@@ -172,9 +172,9 @@ let score = 0, kills = 0, wave = 1;
 let waveSpawning = false;
 let cameraMode = 0;
 const cameraOffsets = [
-    new THREE.Vector3(0, 15, 55),
-    new THREE.Vector3(0, 4, -3),
-    new THREE.Vector3(0, 35, 100)
+    new THREE.Vector3(0, 20, 70),
+    new THREE.Vector3(0, 2.5, -4.5),
+    new THREE.Vector3(0, 45, 130)
 ];
 
 const keys = {};
@@ -505,7 +505,7 @@ function buildAircraftModel(type) {
     }
 
     // Scale up so aircraft are visible against the terrain
-    g.scale.set(4, 4, 4);
+    g.scale.set(7, 7, 7);
     return g;
 }
 
@@ -1138,15 +1138,22 @@ function updateCamera(dt) {
     var desiredPos = new THREE.Vector3();
 
     if (cameraMode === 1) {
+        // Cockpit view — hide own model, sit in canopy, look forward
+        player.mesh.visible = false;
         player.mesh.localToWorld(desiredPos.copy(offset));
         camera.position.copy(desiredPos);
-        var look = new THREE.Vector3(0, 0, -50);
+        var look = new THREE.Vector3(0, 0.5, -100);
         player.mesh.localToWorld(look);
         camera.lookAt(look);
+        camera.fov = 80;
+        camera.updateProjectionMatrix();
     } else {
+        player.mesh.visible = true;
         player.mesh.localToWorld(desiredPos.copy(offset));
         camera.position.lerp(desiredPos, cameraMode === 0 ? 0.06 : 0.04);
         camera.lookAt(player.mesh.position);
+        camera.fov = 65;
+        camera.updateProjectionMatrix();
     }
 }
 
