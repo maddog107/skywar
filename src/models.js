@@ -169,12 +169,14 @@ export function hasFileModel(id) { return !!cache[id]; }
 // ── Paint schemes ──
 export const LIVERIES = {
     default: { label: 'STOCK', color: null },
-    ghost: { label: 'GHOST', color: 0x8d969e },
-    navy: { label: 'NAVY', color: 0x2f4c78 },
-    desert: { label: 'DESERT', color: 0xb49a6a },
-    arctic: { label: 'ARCTIC', color: 0xe3e8ec },
-    black: { label: 'STEALTH', color: 0x2a2c30 },
-    red: { label: 'RED ACE', color: 0x9e2a22 },
+    ghost: { label: 'GHOST', color: 0xb9c3cc },
+    navy: { label: 'NAVY', color: 0x3d74d0 },
+    desert: { label: 'DESERT', color: 0xe0bf82 },
+    arctic: { label: 'ARCTIC', color: 0xf4f7fa },
+    black: { label: 'STEALTH', color: 0x3c4046 },
+    red: { label: 'RED ACE', color: 0xe8321f },
+    orange: { label: 'ORANGE', color: 0xff8a1c },
+    green: { label: 'JUNGLE', color: 0x5f9a3a },
 };
 
 export function applyLivery(model, key) {
@@ -194,12 +196,35 @@ export function applyLivery(model, key) {
         if (o.material !== base) o.material.dispose();
         const m = base.clone();
         const c = new THREE.Color(liv.color);
-        if (base.map) m.color.copy(c).lerp(white, 0.35);
-        else m.color.copy(c).multiplyScalar(clamp01(lum / 0.4, 0.6, 1.35));
+        if (base.map) {
+            // textured skins are dark grey, and colour multiplies the texture: compensate so paint reads bright
+            const texLum = base.map.userData.avgLum ?? (base.map.userData.avgLum = textureLuminance(base.map));
+            m.color.copy(c).multiplyScalar(clamp01(0.55 / Math.max(texLum, 0.08), 1, 3.2));
+        }
+        else m.color.copy(c).multiplyScalar(clamp01(lum / 0.4, 0.85, 1.2));
+        // paint is less metallic than bare metal, so it reads as a bright colour
+        if ('metalness' in m) { m.metalness = Math.min(m.metalness, 0.15); m.roughness = Math.max(0.4, Math.min(m.roughness, 0.6)); }
         o.material = m;
     });
 }
 function clamp01(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+// Average brightness of a texture (0..1), sampled on a tiny canvas
+function textureLuminance(tex) {
+    try {
+        const img = tex.image;
+        if (!img || !img.width) return 0.5;
+        const c = document.createElement('canvas');
+        c.width = c.height = 16;
+        const ctx = c.getContext('2d');
+        ctx.drawImage(img, 0, 0, 16, 16);
+        const d = ctx.getImageData(0, 0, 16, 16).data;
+        let sum = 0;
+        for (let i = 0; i < d.length; i += 4) sum += (d[i] + d[i + 1] + d[i + 2]) / 765;
+        const srgb = sum / (d.length / 4);
+        return srgb * srgb; // rough sRGB → linear
+    } catch (e) { return 0.5; }
+}
 
 function cloneRig(r) {
     return {

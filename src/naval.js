@@ -368,7 +368,7 @@ export class Ship {
                 }
             }
         }
-        if (!this.alive) return;
+        if (!this.alive || this.passive) return;
         this.updateDefenses(dt);
     }
 
@@ -474,15 +474,15 @@ export class Naval {
         return s;
     }
 
-    spawnEnemyGroup() {
-        const spot = findOcean(0, 0, 20000, 32000, 3000) || findOcean(0, 0, 12000, 40000, 2200) || { x: 22000, z: 10000 };
+    spawnEnemyGroup(passive = false) {
+        const spot = (passive ? findOcean(0, 0, 7000, 16000, 2600) : null) || findOcean(0, 0, 20000, 32000, 3000) || findOcean(0, 0, 12000, 40000, 2200) || { x: 22000, z: 10000 };
         const a0 = Math.random() * Math.PI * 2;
         const carrier = new Ship(this, 'carrier', 'red', spot, 3000, a0, -1, 'ENEMY CARRIER');
         const d1 = new Ship(this, 'destroyer', 'red', spot, 3350, a0 + 0.09, -1, 'DESTROYER');
         const d2 = new Ship(this, 'destroyer', 'red', spot, 2650, a0 - 0.1, -1, 'DESTROYER');
         // keep escorts in formation: same angular speed as the carrier
         d1.orbit.w = d2.orbit.w = carrier.orbit.w;
-        for (const s of [carrier, d1, d2]) { this.ships.push(s); this.game.ground.targets.push(s); }
+        for (const s of [carrier, d1, d2]) { s.passive = passive; this.ships.push(s); this.game.ground.targets.push(s); }
         this.enemyCarrier = carrier;
         return carrier;
     }

@@ -31,7 +31,7 @@ You need a local server because the game uses ES modules and loads `.glb` models
   Every fourth wave brings a named ace.
 - **Modes**: Dogfight waves, Strike (destroy an airbase), Naval Strike (sink a carrier group),
   Survival, Target Practice (timed range), Sandbox (unlimited everything, invincible, bombs, N spawns
-  bandits) and Free Flight. Four times of day: dawn, midday, dusk and night.
+  bandits) and Free Flight (with an unarmed carrier group offshore to shoot at). Four times of day: dawn, midday, dusk and night.
 - **Aircraft carriers**: take off by catapult (full throttle on deck) and land on the angled deck to
   catch an arresting wire. Enemy carriers and destroyers defend themselves with CIWS guns that shoot
   down missiles, SAMs, a naval gun and deck-launched fighters. Destroyed ships burn and sink.
@@ -40,7 +40,7 @@ You need a local server because the game uses ES modules and loads `.glb` models
   flameout that leaves you gliding). Land gear-up or too hard and you belly-land in sparks, or ditch at
   sea and slowly sink, instead of exploding. Start in the air, on the runway, on the apron (taxi out) or on the
   carrier. Stop on a friendly runway or deck to repair, refuel and rearm.
-- **Hangar**: seven paint schemes and three loadouts (Balanced, Air Superiority, Strike). Bombs
+- **Hangar**: nine paint schemes and three loadouts (Balanced, Air Superiority, Strike). Bombs
   have a CCIP impact pipper and leave craters.
 - **Ejection, War Thunder trailer style**: eject (J J) into a first-person view under the parachute.
   You have an AK-47: shoot enemy parachutists (they shoot back), or shoot a pilot through his canopy,

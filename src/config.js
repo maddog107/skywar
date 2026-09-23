@@ -250,7 +250,7 @@ export const MODES = {
     practice: { label: 'TARGET PRACTICE', desc: 'Timed range: shoot target boards on the hills and flying drones. Nothing shoots back.' },
     survival: { label: 'SURVIVAL', desc: 'Endless escalating waves. No repairs, no mercy. How long can you last?' },
     sandbox: { label: 'SANDBOX', desc: 'Just have fun: unlimited ammo & fuel, invincible, bombs, spawn bandits with N.' },
-    freeflight: { label: 'FREE FLIGHT', desc: 'No enemies. Taxi, take off, explore, land on the runway or the carrier.' },
+    freeflight: { label: 'FREE FLIGHT', desc: 'Taxi, take off, explore and land. Unarmed target ships offshore to sink for fun.' },
 };
 
 export const TIMES = {

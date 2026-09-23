@@ -121,6 +121,7 @@ export class Game {
         this.naval.spawnHomeCarrier();
         if (this.mode === 'strike' || this.mode === 'sandbox') this.ground.spawnEnemyBase();
         if (this.mode === 'naval' || this.mode === 'sandbox') this.naval.spawnEnemyGroup();
+        else if (this.mode === 'freeflight') this.naval.spawnEnemyGroup(true); // unarmed target ships to shoot at for fun
         if (this.mode === 'practice' || this.mode === 'sandbox') this.spawnPractice(this.mode === 'practice' ? 16 : 10);
         const p = this.spawnPlayer();
 
