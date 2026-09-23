@@ -257,8 +257,7 @@ export class Aircraft {
     }
 
     updateSurfaces(dt) {
-        const onGroundBrake = this.onGround && this.isPlayer && this.game.input.down('Space');
-        const brakeTarget = this.airbrake && !onGroundBrake ? 1 : this.airbrake && this.onGround ? 1 : 0;
+        const brakeTarget = this.airbrake ? 1 : 0;
         this.brakeAnim = damp(this.brakeAnim, this.alive ? brakeTarget : 0, 5, dt);
         this.flapAnim = damp(this.flapAnim, this.flaps / 2, 2.5, dt);
         for (const p of this.flapPanels) { p.visible = this.flapAnim > 0.03; p.rotation.x = this.flapAnim * 0.7; }
@@ -323,7 +322,7 @@ export class Aircraft {
 
     // Engine thrust (m/s²) for the current throttle, including fuel starvation
     thrustFor(rho) {
-        if (this.flameout && this.game.settings?.fuel === false && !this.bellied) { this.flameout = false; this.fuel = Math.max(this.fuel, 0.05); }
+        if (this.flameout && this.game.settings?.fuel === false && !this.bellied && !this.forcedFlameout) { this.flameout = false; this.fuel = Math.max(this.fuel, 0.05); }
         if (this.flameout || this.bellied) return 0;
         const t = this.throttle;
         return (t <= 0.9 ? this.thrustMil * (t / 0.9) : this.thrustMil + (this.thrustAB - this.thrustMil) * ((t - 0.9) / 0.1)) * (0.45 + 0.55 * rho);
@@ -499,13 +498,14 @@ export class Aircraft {
         this.qv.setFromAxisAngle(AY, heading);
         this.rollRate = 0; this.beta = 0;
 
+        this._lastFlaps = this.flaps; this.balloon = 0;
         const rotateSpeed = Math.sqrt(G / (this.liftK * rho * CL_MAX * (1 + 0.2 * this.flaps))) * 1.05;
         const pitchTarget = V > rotateSpeed * 0.85 && !this.bellied ? clamp(c.pitch, 0, 1) * 0.28 : 0;
         this.alpha = damp(this.alpha, pitchTarget, 2.5, dt);
         const Cl = this.clEff * this.alpha;
         // spoilers: airbrake on the ground dumps lift and brakes hard
         const lift = this.liftK * V * V * rho * Cl * (this.airbrake ? 0.3 : 1);
-        let friction = (this.airbrake ? 6 : 0.25) + (c.throttle < 0.05 && V < 30 ? 1.5 : 0);
+        let friction = (this.airbrake || this.wheelBrake ? 6 : 0.25) + (c.throttle < 0.05 && V < 30 ? 1.5 : 0);
         if (this.bellied) friction = this.bellyWater ? 10 : 8;
         const drag = this.liftK * V * V * rho * (this.cd0 * (1 + 3.5 * this.brakeAnim + 1.7 * this.flapAnim) + K_INDUCED * Cl * Cl);
         let acc = thrust - drag - (V > 0.1 ? friction : 0);
@@ -533,18 +533,20 @@ export class Aircraft {
         const surf = this.game.surfaceAt(this.pos.x, this.pos.z, this.pos.y - this.gearOffset + 3);
         if (ship && surf.ship !== ship) {
             // off the end (or edge) of the deck: flying if fast enough, otherwise dropping
-            this.onGround = false; this.deck = null; this.catapult = 0;
+            this.onGround = false; this.deck = null; this.catapult = 0; this.trap = false;
+            if (this.bellied) { this.bellied = false; this.bellyWater = false; this.sinkDepth = 0; this.crash(true); return; }
             if (V > rotateSpeed) { this.vel.y += 2.5; this.pos.y += 0.5; this.alpha = Math.max(this.alpha, 0.12); }
             this.syncBody();
             return;
         }
         this.pos.y = surf.h + this.gearOffset;
         if (this.bellied) {
-            this.pos.y = surf.h + (this.bellyWater ? 0 : 0.2) + 1.0 - this.sinkDepth;
+            this.pos.y = surf.h + this.bellyOffset + (this.bellyWater ? 0 : 0.2) - this.sinkDepth;
             this.updateBelly(dt, V);
             if (V > 5) { this.qv.multiply(_q1.setFromAxisAngle(AZ, (Math.random() - 0.5) * 0.02)); }
         } else if (lift > G * 1.02) {
             this.onGround = false;
+            this.trap = false;
             this.deck = null;
             this.vel.y = 2.5;
             this.pos.y += 0.5;
@@ -552,10 +554,12 @@ export class Aircraft {
         }
         if (!ship) {
             // rolled off the runway at speed on rough ground?
-            if (!surf.runway && V > 40 && surf.h > 1 && !(this.bellied && V < 90)) {
+            if (!surf.runway && V > (this.bellied ? 8 : 40) && surf.h > 1) {
                 const e = 5;
-                const slope = Math.abs(terrainHeight(this.pos.x + e, this.pos.z) - terrainHeight(this.pos.x - e, this.pos.z)) / (2 * e);
-                if (slope > 0.12) this.crash();
+                const dx = terrainHeight(this.pos.x + e, this.pos.z) - terrainHeight(this.pos.x - e, this.pos.z);
+                const dz = terrainHeight(this.pos.x, this.pos.z + e) - terrainHeight(this.pos.x, this.pos.z - e);
+                const slope = Math.hypot(dx, dz) / (2 * e);
+                if (slope > (this.bellied ? 0.35 : 0.12)) this.crash();
             }
             if (surf.water && !this.bellied) this.crash(true);
         }
@@ -592,6 +596,7 @@ export class Aircraft {
             this.relSpeed = relSpeed;
             const heading = Math.atan2(-rel.x, -rel.z);
             this.qv.setFromAxisAngle(AY, heading);
+            this.trap = false;
             if (this.deck) {
                 this.deckHeading = heading - this.deck.heading;
                 this.trap = this.deck.inWireZone(this.pos.x, this.pos.z);
@@ -603,7 +608,7 @@ export class Aircraft {
         }
         // too hard / gear up / off-field — but still survivable? Then it's a belly landing (or ditching)
         const canBelly = !surf.hull && vs > -6.5 && upY > 0.8 && pitch > -0.15 && pitch < 0.4 && relSpeed < this.spec.flight.speed * 0.75;
-        if (canBelly) { this.startBelly(surf, rel, relSpeed, vs); return; }
+        if (canBelly && this.isPlayer) { this.startBelly(surf, rel, relSpeed, vs); return; }
         this.crash(surf.water && !surf.hull);
     }
 
@@ -617,6 +622,14 @@ export class Aircraft {
         this.bellyWater = !!surf.water;
         this.bellyStopped = false;
         this.gear = false; this.gearAnim = 0; this.updateGearVisual();
+        // rest on the lowest point of the airframe with the gear up (model origins vary a lot)
+        const q0 = this.root.quaternion.clone();
+        this.root.quaternion.identity(); // measure level, not at the touchdown pitch
+        this.root.updateMatrixWorld(true);
+        const box = new THREE.Box3().setFromObject(this.root);
+        this.root.quaternion.copy(q0);
+        this.root.updateMatrixWorld(true);
+        this.bellyOffset = isFinite(box.min.y) ? clamp(this.root.position.y - box.min.y, 0.3, this.gearOffset) : this.gearOffset * 0.5;
         this.flaps = 0;
         this.onGround = true;
         this.deck = surf.ship || null;

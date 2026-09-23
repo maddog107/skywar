@@ -90,8 +90,9 @@ export class PilotOnFoot {
         this.candidate = best;
         this.hint = '';
         if (best) {
-            const boardable = best.pilotDead || best.abandoned || best.team === 'blue';
-            this.hint = boardable ? 'E — HIJACK ' + best.spec.name.toUpperCase() + ' (' + Math.round(bd) + ' m)' : 'SHOOT THE PILOT THROUGH THE CANOPY TO HIJACK';
+            const vip = this.game.mstate && this.game.mstate.transport === best;
+            const boardable = !vip && (best.pilotDead || best.abandoned || best.team === 'blue');
+            this.hint = vip ? 'PROTECT THE VIP — NO BOARDING' : boardable ? 'E — HIJACK ' + best.spec.name.toUpperCase() + ' (' + Math.round(bd) + ' m)' : 'SHOOT THE PILOT THROUGH THE CANOPY TO HIJACK';
             if (boardable && input.down('KeyE') && this.hijackT <= 0) this.hijack(best);
         }
         // leap animation into the hijacked jet

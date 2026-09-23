@@ -116,6 +116,7 @@ function normaliseGLTF(root, id, info) {
 // Find the engine exhausts from the geometry: the rear-most vertices close to the
 // centreline (excluding fins/stabilisers), split left/right for twin engines.
 function findNozzles(obj, spec, box) {
+    if (spec.category === 'civil') return []; // airliners/transports: engines are on the wings
     const L = spec.length;
     const n = spec.proc?.engines ?? 1;
     const pts = [];

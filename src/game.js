@@ -98,6 +98,8 @@ export class Game {
     // ═════════════ Setup ═════════════
     start(opts) {
         this.cleanup();
+        this.lastEjectPress = -9;
+        this.autopilot.warnT = -9; this.autopilot.override = 0;
         this.mission = opts.mission ? MISSIONS[opts.mission] : null;
         this.missionId = opts.mission || null;
         this.isDaily = !!opts.daily;
@@ -264,6 +266,7 @@ export class Game {
         this.state = 'playing';
         this.deathT = 0;
         this.autopilot.disengage();
+        this.input.spoilersOn = false;
         this.gloc = 0; this.whiteout = 0; this.damageFlash = 0;
         this.cameraMode = this.settings.defaultCockpit ? 'cockpit' : 'chase';
         this.showBanner('NEW AIRFRAME', this.lives === Infinity ? '' : this.lives + ' SPARE JET' + (this.lives === 1 ? '' : 'S') + ' LEFT', 3);
@@ -346,9 +349,18 @@ export class Game {
             const pos = touch.clone().addScaledVector(fwd, -dist);
             pos.y = touch.y + dist * Math.tan(GLIDE_SLOPE) + p.gearOffset;
             // never start inside a hill: stay clear of the highest ground under the rest of the approach
+            if (kind === 'cv_approach') {
+                // the carrier can steam near a coast: start short of any land under the glide path
+                for (let d = 200; d <= dist; d += 100) {
+                    const gy = touch.y + d * Math.tan(GLIDE_SLOPE);
+                    if (terrainHeight(touch.x - fwd.x * d, touch.z - fwd.z * d) > gy - 40) { dist = Math.max(1200, d - 300); break; }
+                }
+                pos.copy(touch).addScaledVector(fwd, -dist);
+                pos.y = touch.y + dist * Math.tan(GLIDE_SLOPE) + p.gearOffset;
+            }
             let hi = 0;
             for (let d = 0; d <= dist; d += 100) hi = Math.max(hi, terrainHeight(touch.x - fwd.x * d, touch.z - fwd.z * d));
-            if (kind !== 'cv_approach') pos.y = Math.max(pos.y, hi + 60);
+            pos.y = Math.max(pos.y, hi + 60);
             p.spawnAir(pos, Math.atan2(-fwd.x, -fwd.z), 0.3);
             // already configured: gear and full flaps down, on speed, on the glide slope
             p.gear = true; p.gearAnim = 1; p.flaps = 2; p.flapAnim = 1; p._lastFlaps = 2; p.balloon = 0;
@@ -413,6 +425,7 @@ export class Game {
         }
         if (pm) this.removeSeat(pm.seat);
         this.autopilot.disengage();
+        this.input.spoilersOn = false;
         if (this.player && this.player !== a) this.player.isPlayer = false;
         for (const m of a.incoming) m.target = null; // friendly missiles chasing the stolen jet go dumb
         a.incoming.length = 0;
@@ -422,6 +435,7 @@ export class Game {
         a.team = 'blue'; a.isPlayer = true; a.callsign = this.callsign;
         a.lrm = a.lrm ?? 0; a.rockets = a.rockets ?? 0; a.bombs = a.bombs ?? 0;
         a.fuel = Math.max(a.fuel ?? 1, 0.6); a.flameout = false;
+        if (this.mission && this.mission.loadout) this.mission.loadout(a); // mission weapon rules still apply
         this.player = a;
         this.pilotMode = null;
         this.state = 'playing';
@@ -732,6 +746,7 @@ export class Game {
         const off = _v.subVectors(this.camera.position, target);
         this.photo = { yaw: Math.atan2(off.x, off.z), pitch: Math.asin(clamp(off.y / Math.max(off.length(), 1), -0.95, 0.95)), dist: clamp(off.length(), 8, 400), target: target.clone() };
         this.hideHud = true;
+        this.world.clearFlash();
         this.input.lock();
     }
 
@@ -841,6 +856,7 @@ export class Game {
         this.onPause && this.onPause(on);
         this.input.consumeMouse();
         if (on) {
+            this.world.clearFlash();
             this.input.freeMouse = false;
             this.input.unlock();
             try { window.speechSynthesis && speechSynthesis.cancel(); } catch (e) { /* ignore */ }
@@ -1017,15 +1033,16 @@ export class Game {
         if (tc && tc.throttle != null) { c.throttle = tc.throttle; tc.throttle = null; }
         if (tc && tc.active && mode !== 'keyboard') { c.pitch = this.stick.pitch; c.roll = this.stick.roll; } // touch flies like a stick
         if (p.onGround) {
-            // Space = wheel brakes on the ground (guns still on LMB)
-            p.airbrake = s.airbrake || this.input.down('Space');
+            // Space = wheel brakes on the ground (guns still on LMB); B = spoilers
+            p.airbrake = s.airbrake;
+            p.wheelBrake = this.input.down('Space');
             s.fire = this.input.mouse.left;
             if (p.deck && c.throttle >= 0.89 && p.relSpeed < 5 && p.startCatapult()) {
                 this.addFeed('CATAPULT!', '#5dffa0');
                 this.shake = 1.2;
                 this.audio.whoosh(0.8);
             }
-        } else p.airbrake = s.airbrake;
+        } else { p.airbrake = s.airbrake; p.wheelBrake = false; }
         // autopilot flies until the pilot touches the stick
         if (this.autopilot.active) {
             // accidental bumps only warn; sustained input takes control
@@ -1275,7 +1292,6 @@ export class Game {
             let r = this.mission.check ? this.mission.check(this) : null;
             if (!r && this.lives <= 0 && this.pilotMode) r = 'lose'; // one-life missions end when you bail out
             if (r && this.state === 'playing') {
-                if (r === 'win') this.score += 1500 + (this.lives > 0 ? 500 * this.lives : 0);
                 this.gameOver(r === 'win');
                 return;
             }
@@ -1286,6 +1302,7 @@ export class Game {
     }
 
     gameOver(victory) {
+        if (victory && this.mission) this.score += 1500 + (this.lives > 0 ? 500 * this.lives : 0);
         this.state = 'over';
         this.input.unlock();
         const acc = this.shots ? Math.round((this.hits / this.shots) * 100) : 0;

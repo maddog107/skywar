@@ -110,9 +110,12 @@ export class Pilot {
             if (e === this.target) score *= 0.7; // stickiness
             if (score < bestScore) { bestScore = score; best = e; }
         }
+        // escort missions: go for the protected aircraft most of the time (decided every few seconds)
+        this.priorityT = (this.priorityT || 0) - 1;
+        if (this.priorityT <= 0) { this.usePriority = Math.random() < 0.65; this.priorityT = 6 + Math.floor(Math.random() * 8); }
+        if (this.priority && this.priority.alive && (this.usePriority || !best)) best = this.priority;
+        if (best !== this.target) this.lockT = 0;
         this.target = best;
-        // escort missions: go for the protected aircraft most of the time
-        if (this.priority && this.priority.alive && (Math.random() < 0.65 || !best)) this.target = this.priority;
     }
 
     threatMissile() {

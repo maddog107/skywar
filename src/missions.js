@@ -90,7 +90,6 @@ export const MISSIONS = {
             for (let i = 0; i < 3; i++) {
                 const pos = new THREE.Vector3(b.x, 2200 + i * 150, b.z).addScaledVector(dir, 30000 + i * 600).add(new THREE.Vector3(i * 250 - 250, 0, 0));
                 const e = g.spawnHostile('mig25', pos, new THREE.Vector3(b.x, 1800, b.z), 'BOMBER ' + (i + 1));
-                e.speedCap = 0.45;
                 bombers.push(e);
             }
             const esc = g.spawnEnemies(2, { x: b.x + dir.x * 26000, z: b.z + dir.z * 26000 });
@@ -127,14 +126,15 @@ export const MISSIONS = {
             const p = g.player;
             const pos = touch.clone().addScaledVector(fwd, -11000); pos.y = 2500;
             p.spawnAir(pos, Math.atan2(-fwd.x, -fwd.z), 0.4);
-            p.fuel = 0; p.flameout = true; p.controls.throttle = 0;
+            p.fuel = 0; p.flameout = true; p.forcedFlameout = true; p.controls.throttle = 0;
             g.aimDir.copy(p.vel).normalize();
             g.audio.say('Double flameout! Glide to the runway.', true);
         },
         check: (g) => {
             const p = g.player;
             if (!p.alive || p.bellied) return p.bellied && p.speed < 1 ? 'lose' : !p.alive ? 'lose' : null;
-            return p.onGround && p.speed < 3 && isOnRunway(p.pos.x, p.pos.z)?.friendly ? 'win' : null;
+            if (!p.onGround || p.speed >= 3) return null;
+            return isOnRunway(p.pos.x, p.pos.z)?.friendly ? 'win' : 'lose'; // stopped anywhere else: no engine to taxi
         },
         objective: (g) => { const b = home(), p = g.player; return 'DEADSTICK — ' + km(Math.hypot(p.pos.x - b.x, p.pos.z - b.z)) + ' TO THE RUNWAY'; },
     },

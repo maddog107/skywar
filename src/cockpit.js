@@ -502,7 +502,7 @@ export class Cockpit {
         this.setLight('stall', p.stalling);
         this.setLight('ab', p.afterburner);
         this.setLight('gear', p.gear);
-        this.setLight('brake', p.airbrake);
+        this.setLight('brake', p.airbrake || p.wheelBrake);
         this.setLight('fuel', p.fuel < 0.2 && game.settings.fuel !== false);
         this.setLight('master', (game.time - p.lastHitTime < 2 || p.health / p.maxHealth < 0.3) && blink);
 

@@ -233,6 +233,7 @@ export class Ship {
         this.orbit = { cx: center.x, cz: center.z, R: orbitR, a: angle, w: dir * this.def.speed / orbitR };
         const built = type === 'carrier' ? buildCarrier(team) : buildDestroyer();
         this.mesh = built.group;
+        this.mesh.rotation.order = 'YXZ'; // heading first, then pitch/roll about the ship's own axes
         this.parts = built.parts;
         this.mounts = built.mounts;
         this.game.scene.add(this.mesh);

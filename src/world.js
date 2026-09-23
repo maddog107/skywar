@@ -176,6 +176,13 @@ export class World {
         this.skyMat.uniforms.zenith.value.copy(this.palette.zenith).lerp(new THREE.Color(0.8, 0.82, 0.95), f * 0.6);
     }
 
+    clearFlash() {
+        this.flash = 0;
+        this.bolt.visible = false;
+        if (this.baseHemi != null) this.hemi.intensity = this.baseHemi;
+        if (this.palette) this.skyMat.uniforms.zenith.value.copy(this.palette.zenith);
+    }
+
     strike(camera, game) {
         const a = Math.random() * Math.PI * 2, d = 1500 + Math.random() * 7000;
         const x = camera.position.x + Math.cos(a) * d, z = camera.position.z + Math.sin(a) * d;
