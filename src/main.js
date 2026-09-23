@@ -16,6 +16,10 @@ import { Cockpit } from './cockpit.js';
 import { Game, LOADOUT_LABELS } from './game.js';
 import { applyLivery, LIVERIES } from './models.js';
 import { MISSIONS, dailyMission } from './missions.js';
+import { Career, RANKS, MEDALS } from './career.js';
+import { Music } from './music.js';
+import { Towns } from './towns.js';
+import { setupTouch, isTouchDevice } from './touch.js';
 import { Aircraft, refSpeeds } from './aircraft.js';
 import { Pilot } from './ai.js';
 import { preloadModels, hasFileModel } from './models.js';
@@ -28,7 +32,7 @@ const DEFAULTS = {
     aircraft: 'f16', mode: 'dogfight', difficulty: 'veteran', time: 'day', wingmen: 1,
     controlMode: 'mouseaim', sensitivity: 1, invertPitch: false, quality: 'high', volume: 0.7,
     callouts: true, gEffects: true, defaultCockpit: false,
-    start: 'auto', loadout: 'balanced', livery: 'default', fuel: true, weather: 'clear',
+    start: 'auto', loadout: 'balanced', livery: 'default', fuel: true, weather: 'clear', unlockAll: false, music: 0.5,
 };
 let settings = { ...DEFAULTS };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('skywar.settings') || '{}')); } catch (e) { /* ignore */ }
@@ -90,7 +94,16 @@ let world;
 const effects = new Effects(scene);
 const audio = new Audio();
 const input = new Input(renderer.domElement);
+const touchUI = setupTouch(input);
+if (touchUI && !localStorage.getItem('skywar.settings')) settings.controlMode = 'keyboard'; // sticks, not mouse-aim, on touch screens
 const hud = new HUD($('hud'));
+const career = new Career();
+const music = new Music();
+music.setVolume(settings.music ?? 0.5);
+// the first click anywhere unlocks audio (browser autoplay rules)
+window.addEventListener('pointerdown', () => { music.unlock(); }, { once: true });
+window.addEventListener('keydown', () => { music.unlock(); }, { once: true });
+career.unlockAll = !!settings.unlockAll;
 let game;
 
 // ── Loading ──
@@ -101,11 +114,18 @@ async function boot() {
     world.weather = settings.weather || 'clear';
     world.setTime(settings.time);
     world.updateTerrain(new THREE.Vector3(0, 0, 0), true);
+    $('loadText').textContent = 'BUILDING TOWNS…';
+    await new Promise(r => setTimeout(r, 20));
+    world.towns = new Towns(scene);
+    world.towns.setNight(world.timeKey === 'night' || world.timeKey === 'dusk');
     $('loadFill').style.width = '35%';
     $('loadText').textContent = 'LOADING AIRFRAMES…';
     await preloadModels((f) => { $('loadFill').style.width = (35 + f * 60) + '%'; });
     game = new Game({ scene, camera, world, effects, audio, input, hud, cockpit, settings });
     game.onGameOver = showGameOver;
+    game.onNvg = (on) => { renderer.domElement.style.filter = on ? 'grayscale(1) brightness(2.3) contrast(1.35) sepia(1) hue-rotate(55deg) saturate(3.5)' : ''; };
+    career.attach(game);
+    career.onChange(() => { refreshLocks(); renderPilotBadge(); });
     game.onPause = (on) => {
         $('pause').classList.toggle('show', on);
         $('quickPos').classList.toggle('show', on && game.quickPositionsAllowed);
@@ -163,6 +183,9 @@ function buildMenu() {
             c.textContent = COUNTRY[s.country] || s.country;
             c.title = hasFileModel(id) ? 'Detailed 3D model' : 'Procedural model';
             el.append(left, c);
+            const lock = document.createElement('span');
+            lock.className = 'lock';
+            el.appendChild(lock);
             el.addEventListener('click', () => { selectAircraft(id); audio.uiClick(); });
             list.appendChild(el);
         }
@@ -179,7 +202,7 @@ function buildMenu() {
         b.addEventListener('click', () => {
             settings.mode = k; save();
             mc.querySelectorAll('.mode-card').forEach(x => x.classList.toggle('sel', x === b));
-            audio.uiClick(); updateBest(); buildMissionList();
+            audio.uiClick(); updateBest(); buildMissionList(); updateLaunch();
         });
         mc.appendChild(b);
     }
@@ -203,6 +226,8 @@ function buildMenu() {
     seg('setCockpit', [[false, 'OFF'], [true, 'ON']], 'defaultCockpit');
     $('setSens').value = settings.sensitivity;
     $('setSens').oninput = (e) => { settings.sensitivity = +e.target.value; save(); };
+    $('setMusic').value = settings.music ?? 0.5;
+    $('setMusic').oninput = (e) => { settings.music = +e.target.value; music.setVolume(settings.music); save(); };
     $('setVolume').value = settings.volume;
     $('setVolume').oninput = (e) => { settings.volume = +e.target.value; audio.setVolume(settings.volume); save(); };
     syncControlHint();
@@ -213,10 +238,13 @@ function buildMenu() {
     $('abortBtn').onclick = () => { $('pause').classList.remove('show'); toMenu(); };
     $('retryBtn').onclick = () => { $('over').classList.remove('show'); launch(); };
     $('menuBtn').onclick = () => { $('over').classList.remove('show'); toMenu(); };
-    document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => openModal(b.dataset.open)));
+    document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => { if (b.dataset.open === 'profileModal') renderProfile(); openModal(b.dataset.open); }));
     document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => b.closest('.modal').classList.remove('show')));
     buildCredits();
+    seg('setUnlocks', [[false, 'CAREER'], [true, 'ALL UNLOCKED']], 'unlockAll', () => { career.unlockAll = !!settings.unlockAll; refreshLocks(); });
     selectAircraft(settings.aircraft in AIRCRAFT ? settings.aircraft : 'f16');
+    refreshLocks();
+    renderPilotBadge();
 }
 
 function buildMissionList() {
@@ -240,9 +268,70 @@ function buildMissionList() {
         b.addEventListener('click', () => {
             settings.missionId = id; save();
             el.querySelectorAll('.mission').forEach(x => x.classList.toggle('sel', x === b));
-            audio.uiClick(); updateBest();
+            audio.uiClick(); updateBest(); updateLaunch();
         });
         el.appendChild(b);
+    }
+}
+
+// ── Career: locks, pilot badge, profile ──
+function refreshLocks() {
+    document.querySelectorAll('.ac-item').forEach(el => {
+        const id = el.dataset.id, ok = career.aircraftUnlocked(id);
+        el.classList.toggle('locked', !ok);
+        const l = el.querySelector('.lock');
+        if (l) l.textContent = ok ? '' : '🔒 ' + RANKS[career.aircraftRank(id)].name.split(' ').map(w => w[0]).join('');
+    });
+    document.querySelectorAll('#segLivery button').forEach(b => {
+        const ok = career.liveryUnlocked(b.dataset.val);
+        b.disabled = !ok; b.classList.toggle('locked', !ok);
+        b.title = ok ? '' : 'Unlocks at ' + RANKS[career.liveryRank(b.dataset.val)].name;
+    });
+    if (!career.liveryUnlocked(settings.livery)) { settings.livery = 'default'; save(); if (showcase) applyLivery(showcase.model, 'default'); }
+    updateLaunch();
+}
+
+function updateLaunch() {
+    const daily = settings.mode === 'missions' && (settings.missionId === 'daily' || !settings.missionId);
+    const ok = daily || career.aircraftUnlocked(settings.aircraft);
+    const btn = $('launchBtn');
+    btn.disabled = !ok;
+    btn.classList.toggle('locked', !ok);
+    btn.firstChild.textContent = ok ? 'LAUNCH ' : 'LOCKED — ' + RANKS[career.aircraftRank(settings.aircraft)].name + ' ';
+}
+
+function renderPilotBadge() {
+    const el = $('pilotBadge');
+    if (!el) return;
+    const r = career.rank, n = career.nextRank, xp = career.data.xp;
+    const frac = n ? (xp - r.xp) / (n.xp - r.xp) : 1;
+    el.innerHTML = '';
+    const t = document.createElement('div'); t.className = 'pb-rank'; t.textContent = r.name;
+    const bar = document.createElement('div'); bar.className = 'pb-bar';
+    const fill = document.createElement('i'); fill.style.width = Math.round(frac * 100) + '%'; bar.appendChild(fill);
+    const x = document.createElement('div'); x.className = 'pb-xp'; x.textContent = xp.toLocaleString() + ' XP' + (n ? ' / ' + n.xp.toLocaleString() : '');
+    el.append(t, bar, x);
+}
+
+function renderProfile() {
+    const d = career.data, body = $('profileBody');
+    body.innerHTML = '';
+    const add = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; body.appendChild(e); return e; };
+    add('div', 'pf-rank', career.rank.name);
+    const n = career.nextRank;
+    add('div', 'mono dim small-text', n ? (n.xp - d.xp).toLocaleString() + ' XP to ' + n.name + ' — unlocks: ' + (career.unlocksAt(career.rankIndex + 1).join(', ') || '—') : 'Maximum rank reached.');
+    const stats = add('div', 'stats', null);
+    const hrs = Math.floor(d.flightTime / 3600), mins = Math.floor((d.flightTime % 3600) / 60);
+    for (const [k, v] of [['TOTAL XP', d.xp.toLocaleString()], ['SORTIES', d.sorties], ['KILLS', d.kills], ['GROUND KILLS', d.groundKills], ['WINS', d.wins], ['LANDINGS', d.landings], ['TRAPS', d.traps], ['LOSSES', d.deaths], ['FLIGHT TIME', hrs + 'h ' + mins + 'm']]) {
+        const c = document.createElement('div'); const b = document.createElement('b'); b.textContent = v; const s = document.createElement('span'); s.textContent = k; c.append(b, s); stats.appendChild(c);
+    }
+    add('div', 'panel-title', 'MEDALS ' + Object.keys(d.medals).length + ' / ' + Object.keys(MEDALS).length);
+    const grid = add('div', 'medals', null);
+    for (const [id, m] of Object.entries(MEDALS)) {
+        const c = document.createElement('div'); c.className = 'medal' + (d.medals[id] ? ' got' : '');
+        const b = document.createElement('b'); b.textContent = (d.medals[id] ? '🎖 ' : '· ') + m.name;
+        const s = document.createElement('span'); s.textContent = m.desc;
+        c.append(b, s); grid.appendChild(c);
     }
 }
 
@@ -310,10 +399,11 @@ function selectAircraft(id) {
         TAKEOFF <b>~${Math.round(refSpeeds(s).takeoff * 1.944)} KT</b> · LANDING <b>~${Math.round(refSpeeds(s).approach * 1.944)} KT</b> · STALL <b>${Math.round(refSpeeds(s).stall * 1.944)} KT</b></div>`;
     spawnShowcase(id);
     updateBest();
+    updateLaunch();
 }
 
 function bestKey(mode, missionId, daily) {
-    if (mode === 'missions') return daily ? 'daily:' + dailyMission().key : 'mission:' + missionId + ':' + settings.difficulty;
+    if (mode === 'missions') return daily ? 'daily:' + (game && game.dailyKey && game.state !== 'menu' ? game.dailyKey : dailyMission().key) : 'mission:' + missionId + ':' + settings.difficulty;
     return mode + ':' + settings.difficulty;
 }
 
@@ -321,7 +411,8 @@ function updateBest() {
     const k = settings.mode === 'missions' ? bestKey('missions', settings.missionId, !settings.missionId || settings.missionId === 'daily') : bestKey(settings.mode);
     const b = best[k];
     const label = settings.mode === 'missions' ? (settings.missionId === 'daily' || !settings.missionId ? 'TODAY\'S DAILY' : (MISSIONS[settings.missionId] || {}).title) : MODES[settings.mode].label;
-    $('best').textContent = b ? `BEST ${label} (${DIFFICULTY[settings.difficulty].label}): ${b.score} PTS${b.win ? ' · ✓ COMPLETED' : ''}` : '';
+    const isDaily = settings.mode === 'missions' && (settings.missionId === 'daily' || !settings.missionId);
+    $('best').textContent = b ? `BEST ${label}${isDaily ? '' : ' (' + DIFFICULTY[settings.difficulty].label + ')'}: ${b.score} PTS${b.win ? ' · ✓ COMPLETED' : ''}` : '';
 }
 
 function spawnShowcase(id) {
@@ -345,9 +436,11 @@ function showMenu() {
 
 function toMenu() {
     try { window.speechSynthesis && speechSynthesis.cancel(); } catch (e) { /* ignore */ }
+    if (game.state !== 'over' && game.state !== 'menu' && game.player) career.finishSortie({ score: Math.round(game.score), mode: game.mode }, true);
     input.freeMouse = false;
     game.cleanup();
     game.state = 'menu';
+    world.setTime(settings.time);
     cockpitPass.enabled = false;
     cockpit.enabled = false;
     spawnShowcase(settings.aircraft);
@@ -357,7 +450,9 @@ function toMenu() {
 }
 
 function launch() {
+    if ($('launchBtn').disabled) return;
     audio.init();
+    career.startSortie();
     audio.uiConfirm();
     if (showcase) { showcase.remove(); showcase = null; }
     world.setTime(settings.time);
@@ -367,6 +462,7 @@ function launch() {
         const daily = settings.missionId === 'daily' || !settings.missionId ? dailyMission() : null;
         if (daily) world.setTime(daily.time);
         game.start({ mode: 'missions', aircraft: daily ? daily.aircraft : settings.aircraft, mission: daily ? daily.id : settings.missionId, daily: !!daily });
+        game.dailyKey = daily ? daily.key : null;
     } else game.start({ mode: settings.mode, aircraft: settings.aircraft });
     // compile every material now so ships, targets and explosions don't hitch on first sight
     try {
@@ -385,18 +481,28 @@ function showGameOver(r) {
     if (isBest && r.score > 0) {
         best[k] = { score: r.score, kills: r.kills, win: r.victory || (prev && prev.win) };
         try { localStorage.setItem('skywar.best', JSON.stringify(best)); } catch (e) { /* ignore */ }
+    } else if (r.victory && prev && !prev.win) {
+        prev.win = true;
+        try { localStorage.setItem('skywar.best', JSON.stringify(best)); } catch (e) { /* ignore */ }
     }
     $('overTitle').textContent = r.victory ? 'MISSION COMPLETE' : 'SHOT DOWN';
     $('overTitle').className = 'card-title ' + (r.victory ? 'win' : 'lose');
     $('overTitle').textContent = r.mission ? (r.victory ? 'MISSION ACCOMPLISHED' : 'MISSION FAILED') : $('overTitle').textContent;
     $('overSub').textContent = (r.mission ? (r.daily ? 'DAILY · ' : '') + r.mission : MODES[r.mode].label) + ' · ' + AIRCRAFT[r.aircraft].name.toUpperCase() + ' · ' + DIFFICULTY[settings.difficulty].label;
     const stats = [
-        ['SCORE', r.score], ['KILLS', r.kills], [r.mode === 'strike' ? 'GROUND KILLS' : 'WAVE', r.mode === 'strike' ? r.groundKills : r.wave],
+        ['SCORE', r.score], ['KILLS', r.kills], r.mode === 'dogfight' || r.mode === 'survival' ? ['WAVE', r.wave] : ['GROUND KILLS', r.groundKills],
         ['TIME', r.time], ['GUN ACCURACY', r.accuracy + '%'], ['MISSILE HITS', r.missileHits + ' / ' + r.missiles],
     ];
     $('overStats').innerHTML = stats.map(([a, b]) => `<div><b>${b}</b><span>${a}</span></div>`).join('');
     $('overBest').textContent = isBest && r.score > 0 ? '★ NEW PERSONAL BEST' : prev ? 'BEST: ' + prev.score : '';
     $('overBest').style.color = isBest ? 'var(--accent)' : 'var(--dim)';
+    const cr = career.finishSortie(r);
+    const xpLine = '+' + cr.xp.toLocaleString() + ' XP · ' + career.rank.name + (cr.promoted ? '  ▲ PROMOTED!' : '');
+    $('overBest').textContent = [$('overBest').textContent, xpLine].filter(Boolean).join('   ·   ');
+    if (cr.promoted) {
+        $('overSub').textContent += '  —  PROMOTED TO ' + cr.promoted + (cr.unlocked.length ? ' · UNLOCKED: ' + cr.unlocked.join(', ') : '');
+        audio.say('Congratulations, you have been promoted to ' + cr.promoted.toLowerCase() + '.', true);
+    }
     $('over').classList.add('show');
 }
 
@@ -423,6 +529,10 @@ function buildCredits() {
         d.append(a, document.createTextNode(' — ' + who + ' — ' + lic));
         body.appendChild(d);
     }
+    const mp = document.createElement('p');
+    mp.style.marginTop = '10px';
+    mp.textContent = 'Music (CC0, OpenGameArt.org): "Fantasy Orchestral Theme" by Joth · "The Rush" by Thomas Bruno (tebruno99) · "Space Music: Out There" and "Pressure" by yd. See music/CREDITS.md.';
+    body.appendChild(mp);
     const t = document.createElement('p');
     t.style.marginTop = '10px';
     t.textContent = 'Engine: three.js. All other models, terrain, effects, cockpit, and audio are procedurally generated.';
@@ -449,6 +559,8 @@ function frame(dt) {
     $('clickToFly').classList.toggle('show', game.state === 'playing' && !game.photo && settings.controlMode !== 'mousestick' && !input.locked);
     composer.render(dt);
     hud.draw(game, dt);
+    music.update(dt, game);
+    if (touchUI) touchUI.classList.toggle('show', game.state === 'playing' && !game.pilotMode);
 }
 
 function updateMenuScene(dt) {

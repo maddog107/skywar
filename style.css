@@ -149,3 +149,35 @@ input[type=range] { accent-color: var(--accent); width: 170px; }
 .mission .mt i { font-style: normal; font-family: 'Share Tech Mono', monospace; font-size: 10px; color: var(--accent); letter-spacing: 0.12em; }
 .mission .md { font-size: 11.5px; color: var(--dim); line-height: 1.25; margin-top: 2px; }
 .mission.daily { border-color: rgba(255, 181, 71, 0.5); background: linear-gradient(90deg, rgba(255, 181, 71, 0.12), transparent); }
+
+.ac-item.locked { opacity: 0.55; }
+.ac-item .lock { grid-column: 1 / 3; font-family: 'Share Tech Mono', monospace; font-size: 10px; color: var(--accent); letter-spacing: 0.1em; }
+.ac-item .lock:empty { display: none; }
+.seg button.locked { opacity: 0.35; cursor: not-allowed; }
+.launch.locked { background: #4a4f55; color: #c9cfd6; cursor: not-allowed; letter-spacing: 0.12em; font-size: 16px; }
+.pilot-badge { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; padding: 6px 12px; border: 1px solid var(--line); min-width: 180px; cursor: pointer; }
+.pilot-badge:hover { border-color: var(--line-2); }
+.pb-rank { font-weight: 700; font-size: 12px; letter-spacing: 0.14em; color: var(--accent); }
+.pb-bar { width: 100%; height: 3px; background: var(--line); position: relative; }
+.pb-bar i { position: absolute; inset: 0; right: auto; background: var(--accent); }
+.pb-xp { font-family: 'Share Tech Mono', monospace; font-size: 10px; color: var(--dim); }
+.head-links { align-items: center; }
+.pf-rank { font-size: 28px; font-weight: 700; letter-spacing: 0.12em; color: var(--accent); }
+.medals { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.medal { border: 1px solid var(--line); padding: 7px 9px; opacity: 0.5; }
+.medal.got { opacity: 1; border-color: rgba(255, 210, 63, 0.5); background: rgba(255, 210, 63, 0.06); }
+.medal b { display: block; font-size: 13px; letter-spacing: 0.08em; }
+.medal span { font-size: 11px; color: var(--dim); }
+
+/* ── Touch controls ── */
+#touchUI { position: fixed; inset: 0; z-index: 8; pointer-events: none; display: none; touch-action: none; }
+#touchUI.show { display: block; }
+#touchUI > * { pointer-events: auto; }
+.t-stick { position: absolute; left: 28px; bottom: 28px; width: 150px; height: 150px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.3); background: rgba(0,0,0,0.18); }
+.t-knob { position: absolute; left: 50%; top: 50%; width: 60px; height: 60px; margin: -30px 0 0 -30px; border-radius: 50%; background: rgba(255,255,255,0.35); }
+.t-throttle { position: absolute; right: 24px; bottom: 28px; width: 46px; height: 190px; border: 2px solid rgba(255,255,255,0.3); background: rgba(0,0,0,0.18); }
+.t-thr-fill { position: absolute; left: 0; right: 0; bottom: 0; height: 50%; background: rgba(255,181,71,0.45); }
+.t-throttle span { position: absolute; top: -18px; width: 100%; text-align: center; font-size: 11px; color: rgba(255,255,255,0.7); }
+.t-buttons { position: absolute; right: 86px; bottom: 28px; display: grid; grid-template-columns: repeat(4, 58px); gap: 6px; }
+.t-buttons button { height: 44px; border: 1px solid rgba(255,255,255,0.3); background: rgba(0,0,0,0.3); color: #fff; font-family: 'Share Tech Mono', monospace; font-size: 12px; }
+.t-buttons button.big { height: 58px; background: rgba(255,181,71,0.25); border-color: rgba(255,181,71,0.6); }

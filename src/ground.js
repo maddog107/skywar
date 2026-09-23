@@ -186,8 +186,9 @@ class GroundTarget {
         this.ammo = type === 'sam' ? 4 : Infinity;
     }
 
-    damage(amount, source) {
+    damage(amount, source, kind) {
         if (!this.alive) return;
+        this.lastKind = kind;
         this.hp -= amount;
         this.health = this.hp;
         if (this.hp <= 0) this.destroy(source);

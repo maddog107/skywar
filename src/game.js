@@ -125,6 +125,7 @@ export class Game {
         this._navalWon = false; this.navalWinT = 0; this._practiceDone = false; this.spawnT = 3;
         this.gloc = 0; this.whiteout = 0; this.missileCam = null; this.pullUp = false;
         this.photo = null; this.hideHud = false;
+        if (this.nvg) { this.nvg = false; this.onNvg && this.onNvg(false); }
         if (this.rings) { this.rings.remove(); this.rings = null; }
         this.navTarget = null;
         this.lives = this.mission ? (this.mission.lives ?? 0) : ['freeflight', 'sandbox', 'practice', 'rings'].includes(this.mode) ? Infinity : 2;
@@ -241,7 +242,7 @@ export class Game {
         this.aimDir.copy(p.vel.lengthSq() > 1 && !p.onGround ? p.vel : _v.set(0, 0, -1).applyQuaternion(p.quat)).normalize();
         this.camQuat.copy(p.quat);
         this.camPos.copy(p.pos).add(_v.set(0, 6, 30).applyQuaternion(p.quat));
-        this.rotateSpeed = Math.sqrt(G / (p.liftK * 1.65 * 1.2)) * 1.05;
+        this.rotateSpeed = refSpeeds(p.spec).takeoff;
         this.lockTarget = null; this.lockProgress = 0;
         this._lowHpCall = false;
         return p;
@@ -310,6 +311,7 @@ export class Game {
         const cv = this.naval.homeCarrier && this.naval.homeCarrier.alive ? this.naval.homeCarrier : null;
         if (kind.startsWith('cv') && !cv) { this.addFeed('NO CARRIER AVAILABLE', '#ffc23f'); return; }
         if (this.pilotMode) { this.removeSeat(this.pilotMode.seat); this.pilotMode = null; }
+        this.photo = null; this.hideHud = false; this.missileCam = null;
         const old = this.player;
         if (old) { old.remove(); const i = this.aircraft.indexOf(old); if (i >= 0) this.aircraft.splice(i, 1); }
         this.autopilot.disengage();
@@ -379,6 +381,7 @@ export class Game {
     enterPilotMode(ac, seat) {
         ac.isPlayer = false;
         ac.abandoned = true;
+        this.autopilot.disengage();
         this.pilotMode = new PilotOnFoot(this, seat, ac);
         this.state = 'playing';
         this.missileCam = null;
@@ -394,6 +397,7 @@ export class Game {
         this.killmarkerT = this.time;
         this.slowmoT = 0.4;
         this.addFeed('PILOT KILLED — PRESS E TO HIJACK  +200', '#ffc23f');
+        this.events.emit('riflePilot', a);
         this.audio.say(pick(['Pilot is down!', 'Got him through the canopy!']));
     }
 
@@ -408,6 +412,7 @@ export class Game {
             this.addFeed(a.callsign + ' BAILED OUT FOR YOU', '#5ab8ff');
         }
         if (pm) this.removeSeat(pm.seat);
+        this.autopilot.disengage();
         if (this.player && this.player !== a) this.player.isPlayer = false;
         for (const m of a.incoming) m.target = null; // friendly missiles chasing the stolen jet go dumb
         a.incoming.length = 0;
@@ -421,11 +426,12 @@ export class Game {
         this.pilotMode = null;
         this.state = 'playing';
         this.aimDir.copy(a.vel.lengthSq() > 1 && !a.onGround ? a.vel : a.getForward(_v)).normalize();
-        this.rotateSpeed = Math.sqrt(G / (a.liftK * 1.65 * 1.2)) * 1.05;
+        this.rotateSpeed = refSpeeds(a.spec).takeoff;
         this.camQuat.copy(a.quat);
         this.lockTarget = null;
         this.score += 500;
         this.showBanner('HIJACKED!', a.spec.name.toUpperCase() + ' IS YOURS  +500', 3.5, '#ffc23f');
+        this.events.emit('hijack', a);
     }
 
     pilotKilled() {
@@ -717,7 +723,11 @@ export class Game {
 
     // ═════════════ Actions ═════════════
     togglePhoto() {
-        if (this.photo) { this.photo = null; this.hideHud = false; this.addFeed('PHOTO MODE OFF', '#5dffa0'); return; }
+        if (this.photo) {
+            this.photo = null; this.hideHud = false; this.addFeed('PHOTO MODE OFF', '#5dffa0');
+            if (this.settings.controlMode === 'mousestick' && !this.pilotMode) this.input.unlock();
+            return;
+        }
         const target = this.pilotMode ? this.pilotMode.pos : this.player.pos;
         const off = _v.subVectors(this.camera.position, target);
         this.photo = { yaw: Math.atan2(off.x, off.z), pitch: Math.asin(clamp(off.y / Math.max(off.length(), 1), -0.95, 0.95)), dist: clamp(off.length(), 8, 400), target: target.clone() };
@@ -727,6 +737,7 @@ export class Game {
 
     onAction(a) {
         if (a === 'photo' && (this.state === 'playing' || this.photo)) { this.togglePhoto(); return; }
+        if (this.photo && a !== 'pause' && a !== 'lockLost') return; // frozen: no flying while taking pictures
         if (a === 'lockLost') {
             if (this.state === 'playing' && (this.settings.controlMode !== 'mousestick' || this.pilotMode)) this.pause(true);
             return;
@@ -768,6 +779,12 @@ export class Game {
                 this.audio.tick(500 + n * 60, 0.06, 0.04);
                 break;
             }
+            case 'nvg':
+                this.nvg = !this.nvg;
+                this.onNvg && this.onNvg(this.nvg);
+                this.addFeed(this.nvg ? 'NIGHT VISION ON' : 'NIGHT VISION OFF', '#5dffa0');
+                this.audio.tick(1400, 0.08, 0.06);
+                break;
             case 'autoland':
                 if (this.autopilot.active === 'land') this.autopilot.disengage('AUTOPILOT OFF');
                 else this.autopilot.land();
@@ -987,19 +1004,23 @@ export class Game {
         } else {
             c.pitch = this.stick.pitch; c.roll = this.stick.roll; c.yaw = this.stick.yaw;
             // mouse free-look in keyboard mode
-            this.freeLook.yaw = clamp(this.freeLook.yaw - mouse.dx * 0.004, -2.6, 2.6);
-            this.freeLook.pitch = clamp(this.freeLook.pitch - mouse.dy * 0.004, -1.2, 1.4);
+            const fs = 0.004 * this.settings.sensitivity;
+            this.freeLook.yaw = clamp(this.freeLook.yaw - mouse.dx * fs, -2.6, 2.6);
+            this.freeLook.pitch = clamp(this.freeLook.pitch - mouse.dy * fs, -1.2, 1.4);
             if (mouse.dx || mouse.dy) this.freeLook.t = 1.2;
             this.freeLook.t -= dt;
             if (this.freeLook.t < 0) { this.freeLook.yaw = damp(this.freeLook.yaw, 0, 3, dt); this.freeLook.pitch = damp(this.freeLook.pitch, 0, 3, dt); }
         }
         // throttle
         c.throttle = clamp(c.throttle + s.throttleDelta * dt * 0.6 - mouse.wheel * 0.05, 0, 1);
+        const tc = this.input.touch;
+        if (tc && tc.throttle != null) { c.throttle = tc.throttle; tc.throttle = null; }
+        if (tc && tc.active && mode !== 'keyboard') { c.pitch = this.stick.pitch; c.roll = this.stick.roll; } // touch flies like a stick
         if (p.onGround) {
             // Space = wheel brakes on the ground (guns still on LMB)
             p.airbrake = s.airbrake || this.input.down('Space');
             s.fire = this.input.mouse.left;
-            if (p.deck && c.throttle > 0.93 && p.relSpeed < 5 && p.startCatapult()) {
+            if (p.deck && c.throttle >= 0.89 && p.relSpeed < 5 && p.startCatapult()) {
                 this.addFeed('CATAPULT!', '#5dffa0');
                 this.shake = 1.2;
                 this.audio.whoosh(0.8);
@@ -1272,7 +1293,7 @@ export class Game {
             victory, score: Math.round(this.score), kills: this.kills, wave: this.wave, time: this.clockText(),
             accuracy: acc, missiles: this.missilesFired, missileHits: this.missileHits, groundKills: this.groundKills,
             mode: this.mission ? 'missions' : this.mode, aircraft: this.aircraftId,
-            mission: this.mission ? this.mission.title : null, missionId: this.missionId, daily: this.isDaily,
+            mission: this.mission ? this.mission.title : null, missionId: this.missionId, daily: this.isDaily, seconds: this.missionTime,
         });
         if (victory) this.audio.say(this.mission ? 'Mission accomplished. Outstanding work.' : 'Mission complete. All targets destroyed. Return to base.', true);
         else if (this.mission) this.audio.say('Mission failed.', true);

@@ -736,6 +736,16 @@ export class HUD {
 
     drawScreenEffects(game) {
         const ctx = this.ctx, W = this.w, H = this.h;
+        if (game.nvg) {
+            // goggle tube vignette + scanlines + sensor noise
+            const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.38, W / 2, H / 2, Math.max(W, H) * 0.62);
+            g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,12,0,0.9)');
+            ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+            ctx.fillStyle = 'rgba(0,40,0,0.10)';
+            for (let y = (this.t * 60) % 3; y < H; y += 3) ctx.fillRect(0, y, W, 1);
+            ctx.fillStyle = 'rgba(180,255,180,0.05)';
+            for (let i = 0; i < 180; i++) ctx.fillRect(Math.random() * W, Math.random() * H, 2, 2);
+        }
         // G-induced grey-out / red-out
         const gl = game.gloc || 0;
         if (gl > 0.01) {

@@ -6,7 +6,7 @@ import { clamp } from './util.js';
 const ACTIONS = {
     KeyV: 'camera', KeyT: 'target', Tab: 'target', KeyG: 'gear', KeyH: 'help', Escape: 'pause', KeyP: 'pause',
     KeyM: 'missile', Enter: 'confirm', KeyR: 'flares', KeyF: 'flaps', KeyJ: 'eject', KeyN: 'spawn', KeyL: 'loadout',
-    KeyX: 'weapon', KeyK: 'missilecam', KeyB: 'spoilers', KeyY: 'autoland', KeyU: 'autotakeoff', KeyO: 'photo',
+    KeyX: 'weapon', KeyK: 'missilecam', KeyB: 'spoilers', KeyY: 'autoland', KeyU: 'autotakeoff', KeyO: 'photo', KeyI: 'nvg',
     Digit1: 'thr1', Digit2: 'thr2', Digit3: 'thr3', Digit4: 'thr4', Digit5: 'thr5', Digit6: 'thr6', Digit7: 'thr7', Digit8: 'thr8', Digit9: 'thr9', Digit0: 'thr10',
 };
 
@@ -104,6 +104,13 @@ export function readStick(input, settings) {
     s.fire = input.down('Space') || input.mouse.left;
     s.airbrake = !!input.spoilersOn;
     s.manual = s.pitch !== 0 || s.roll !== 0;
+    const tc = input.touch;
+    if (tc && tc.active) {
+        s.pitch = clamp(s.pitch + tc.pitch * inv, -1, 1);
+        s.roll = clamp(s.roll + tc.roll, -1, 1);
+        s.fire = s.fire || tc.fire;
+        if (Math.abs(tc.pitch) + Math.abs(tc.roll) > 0.05) s.manual = true;
+    }
     const pad = input.readPad();
     if (pad) {
         s.pitch = clamp(s.pitch + pad.pitch * inv, -1, 1);

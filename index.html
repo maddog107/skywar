@@ -32,6 +32,8 @@
     <header class="menu-head">
         <div class="logo small">SKY<span>WAR</span></div>
         <div class="head-links">
+            <button class="pilot-badge" id="pilotBadge" data-open="profileModal"></button>
+            <button class="link" data-open="profileModal">PILOT</button>
             <button class="link" data-open="controlsModal">CONTROLS</button>
             <button class="link" data-open="settingsModal">SETTINGS</button>
             <button class="link" data-open="creditsModal">CREDITS</button>
@@ -60,7 +62,7 @@
         </div>
     </aside>
     <footer class="menu-foot mono dim">
-        <span>MOUSE — AIM</span><span>LMB/SPACE — GUNS</span><span>RMB/M — FIRE WEAPON</span><span>X — SWITCH WEAPON</span><span>R — FLARES</span><span>F — FLAPS</span><span>JJ — EJECT</span>
+        <span>MOUSE — AIM</span><span>LMB/SPACE — GUNS</span><span>RMB/M — FIRE WEAPON</span><span>X — SWITCH WEAPON</span><span>R — FLARES</span><span>F — FLAPS</span><span>B — SPOILERS</span><span>G — GEAR</span><span>Y/U — AUTOPILOT</span><span>O — PHOTO</span><span>JJ — EJECT</span>
         <span>T — TARGET</span><span>V — CAMERA</span><span>1–0 / Z / SHIFT — THROTTLE</span><span>C — PADLOCK</span><span>ESC — PAUSE</span>
     </footer>
 </div>
@@ -109,11 +111,13 @@
             <div class="row"><label>MOUSE SENSITIVITY</label><input type="range" id="setSens" min="0.3" max="2.5" step="0.05"></div>
             <div class="row"><label>INVERT PITCH</label><div class="seg" id="setInvert"></div></div>
             <div class="row"><label>GRAPHICS</label><div class="seg" id="setQuality"></div></div>
-            <div class="row"><label>VOLUME</label><input type="range" id="setVolume" min="0" max="1" step="0.05"></div>
+            <div class="row"><label>SOUND VOLUME</label><input type="range" id="setVolume" min="0" max="1" step="0.05"></div>
+            <div class="row"><label>MUSIC VOLUME</label><input type="range" id="setMusic" min="0" max="1" step="0.05"></div>
             <div class="row"><label>RADIO CALLOUTS</label><div class="seg" id="setCallouts"></div></div>
             <div class="row"><label>G-EFFECTS (BLACKOUT)</label><div class="seg" id="setG"></div></div>
             <div class="row"><label>START IN COCKPIT</label><div class="seg" id="setCockpit"></div></div>
             <div class="row"><label>FUEL CONSUMPTION</label><div class="seg" id="setFuel"></div></div>
+            <div class="row"><label>JETS &amp; PAINT</label><div class="seg" id="setUnlocks"></div></div>
         </div>
         <button class="btn" data-close>DONE</button>
     </div>
@@ -142,17 +146,28 @@
             <div><b>T / Tab</b><span>Cycle target</span></div>
             <div><b>C / L (hold)</b><span>Padlock target / look behind</span></div>
             <div><b>O</b><span>Photo mode: freeze the action, orbit and zoom the camera, no HUD</span></div>
+            <div><b>I</b><span>Night vision goggles</span></div>
             <div><b>V · K</b><span>Camera: chase · cockpit · far · cinematic · missile cam</span></div>
             <div><b>Y · U</b><span>Autopilot: auto-land at the nearest friendly runway/carrier · auto-takeoff (stick cancels)</span></div>
             <div><b>J J</b><span>Eject (double-tap)</span></div>
-            <div><b>Ejected</b><span>Mouse look · LMB AK-47 · R reload · WASD/arrows steer chute · E hijack a nearby jet · Enter new jet after landing</span></div>
+            <div><b>Ejected</b><span>Mouse look · LMB AK-47 · R reload · WASD/arrows steer chute · E hijack a nearby jet · Enter/Space new jet after landing</span></div>
             <div><b>L (on the pad)</b><span>Change loadout while stopped on a friendly runway or carrier</span></div>
             <div><b>N</b><span>Spawn a bandit (Sandbox / Free Flight)</span></div>
             <div><b>Esc / P</b><span>Pause</span></div>
-            <div><b>Gamepad</b><span>Sticks fly · RT guns · A weapon · B flares · X target · Y camera · LB/RB throttle · D-pad weapon</span></div>
+            <div><b>H</b><span>Help (this screen)</span></div>
+            <div><b>Gamepad</b><span>Left stick fly · right stick X rudder · RT guns · LT airbrake · A weapon · B flares · X target · Y camera · LB/RB throttle · D-pad weapon · Back gear · Start pause</span></div>
         </div>
         <div class="mono dim small-text">Free Flight / Sandbox: press Esc for QUICK POSITION (runway or carrier approach, runway takeoff, catapult). Carrier: full power (9 or 0) on deck fires the catapult; land on the angled deck to catch a wire. Stop on a friendly runway or deck to repair, refuel and rearm.</div>
         <button class="btn" data-close>GOT IT</button>
+    </div>
+</div>
+
+<!-- PILOT PROFILE -->
+<div id="profileModal" class="modal">
+    <div class="center-card wide">
+        <div class="card-title">PILOT</div>
+        <div id="profileBody"></div>
+        <button class="btn" data-close>CLOSE</button>
     </div>
 </div>
 

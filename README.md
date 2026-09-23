@@ -75,13 +75,16 @@ You need a local server because the game uses ES modules and loads `.glb` models
 | L | Change loadout while stopped on a friendly pad (look behind in the air) |
 | T / Tab | Cycle target |
 | C (hold) / L (hold) | Padlock target / look behind |
-| V | Camera: chase, cockpit, far, cinematic |
+| V / K | Camera: chase, cockpit, far, cinematic / missile cam |
+| O | Photo mode (freeze, orbit, zoom, no HUD) |
+| H | Help (controls) |
 | B / G | Spoilers on/off / landing gear |
 | Enter | New jet after a crash landing or parachute landing |
-| Esc | Pause |
+| Esc / P | Pause (Quick Position in Free Flight / Sandbox) |
 
-A gamepad is supported: sticks fly, RT fires guns, A fires the weapon, B drops flares, X cycles
-targets, Y changes camera and the d-pad switches weapons.
+A gamepad is supported: left stick flies, right stick X is rudder, RT fires guns, LT is the airbrake,
+A fires the weapon, B drops flares, X cycles targets, Y changes camera, LB/RB throttle, D-pad switches
+weapons, Back toggles gear and Start pauses.
 
 ## Code layout
 

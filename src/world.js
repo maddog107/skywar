@@ -261,6 +261,7 @@ export class World {
 
         this.terrainMat.emissive = new THREE.Color(night ? 0x020306 : 0x000000);
         this.baseLights.forEach(l => (l.visible = night || key === 'dusk'));
+        if (this.towns) this.towns.setNight(night || key === 'dusk');
         this.updateEnvironment();
     }
 

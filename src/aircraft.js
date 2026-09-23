@@ -323,6 +323,7 @@ export class Aircraft {
 
     // Engine thrust (m/s²) for the current throttle, including fuel starvation
     thrustFor(rho) {
+        if (this.flameout && this.game.settings?.fuel === false && !this.bellied) { this.flameout = false; this.fuel = Math.max(this.fuel, 0.05); }
         if (this.flameout || this.bellied) return 0;
         const t = this.throttle;
         return (t <= 0.9 ? this.thrustMil * (t / 0.9) : this.thrustMil + (this.thrustAB - this.thrustMil) * ((t - 0.9) / 0.1)) * (0.45 + 0.55 * rho);

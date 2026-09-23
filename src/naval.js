@@ -299,6 +299,7 @@ export class Ship {
         this.hp -= amount * mult;
         this.health = this.hp;
         this.lastHitBy = source;
+        this.lastKind = kind;
         const dmgFrac = 1 - Math.max(this.hp, 0) / this.maxHp;
         // fires spread as damage accumulates: one small blaze at first, a burning wreck near the end
         this.fires = this.fires || [];
