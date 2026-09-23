@@ -51,8 +51,8 @@ export function groundHeight(x, z) {
 export function isOnRunway(x, z) {
     for (const b of BASES) {
         const c = Math.cos(b.heading), s = Math.sin(b.heading);
-        const lx = (x - b.x) * c - (z - b.z) * s;
-        const lz = (x - b.x) * s + (z - b.z) * c;
+        const lx = (x - b.x) * c + (z - b.z) * s;
+        const lz = -(x - b.x) * s + (z - b.z) * c;
         if (Math.abs(lx) < RUNWAY.width * 0.6 && Math.abs(lz) < RUNWAY.length / 2 + 40) return b;
     }
     return null;
@@ -168,6 +168,7 @@ export class World {
         const rt = pmrem.fromScene(envScene, 0.02);
         this.skyMat.uniforms.camPos.value.copy(saved);
         this.skyMat.uniforms.domeCentered.value = 0;
+        dome.geometry.dispose(); ground.geometry.dispose(); ground.material.dispose();
         if (this.envRT) this.envRT.dispose();
         this.envRT = rt;
         this.scene.environment = rt.texture;

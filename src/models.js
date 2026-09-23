@@ -151,11 +151,17 @@ export function createAircraftModel(id) {
     }
     if (!cache['proc_' + id]) {
         const r = buildProcedural(id);
+        // spinning props stay separate so segmentation doesn't bake them into the airframe
+        r.rig.propTemplates = (r.rig.props || []).map(pr => { pr.parent && pr.parent.remove(pr); return pr; });
+        r.rig.props = [];
         r.object = safeSegment(r.object, id);
         cache['proc_' + id] = r;
     }
     const src = cache['proc_' + id];
-    return { object: src.object.clone(true), rig: cloneRig(src.rig), fromFile: false };
+    const object = src.object.clone(true);
+    const rig = cloneRig(src.rig);
+    rig.props = (src.rig.propTemplates || []).map(t => { const c = t.clone(true); object.add(c); return c; });
+    return { object, rig, fromFile: false };
 }
 
 export function hasFileModel(id) { return !!cache[id]; }
@@ -179,11 +185,13 @@ export function applyLivery(model, key) {
         if (!o.userData.origMat) o.userData.origMat = o.material;
         const base = o.userData.origMat;
         if (!liv.color || base.isShaderMaterial || base.transparent || base.isMeshPhysicalMaterial || base.userData?.noPaint || !base.color) {
+            if (o.material !== base) o.material.dispose();
             o.material = base;
             return;
         }
         const lum = (base.color.r + base.color.g + base.color.b) / 3;
         if (lum < 0.06 && !base.map) { o.material = base; return; } // keep dark trim, tyres, nozzles
+        if (o.material !== base) o.material.dispose();
         const m = base.clone();
         const c = new THREE.Color(liv.color);
         if (base.map) m.color.copy(c).lerp(white, 0.35);
@@ -199,7 +207,7 @@ function cloneRig(r) {
         nozzles: r.nozzles.map(v => v.clone()),
         wingtips: r.wingtips.map(v => v.clone()),
         cockpit: r.cockpit.clone(),
-        props: r.props,
+        props: r.props ? [...r.props] : [],
     };
 }
 

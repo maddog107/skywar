@@ -45,7 +45,13 @@ export class Input {
             if (this.locked || this.freeMouse) { this.mouse.dx += e.movementX || 0; this.mouse.dy += e.movementY || 0; }
         });
         window.addEventListener('wheel', (e) => { this.mouse.wheel += Math.sign(e.deltaY); }, { passive: true });
-        document.addEventListener('pointerlockchange', () => { this.locked = document.pointerLockElement === this.dom; });
+        document.addEventListener('pointerlockchange', () => {
+            const was = this.locked;
+            this.locked = document.pointerLockElement === this.dom;
+            // Esc while the pointer is captured only releases the lock in most browsers: treat it as pause
+            if (was && !this.locked && !this.selfUnlock) this.emit('lockLost');
+            this.selfUnlock = false;
+        });
         window.addEventListener('gamepadconnected', (e) => { this.pad = e.gamepad.index; this.emit('gamepad'); });
     }
 
@@ -53,7 +59,7 @@ export class Input {
     emit(a) { this.listeners.forEach(fn => fn(a)); }
 
     lock() { if (!this.locked && this.dom.requestPointerLock) { try { const r = this.dom.requestPointerLock(); if (r && r.catch) r.catch(() => {}); } catch (e) { /* ignore */ } } }
-    unlock() { if (this.locked) document.exitPointerLock(); }
+    unlock() { if (this.locked) { this.selfUnlock = true; document.exitPointerLock(); } }
 
     down(...codes) { return codes.some(c => this.keys[c]); }
 
@@ -93,7 +99,7 @@ export function readStick(input, settings) {
     if (input.down('KeyQ')) s.yaw += 1;
     if (input.down('KeyE')) s.yaw -= 1;
     if (input.down('ShiftLeft', 'ShiftRight', 'Equal', 'NumpadAdd')) s.throttleDelta += 1;
-    if (input.down('KeyZ', 'ControlLeft', 'Minus', 'NumpadSubtract')) s.throttleDelta -= 1;
+    if (input.down('KeyZ', 'Minus', 'NumpadSubtract')) s.throttleDelta -= 1;
     s.fire = input.down('Space') || input.mouse.left;
     s.airbrake = input.down('KeyB');
     s.manual = s.pitch !== 0 || s.roll !== 0;

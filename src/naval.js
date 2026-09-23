@@ -291,7 +291,7 @@ export class Ship {
 
     damage(amount, source, kind) {
         if (!this.alive) return;
-        const mult = kind === 'missile' ? 2.5 : 1;
+        const mult = kind === 'missile' ? 2.5 : kind === 'rocket' ? 1.8 : 1;
         this.hp -= amount * mult;
         this.health = this.hp;
         this.lastHitBy = source;

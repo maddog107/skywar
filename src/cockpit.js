@@ -203,7 +203,7 @@ export class Cockpit {
         annun('ab', 'A/B', '#40ff70', -0.43, 0.11);
         annun('gear', 'GEAR', '#40ff70', 0.43, 0.11);
         annun('brake', 'BRAKE', '#ffb020', -0.43, 0.08);
-        annun('fuel', 'LOW HP', '#ff3020', 0.43, 0.08);
+        annun('fuel', 'FUEL', '#ff3020', 0.43, 0.08);
 
         // ── Side consoles ──
         for (const s of [-1, 1]) {
@@ -411,7 +411,7 @@ export class Cockpit {
         ctx.fillStyle = '#3dff8a'; ctx.font = 'bold 22px monospace';
         if (!p) return;
         ctx.fillText('TGT ' + (game.lockTarget ? (Math.round(game.lockTarget.pos.distanceTo(p.pos) / 100) / 10).toFixed(1) + 'KM' : '---'), 10, 34);
-        ctx.fillText('M' + p.mach.toFixed(2) + ' ' + p.gLoad.toFixed(1) + 'G ' + (['SRM', 'LRM', 'RKT'][game.slot || 0]), 10, 72);
+        ctx.fillText('M' + p.mach.toFixed(2) + ' ' + p.gLoad.toFixed(1) + 'G ' + (['SRM', 'LRM', 'RKT', 'BMB'][game.slot || 0]), 10, 72);
     }
 
     drawGauge(g, p) {
@@ -503,7 +503,7 @@ export class Cockpit {
         this.setLight('ab', p.afterburner);
         this.setLight('gear', p.gear);
         this.setLight('brake', p.airbrake);
-        this.setLight('fuel', p.health / p.maxHealth < 0.3);
+        this.setLight('fuel', p.fuel < 0.2 && game.settings.fuel !== false);
         this.setLight('master', (game.time - p.lastHitTime < 2 || p.health / p.maxHealth < 0.3) && blink);
 
         // instruments at ~20 Hz, staggered

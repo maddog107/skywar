@@ -105,7 +105,8 @@ async function boot() {
     game = new Game({ scene, camera, world, effects, audio, input, hud, cockpit, settings });
     game.onGameOver = showGameOver;
     game.onPause = (on) => $('pause').classList.toggle('show', on);
-    game.onHelp = () => openModal('controlsModal');
+    game.onHelp = () => { if (game.state === 'playing') game.pause(true); openModal('controlsModal'); };
+    game.onSettingsChange = () => { save(); document.querySelectorAll('.seg').forEach(sg => { const k = sg.dataset.key; if (k) sg.querySelectorAll('button').forEach(b => b.classList.toggle('sel', b.dataset.val === String(settings[k]))); }); };
     game.applyLivery = (ac) => applyLivery(ac.model, settings.livery, ac.type);
     window.skywar = { game, settings, world, effects, cockpit, camera, Pilot, renderer };
     applyQuality();
@@ -301,6 +302,8 @@ function showMenu() {
 }
 
 function toMenu() {
+    try { window.speechSynthesis && speechSynthesis.cancel(); } catch (e) { /* ignore */ }
+    input.freeMouse = false;
     game.cleanup();
     game.state = 'menu';
     cockpitPass.enabled = false;
@@ -317,6 +320,7 @@ function launch() {
     if (showcase) { showcase.remove(); showcase = null; }
     world.setTime(settings.time);
     $('menu').classList.remove('show');
+    input.consumeMouse();
     game.start({ mode: settings.mode, aircraft: settings.aircraft });
     // compile every material now so ships, targets and explosions don't hitch on first sight
     try {
@@ -389,6 +393,10 @@ window.skywarStep = (n = 60, dt = 1 / 60) => { for (let i = 0; i < n; i++) frame
 function frame(dt) {
     if (game.state === 'menu') updateMenuScene(dt);
     else game.update(dt);
+    if (game.state === 'menu' || game.state === 'paused' || game.state === 'over') {
+        audio.update(dt, null, { playing: false });
+        input.readPad(); // keep gamepad buttons (Start to unpause) alive outside flight
+    } else if (game.pilotMode) input.readPad();
 
     cockpitPass.enabled = cockpit.enabled && game.state !== 'menu' && ((game.player && game.player.alive) || !!game.pilotMode);
     $('clickToFly').classList.toggle('show', game.state === 'playing' && settings.controlMode !== 'mousestick' && !input.locked);

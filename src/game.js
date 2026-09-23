@@ -50,6 +50,7 @@ export class Game {
         this.naval = new Naval(this);
         this.pilotMode = null;
         this.lives = 0;
+        this.slot = 0;
         this._surf = { h: 0, ship: null, water: false, runway: null, hull: false };
         this.aircraft = [];
         this.player = null;
@@ -111,7 +112,11 @@ export class Game {
         this.cameraMode = this.settings.defaultCockpit ? 'cockpit' : 'chase';
 
         this.callsign = pick(CALLSIGNS);
+        this.slot = 0;
+        this._navalWon = false; this.navalWinT = 0; this._practiceDone = false; this.spawnT = 3;
+        this.gloc = 0; this.whiteout = 0; this.missileCam = null; this.pullUp = false;
         this.lives = ['freeflight', 'sandbox', 'practice'].includes(this.mode) ? Infinity : 2;
+        this.input.consumeMouse();
         this.pilotMode = null;
         this.naval.spawnHomeCarrier();
         if (this.mode === 'strike' || this.mode === 'sandbox') this.ground.spawnEnemyBase();
@@ -218,10 +223,17 @@ export class Game {
         if (this.lives <= 0) { this.gameOver(false); return; }
         if (this.lives !== Infinity) this.lives--;
         if (this.pilotMode) { this.removeSeat(this.pilotMode.seat); this.pilotMode = null; }
+        if (this.player) {
+            const old = this.player;
+            old.isPlayer = false; old.abandoned = true;
+            // an unmanned jet left circling forever would clutter the sky: let it go
+            if (old.alive) { old.alive = false; old.explode(false); }
+        }
         const w = this.startPoint();
         this.spawnPlayer(w === 'air' ? 'air' : w);
         this.state = 'playing';
         this.deathT = 0;
+        this.gloc = 0; this.whiteout = 0; this.damageFlash = 0;
         this.cameraMode = this.settings.defaultCockpit ? 'cockpit' : 'chase';
         this.showBanner('NEW AIRFRAME', this.lives === Infinity ? '' : this.lives + ' SPARE JET' + (this.lives === 1 ? '' : 'S') + ' LEFT', 3);
         this.input.lock();
@@ -275,6 +287,10 @@ export class Game {
             this.addFeed(a.callsign + ' BAILED OUT FOR YOU', '#5ab8ff');
         }
         if (pm) this.removeSeat(pm.seat);
+        if (this.player && this.player !== a) this.player.isPlayer = false;
+        for (const m of a.incoming) m.target = null; // friendly missiles chasing the stolen jet go dumb
+        a.incoming.length = 0;
+        if (a.lockedBy) a.lockedBy.clear();
         a.pilot = null; a.pilotAI = null; a.pilotDead = false; a.abandoned = false;
         a.ejected = false; a.ejectT = -1; a.ejectSeat = null;
         a.team = 'blue'; a.isPlayer = true; a.callsign = this.callsign;
@@ -283,7 +299,8 @@ export class Game {
         this.player = a;
         this.pilotMode = null;
         this.state = 'playing';
-        this.aimDir.copy(a.vel).normalize();
+        this.aimDir.copy(a.vel.lengthSq() > 1 && !a.onGround ? a.vel : a.getForward(_v)).normalize();
+        this.rotateSpeed = Math.sqrt(G / (a.liftK * 1.65 * 1.2)) * 1.05;
         this.camQuat.copy(a.quat);
         this.lockTarget = null;
         this.score += 500;
@@ -399,13 +416,14 @@ export class Game {
                 if (ac.health / ac.maxHealth < 0.35 && !this._lowHpCall) { this._lowHpCall = true; this.audio.say("I'm hit! I'm hit!", true); }
             }
             if (source === this.player) {
-                this.hits++;
+                if (kind === 'gun') this.hits++;
                 this.hitmarkerT = this.time;
                 if (kind === 'gun') this.audio.tick(2600, 0.1, 0.025);
             }
         });
         ev.on('bulletHit', () => {});
         ev.on('killed', (ac, { source, kind }) => {
+            if (this.state === 'over') return;
             if (ac.isPlayer) {
                 this.state = 'dead';
                 this.deathT = 0;
@@ -413,7 +431,7 @@ export class Game {
                 this.audio.say('Mayday, mayday! Ejecting!', true);
                 return;
             }
-            if (ac.abandoned && this.pilotMode) return;
+            if (ac.abandoned) return;
             const byPlayer = source === this.player;
             const name = ac.spec.name;
             if (ac.team === 'red') {
@@ -527,6 +545,7 @@ export class Game {
     cycleLoadout() {
         const k = LOADOUT_KEYS[(LOADOUT_KEYS.indexOf(this.settings.loadout || 'balanced') + 1) % LOADOUT_KEYS.length];
         this.settings.loadout = k;
+        this.onSettingsChange && this.onSettingsChange();
         this.rearm(this.player);
         this.showBanner('LOADOUT: ' + LOADOUTS[k].label, 'Reloaded on the ground', 2.5);
     }
@@ -550,7 +569,12 @@ export class Game {
 
     // ═════════════ Actions ═════════════
     onAction(a) {
+        if (a === 'lockLost') {
+            if (this.state === 'playing' && (this.settings.controlMode !== 'mousestick' || this.pilotMode)) this.pause(true);
+            return;
+        }
         if (a === 'pause') {
+            if (document.querySelector('.modal.show') && this.state === 'paused') { document.querySelectorAll('.modal.show').forEach(m => m.classList.remove('show')); return; }
             if (this.state === 'playing') this.pause(true);
             else if (this.state === 'paused') this.pause(false);
             return;
@@ -611,7 +635,15 @@ export class Game {
     pause(on) {
         this.state = on ? 'paused' : 'playing';
         this.onPause && this.onPause(on);
-        if (on) this.input.unlock(); else if (this.settings.controlMode !== 'mousestick') this.input.lock();
+        this.input.consumeMouse();
+        if (on) {
+            this.input.freeMouse = false;
+            this.input.unlock();
+            try { window.speechSynthesis && speechSynthesis.cancel(); } catch (e) { /* ignore */ }
+        } else {
+            document.querySelectorAll('.modal.show').forEach(m => m.classList.remove('show'));
+            if (this.settings.controlMode !== 'mousestick' || this.pilotMode) this.input.lock();
+        }
     }
 
     firePlayerMissile() {
@@ -851,6 +883,7 @@ export class Game {
             p.controls.throttle = 0;
             this.firing = false;
         }
+        for (const a of this.aircraft) if (a.lockedBy) a.lockedBy.clear(); // lockers re-register each frame
         for (const a of this.aircraft) if (a.pilot && a.alive && !a.pilotDead) a.pilot.update(dt);
         for (const a of this.aircraft) a.update(dt);
         this.weapons.update(dt);
@@ -862,7 +895,7 @@ export class Game {
         // purge dead AI that finished exploding
         for (let i = this.aircraft.length - 1; i >= 0; i--) {
             const a = this.aircraft[i];
-            if (a.exploded && !a.isPlayer) {
+            if (a.exploded && a !== this.player) {
                 a.remove();
                 this.aircraft.splice(i, 1);
             }
@@ -870,6 +903,11 @@ export class Game {
         for (const a of this.aircraft) if (a.lockedBy) for (const l of a.lockedBy) if (!l.alive) a.lockedBy.delete(l);
 
         this.damageFlash = Math.max(0, this.damageFlash - dt * 1.5);
+        if (pm || !p || !p.alive || this.state !== 'playing') {
+            this.gloc = Math.max(0, this.gloc - rawDt * 0.8);
+            this.whiteout = Math.max(0, this.whiteout - rawDt * 2);
+            this.pullUp = false;
+        }
         this.shake = Math.max(0, this.shake - rawDt * 2.2);
         if (this.state === 'dead') {
             this.deathT += rawDt;
@@ -961,10 +999,11 @@ export class Game {
             }
             if (c && !c.alive && !this._navalWon) {
                 this._navalWon = true;
+                this.navalWinT = 6;
                 this.score += 5000;
                 this.showBanner('CARRIER SUNK', '+5000', 5, '#5dffa0');
-                setTimeout(() => { if (this.state === 'playing') this.gameOver(true); }, 6000);
             }
+            if (this._navalWon) { this.navalWinT -= dt; if (this.navalWinT <= 0) this.gameOver(true); }
         } else if (this.mode === 'practice') {
             const tg = this.ground.targets.filter(t => !t.isShip && t.team === 'red');
             const left = tg.filter(t => t.alive).length + this.aircraft.filter(a => a.team === 'red' && a.alive).length;

@@ -295,7 +295,7 @@ export class Pilot {
         }
 
         // stay near the fight
-        if (g.player && ac.pos.distanceTo(g.player.pos) > 14000) {
+        if (!this.leash && g.player && ac.pos.distanceTo(g.player.pos) > 14000) {
             wantDir = _t.subVectors(g.player.pos, ac.pos).normalize();
         }
 

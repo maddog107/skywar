@@ -62,6 +62,12 @@ function makeFlameMaterial() {
 const navTex = makeRadialTexture(64, [[0, 'rgba(255,255,255,1)'], [0.2, 'rgba(255,255,255,0.8)'], [1, 'rgba(255,255,255,0)']]);
 
 let nextId = 1;
+const GEAR_MATS = {
+    strutMat: new THREE.MeshStandardMaterial({ color: 0xb8bcc0, metalness: 0.7, roughness: 0.35 }),
+    tyreMat: new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.9 }),
+    hubMat: new THREE.MeshStandardMaterial({ color: 0x777b80, metalness: 0.6, roughness: 0.4 }),
+};
+for (const m of Object.values(GEAR_MATS)) m.userData.noPaint = true;
 
 export class Aircraft {
     constructor(game, typeId, { team = 'blue', isPlayer = false, name = null } = {}) {
@@ -105,7 +111,7 @@ export class Aircraft {
         this.flaps = 0;
         this.fuel = 1;
         this.flameout = false;
-        this.fuelTime = this.spec.fuelTime || (this.spec.category === 'civil' ? 3000 : this.spec.category === 'bomber' ? 2400 : 780);
+        this.fuelTime = this.spec.fuelTime || (this.spec.category === 'civil' ? 3000 : this.spec.category === 'bomber' ? 3600 : 1500);
         this.onGround = false;
         this.deck = null; this.deckHeading = 0; this.relSpeed = 0; this.trap = false; this.catapult = 0;
         this.gLoad = 1;
@@ -170,10 +176,7 @@ export class Aircraft {
         const H = this.gearOffset;
         const sc = clamp(L / 17, 0.8, 3.2);
         const bellyY = this.rig.minY != null ? this.rig.minY + 0.15 : -H + 1.35;
-        const strutMat = new THREE.MeshStandardMaterial({ color: 0xb8bcc0, metalness: 0.7, roughness: 0.35 });
-        const tyreMat = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.9 });
-        const hubMat = new THREE.MeshStandardMaterial({ color: 0x777b80, metalness: 0.6, roughness: 0.4 });
-        strutMat.userData.noPaint = hubMat.userData.noPaint = tyreMat.userData.noPaint = true;
+        const { strutMat, tyreMat, hubMat } = GEAR_MATS;
         const wheelR = 0.33 * sc;
         const strutLen = Math.max(0.4, bellyY - (-H + wheelR));
         this.gearLegs = [];
@@ -419,7 +422,7 @@ export class Aircraft {
             const fwd = _v1.set(0, 0, -1).applyQuaternion(this.qv);
             heading = Math.atan2(-fwd.x, -fwd.z);
         }
-        const steer = (c.yaw * 0.6 + c.roll * 0.35) * clamp(1 - V / 120, 0.1, 1) * 0.6;
+        const steer = (c.yaw * 0.6 - c.roll * 0.35) * clamp(1 - V / 120, 0.1, 1) * 0.6;
         if (ship) this.deckHeading += steer * dt; else heading += steer * dt;
         if (ship) heading = ship.heading + this.deckHeading;
         this.qv.setFromAxisAngle(AY, heading);
@@ -457,13 +460,14 @@ export class Aircraft {
         this.pos.addScaledVector(this.vel, dt);
         const surf = this.game.surfaceAt(this.pos.x, this.pos.z, this.pos.y - this.gearOffset + 3);
         if (ship && surf.ship !== ship) {
-            // rolled off the edge of the deck
+            // off the end (or edge) of the deck: flying if fast enough, otherwise dropping
             this.onGround = false; this.deck = null; this.catapult = 0;
+            if (V > rotateSpeed) { this.vel.y += 2.5; this.pos.y += 0.5; this.alpha = Math.max(this.alpha, 0.12); }
             this.syncBody();
             return;
         }
         this.pos.y = surf.h + this.gearOffset;
-        if (lift > G * 1.02 || (this.catapult <= 0 && ship && V > rotateSpeed * 1.15 && this.airborneEdge(ship))) {
+        if (lift > G * 1.02) {
             this.onGround = false;
             this.deck = null;
             this.vel.y = 2.5;
@@ -481,8 +485,6 @@ export class Aircraft {
         }
         this.syncBody();
     }
-
-    airborneEdge(ship) { return !ship.onDeck(this.pos.x, this.pos.z, -20); }
 
     startCatapult() {
         if (!this.onGround || !this.deck || this.relSpeed > 5 || this.catapult > 0) return false;
@@ -605,6 +607,7 @@ export class Aircraft {
         this.exploded = true;
         this.falling = false;
         const fx = this.game.effects;
+        if (water) fx.waterSplash(this.pos, 1.4);
         if (!water) {
             fx.explosion(this.pos, ground ? 2.2 : 1.6, ground ? null : this.vel);
             fx.debrisBurst(this.pos, ground ? _v1.set(0, 0, 0) : this.vel, ground ? 6 : 12, this.spec.length / 22);
@@ -627,6 +630,11 @@ export class Aircraft {
     remove() {
         this.stopTrails();
         this.game.scene.remove(this.root);
+        // free per-instance GPU resources (shared geometries/materials are kept)
+        for (const m of this.flames) m.material.dispose();
+        for (const s of [this.navL, this.navR, this.strobe]) s && s.material.dispose();
+        this.model.traverse(o => { if (o.isMesh && o.userData.origMat && o.material !== o.userData.origMat) o.material.dispose(); });
+        for (const l of this.gearLegs || []) l.traverse(o => { if (o.isMesh) o.geometry.dispose(); });
     }
 
     // ── Per-frame ──

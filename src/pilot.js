@@ -97,7 +97,7 @@ export class PilotOnFoot {
         // leap animation into the hijacked jet
         if (this.hijackT > 0) {
             this.hijackT -= dt;
-            if (this.hijackT <= 0) g.completeHijack(this.hijackTarget, this);
+            if (this.hijackT <= 0) { g.completeHijack(this.hijackTarget, this); return; }
         }
         if (s.landed) {
             this.landedT += dt;
@@ -130,7 +130,7 @@ export class PilotOnFoot {
         // hitscan: pilots in cockpits, parachutists, airframes
         let hit = null, hitT = 900;
         for (const a of g.aircraft) {
-            if (!a.alive || a.isPlayer) continue;
+            if (!a.alive || a.isPlayer || a === this.from || a.team === 'blue') continue;
             const cp = _v2.copy(a.rig.cockpit).applyMatrix4(a.model.matrixWorld);
             const tc = raySphere(o, d, cp, 1.3);
             if (tc > 0 && tc < hitT) { hitT = tc; hit = { kind: 'cockpit', a }; continue; }
@@ -138,7 +138,7 @@ export class PilotOnFoot {
             if (tb > 0 && tb < hitT) { hitT = tb; hit = { kind: 'body', a }; }
         }
         for (const s of g.wreckage.seats) {
-            if (s.player || s.dead || !s.owner) continue;
+            if (s.player || s.dead || !s.owner || s.owner.team !== 'red') continue;
             const c = _v2.copy(s.root.position).add(_v3.set(0, 1.0, 0));
             const t = raySphere(o, d, c, 1.4);
             if (t > 0 && t < hitT) { hitT = t; hit = { kind: 'chute', s }; }
@@ -217,7 +217,7 @@ export function spawnFallingBody(game, a) {
     game.scene.add(root);
     const up = a.getUp(new THREE.Vector3()), right = a.getRight(new THREE.Vector3());
     w.parts.push({
-        obj: root, vel: a.vel.clone().multiplyScalar(0.6).addScaledVector(up, 18).addScaledVector(right, rand(-10, 10)),
+        obj: root, inert: true, vel: a.vel.clone().multiplyScalar(0.6).addScaledVector(up, 18).addScaledVector(right, rand(-10, 10)),
         spin: new THREE.Vector3(rand(-6, 6), rand(-6, 6), rand(-6, 6)), life: 30, smokeT: 99, burning: false, heavy: false, radius: 1, body: true,
     });
 }

@@ -7,7 +7,6 @@
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
 import { rand, clamp } from './util.js';
-import { terrainHeight } from './world.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion();
 
@@ -218,11 +217,13 @@ export class Wreckage {
                 fx.puffSmoke(p.obj.position, _v, p.heavy ? 5 : 3, 0.07, p.heavy ? 4.5 : 3, 0.75);
                 if (p.burning) fx.puffFire(p.obj.position, _v.copy(p.vel).multiplyScalar(0.2), p.heavy ? 7 : 4, 0.35);
             }
-            const h = terrainHeight(p.obj.position.x, p.obj.position.z);
-            const gh = Math.max(h, 0);
+            const surf = g.surfaceAt(p.obj.position.x, p.obj.position.z, p.obj.position.y + 3);
+            const h = surf.water ? -1 : surf.h;
+            const gh = surf.h;
             if (p.obj.position.y < gh + 1 || p.life <= 0) {
                 if (p.obj.position.y < gh + 3) {
                     if (h < 0) fx.waterSplash(p.obj.position, p.heavy ? 1.2 : 0.6);
+                    else if (p.inert) fx.groundImpact(p.obj.position);
                     else {
                         fx.explosion(p.obj.position, p.heavy ? 1.4 : 0.6);
                         g.audio.boom(g.camera.position.distanceTo(p.obj.position), p.heavy ? 1 : 0.5);
@@ -254,7 +255,7 @@ export class Wreckage {
                     seatDrop.quaternion.copy(r.quaternion);
                     seatDrop.scale.copy(r.scale);
                     g.scene.add(seatDrop);
-                    this.parts.push({ obj: seatDrop, vel: s.vel.clone(), spin: new THREE.Vector3(2, 1, 3), life: 20, smokeT: 99, burning: false, heavy: false, radius: 1 });
+                    this.parts.push({ obj: seatDrop, vel: s.vel.clone(), spin: new THREE.Vector3(2, 1, 3), life: 20, smokeT: 99, burning: false, heavy: false, radius: 1, inert: true });
                     s.chute.visible = true;
                 }
                 if (s.deployed) {
@@ -275,11 +276,13 @@ export class Wreckage {
                     r.quaternion.multiply(_q);
                 }
                 r.position.addScaledVector(s.vel, dt);
-                const gh = Math.max(terrainHeight(r.position.x, r.position.z), 0);
+                const su = g.surfaceAt(r.position.x, r.position.z, r.position.y + 2);
+                const gh = su.h;
                 if (r.position.y < gh + 0.3) {
                     r.position.y = gh + 0.3;
                     s.landed = true;
-                    if (gh <= 0) g.effects.waterSplash(r.position, 0.25);
+                    s.onShip = su.ship || null;
+                    if (su.water) g.effects.waterSplash(r.position, 0.25);
                 }
             } else {
                 s.landT += dt;

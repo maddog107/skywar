@@ -94,7 +94,7 @@ export class Weapons {
             if (!dead) {
                 // aircraft hits (segment test against each enemy)
                 for (const ac of g.aircraft) {
-                    if (!ac.alive || ac.team === b.team) continue;
+                    if (!ac.alive || ac.team === b.team || b.damage <= 0) continue;
                     const r = ac.hitRadius;
                     if (Math.abs(ac.pos.x - b.pos.x) > 80 || Math.abs(ac.pos.z - b.pos.z) > 80) continue;
                     // test in target's frame: shift the segment by target displacement this frame
@@ -171,7 +171,7 @@ export class Weapons {
         const m = {
             mesh, pos: mesh.position, vel, target, owner: ac, team: ac.team, kind, W,
             life: W.life, age: 0, armed: false, lost: false,
-            trail: this.game.effects.addTrail({ max: 220, width: kind === 'sam' ? 1.6 : kind === 'rkt' ? 0.6 : 1.1, life: kind === 'sam' ? 7 : kind === 'rkt' ? 2 : 5.5, color: [0.92, 0.92, 0.9], alpha: 0.5, minDist: 10, widthGrow: 2.2 }),
+            trail: this.game.effects.addTrail({ max: 220, width: kind === 'sam' ? 1.0 : kind === 'rkt' ? 0.6 : 1.1, life: kind === 'sam' ? 7 : kind === 'rkt' ? 2 : 5.5, color: [0.92, 0.92, 0.9], alpha: 0.5, minDist: 10, widthGrow: 2.2 }),
             fireT: 0,
         };
         this.missiles.push(m);
@@ -218,7 +218,11 @@ export class Weapons {
                 const dist = r.length();
                 const rhat = _v3.copy(r).divideScalar(dist);
                 // seeker gimbal limit
-                if (rhat.dot(dir) < 0.35 && dist > 120) m.lost = true;
+                if (rhat.dot(dir) < 0.35 && dist > 120) {
+                    m.lost = true;
+                    const k = t.incoming ? t.incoming.indexOf(m) : -1;
+                    if (k >= 0) t.incoming.splice(k, 1);
+                }
                 // decoyed by flares?
                 if (t.isFlare !== true && m.kind !== 'sam' && !W.radar) this.checkFlares(m, dir, dist);
                 const vr = _v4.subVectors(tv, m.vel);
@@ -243,7 +247,7 @@ export class Weapons {
                 let hitT = null;
                 for (const a of g.aircraft) if (a.alive && a.team !== m.team && a.pos.distanceToSquared(m.pos) < (W.prox + a.hitRadius * 0.5) ** 2) { hitT = a; break; }
                 if (!hitT && g.ground) for (const gt of g.ground.targets) if (gt.alive && gt.team !== m.team && (gt.hitTest ? gt.hitTest(m.pos) : gt.pos.distanceToSquared(m.pos) < (gt.radius + 4) ** 2)) { hitT = gt; break; }
-                if (hitT) { this.detonate(m, hitT); this.splash(m); this.removeMissile(i); continue; }
+                if (hitT) { this.detonate(m, hitT); this.splash(m, hitT); this.removeMissile(i); continue; }
             }
             // segment check vs target in case of overshoot
             _prev.copy(m.pos);
@@ -285,17 +289,17 @@ export class Weapons {
         const d = m.pos.distanceTo(t.pos);
         let dmg = m.W.damage * clamp(1.5 - d / 40, 0.6, 1.3);
         if (t.isPlayer) dmg *= 0.8;
-        if (t.damage) t.damage(dmg, m.owner, 'missile');
+        if (t.damage) t.damage(dmg, m.owner, m.kind === 'rkt' ? 'rocket' : 'missile');
         g.events.emit('missileHit', m.owner, { target: t, missile: m });
     }
 
     // area damage to ground targets near an impact
-    splash(m) {
+    splash(m, exclude = null) {
         const g = this.game;
         if (!g.ground) return;
         const R = m.W.splash || 26;
         for (const t of g.ground.targets) {
-            if (!t.alive || t.team === m.team) continue;
+            if (!t.alive || t.team === m.team || t === exclude) continue;
             if (t.hitTest && t.hitTest(m.pos)) { t.damage(m.W.damage, m.owner, m.kind === 'rkt' ? 'rocket' : 'missile'); continue; }
             const d = t.pos.distanceTo(m.pos);
             if (d < R + t.radius) t.damage(m.W.damage * clamp(1.2 - d / (R + t.radius), 0.3, 1), m.owner);
@@ -305,11 +309,11 @@ export class Weapons {
     checkFlares(m, dir, distToTarget) {
         for (const f of this.flares) {
             if (f.checked.has(m)) continue;
-            f.checked.add(m);
             const r = _v2.subVectors(f.pos, m.pos);
             const d = r.length();
             if (d > 2600 || d > distToTarget * 1.6) continue;
             if (r.divideScalar(d).dot(dir) < 0.6) continue;
+            f.checked.add(m);
             // each flare has a chance to seduce the seeker
             const chance = f.owner?.isPlayer ? 0.11 : 0.05 + (f.owner?.pilot?.skill ?? 0.5) * 0.06;
             if (Math.random() < chance) {
