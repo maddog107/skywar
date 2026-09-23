@@ -12,6 +12,7 @@ import { Naval } from './naval.js';
 import { PilotOnFoot, spawnFallingBody } from './pilot.js';
 import { Autopilot, runwayApproach, GLIDE_SLOPE } from './autopilot.js';
 import { refSpeeds } from './aircraft.js';
+import { MISSIONS } from './missions.js';
 import { readStick } from './input.js';
 import { clamp, damp, lerp, rand, pick, formatTime, G } from './util.js';
 import { BASES, RUNWAY, terrainHeight, isOnRunway } from './world.js';
@@ -96,7 +97,11 @@ export class Game {
     // ═════════════ Setup ═════════════
     start(opts) {
         this.cleanup();
-        this.mode = opts.mode;
+        this.mission = opts.mission ? MISSIONS[opts.mission] : null;
+        this.missionId = opts.mission || null;
+        this.isDaily = !!opts.daily;
+        this.mstate = null;
+        this.mode = this.mission ? (this.mission.base === 'custom' ? 'mission' : this.mission.base) : opts.mode;
         this.aircraftId = opts.aircraft;
         this.state = 'playing';
         this.time = 0;
@@ -118,7 +123,7 @@ export class Game {
         this.slot = 0;
         this._navalWon = false; this.navalWinT = 0; this._practiceDone = false; this.spawnT = 3;
         this.gloc = 0; this.whiteout = 0; this.missileCam = null; this.pullUp = false;
-        this.lives = ['freeflight', 'sandbox', 'practice'].includes(this.mode) ? Infinity : 2;
+        this.lives = this.mission ? (this.mission.lives ?? 0) : ['freeflight', 'sandbox', 'practice'].includes(this.mode) ? Infinity : 2;
         this.input.consumeMouse();
         this.input.spoilersOn = false;
         this.autopilot.disengage();
@@ -151,12 +156,18 @@ export class Game {
         } else if (this.mode === 'sandbox') {
             this.showBanner('SANDBOX', 'Unlimited everything. N spawns bandits. Bombs away!', 5);
             this.slot = 3;
+        } else if (this.mode === 'mission') {
+            // custom missions set themselves up below
         } else {
             this.waveBreak = 3;
             this.showBanner(this.mode === 'survival' ? 'SURVIVAL' : 'DOGFIGHT', this.mode === 'survival' ? 'Endless hostiles. No repairs. Good luck.' : 'Hostile fighters inbound. Weapons free.', 4);
         }
         // wingmen
-        if (this.settings.wingmen > 0 && !['freeflight', 'practice', 'sandbox'].includes(this.mode)) {
+        if (this.mission) {
+            this.mission.setup && this.mission.setup(this);
+            this.showBanner((this.isDaily ? 'DAILY: ' : 'MISSION: ') + this.mission.title, this.mission.desc, 6, '#ffc23f');
+        }
+        if (this.settings.wingmen > 0 && !this.mission && !['freeflight', 'practice', 'sandbox'].includes(this.mode)) {
             for (let i = 0; i < this.settings.wingmen; i++) {
                 const id = pick(ALLY_POOL);
                 const w = new Aircraft(this, id, { team: 'blue', name: WINGMEN[i] });
@@ -177,7 +188,7 @@ export class Game {
 
     // Where the player starts: air, runway, apron (taxi) or carrier catapult
     startPoint() {
-        let w = this.settings.start || 'auto';
+        let w = this.mission ? this.mission.start : this.settings.start || 'auto';
         if (w === 'auto') w = this.mode === 'freeflight' || this.mode === 'sandbox' ? 'runway' : this.mode === 'naval' ? 'carrier' : 'air';
         return w;
     }
@@ -246,6 +257,30 @@ export class Game {
         this.input.lock();
     }
 
+    // ── Mission helpers ──
+    spawnFriendly(id, pos, waypoint, name) {
+        const a = new Aircraft(this, id, { team: 'blue', name });
+        const d = _v.subVectors(waypoint, pos).setY(0).normalize();
+        a.spawnAir(pos, Math.atan2(-d.x, -d.z), 0.55);
+        const pl = new Pilot(this, a, 0.5);
+        pl.passive = true; pl.waypoint = waypoint.clone(); pl.cruise = 0.7;
+        this.aircraft.push(a);
+        return a;
+    }
+
+    spawnHostile(id, pos, waypoint, name) {
+        const a = new Aircraft(this, id, { team: 'red', name });
+        const d = _v.subVectors(waypoint, pos).setY(0).normalize();
+        a.spawnAir(pos, Math.atan2(-d.x, -d.z), 0.5);
+        const pl = new Pilot(this, a, 0.5);
+        pl.passive = true; pl.waypoint = waypoint.clone(); pl.cruise = 0.36;
+        a.flares = 6;
+        this.aircraft.push(a);
+        return a;
+    }
+
+    runwayApproachInfo() { return runwayApproach(BASES.find(b => b.friendly)); }
+
     // ── Quick positions (Free Flight / Sandbox): jump to a landing approach or a takeoff spot ──
     get quickPositionsAllowed() { return this.mode === 'freeflight' || this.mode === 'sandbox'; }
 
@@ -261,14 +296,25 @@ export class Game {
         if (kind === 'rwy_takeoff') this.spawnPlayer('runway');
         else if (kind === 'cv_takeoff') this.spawnPlayer('carrier');
         else {
-            const p = this.spawnPlayer('air');
+            this.spawnPlayer('air');
+            this.placeApproach(kind);
+        }
+        this.world.updateTerrain(this.player.pos, true);
+        if (this.state === 'paused') this.pause(false);
+        this.state = 'playing';
+    }
+
+    placeApproach(kind, distance = null) {
+        const cv = this.naval.homeCarrier;
+        {
+            const p = this.player;
             const app = refSpeeds(p.spec).approach;
             let fwd, touch, shipVel = new THREE.Vector3(), dist;
             if (kind === 'cv_approach') {
                 fwd = new THREE.Vector3(-Math.sin(cv.heading), 0, -Math.cos(cv.heading));
                 touch = cv.toWorld(-4, cv.deckY, cv.def.L * 0.3);
                 shipVel.copy(cv.vel);
-                dist = 3000;
+                dist = distance || 3000;
             } else {
                 const ra = runwayApproach(BASES.find(b => b.friendly));
                 fwd = ra.fwd; touch = ra.touch;
@@ -291,9 +337,6 @@ export class Game {
             this.camQuat.copy(p.quat);
             this.addFeed(kind === 'cv_approach' ? 'CARRIER APPROACH — CATCH A WIRE' : 'RUNWAY APPROACH — ' + Math.round(app * 1.944) + ' KT ON THE GLIDE SLOPE', '#5dffa0');
         }
-        this.world.updateTerrain(this.player.pos, true);
-        if (this.state === 'paused') this.pause(false);
-        this.state = 'playing';
     }
 
     removeSeat(seat) {
@@ -409,7 +452,7 @@ export class Game {
     }
 
     // ═════════════ Spawning ═════════════
-    spawnEnemies(n, near = null) {
+    spawnEnemies(n, near = null, ids = null) {
         const p = this.player;
         const center = near ? _v.set(near.x, 0, near.z) : p.pos;
         const baseAngle = Math.random() * Math.PI * 2;
@@ -417,7 +460,7 @@ export class Game {
         const spawned = [];
         for (let i = 0; i < n; i++) {
             const pool = this.wave <= 2 && !near ? ENEMY_EARLY : ENEMY_POOL;
-            const id = pick(pool);
+            const id = ids ? ids[i % ids.length] : pick(pool);
             const e = new Aircraft(this, id, { team: 'red' });
             const a = baseAngle + (i - n / 2) * 0.15;
             const dist = near ? rand(800, 2500) : rand(5500, 7500);
@@ -621,6 +664,7 @@ export class Game {
         p.flares = p.spec.flares;
         if (p.spec.gun) p.ammo = p.spec.gun.ammo;
         p.refuel(1);
+        if (this.mission && this.mission.loadout) this.mission.loadout(p);
     }
 
     cycleLoadout() {
@@ -930,8 +974,13 @@ export class Game {
         } else p.airbrake = s.airbrake;
         // autopilot flies until the pilot touches the stick
         if (this.autopilot.active) {
-            if (s.manual || Math.abs(mouse.dx) + Math.abs(mouse.dy) > 60 && mode === 'mouseaim') this.autopilot.disengage('AUTOPILOT OFF — MANUAL CONTROL');
-            else this.autopilot.update(dt, p);
+            // accidental bumps only warn; sustained input takes control
+            const ap = this.autopilot;
+            const nudge = (mode !== 'keyboard' ? Math.abs(mouse.dx) + Math.abs(mouse.dy) : 0) + (s.manual ? 900 * dt : 0);
+            ap.override = Math.max(0, (ap.override || 0) + nudge - 250 * dt);
+            if (nudge > 0) ap.warnT = this.time;
+            if (ap.override > 450) { ap.override = 0; ap.disengage('AUTOPILOT OFF — YOU HAVE CONTROL'); }
+            else ap.update(dt, p);
         }
         if (this.mode === 'sandbox') { if (p.spec.gun) p.ammo = p.spec.gun.ammo; p.fuel = 1; p.flameout = false; p.health = p.maxHealth; p.missiles = Math.max(p.missiles, 2); p.lrm = Math.max(p.lrm, 1); p.rockets = Math.max(p.rockets, 8); p.bombs = Math.max(p.bombs, 4); p.flares = Math.max(p.flares, 5); }
         this.firing = s.fire;
@@ -1133,6 +1182,17 @@ export class Game {
         } else if (this.mode === 'sandbox') {
             this.objective = 'SANDBOX — N: SPAWN BANDIT · X: WEAPONS · BOMBS AWAY';
         }
+        if (this.mission) {
+            this.mission.update && this.mission.update(this);
+            if (this.mission.objective) this.objective = this.mission.objective(this, this.objective);
+            let r = this.mission.check ? this.mission.check(this) : null;
+            if (!r && this.lives <= 0 && this.pilotMode) r = 'lose'; // one-life missions end when you bail out
+            if (r && this.state === 'playing') {
+                if (r === 'win') this.score += 1500 + (this.lives > 0 ? 500 * this.lives : 0);
+                this.gameOver(r === 'win');
+                return;
+            }
+        }
         // soft combat boundary
         this.outOfBounds = !['freeflight', 'sandbox', 'naval'].includes(this.mode) && Math.hypot(p.pos.x, p.pos.z - (this.mode === 'strike' ? -8000 : 0)) > 30000;
         if (p.pos.y > 14000 && p.vel) p.vel.y -= 10 * dt;
@@ -1145,9 +1205,11 @@ export class Game {
         this.onGameOver && this.onGameOver({
             victory, score: Math.round(this.score), kills: this.kills, wave: this.wave, time: this.clockText(),
             accuracy: acc, missiles: this.missilesFired, missileHits: this.missileHits, groundKills: this.groundKills,
-            mode: this.mode, aircraft: this.aircraftId,
+            mode: this.mission ? 'missions' : this.mode, aircraft: this.aircraftId,
+            mission: this.mission ? this.mission.title : null, missionId: this.missionId, daily: this.isDaily,
         });
-        if (victory) this.audio.say('Mission complete. All targets destroyed. Return to base.', true);
+        if (victory) this.audio.say(this.mission ? 'Mission accomplished. Outstanding work.' : 'Mission complete. All targets destroyed. Return to base.', true);
+        else if (this.mission) this.audio.say('Mission failed.', true);
     }
 
     // ═════════════ Camera ═════════════

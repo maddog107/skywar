@@ -75,6 +75,11 @@ export class Autopilot {
         if (this.target.kind === 'runway') this.pickRunwayEnd(home);
         this.active = 'land';
         this.phase = 'transit';
+        // already lined up on final? then just keep flying the approach
+        const t = this.geometry();
+        const rel = _v.subVectors(p.pos, t.touch);
+        const along = -rel.dot(t.fwd), lateral = rel.x * t.fwd.z - rel.z * t.fwd.x;
+        if (along > 300 && along < 12000 && Math.abs(lateral) < 500 && _v2.copy(p.vel).normalize().dot(t.fwd) > 0.85) this.phase = 'final';
         g.addFeed('AUTOPILOT: LANDING AT ' + (this.target.kind === 'carrier' ? 'CARRIER ' + cv.name : 'HOME AIRBASE'), '#5dffa0');
     }
 
@@ -91,7 +96,7 @@ export class Autopilot {
         if (t.kind === 'carrier') {
             const s = t.ship;
             t.fwd = _v3.set(-Math.sin(s.heading), 0, -Math.cos(s.heading)).clone();
-            t.touch = s.toWorld(-4, s.deckY, s.def.L * 0.3);
+            t.touch = s.toWorld(-4, s.deckY, s.def.L * 0.4);
         }
         return t;
     }
@@ -148,6 +153,15 @@ export class Autopilot {
         const lateral = rel.x * fwd.z - rel.z * fwd.x;
         const app = rs.approach;
 
+        if (p.onGround && t.kind === 'carrier' && !p.trap && p.relSpeed > 35) {
+            // missed the wires: bolter — full power and fly off the angled deck
+            this.phase = 'bolter';
+            c.throttle = 1; c.pitch = 0.4; c.roll = 0; c.yaw = 0;
+            p.airbrake = false; g.input.spoilersOn = false;
+            this.status = 'BOLTER — FULL POWER';
+            return;
+        }
+        if (this.phase === 'bolter' && !p.onGround) { this.phase = 'transit'; g.addFeed('BOLTER — GOING AROUND', '#ffc23f'); }
         if (p.onGround) {
             this.phase = 'rollout';
             c.throttle = 0; c.pitch = 0; c.yaw = 0;
@@ -171,7 +185,7 @@ export class Autopilot {
             c.throttle = clamp(0.6 + (app * 1.7 - p.speed) * 0.03, 0.2, 0.9);
             if (avoidTerrain(p, c, 120)) { this.status = 'TERRAIN — CLIMBING'; return; }
             this.status = 'TO APPROACH FIX ' + (d / 1000).toFixed(1) + ' KM';
-            if (d < 1800 || (along > 1500 && along < 12000 && Math.abs(lateral) < 700 && _v3.copy(p.vel).normalize().dot(fwd) > 0.8)) this.phase = 'final';
+            if (d < 1800 || (along > 600 && along < 12000 && Math.abs(lateral) < 700 && _v3.copy(p.vel).normalize().dot(fwd) > 0.8)) this.phase = 'final';
             return;
         }
 

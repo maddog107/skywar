@@ -282,7 +282,7 @@ export class Ship {
     }
     inWireZone(x, z) {
         const { lz } = this.toLocal(x, z);
-        return this.type === 'carrier' && lz > this.def.L * 0.18 && lz < this.def.L * 0.45;
+        return this.type === 'carrier' && lz > -this.def.L * 0.02 && lz < this.def.L * 0.48;
     }
     catapultSpot() { return this.toWorld(12, this.deckY, -this.def.L * 0.02); }
 

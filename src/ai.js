@@ -111,6 +111,8 @@ export class Pilot {
             if (score < bestScore) { bestScore = score; best = e; }
         }
         this.target = best;
+        // escort missions: go for the protected aircraft most of the time
+        if (this.priority && this.priority.alive && (Math.random() < 0.65 || !best)) this.target = this.priority;
     }
 
     threatMissile() {
@@ -174,6 +176,18 @@ export class Pilot {
         let throttle = 0.85;
         let wantGuns = false;
 
+        if (this.waypoint) {
+            // transports / bombers: fly the route, hold altitude, don't fight
+            const to = _d.subVectors(this.waypoint, ac.pos);
+            to.y = clamp((this.waypoint.y - ac.pos.y) / 1500, -0.25, 0.25) * to.length() * 0.001 + to.y * 0;
+            wantDir = _t.set(to.x, 0, to.z).normalize();
+            wantDir.y = clamp((this.waypoint.y - ac.pos.y) / 2000, -0.2, 0.2);
+            wantDir.normalize();
+            steerToward(ac, wantDir, c, 0.6);
+            c.throttle = this.cruise ?? 0.75;
+            avoidTerrain(ac, c, 200);
+            return;
+        }
         const FL = this.formation && this.formation.leader;
         if (FL && FL !== this.game.player) this.formation.leader = this.game.player; // follow whatever jet the player flies
         if (this.formation && !this.target && this.formation.leader && !this.formation.leader.onGround && this.formation.leader.alive) {

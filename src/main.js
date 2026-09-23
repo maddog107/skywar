@@ -15,6 +15,7 @@ import { HUD } from './hud.js';
 import { Cockpit } from './cockpit.js';
 import { Game, LOADOUT_LABELS } from './game.js';
 import { applyLivery, LIVERIES } from './models.js';
+import { MISSIONS, dailyMission } from './missions.js';
 import { Aircraft, refSpeeds } from './aircraft.js';
 import { Pilot } from './ai.js';
 import { preloadModels, hasFileModel } from './models.js';
@@ -177,10 +178,11 @@ function buildMenu() {
         b.addEventListener('click', () => {
             settings.mode = k; save();
             mc.querySelectorAll('.mode-card').forEach(x => x.classList.toggle('sel', x === b));
-            audio.uiClick(); updateBest();
+            audio.uiClick(); updateBest(); buildMissionList();
         });
         mc.appendChild(b);
     }
+    buildMissionList();
     seg('segDifficulty', Object.entries(DIFFICULTY).map(([k, v]) => [k, v.label]), 'difficulty', updateBest);
     seg('segTime', Object.entries(TIMES).map(([k, v]) => [k, v.label]), 'time', () => world.setTime(settings.time));
     seg('segWingmen', [[0, 'SOLO'], [1, '1'], [2, '2']], 'wingmen');
@@ -213,6 +215,33 @@ function buildMenu() {
     document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => b.closest('.modal').classList.remove('show')));
     buildCredits();
     selectAircraft(settings.aircraft in AIRCRAFT ? settings.aircraft : 'f16');
+}
+
+function buildMissionList() {
+    const el = $('missionList');
+    el.classList.toggle('show', settings.mode === 'missions');
+    if (settings.mode !== 'missions') return;
+    el.innerHTML = '';
+    const daily = dailyMission();
+    const items = [['daily', 'DAILY — ' + daily.def.title, (AIRCRAFT[daily.aircraft].name + ' · ' + TIMES[daily.time].label + ' · ') + daily.def.desc, 'TODAY'],
+        ...Object.entries(MISSIONS).map(([id, m]) => [id, m.title, m.desc, m.tag])];
+    if (!settings.missionId) settings.missionId = 'daily';
+    for (const [id, title, desc, tag] of items) {
+        const b = document.createElement('button');
+        b.className = 'mission' + (id === 'daily' ? ' daily' : '') + (settings.missionId === id ? ' sel' : '');
+        const t = document.createElement('div'); t.className = 'mt';
+        const tt = document.createElement('span'); tt.textContent = title;
+        const tg = document.createElement('i'); tg.textContent = tag;
+        t.append(tt, tg);
+        const d = document.createElement('div'); d.className = 'md'; d.textContent = desc;
+        b.append(t, d);
+        b.addEventListener('click', () => {
+            settings.missionId = id; save();
+            el.querySelectorAll('.mission').forEach(x => x.classList.toggle('sel', x === b));
+            audio.uiClick(); updateBest();
+        });
+        el.appendChild(b);
+    }
 }
 
 function seg(id, options, key, cb) {
@@ -281,10 +310,16 @@ function selectAircraft(id) {
     updateBest();
 }
 
+function bestKey(mode, missionId, daily) {
+    if (mode === 'missions') return daily ? 'daily:' + dailyMission().key : 'mission:' + missionId + ':' + settings.difficulty;
+    return mode + ':' + settings.difficulty;
+}
+
 function updateBest() {
-    const k = settings.mode + ':' + settings.difficulty;
+    const k = settings.mode === 'missions' ? bestKey('missions', settings.missionId, !settings.missionId || settings.missionId === 'daily') : bestKey(settings.mode);
     const b = best[k];
-    $('best').textContent = b ? `BEST ${MODES[settings.mode].label} (${DIFFICULTY[settings.difficulty].label}): ${b.score} PTS · ${b.kills} KILLS` : '';
+    const label = settings.mode === 'missions' ? (settings.missionId === 'daily' || !settings.missionId ? 'TODAY\'S DAILY' : (MISSIONS[settings.missionId] || {}).title) : MODES[settings.mode].label;
+    $('best').textContent = b ? `BEST ${label} (${DIFFICULTY[settings.difficulty].label}): ${b.score} PTS${b.win ? ' · ✓ COMPLETED' : ''}` : '';
 }
 
 function spawnShowcase(id) {
@@ -326,7 +361,11 @@ function launch() {
     world.setTime(settings.time);
     $('menu').classList.remove('show');
     input.consumeMouse();
-    game.start({ mode: settings.mode, aircraft: settings.aircraft });
+    if (settings.mode === 'missions') {
+        const daily = settings.missionId === 'daily' || !settings.missionId ? dailyMission() : null;
+        if (daily) world.setTime(daily.time);
+        game.start({ mode: 'missions', aircraft: daily ? daily.aircraft : settings.aircraft, mission: daily ? daily.id : settings.missionId, daily: !!daily });
+    } else game.start({ mode: settings.mode, aircraft: settings.aircraft });
     // compile every material now so ships, targets and explosions don't hitch on first sight
     try {
         game.effects.explosion(new THREE.Vector3(0, -500, 0), 0.1);
@@ -338,16 +377,17 @@ function launch() {
 }
 
 function showGameOver(r) {
-    const k = r.mode + ':' + settings.difficulty;
+    const k = bestKey(r.mode, r.missionId, r.daily);
     const prev = best[k];
     const isBest = !prev || r.score > prev.score;
     if (isBest && r.score > 0) {
-        best[k] = { score: r.score, kills: r.kills };
+        best[k] = { score: r.score, kills: r.kills, win: r.victory || (prev && prev.win) };
         try { localStorage.setItem('skywar.best', JSON.stringify(best)); } catch (e) { /* ignore */ }
     }
     $('overTitle').textContent = r.victory ? 'MISSION COMPLETE' : 'SHOT DOWN';
     $('overTitle').className = 'card-title ' + (r.victory ? 'win' : 'lose');
-    $('overSub').textContent = MODES[r.mode].label + ' · ' + AIRCRAFT[r.aircraft].name.toUpperCase() + ' · ' + DIFFICULTY[settings.difficulty].label;
+    $('overTitle').textContent = r.mission ? (r.victory ? 'MISSION ACCOMPLISHED' : 'MISSION FAILED') : $('overTitle').textContent;
+    $('overSub').textContent = (r.mission ? (r.daily ? 'DAILY · ' : '') + r.mission : MODES[r.mode].label) + ' · ' + AIRCRAFT[r.aircraft].name.toUpperCase() + ' · ' + DIFFICULTY[settings.difficulty].label;
     const stats = [
         ['SCORE', r.score], ['KILLS', r.kills], [r.mode === 'strike' ? 'GROUND KILLS' : 'WAVE', r.mode === 'strike' ? r.groundKills : r.wave],
         ['TIME', r.time], ['GUN ACCURACY', r.accuracy + '%'], ['MISSILE HITS', r.missileHits + ' / ' + r.missiles],

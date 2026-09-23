@@ -403,7 +403,7 @@ export class HUD {
                 ctx.stroke();
             }
             ctx.textAlign = 'center';
-            const label = a.isGround ? a.name : a.isAce ? '★ ' + a.callsign : a.pilotDead ? 'NO PILOT — E' : (a.spec.name.split(' ')[0]);
+            const label = a.isGround ? a.name : a.isAce ? '★ ' + a.callsign : a.pilotDead ? 'NO PILOT — E' : a.callsign !== a.spec.name ? a.callsign : (a.spec.name.split(' ')[0]);
             ctx.fillText(label, P.x, P.y - size - 10);
             ctx.fillText(dist < 1000 ? Math.round(dist) + 'm' : (dist / 1000).toFixed(1) + 'km', P.x, P.y + size + 11);
             // health pip
@@ -637,7 +637,14 @@ export class HUD {
         if (game.autopilot && game.autopilot.active) {
             ctx.font = '700 15px "Share Tech Mono", ui-monospace, monospace';
             ctx.fillStyle = BLUE;
-            ctx.fillText('AUTOPILOT · ' + game.autopilot.status + '   (Y/U or stick to cancel)', this.w / 2, this.h * 0.2);
+            ctx.fillText('AUTOPILOT · ' + game.autopilot.status, this.w / 2, this.h * 0.2);
+            if (game.time - (game.autopilot.warnT || -9) < 1.5) {
+                const k = clamp((game.autopilot.override || 0) / 450, 0, 1);
+                ctx.fillStyle = AMBER;
+                ctx.fillText('AUTOPILOT ON — KEEP MOVING / HOLD A KEY TO TAKE CONTROL (Y/U: OFF NOW)', this.w / 2, this.h * 0.2 + 24);
+                ctx.fillRect(this.w / 2 - 120, this.h * 0.2 + 38, 240 * k, 4);
+                ctx.strokeStyle = AMBER; ctx.strokeRect(this.w / 2 - 120, this.h * 0.2 + 38, 240, 4);
+            }
             ctx.font = '700 22px "Share Tech Mono", ui-monospace, monospace';
         }
         if (p.stalling && blink) warn('STALL', AMBER);

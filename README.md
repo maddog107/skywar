@@ -29,6 +29,8 @@ You need a local server because the game uses ES modules and loads `.glb` models
 - **AI pilots**: they turn to fight, lead their gun shots, beam incoming missiles, drop flares,
   jink when under fire, extend when hurt, and avoid terrain. Skill scales with difficulty.
   Every fourth wave brings a named ace.
+- **Missions**: Clean Sweep, Five on One, Ace Duel, SAM Alley, Escort, Scramble, Carrier Killer,
+  Deadstick and Trap, plus a Daily Mission picked from the date (the mission, jet and time of day change every day).
 - **Modes**: Dogfight waves, Strike (destroy an airbase), Naval Strike (sink a carrier group),
   Survival, Target Practice (timed range), Sandbox (unlimited everything, invincible, bombs, N spawns
   bandits) and Free Flight (with an unarmed carrier group offshore to shoot at). Four times of day: dawn, midday, dusk and night.

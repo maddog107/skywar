@@ -244,6 +244,7 @@ export const DIFFICULTY = {
 };
 
 export const MODES = {
+    missions: { label: 'MISSIONS', desc: 'Hand-built challenges plus a new Daily Mission every day.' },
     dogfight: { label: 'DOGFIGHT', desc: 'Waves of hostile fighters. Resupply between waves. Wingmen available.' },
     strike: { label: 'STRIKE', desc: 'Destroy the enemy airbase: SAM sites, AAA, radar and hangars while fighters defend it.' },
     naval: { label: 'NAVAL STRIKE', desc: 'Sink an enemy carrier group. CIWS guns shoot down missiles, SAMs and fighters defend it.' },
