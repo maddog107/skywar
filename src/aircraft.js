@@ -46,14 +46,15 @@ function makeFlameMaterial() {
         fragmentShader: /* glsl */`
             uniform float power, ab, time; varying float vT; varying vec3 vN; varying vec3 vV;
             void main() {
-                float rim = pow(abs(dot(vN, vV)), 1.5);
+                float rim = pow(abs(dot(vN, vV)), 2.2);
                 float t = clamp(vT, 0.0, 1.0);
                 // shock diamonds when the afterburner is lit
-                float diamonds = ab * 0.6 * pow(0.5 + 0.5 * cos(t * 36.0 - time * 3.0), 6.0) * (1.0 - t);
-                vec3 core = mix(vec3(0.6, 0.75, 1.6), vec3(3.2, 1.7, 0.6), ab);
-                vec3 tip = mix(vec3(0.15, 0.2, 0.7), vec3(1.6, 0.35, 0.05), ab);
-                vec3 col = mix(core, tip, t) * (1.0 - t) * rim;
-                col += vec3(3.0, 2.2, 1.4) * diamonds;
+                float diamonds = ab * 0.35 * pow(0.5 + 0.5 * cos(t * 22.0 - time * 3.0), 8.0) * (1.0 - t);
+                // military power: orange flame · afterburner: hot red with shock diamonds
+                vec3 core = mix(vec3(1.6, 0.62, 0.12), vec3(1.9, 0.35, 0.1), ab);
+                vec3 tip = mix(vec3(0.8, 0.18, 0.02), vec3(1.1, 0.06, 0.02), ab);
+                vec3 col = mix(core, tip, t) * (1.0 - t * t) * rim;
+                col += vec3(1.8, 0.9, 0.4) * diamonds;
                 float flick = 0.85 + 0.15 * sin(time * 60.0 + t * 12.0);
                 gl_FragColor = vec4(col * power * flick, 1.0);
             }`,
@@ -240,28 +241,13 @@ export class Aircraft {
             this.model.add(pivot);
             this.flapPanels.push(pivot);
         }
+        // spoilers: panels on top of each wing just ahead of the flaps, hinged at the front, rising up
         this.brakePanels = [];
-        const big = this.spec.category !== 'fighter';
-        if (big) {
-            // spoilers pop up from the top of each wing
-            for (const s of [-1, 1]) {
-                const pivot = new THREE.Group();
-                pivot.position.set(s * hs * 0.45, wingY + thick, teZ - chord * 1.6);
-                const panel = new THREE.Mesh(new THREE.BoxGeometry(span * 0.9, thick, chord * 0.9), mat);
-                panel.position.z = chord * 0.45;
-                panel.castShadow = true;
-                pivot.add(panel);
-                pivot.visible = false;
-                this.model.add(pivot);
-                this.brakePanels.push(pivot);
-            }
-        } else {
-            const topY = rig.minY != null && rig.height ? rig.minY + rig.height * 0.62 : L * 0.05;
+        for (const s of [-1, 1]) {
             const pivot = new THREE.Group();
-            pivot.position.set(0, topY, L * 0.0);
-            const len = L * 0.13, w = L * 0.065;
-            const panel = new THREE.Mesh(new THREE.BoxGeometry(w, thick, len), mat);
-            panel.position.z = len / 2;
+            pivot.position.set(s * hs * 0.4, wingY + thick * 1.5, teZ - chord * 1.05);
+            const panel = new THREE.Mesh(new THREE.BoxGeometry(span * 0.9, thick, chord * 0.9), mat);
+            panel.position.z = chord * 0.45;
             panel.castShadow = true;
             pivot.add(panel);
             pivot.visible = false;
@@ -276,8 +262,7 @@ export class Aircraft {
         this.brakeAnim = damp(this.brakeAnim, this.alive ? brakeTarget : 0, 5, dt);
         this.flapAnim = damp(this.flapAnim, this.flaps / 2, 2.5, dt);
         for (const p of this.flapPanels) { p.visible = this.flapAnim > 0.03; p.rotation.x = this.flapAnim * 0.7; }
-        const big = this.spec.category !== 'fighter';
-        for (const p of this.brakePanels) { p.visible = this.brakeAnim > 0.03; p.rotation.x = -this.brakeAnim * (big ? 0.9 : 0.85); }
+        for (const p of this.brakePanels) { p.visible = this.brakeAnim > 0.03; p.rotation.x = -this.brakeAnim * 0.95; }
     }
 
     updateGearVisual() {
@@ -402,6 +387,12 @@ export class Aircraft {
         let nCmd = c.pitch >= 0
             ? nNeutral + c.pitch * (gLim - nNeutral)
             : nNeutral + c.pitch * (nNeutral + 3);
+        // flaps: extra lift makes the jet balloon up for a few seconds (like an untrimmed GeoFS jet)
+        if (this._lastFlaps === undefined) this._lastFlaps = this.flaps;
+        if (this.flaps !== this._lastFlaps) { this.balloon = (this.balloon || 0) + (this.flaps - this._lastFlaps) * 0.45; this._lastFlaps = this.flaps; }
+        this.balloon = (this.balloon || 0) * Math.exp(-0.28 * dt);
+        // spoilers: dump lift so the jet sinks while they're out
+        nCmd += this.balloon * clamp(V / 90, 0, 1.2) - 0.75 * this.brakeAnim * clamp(V / 70, 0, 1);
 
         // AoA needed to produce the commanded G, limited by stall AoA
         const clS = this.clEff;
@@ -789,15 +780,16 @@ export class Aircraft {
         const fx = this.game.effects;
         const now = this.game.time;
         // Engine flames
-        const power = this.alive && !this.flameout ? clamp((this.throttle - 0.35) / 0.55, 0, 1) : 0;
+        // flame from throttle step 5 (45%) up; stronger toward step 9, afterburner on 0
+        const power = this.alive && !this.flameout && !this.bellied ? clamp((this.throttle - 0.42) / 0.48, 0, 1) : 0;
         const ab = this.afterburner && this.alive && !this.flameout ? 1 : 0;
         const R = this.rig.nozzleR;
         for (const m of this.flames) {
             const u = m.material.uniforms;
             u.time.value = now + this.id;
-            u.power.value = damp(u.power.value, power * 0.55 + ab * 1.2, 10, dt);
+            u.power.value = damp(u.power.value, power > 0 ? 0.35 + power * 0.55 + ab * 0.9 : 0, 10, dt);
             u.ab.value = damp(u.ab.value, ab, 6, dt);
-            const len = R * (2 + power * 3 + ab * (9 + Math.random() * 1.5));
+            const len = R * (1.5 + power * 4.5 + ab * (8 + Math.random() * 1.5));
             m.scale.set(R * (0.85 + ab * 0.15), R * (0.85 + ab * 0.15), len);
             m.visible = u.power.value > 0.02;
         }

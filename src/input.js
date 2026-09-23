@@ -6,7 +6,7 @@ import { clamp } from './util.js';
 const ACTIONS = {
     KeyV: 'camera', KeyT: 'target', Tab: 'target', KeyG: 'gear', KeyH: 'help', Escape: 'pause', KeyP: 'pause',
     KeyM: 'missile', Enter: 'confirm', KeyR: 'flares', KeyF: 'flaps', KeyJ: 'eject', KeyN: 'spawn', KeyL: 'loadout',
-    KeyX: 'weapon', KeyK: 'missilecam',
+    KeyX: 'weapon', KeyK: 'missilecam', KeyB: 'spoilers',
     Digit1: 'thr1', Digit2: 'thr2', Digit3: 'thr3', Digit4: 'thr4', Digit5: 'thr5', Digit6: 'thr6', Digit7: 'thr7', Digit8: 'thr8', Digit9: 'thr9', Digit0: 'thr10',
 };
 
@@ -102,7 +102,7 @@ export function readStick(input, settings) {
     if (input.down('KeyZ', 'Equal', 'NumpadAdd')) s.throttleDelta += 1;
     if (input.down('ShiftLeft', 'ShiftRight', 'Minus', 'NumpadSubtract')) s.throttleDelta -= 1;
     s.fire = input.down('Space') || input.mouse.left;
-    s.airbrake = input.down('KeyB');
+    s.airbrake = !!input.spoilersOn;
     s.manual = s.pitch !== 0 || s.roll !== 0;
     const pad = input.readPad();
     if (pad) {

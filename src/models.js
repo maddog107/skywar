@@ -105,12 +105,46 @@ function normaliseGLTF(root, id, info) {
         halfSpan: (box2.max.x - box2.min.x) / 2,
         height: box2.max.y - box2.min.y,
         minY: box2.min.y,
-        nozzles: info.nozzles ? info.nozzles.map(n => new THREE.Vector3(n[0] * spec.length, n[1] * spec.length, n[2] * spec.length)) : defaultNozzles(spec, box2),
+        nozzles: info.nozzles ? info.nozzles.map(n => new THREE.Vector3(n[0] * spec.length, n[1] * spec.length, n[2] * spec.length)) : findNozzles(holder, spec, box2),
         nozzleR: (info.nozzleR ?? 0.028) * spec.length,
         wingtips: findWingtips(holder, box2),
         cockpit: new THREE.Vector3(0, (info.cockpit?.[0] ?? 0.05) * spec.length, (info.cockpit?.[1] ?? -0.27) * spec.length),
     };
     return { object: holder, rig };
+}
+
+// Find the engine exhausts from the geometry: the rear-most vertices close to the
+// centreline (excluding fins/stabilisers), split left/right for twin engines.
+function findNozzles(obj, spec, box) {
+    const L = spec.length;
+    const n = spec.proc?.engines ?? 1;
+    const pts = [];
+    const v = new THREE.Vector3();
+    obj.traverse((o) => {
+        if (!o.isMesh || !o.geometry.attributes.position) return;
+        const p = o.geometry.attributes.position;
+        const step = Math.max(1, Math.floor(p.count / 6000));
+        for (let i = 0; i < p.count; i += step) {
+            v.fromBufferAttribute(p, i).applyMatrix4(o.matrixWorld);
+            if (v.z > box.max.z - L * 0.12 && Math.abs(v.x) < L * 0.12) pts.push(v.clone());
+        }
+    });
+    if (pts.length < 8) return defaultNozzles(spec, box);
+    // the fuselage tail: median height of those points, then keep points near it
+    const ys = pts.map(p => p.y).sort((a, b) => a - b);
+    const yMed = ys[Math.floor(ys.length * 0.4)];
+    const near = pts.filter(p => Math.abs(p.y - yMed) < L * 0.05);
+    if (near.length < 4) return defaultNozzles(spec, box);
+    const zMax = Math.max(...near.map(p => p.z));
+    const rear = near.filter(p => p.z > zMax - L * 0.05);
+    const y = rear.reduce((a, p) => a + p.y, 0) / rear.length;
+    const z = zMax - L * 0.01;
+    if (n === 1) return [new THREE.Vector3(0, y, z)];
+    const side = rear.filter(p => Math.abs(p.x) > L * 0.005);
+    const xs = side.map(p => Math.abs(p.x));
+    const x = xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : (spec.proc?.spacing ?? 0.05) * L;
+    const sx = clamp01(x, L * 0.025, L * 0.09);
+    return [new THREE.Vector3(-sx, y, z), new THREE.Vector3(sx, y, z)];
 }
 
 function defaultNozzles(spec, box) {

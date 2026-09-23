@@ -117,6 +117,7 @@ export class Game {
         this.gloc = 0; this.whiteout = 0; this.missileCam = null; this.pullUp = false;
         this.lives = ['freeflight', 'sandbox', 'practice'].includes(this.mode) ? Infinity : 2;
         this.input.consumeMouse();
+        this.input.spoilersOn = false;
         this.pilotMode = null;
         this.naval.spawnHomeCarrier();
         if (this.mode === 'strike' || this.mode === 'sandbox') this.ground.spawnEnemyBase();
@@ -635,6 +636,11 @@ export class Game {
                 this.audio.tick(500 + n * 60, 0.06, 0.04);
                 break;
             }
+            case 'spoilers':
+                this.input.spoilersOn = !this.input.spoilersOn;
+                this.addFeed(this.input.spoilersOn ? 'SPOILERS OUT' : 'SPOILERS IN', '#5dffa0');
+                this.audio.tick(250, 0.12, 0.25);
+                break;
             case 'flaps':
                 p.flaps = (p.flaps + 1) % 3;
                 this.addFeed('FLAPS ' + ['UP', 'HALF', 'FULL'][p.flaps], '#5dffa0');

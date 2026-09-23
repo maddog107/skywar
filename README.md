@@ -69,7 +69,7 @@ You need a local server because the game uses ES modules and loads `.glb` models
 | T / Tab | Cycle target |
 | C (hold) / L (hold) | Padlock target / look behind |
 | V | Camera: chase, cockpit, far, cinematic |
-| B / G | Speed brake / landing gear |
+| B / G | Spoilers on/off / landing gear |
 | Enter | New jet after a crash landing or parachute landing |
 | Esc | Pause |
 

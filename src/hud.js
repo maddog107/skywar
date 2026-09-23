@@ -212,7 +212,7 @@ export class HUD {
         if (agl < 2500) ctx.fillText('R ' + Math.round(agl), rx, ly);
         ctx.fillText('VS ' + Math.round(p.vel.y * 196.85), rx, ly + 16);
         if (p.gear) ctx.fillText('GEAR DN', rx, ly + 32);
-        if (p.airbrake) ctx.fillText('BRAKE', rx, ly + 48);
+        if (p.airbrake) ctx.fillText(p.onGround && !game.input.spoilersOn ? 'BRAKES' : 'SPOILERS', rx, ly + 48);
         if (p.flaps) ctx.fillText('FLAPS ' + (p.flaps === 1 ? 'HALF' : 'FULL'), rx, ly + 64);
         if (game.settings.fuel !== false && game.mode !== 'sandbox') {
             ctx.fillStyle = p.fuel < 0.1 ? RED : p.fuel < 0.2 ? AMBER : GREEN;
