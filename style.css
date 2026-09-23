@@ -134,3 +134,8 @@ input[type=range] { accent-color: var(--accent); width: 170px; }
 
 .seg.wrap { flex-wrap: wrap; max-width: 230px; justify-content: flex-end; }
 .seg.wrap button { border-left: 1px solid var(--line); }
+
+.quick-pos { display: none; border-top: 1px solid var(--line); padding-top: 10px; margin-top: 4px; }
+.quick-pos.show { display: block; }
+.qp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
+.qp-grid .btn { font-size: 12px; padding: 9px 8px; letter-spacing: 0.1em; }

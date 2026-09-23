@@ -10,6 +10,8 @@ import { GroundForces } from './ground.js';
 import { Wreckage } from './damage.js';
 import { Naval } from './naval.js';
 import { PilotOnFoot, spawnFallingBody } from './pilot.js';
+import { Autopilot, runwayApproach, GLIDE_SLOPE } from './autopilot.js';
+import { refSpeeds } from './aircraft.js';
 import { readStick } from './input.js';
 import { clamp, damp, lerp, rand, pick, formatTime, G } from './util.js';
 import { BASES, RUNWAY, terrainHeight, isOnRunway } from './world.js';
@@ -48,6 +50,7 @@ export class Game {
         this.wreckage = new Wreckage(this);
         this.ground = new GroundForces(this);
         this.naval = new Naval(this);
+        this.autopilot = new Autopilot(this);
         this.pilotMode = null;
         this.lives = 0;
         this.slot = 0;
@@ -118,6 +121,7 @@ export class Game {
         this.lives = ['freeflight', 'sandbox', 'practice'].includes(this.mode) ? Infinity : 2;
         this.input.consumeMouse();
         this.input.spoilersOn = false;
+        this.autopilot.disengage();
         this.pilotMode = null;
         this.naval.spawnHomeCarrier();
         if (this.mode === 'strike' || this.mode === 'sandbox') this.ground.spawnEnemyBase();
@@ -235,10 +239,61 @@ export class Game {
         this.spawnPlayer(w === 'air' ? 'air' : w);
         this.state = 'playing';
         this.deathT = 0;
+        this.autopilot.disengage();
         this.gloc = 0; this.whiteout = 0; this.damageFlash = 0;
         this.cameraMode = this.settings.defaultCockpit ? 'cockpit' : 'chase';
         this.showBanner('NEW AIRFRAME', this.lives === Infinity ? '' : this.lives + ' SPARE JET' + (this.lives === 1 ? '' : 'S') + ' LEFT', 3);
         this.input.lock();
+    }
+
+    // ── Quick positions (Free Flight / Sandbox): jump to a landing approach or a takeoff spot ──
+    get quickPositionsAllowed() { return this.mode === 'freeflight' || this.mode === 'sandbox'; }
+
+    quickPosition(kind) {
+        if (!this.quickPositionsAllowed) return;
+        const cv = this.naval.homeCarrier && this.naval.homeCarrier.alive ? this.naval.homeCarrier : null;
+        if (kind.startsWith('cv') && !cv) { this.addFeed('NO CARRIER AVAILABLE', '#ffc23f'); return; }
+        if (this.pilotMode) { this.removeSeat(this.pilotMode.seat); this.pilotMode = null; }
+        const old = this.player;
+        if (old) { old.remove(); const i = this.aircraft.indexOf(old); if (i >= 0) this.aircraft.splice(i, 1); }
+        this.autopilot.disengage();
+        this.input.spoilersOn = false;
+        if (kind === 'rwy_takeoff') this.spawnPlayer('runway');
+        else if (kind === 'cv_takeoff') this.spawnPlayer('carrier');
+        else {
+            const p = this.spawnPlayer('air');
+            const app = refSpeeds(p.spec).approach;
+            let fwd, touch, shipVel = new THREE.Vector3(), dist;
+            if (kind === 'cv_approach') {
+                fwd = new THREE.Vector3(-Math.sin(cv.heading), 0, -Math.cos(cv.heading));
+                touch = cv.toWorld(-4, cv.deckY, cv.def.L * 0.3);
+                shipVel.copy(cv.vel);
+                dist = 3000;
+            } else {
+                const ra = runwayApproach(BASES.find(b => b.friendly));
+                fwd = ra.fwd; touch = ra.touch;
+                dist = clamp(ra.clearDist - 300, 2500, 5000);
+            }
+            const pos = touch.clone().addScaledVector(fwd, -dist);
+            pos.y = touch.y + dist * Math.tan(GLIDE_SLOPE) + p.gearOffset;
+            // never start inside a hill: stay clear of the highest ground under the rest of the approach
+            let hi = 0;
+            for (let d = 0; d <= dist; d += 100) hi = Math.max(hi, terrainHeight(touch.x - fwd.x * d, touch.z - fwd.z * d));
+            if (kind !== 'cv_approach') pos.y = Math.max(pos.y, hi + 60);
+            p.spawnAir(pos, Math.atan2(-fwd.x, -fwd.z), 0.3);
+            // already configured: gear and full flaps down, on speed, on the glide slope
+            p.gear = true; p.gearAnim = 1; p.flaps = 2; p.flapAnim = 1; p._lastFlaps = 2; p.balloon = 0;
+            p.vel.copy(fwd).multiplyScalar(app).add(shipVel);
+            p.vel.y = -app * Math.tan(GLIDE_SLOPE);
+            p.throttle = p.controls.throttle = 0.45;
+            p.syncBody();
+            this.aimDir.copy(p.vel).sub(shipVel).normalize();
+            this.camQuat.copy(p.quat);
+            this.addFeed(kind === 'cv_approach' ? 'CARRIER APPROACH — CATCH A WIRE' : 'RUNWAY APPROACH — ' + Math.round(app * 1.944) + ' KT ON THE GLIDE SLOPE', '#5dffa0');
+        }
+        this.world.updateTerrain(this.player.pos, true);
+        if (this.state === 'paused') this.pause(false);
+        this.state = 'playing';
     }
 
     removeSeat(seat) {
@@ -636,6 +691,14 @@ export class Game {
                 this.audio.tick(500 + n * 60, 0.06, 0.04);
                 break;
             }
+            case 'autoland':
+                if (this.autopilot.active === 'land') this.autopilot.disengage('AUTOPILOT OFF');
+                else this.autopilot.land();
+                break;
+            case 'autotakeoff':
+                if (this.autopilot.active === 'takeoff') this.autopilot.disengage('AUTOPILOT OFF');
+                else this.autopilot.takeoff();
+                break;
             case 'spoilers':
                 this.input.spoilersOn = !this.input.spoilersOn;
                 this.addFeed(this.input.spoilersOn ? 'SPOILERS OUT' : 'SPOILERS IN', '#5dffa0');
@@ -865,6 +928,11 @@ export class Game {
                 this.audio.whoosh(0.8);
             }
         } else p.airbrake = s.airbrake;
+        // autopilot flies until the pilot touches the stick
+        if (this.autopilot.active) {
+            if (s.manual || Math.abs(mouse.dx) + Math.abs(mouse.dy) > 60 && mode === 'mouseaim') this.autopilot.disengage('AUTOPILOT OFF — MANUAL CONTROL');
+            else this.autopilot.update(dt, p);
+        }
         if (this.mode === 'sandbox') { if (p.spec.gun) p.ammo = p.spec.gun.ammo; p.fuel = 1; p.flameout = false; p.health = p.maxHealth; p.missiles = Math.max(p.missiles, 2); p.lrm = Math.max(p.lrm, 1); p.rockets = Math.max(p.rockets, 8); p.bombs = Math.max(p.bombs, 4); p.flares = Math.max(p.flares, 5); }
         this.firing = s.fire;
         if (s.fire && p.spec.gun && p.ammo > 0) {

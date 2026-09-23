@@ -68,6 +68,15 @@
     <div class="center-card">
         <div class="card-title">PAUSED</div>
         <button class="btn" id="resumeBtn">RESUME</button>
+        <div id="quickPos" class="quick-pos">
+            <div class="mono dim small-text">QUICK POSITION</div>
+            <div class="qp-grid">
+                <button class="btn ghost" data-qp="rwy_approach">RUNWAY APPROACH</button>
+                <button class="btn ghost" data-qp="cv_approach">CARRIER APPROACH</button>
+                <button class="btn ghost" data-qp="rwy_takeoff">RUNWAY TAKEOFF</button>
+                <button class="btn ghost" data-qp="cv_takeoff">CARRIER CATAPULT</button>
+            </div>
+        </div>
         <button class="btn" data-open="settingsModal">SETTINGS</button>
         <button class="btn" data-open="controlsModal">CONTROLS</button>
         <button class="btn ghost" id="abortBtn">ABORT MISSION</button>
@@ -131,6 +140,7 @@
             <div><b>T / Tab</b><span>Cycle target</span></div>
             <div><b>C / L (hold)</b><span>Padlock target / look behind</span></div>
             <div><b>V · K</b><span>Camera: chase · cockpit · far · cinematic · missile cam</span></div>
+            <div><b>Y · U</b><span>Autopilot: auto-land at the nearest friendly runway/carrier · auto-takeoff (stick cancels)</span></div>
             <div><b>J J</b><span>Eject (double-tap)</span></div>
             <div><b>Ejected</b><span>Mouse look · LMB AK-47 · R reload · WASD/arrows steer chute · E hijack a nearby jet · Enter new jet after landing</span></div>
             <div><b>L (on the pad)</b><span>Change loadout while stopped on a friendly runway or carrier</span></div>
@@ -138,7 +148,7 @@
             <div><b>Esc / P</b><span>Pause</span></div>
             <div><b>Gamepad</b><span>Sticks fly · RT guns · A weapon · B flares · X target · Y camera · LB/RB throttle · D-pad weapon</span></div>
         </div>
-        <div class="mono dim small-text">Carrier: full power (9 or 0) on deck fires the catapult; land on the angled deck to catch a wire. Stop on a friendly runway or deck to repair, refuel and rearm.</div>
+        <div class="mono dim small-text">Free Flight / Sandbox: press Esc for QUICK POSITION (runway or carrier approach, runway takeoff, catapult). Carrier: full power (9 or 0) on deck fires the catapult; land on the angled deck to catch a wire. Stop on a friendly runway or deck to repair, refuel and rearm.</div>
         <button class="btn" data-close>GOT IT</button>
     </div>
 </div>

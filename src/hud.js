@@ -634,6 +634,12 @@ export class HUD {
         if (p.incoming.length && blink) warn('▲ MISSILE ▲', RED);
         else if (p.lockedBy && p.lockedBy.size && blink) warn('LOCKED ON', AMBER);
         if (game.pullUp && blink) warn('PULL UP', RED);
+        if (game.autopilot && game.autopilot.active) {
+            ctx.font = '700 15px "Share Tech Mono", ui-monospace, monospace';
+            ctx.fillStyle = BLUE;
+            ctx.fillText('AUTOPILOT · ' + game.autopilot.status + '   (Y/U or stick to cancel)', this.w / 2, this.h * 0.2);
+            ctx.font = '700 22px "Share Tech Mono", ui-monospace, monospace';
+        }
         if (p.stalling && blink) warn('STALL', AMBER);
         if (p.flameout && blink) warn('FLAMEOUT — GLIDE TO BASE', RED);
         else if (p.fuel < 0.2 && game.settings.fuel !== false && game.mode !== 'sandbox' && blink) warn(p.fuel < 0.1 ? 'FUEL LOW' : 'BINGO FUEL', AMBER);
@@ -642,7 +648,7 @@ export class HUD {
         if (p.onGround && p.speed < 4) {
             ctx.font = '600 13px "Share Tech Mono", ui-monospace, monospace';
             ctx.fillStyle = GREEN;
-            const msg = p.bellied ? 'CRASH LANDED — ENTER: NEW JET · J J: BAIL OUT' : p.deck ? 'FULL POWER (9 or 0) TO FIRE THE CATAPULT' : 'Z / 1–0: THROTTLE · ←/→: STEER · S: ROTATE AT ' + Math.round(game.rotateSpeed * MS_TO_KTS) + ' KTS · SPACE: BRAKES';
+            const msg = p.bellied ? 'CRASH LANDED — ENTER: NEW JET · J J: BAIL OUT' : p.deck ? 'FULL POWER (9 or 0) TO FIRE THE CATAPULT · U: AUTO-TAKEOFF' : 'Z / 1–0: THROTTLE · ←/→: STEER · S: ROTATE AT ' + Math.round(game.rotateSpeed * MS_TO_KTS) + ' KTS · U: AUTO-TAKEOFF';
             ctx.fillText(msg, this.w / 2, this.h * 0.8);
             if (game.atFriendlyPad(p)) ctx.fillText('STOPPED ON A FRIENDLY PAD: REPAIR · REFUEL · REARM  (L: CHANGE LOADOUT)', this.w / 2, this.h * 0.8 + 20);
         }

@@ -1,0 +1,208 @@
+// ═══════════════════════════════════════════════════════════════
+// Autopilot: automatic takeoff (runway or catapult) and automatic landing on
+// the nearest friendly runway or the (moving) home carrier.
+// Flies the player's jet through the same controls the player would use.
+// ═══════════════════════════════════════════════════════════════
+import * as THREE from 'three';
+import { steerToward, avoidTerrain } from './ai.js';
+import { refSpeeds } from './aircraft.js';
+import { BASES, RUNWAY, terrainHeight } from './world.js';
+import { clamp, DEG } from './util.js';
+
+const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
+const GLIDE = 3.5 * DEG;
+export const GLIDE_SLOPE = GLIDE;
+
+// Landing direction and touchdown point for a runway (picks the end with clearer approach terrain)
+export function runwayApproach(base) {
+    let best = null;
+    for (const dir of [1, -1]) {
+        const h = -base.heading + (dir < 0 ? Math.PI : 0);
+        const fwd = new THREE.Vector3(-Math.sin(h), 0, -Math.cos(h));
+        const thr = new THREE.Vector3(base.x, base.h, base.z).addScaledVector(fwd, -RUNWAY.length / 2);
+        // how far out the glide slope stays clear of terrain (with a margin), and the worst intrusion
+        let worst = -Infinity, clearDist = 9000;
+        for (let d = 100; d <= 9000; d += 100) {
+            const x = thr.x - fwd.x * d, z = thr.z - fwd.z * d;
+            const over = terrainHeight(x, z) - (base.h + d * Math.tan(GLIDE));
+            if (over > -35 && clearDist === 9000) clearDist = d - 100;
+            worst = Math.max(worst, over * (d <= 6000 ? 1 : 0.3));
+        }
+        const score = worst - clearDist * 0.01;
+        if (!best || score < best.score) best = { score, fwd, thr, clearDist };
+    }
+    return { fwd: best.fwd, touch: best.thr.clone().addScaledVector(best.fwd, 400), clearDist: best.clearDist };
+}
+
+export class Autopilot {
+    constructor(game) {
+        this.game = game;
+        this.active = null; // 'takeoff' | 'land'
+        this.phase = '';
+        this.status = '';
+    }
+
+    disengage(msg) {
+        if (!this.active) return;
+        this.active = null;
+        this.phase = '';
+        this.status = '';
+        const p = this.game.player;
+        if (p) this.game.aimDir.copy(p.vel.lengthSq() > 1 ? p.vel : p.getForward(_v)).normalize();
+        if (msg) this.game.addFeed(msg, '#5dffa0');
+    }
+
+    // ── Engage ──
+    takeoff() {
+        const p = this.game.player;
+        if (!p.onGround) { this.game.addFeed('AUTO-TAKEOFF: ONLY ON THE GROUND', '#ffc23f'); return; }
+        if (p.bellied) return;
+        this.active = 'takeoff';
+        this.phase = 'roll';
+        this.heading = p.deck ? null : Math.atan2(-p.getForward(_v).x, -p.getForward(_v).z);
+        this.game.addFeed('AUTOPILOT: TAKEOFF', '#5dffa0');
+    }
+
+    land() {
+        const g = this.game, p = g.player;
+        if (p.onGround) { this.game.addFeed('ALREADY ON THE GROUND', '#ffc23f'); return; }
+        // nearest friendly landing spot: home runway or the home carrier
+        const home = BASES.find(b => b.friendly);
+        const cv = g.naval.homeCarrier && g.naval.homeCarrier.alive ? g.naval.homeCarrier : null;
+        const dRunway = Math.hypot(p.pos.x - home.x, p.pos.z - home.z);
+        const dCarrier = cv ? cv.pos.distanceTo(p.pos) : Infinity;
+        this.target = dCarrier < dRunway ? { kind: 'carrier', ship: cv } : { kind: 'runway', base: home };
+        if (this.target.kind === 'runway') this.pickRunwayEnd(home);
+        this.active = 'land';
+        this.phase = 'transit';
+        g.addFeed('AUTOPILOT: LANDING AT ' + (this.target.kind === 'carrier' ? 'CARRIER ' + cv.name : 'HOME AIRBASE'), '#5dffa0');
+    }
+
+    // Use whichever runway direction has the lower terrain under its approach
+    pickRunwayEnd(base) {
+        const a = runwayApproach(base);
+        this.target.fwd = a.fwd;
+        this.target.touch = a.touch;
+    }
+
+    // Touchdown point & landing direction (the carrier moves, so recompute each frame)
+    geometry() {
+        const t = this.target;
+        if (t.kind === 'carrier') {
+            const s = t.ship;
+            t.fwd = _v3.set(-Math.sin(s.heading), 0, -Math.cos(s.heading)).clone();
+            t.touch = s.toWorld(-4, s.deckY, s.def.L * 0.3);
+        }
+        return t;
+    }
+
+    // ── Per-frame (called from updatePlayer; overrides the stick) ──
+    update(dt, p) {
+        if (!this.active) return;
+        if (!p.alive) { this.disengage(); return; }
+        const c = p.controls;
+        const rs = refSpeeds(p.spec);
+        if (this.active === 'takeoff') return this.flyTakeoff(dt, p, c, rs);
+        return this.flyLanding(dt, p, c, rs);
+    }
+
+    flyTakeoff(dt, p, c, rs) {
+        const g = this.game;
+        c.yaw = 0; c.roll = 0; c.pitch = 0;
+        if (p.onGround) {
+            p.airbrake = false;
+            g.input.spoilersOn = false;
+            p.flaps = Math.max(p.flaps, 1);
+            c.throttle = p.deck ? 1 : 0.9;
+            if (!p.deck && this.heading != null) {
+                // hold the runway heading with the nose wheel
+                const f = p.getForward(_v);
+                let err = Math.atan2(-f.x, -f.z) - this.heading;
+                err = Math.atan2(Math.sin(err), Math.cos(err));
+                c.roll = clamp(err * 4, -1, 1);
+            }
+            if (p.relSpeed > rs.takeoff) c.pitch = 0.7;
+            this.status = 'TAKEOFF ROLL ' + Math.round(p.relSpeed * 1.944) + ' / ' + Math.round(rs.takeoff * 1.944) + ' KT';
+            return;
+        }
+        const agl = p.pos.y - Math.max(terrainHeight(p.pos.x, p.pos.z), 0);
+        const f = p.getForward(_v);
+        _v2.set(f.x, 0, f.z).normalize();
+        _v2.y = 0.2; _v2.normalize();
+        steerToward(p, _v2, c, 1, true);
+        c.throttle = 0.9;
+        if (agl > 40 && p.gear) { p.gear = false; g.addFeed('GEAR UP', '#5dffa0'); }
+        if (agl > 250 && p.flaps) p.flaps = 0;
+        this.status = 'CLIMBING ' + Math.round(agl * 3.28) + ' FT';
+        if (agl > 500) this.disengage('AUTOPILOT OFF — YOU HAVE CONTROL');
+    }
+
+    flyLanding(dt, p, c, rs) {
+        const g = this.game, t = this.geometry();
+        const fwd = t.fwd, touch = t.touch;
+        if (t.kind === 'carrier' && (!t.ship.alive)) { this.disengage('CARRIER LOST — AUTOPILOT OFF'); return; }
+        const shipVel = t.kind === 'carrier' ? t.ship.vel : _v3.set(0, 0, 0);
+        // along-track distance to touchdown (positive = before it), and lateral offset
+        const rel = _v.subVectors(p.pos, touch);
+        const along = -rel.dot(fwd);
+        const lateral = rel.x * fwd.z - rel.z * fwd.x;
+        const app = rs.approach;
+
+        if (p.onGround) {
+            this.phase = 'rollout';
+            c.throttle = 0; c.pitch = 0; c.yaw = 0;
+            p.airbrake = true;
+            const f = p.getForward(_v2);
+            let err = Math.atan2(-f.x, -f.z) - Math.atan2(-fwd.x, -fwd.z);
+            err = Math.atan2(Math.sin(err), Math.cos(err));
+            c.roll = clamp(err * 4 + lateral * 0.01, -1, 1);
+            this.status = 'ROLLOUT ' + Math.round(p.relSpeed * 1.944) + ' KT';
+            if (p.relSpeed < 2) { p.airbrake = false; g.input.spoilersOn = false; this.disengage('LANDED — AUTOPILOT OFF'); }
+            return;
+        }
+
+        if (this.phase === 'transit') {
+            // fly to a point 9 km out on the extended centreline
+            const iaf = _v2.copy(touch).addScaledVector(fwd, -9000);
+            iaf.y = Math.max(touch.y + 9000 * Math.tan(GLIDE), terrainHeight(iaf.x, iaf.z) + 300);
+            const to = _v3.subVectors(iaf, p.pos);
+            const d = to.length();
+            steerToward(p, to.normalize(), c, 0.8, true);
+            c.throttle = clamp(0.6 + (app * 1.7 - p.speed) * 0.03, 0.2, 0.9);
+            if (avoidTerrain(p, c, 120)) { this.status = 'TERRAIN — CLIMBING'; return; }
+            this.status = 'TO APPROACH FIX ' + (d / 1000).toFixed(1) + ' KM';
+            if (d < 1800 || (along > 1500 && along < 12000 && Math.abs(lateral) < 700 && _v3.copy(p.vel).normalize().dot(fwd) > 0.8)) this.phase = 'final';
+            return;
+        }
+
+        // final approach: centreline + glide slope, configured and on speed
+        if (along < 7000 && !p.gear) p.gear = true;
+        if (along < 6000 && p.speed < 175) p.flaps = 2;
+        g.input.spoilersOn = false;
+        p.airbrake = p.speed > app * 1.25;
+        const glideAlt = touch.y + Math.max(along, 0) * Math.tan(GLIDE);
+        const hAbove = p.pos.y - p.gearOffset - touch.y;
+        // aim at a point ahead on the centreline at the glide-slope height (lead a moving deck)
+        const look = Math.max(700, Math.min(1600, along * 0.5));
+        const aim = _v2.copy(touch).addScaledVector(fwd, -(along - look)).addScaledVector(shipVel, look / Math.max(p.speed, 50));
+        aim.y = touch.y + Math.max(along - look, 0) * Math.tan(GLIDE) + p.gearOffset;
+        // pull back onto the glide slope when low or high
+        aim.y += clamp((glideAlt + p.gearOffset - p.pos.y) * 5, -150, 200);
+        let dir = aim.sub(p.pos).normalize();
+        // flare in the last few metres: slow the sink rate
+        if (t.kind === 'runway' && hAbove < 15 && along < 900) {
+            this.phase = 'flare';
+            dir = _v2.copy(fwd).addScaledVector(shipVel, 1 / Math.max(p.speed, 50));
+            dir.y = -Math.max(1.4, hAbove * 0.25) / Math.max(p.speed, 40);
+            dir.normalize();
+        }
+        steerToward(p, dir, c, 1, true);
+        c.yaw = clamp(c.yaw, -0.4, 0.4);
+        if (along > 2500 && avoidTerrain(p, c, 60)) { c.throttle = 0.9; this.status = 'TERRAIN — CLIMBING'; return; }
+        const relSpeed = _v3.subVectors(p.vel, shipVel).length();
+        c.throttle = this.phase === 'flare' && t.kind === 'runway' ? 0 : clamp(0.45 + (app - relSpeed) * 0.06, 0, 0.9);
+        this.status = (this.phase === 'flare' ? 'FLARE' : 'FINAL') + ' ' + (along / 1000).toFixed(1) + ' KM · ' + Math.round((p.pos.y - glideAlt - p.gearOffset) * 3.28) + ' FT ' + (p.pos.y - glideAlt > 0 ? 'HIGH' : 'LOW');
+        // went around / overshot badly → try again
+        if (along < -400) { this.phase = 'transit'; g.addFeed('GO AROUND', '#ffc23f'); p.gear = true; }
+    }
+}

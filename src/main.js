@@ -104,7 +104,10 @@ async function boot() {
     await preloadModels((f) => { $('loadFill').style.width = (35 + f * 60) + '%'; });
     game = new Game({ scene, camera, world, effects, audio, input, hud, cockpit, settings });
     game.onGameOver = showGameOver;
-    game.onPause = (on) => $('pause').classList.toggle('show', on);
+    game.onPause = (on) => {
+        $('pause').classList.toggle('show', on);
+        $('quickPos').classList.toggle('show', on && game.quickPositionsAllowed);
+    };
     game.onHelp = () => { if (game.state === 'playing') game.pause(true); openModal('controlsModal'); };
     game.onSettingsChange = () => { save(); document.querySelectorAll('.seg').forEach(sg => { const k = sg.dataset.key; if (k) sg.querySelectorAll('button').forEach(b => b.classList.toggle('sel', b.dataset.val === String(settings[k]))); }); };
     game.applyLivery = (ac) => applyLivery(ac.model, settings.livery, ac.type);
@@ -202,6 +205,7 @@ function buildMenu() {
 
     $('launchBtn').onclick = launch;
     $('resumeBtn').onclick = () => game.pause(false);
+    document.querySelectorAll('[data-qp]').forEach(b => b.addEventListener('click', () => { audio.uiConfirm(); game.quickPosition(b.dataset.qp); }));
     $('abortBtn').onclick = () => { $('pause').classList.remove('show'); toMenu(); };
     $('retryBtn').onclick = () => { $('over').classList.remove('show'); launch(); };
     $('menuBtn').onclick = () => { $('over').classList.remove('show'); toMenu(); };

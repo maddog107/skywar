@@ -39,7 +39,9 @@ You need a local server because the game uses ES modules and loads `.glb` models
   lift on the ground, wheel brakes, and fuel (the afterburner burns it 4× faster, then BINGO, then a
   flameout that leaves you gliding). Land gear-up or too hard and you belly-land in sparks, or ditch at
   sea and slowly sink, instead of exploding. Start in the air, on the runway, on the apron (taxi out) or on the
-  carrier. Stop on a friendly runway or deck to repair, refuel and rearm.
+  carrier. Stop on a friendly runway or deck to repair, refuel and rearm. In Free Flight and Sandbox the
+  pause menu has Quick Position buttons (runway/carrier approach, runway takeoff, catapult), and the
+  autopilot can auto-land (Y) at the nearest runway or carrier, or auto-takeoff (U).
 - **Hangar**: nine paint schemes and three loadouts (Balanced, Air Superiority, Strike). Bombs
   have a CCIP impact pipper and leave craters.
 - **Ejection, War Thunder trailer style**: eject (J J) into a first-person view under the parachute.
@@ -63,6 +65,7 @@ You need a local server because the game uses ES modules and loads `.glb` models
 | X | Cycle weapon: SRM, LRM, rockets, bombs |
 | R | Flares |
 | F | Flaps |
+| Y / U | Autopilot: auto-land (nearest friendly runway or carrier) / auto-takeoff |
 | J J | Eject; then E hijacks, R reloads, WASD/arrows steer the chute |
 | N | Spawn a bandit (Sandbox / Free Flight) |
 | L | Change loadout while stopped on a friendly pad (look behind in the air) |
