@@ -33,7 +33,9 @@ You need a local server because the game uses ES modules and loads `.glb` models
   Deadstick and Trap, plus a Daily Mission picked from the date (the mission, jet and time of day change every day).
 - **Modes**: Dogfight waves, Strike (destroy an airbase), Naval Strike (sink a carrier group),
   Survival, Target Practice (timed range), Sandbox (unlimited everything, invincible, bombs, N spawns
-  bandits) and Free Flight (with an unarmed carrier group offshore to shoot at). Four times of day: dawn, midday, dusk and night.
+  bandits), Ring Race (timed canyon course) and Free Flight (with an unarmed carrier group offshore to shoot at).
+- **Weather**: clear, cloudy, rain or storm, with rain streaks, darker skies, turbulence, and lightning
+  whose thunder arrives late depending on distance. **Photo mode** (O) freezes the action for orbit shots. Four times of day: dawn, midday, dusk and night.
 - **Aircraft carriers**: take off by catapult (full throttle on deck) and land on the angled deck to
   catch an arresting wire. Enemy carriers and destroyers defend themselves with CIWS guns that shoot
   down missiles, SAMs, a naval gun and deck-launched fighters. Destroyed ships burn and sink.

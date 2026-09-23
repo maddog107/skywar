@@ -434,8 +434,16 @@ export class Aircraft {
             .addScaledVector(rightW, side)
             .addScaledVector(vhat, -drag)
             .addScaledVector(bodyFwd, this.falling ? thrustN * 0.2 : thrustN);
-        // wind
+        // wind and weather turbulence (stronger low down and in storms)
         if (this.game.wind) _acc.addScaledVector(this.game.wind, 0.02);
+        const wx = this.game.world && this.game.world.weather;
+        if (wx === 'rain' || wx === 'storm') {
+            const k = (wx === 'storm' ? 3.2 : 1.4) * clamp(1.4 - alt / 3000, 0.3, 1.4);
+            const t = this.game.time * 1.7 + this.id;
+            _acc.x += (Math.sin(t * 1.3) + Math.sin(t * 3.7)) * k * 0.5;
+            _acc.y += (Math.sin(t * 2.1 + 1) + Math.sin(t * 5.3)) * k;
+            _acc.z += Math.sin(t * 1.9 + 2) * k * 0.5;
+        }
 
         // speed brake: extra parasitic drag plus a fixed bite so it works at any speed
         if (this.brakeAnim > 0.05) _acc.addScaledVector(vhat, -1.8 * this.brakeAnim);

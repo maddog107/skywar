@@ -346,7 +346,7 @@ export class Effects {
     light(pos, intensity, life) {
         let l = this.lights.find(x => x.userData.life <= 0) || this.lights[0];
         l.position.copy(pos);
-        l.userData.life = life; l.userData.max = life; l.userData.i = intensity * 4000;
+        l.userData.life = life; l.userData.max = life; l.userData.i = intensity * 45;
         l.intensity = l.userData.i;
     }
 

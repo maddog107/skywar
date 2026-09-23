@@ -28,7 +28,7 @@ const DEFAULTS = {
     aircraft: 'f16', mode: 'dogfight', difficulty: 'veteran', time: 'day', wingmen: 1,
     controlMode: 'mouseaim', sensitivity: 1, invertPitch: false, quality: 'high', volume: 0.7,
     callouts: true, gEffects: true, defaultCockpit: false,
-    start: 'auto', loadout: 'balanced', livery: 'default', fuel: true,
+    start: 'auto', loadout: 'balanced', livery: 'default', fuel: true, weather: 'clear',
 };
 let settings = { ...DEFAULTS };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('skywar.settings') || '{}')); } catch (e) { /* ignore */ }
@@ -98,6 +98,7 @@ async function boot() {
     $('loadText').textContent = 'GENERATING TERRAIN…';
     await new Promise(r => setTimeout(r, 30));
     world = new World(scene, renderer);
+    world.weather = settings.weather || 'clear';
     world.setTime(settings.time);
     world.updateTerrain(new THREE.Vector3(0, 0, 0), true);
     $('loadFill').style.width = '35%';
@@ -186,6 +187,7 @@ function buildMenu() {
     seg('segDifficulty', Object.entries(DIFFICULTY).map(([k, v]) => [k, v.label]), 'difficulty', updateBest);
     seg('segTime', Object.entries(TIMES).map(([k, v]) => [k, v.label]), 'time', () => world.setTime(settings.time));
     seg('segWingmen', [[0, 'SOLO'], [1, '1'], [2, '2']], 'wingmen');
+    seg('segWeather', [['clear', 'CLEAR'], ['cloudy', 'CLOUDY'], ['rain', 'RAIN'], ['storm', 'STORM']], 'weather', () => world.setWeather(settings.weather));
     seg('segStart', [['auto', 'AUTO'], ['air', 'AIR'], ['runway', 'RWY'], ['apron', 'TAXI'], ['carrier', 'CVN']], 'start');
     seg('segLoadout', Object.entries(LOADOUT_LABELS).map(([k, v]) => [k, v.label.split(' ')[0]]), 'loadout');
     seg('segLivery', Object.entries(LIVERIES).map(([k, v]) => [k, v.label]), 'livery', () => { if (showcase) applyLivery(showcase.model, settings.livery, showcase.type); });
@@ -444,7 +446,7 @@ function frame(dt) {
     } else if (game.pilotMode) input.readPad();
 
     cockpitPass.enabled = cockpit.enabled && game.state !== 'menu' && ((game.player && game.player.alive) || !!game.pilotMode);
-    $('clickToFly').classList.toggle('show', game.state === 'playing' && settings.controlMode !== 'mousestick' && !input.locked);
+    $('clickToFly').classList.toggle('show', game.state === 'playing' && !game.photo && settings.controlMode !== 'mousestick' && !input.locked);
     composer.render(dt);
     hud.draw(game, dt);
 }
@@ -471,6 +473,7 @@ function updateMenuScene(dt) {
         camera.fov = damp(camera.fov, 45, 3, dt);
         camera.updateProjectionMatrix();
         world.update(dt, camera, target, game.wind);
+        world.updateWeather(dt, camera, game);
         effects.update(dt, camera, scene.fog, () => 0);
     }
 }

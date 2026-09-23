@@ -249,6 +249,7 @@ export const MODES = {
     strike: { label: 'STRIKE', desc: 'Destroy the enemy airbase: SAM sites, AAA, radar and hangars while fighters defend it.' },
     naval: { label: 'NAVAL STRIKE', desc: 'Sink an enemy carrier group. CIWS guns shoot down missiles, SAMs and fighters defend it.' },
     practice: { label: 'TARGET PRACTICE', desc: 'Timed range: shoot target boards on the hills and flying drones. Nothing shoots back.' },
+    rings: { label: 'RING RACE', desc: 'Timed course of glowing rings through the valleys and canyons. Beat your best time.' },
     survival: { label: 'SURVIVAL', desc: 'Endless escalating waves. No repairs, no mercy. How long can you last?' },
     sandbox: { label: 'SANDBOX', desc: 'Just have fun: unlimited ammo & fuel, invincible, bombs, spawn bandits with N.' },
     freeflight: { label: 'FREE FLIGHT', desc: 'Taxi, take off, explore and land. Unarmed target ships offshore to sink for fun.' },

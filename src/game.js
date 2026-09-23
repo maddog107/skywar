@@ -13,6 +13,7 @@ import { PilotOnFoot, spawnFallingBody } from './pilot.js';
 import { Autopilot, runwayApproach, GLIDE_SLOPE } from './autopilot.js';
 import { refSpeeds } from './aircraft.js';
 import { MISSIONS } from './missions.js';
+import { RingCourse } from './rings.js';
 import { readStick } from './input.js';
 import { clamp, damp, lerp, rand, pick, formatTime, G } from './util.js';
 import { BASES, RUNWAY, terrainHeight, isOnRunway } from './world.js';
@@ -123,11 +124,18 @@ export class Game {
         this.slot = 0;
         this._navalWon = false; this.navalWinT = 0; this._practiceDone = false; this.spawnT = 3;
         this.gloc = 0; this.whiteout = 0; this.missileCam = null; this.pullUp = false;
-        this.lives = this.mission ? (this.mission.lives ?? 0) : ['freeflight', 'sandbox', 'practice'].includes(this.mode) ? Infinity : 2;
+        this.photo = null; this.hideHud = false;
+        if (this.rings) { this.rings.remove(); this.rings = null; }
+        this.navTarget = null;
+        this.lives = this.mission ? (this.mission.lives ?? 0) : ['freeflight', 'sandbox', 'practice', 'rings'].includes(this.mode) ? Infinity : 2;
+        if (this.mode === 'rings') this.rings = new RingCourse(this, 7);
         this.input.consumeMouse();
         this.input.spoilersOn = false;
         this.autopilot.disengage();
         this.pilotMode = null;
+        this.world.setWeather(this.settings.weather || 'clear');
+        const storm = this.world.weather === 'storm', rain = this.world.weather === 'rain';
+        this.wind.set(storm ? 14 : rain ? 7 : 3, 0, storm ? -10 : rain ? -5 : -2);
         this.naval.spawnHomeCarrier();
         if (this.mode === 'strike' || this.mode === 'sandbox') this.ground.spawnEnemyBase();
         if (this.mode === 'naval' || this.mode === 'sandbox') this.naval.spawnEnemyGroup();
@@ -158,6 +166,9 @@ export class Game {
             this.slot = 3;
         } else if (this.mode === 'mission') {
             // custom missions set themselves up below
+        } else if (this.mode === 'rings') {
+            this.placeAtRing();
+            this.showBanner('RING RACE', this.rings.rings.length + ' rings through the valleys. Crashing respawns you at your last ring (+5 s).', 5);
         } else {
             this.waveBreak = 3;
             this.showBanner(this.mode === 'survival' ? 'SURVIVAL' : 'DOGFIGHT', this.mode === 'survival' ? 'Endless hostiles. No repairs. Good luck.' : 'Hostile fighters inbound. Weapons free.', 4);
@@ -167,7 +178,7 @@ export class Game {
             this.mission.setup && this.mission.setup(this);
             this.showBanner((this.isDaily ? 'DAILY: ' : 'MISSION: ') + this.mission.title, this.mission.desc, 6, '#ffc23f');
         }
-        if (this.settings.wingmen > 0 && !this.mission && !['freeflight', 'practice', 'sandbox'].includes(this.mode)) {
+        if (this.settings.wingmen > 0 && !this.mission && !['freeflight', 'practice', 'sandbox', 'rings'].includes(this.mode)) {
             for (let i = 0; i < this.settings.wingmen; i++) {
                 const id = pick(ALLY_POOL);
                 const w = new Aircraft(this, id, { team: 'blue', name: WINGMEN[i] });
@@ -248,6 +259,7 @@ export class Game {
         }
         const w = this.startPoint();
         this.spawnPlayer(w === 'air' ? 'air' : w);
+        if (this.mode === 'rings') { this.placeAtRing(); this.missionTime += 5; this.addFeed('+5 s PENALTY', '#ffc23f'); }
         this.state = 'playing';
         this.deathT = 0;
         this.autopilot.disengage();
@@ -255,6 +267,15 @@ export class Game {
         this.cameraMode = this.settings.defaultCockpit ? 'cockpit' : 'chase';
         this.showBanner('NEW AIRFRAME', this.lives === Infinity ? '' : this.lives + ' SPARE JET' + (this.lives === 1 ? '' : 'S') + ' LEFT', 3);
         this.input.lock();
+    }
+
+    placeAtRing() {
+        const pose = this.rings.spawnPose();
+        const p = this.player;
+        p.spawnAir(pose.pos, pose.heading, 0.55);
+        this.aimDir.copy(p.vel).normalize();
+        this.camQuat.copy(p.quat);
+        this.ringPrev = p.pos.clone();
     }
 
     // ── Mission helpers ──
@@ -449,6 +470,8 @@ export class Game {
         this.effects.clear();
         this.ground.clear();
         this.naval.clear();
+        if (this.rings) { this.rings.remove(); this.rings = null; }
+        this.navTarget = null;
     }
 
     // ═════════════ Spawning ═════════════
@@ -693,7 +716,17 @@ export class Game {
     showBanner(text, sub = '', dur = 3, color) { this.banner = { text, sub, t: this.time, dur, color }; }
 
     // ═════════════ Actions ═════════════
+    togglePhoto() {
+        if (this.photo) { this.photo = null; this.hideHud = false; this.addFeed('PHOTO MODE OFF', '#5dffa0'); return; }
+        const target = this.pilotMode ? this.pilotMode.pos : this.player.pos;
+        const off = _v.subVectors(this.camera.position, target);
+        this.photo = { yaw: Math.atan2(off.x, off.z), pitch: Math.asin(clamp(off.y / Math.max(off.length(), 1), -0.95, 0.95)), dist: clamp(off.length(), 8, 400), target: target.clone() };
+        this.hideHud = true;
+        this.input.lock();
+    }
+
     onAction(a) {
+        if (a === 'photo' && (this.state === 'playing' || this.photo)) { this.togglePhoto(); return; }
         if (a === 'lockLost') {
             if (this.state === 'playing' && (this.settings.controlMode !== 'mousestick' || this.pilotMode)) this.pause(true);
             return;
@@ -1027,6 +1060,20 @@ export class Game {
     // ═════════════ Main update ═════════════
     update(rawDt) {
         if (this.state === 'paused' || this.state === 'menu') return;
+        if (this.photo) {
+            // frozen world, free orbit camera: mouse orbits, wheel zooms
+            const m = this.input.consumeMouse(), ph = this.photo, cam = this.camera;
+            ph.yaw -= m.dx * 0.005; ph.pitch = clamp(ph.pitch + m.dy * 0.004, -1.4, 1.4);
+            ph.dist = clamp(ph.dist * (1 + m.wheel * 0.08), 5, 1500);
+            cam.position.set(Math.sin(ph.yaw) * Math.cos(ph.pitch), Math.sin(ph.pitch), Math.cos(ph.yaw) * Math.cos(ph.pitch)).multiplyScalar(ph.dist).add(ph.target);
+            cam.up.set(0, 1, 0); cam.lookAt(ph.target);
+            cam.fov = damp(cam.fov, 50, 4, rawDt); cam.updateProjectionMatrix();
+            this.cockpit.enabled = false;
+            if (this.player) this.player.root.visible = !this.player.exploded;
+            this.world.update(0, cam, ph.target, this.wind);
+            this.audio.update(rawDt, null, { playing: false });
+            return;
+        }
         // brief slow-motion on kills
         if (this.slowmoT > 0) { this.slowmoT -= rawDt; this.timeScale = damp(this.timeScale, 0.3, 20, rawDt); }
         else this.timeScale = damp(this.timeScale, 1, 6, rawDt);
@@ -1082,6 +1129,7 @@ export class Game {
         }
         this.updateCamera(rawDt, mouse);
         this.world.update(dt, this.camera, pm ? pm.pos : p ? p.pos : this.camera.position, this.wind);
+        this.world.updateWeather(rawDt, this.camera, this);
         this.effects.update(dt, this.camera, this.scene.fog, (x, z) => Math.max(terrainHeight(x, z), 0));
         if (this.cockpit && this.cockpit.enabled && pm) this.cockpit.updateRifle(rawDt, this, this.camera, this.world, pm);
         else if (this.cockpit && this.cockpit.enabled && p && p.alive) this.cockpit.update(rawDt, this, this.camera, this.world);
@@ -1181,6 +1229,24 @@ export class Game {
             }
         } else if (this.mode === 'sandbox') {
             this.objective = 'SANDBOX — N: SPAWN BANDIT · X: WEAPONS · BOMBS AWAY';
+        } else if (this.mode === 'rings' && this.rings && this.player.alive && !this.pilotMode) {
+            const rc = this.rings;
+            rc.update(dt);
+            if (this.ringPrev && rc.check(this.ringPrev, p.pos)) {
+                this.audio.uiConfirm();
+                this.score += 100;
+                if (rc.done) {
+                    this.score += Math.max(500, Math.round(20000 - this.missionTime * 90));
+                    this.showBanner('FINISH!', this.clockText(), 4, '#5dffa0');
+                    this.gameOver(true);
+                    return;
+                }
+                this.addFeed('RING ' + rc.next + ' / ' + rc.rings.length + ' · ' + this.clockText(), '#5dffa0');
+            }
+            this.ringPrev = (this.ringPrev || new THREE.Vector3()).copy(p.pos);
+            const t = rc.target;
+            this.navTarget = t ? { pos: t.pos, label: 'RING ' + (rc.next + 1) } : null;
+            this.objective = 'RING ' + (rc.next + 1) + ' / ' + rc.rings.length + ' · ' + this.clockText();
         }
         if (this.mission) {
             this.mission.update && this.mission.update(this);

@@ -179,6 +179,20 @@ export class Audio {
         o.connect(og).connect(this.sfx); o.start(t + delay); o.stop(t + delay + 0.7);
     }
 
+    thunder(dist = 2000) {
+        if (!this.ctx) return;
+        const ctx = this.ctx, t = ctx.currentTime;
+        const vol = clamp(2.2 / (1 + dist / 1500), 0.1, 1);
+        const src = this.noiseSrc(this.brown, false);
+        const f = ctx.createBiquadFilter(); f.type = 'lowpass';
+        f.frequency.setValueAtTime(dist < 2500 ? 900 : 300, t); f.frequency.exponentialRampToValueAtTime(60, t + 4);
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol, t + (dist < 2500 ? 0.05 : 0.4));
+        g.gain.setValueAtTime(vol * 0.7, t + 0.8); g.gain.exponentialRampToValueAtTime(0.001, t + 5);
+        src.connect(f).connect(g).connect(this.sfx);
+        src.start(t); src.stop(t + 5.2);
+    }
+
     whoosh(vol = 0.5) {
         if (!this.ctx) return;
         const ctx = this.ctx, t = ctx.currentTime;

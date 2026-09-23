@@ -79,6 +79,118 @@ export class World {
         this.initTreeAssets();
         this.initBases();
         this.scene.fog = new THREE.FogExp2(0xbfd4e6, 0.00006);
+        this.weather = 'clear';
+        this.initRain();
+        this.lightningT = 5;
+        this.flash = 0;
+    }
+
+    // ── Weather: clear / cloudy / rain / storm ──
+    setWeather(w) {
+        this.weather = w || 'clear';
+        if (this.timeKey) this.setTime(this.timeKey); // re-applies the palette with weather applied
+    }
+
+    applyWeather(P) {
+        const w = this.weather;
+        const k = w === 'cloudy' ? 0.35 : w === 'rain' ? 0.7 : w === 'storm' ? 1 : 0;
+        if (!k) return;
+        const grey = new THREE.Color(0x6f7780), dark = new THREE.Color(0x3a4048);
+        P.zenith.lerp(dark, 0.55 * k);
+        P.horizon.lerp(grey, 0.6 * k);
+        P.glow.lerp(grey, 0.8 * k);
+        P.sunI *= 1 - 0.65 * k;
+        P.hemiI *= 1 - 0.25 * k;
+        P.fogDensity *= 1 + 1.8 * k;
+        P.clouds.lerp(new THREE.Color(0x9aa2ab), 0.7 * k);
+        P.cloudShadow.lerp(new THREE.Color(0x3c434c), 0.8 * k);
+        P.water.lerp(new THREE.Color(0x1d2a33), 0.6 * k);
+        P.sun.lerp(new THREE.Color(0xc8ccd2), 0.6 * k);
+    }
+
+    initRain() {
+        const N = 4000, B = 140;
+        const seeds = new Float32Array(N * 2 * 3), ends = new Float32Array(N * 2);
+        for (let i = 0; i < N; i++) {
+            const x = Math.random() * B, y = Math.random() * B, z = Math.random() * B;
+            for (let e = 0; e < 2; e++) { seeds.set([x, y, z], (i * 2 + e) * 3); ends[i * 2 + e] = e; }
+        }
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.BufferAttribute(seeds, 3));
+        g.setAttribute('end', new THREE.BufferAttribute(ends, 1));
+        this.rainMat = new THREE.ShaderMaterial({
+            transparent: true, depthWrite: false, fog: false,
+            uniforms: { cam: { value: new THREE.Vector3() }, time: { value: 0 }, box: { value: B }, fall: { value: new THREE.Vector3(3, -42, -2) }, intensity: { value: 0 } },
+            vertexShader: /* glsl */`
+                attribute float end; uniform vec3 cam, fall; uniform float time, box, intensity;
+                varying float vA;
+                void main() {
+                    vec3 p = position + fall * time;
+                    p = cam + mod(p - cam + box * 0.5, box) - box * 0.5;
+                    p -= fall * 0.035 * end; // streak length along the fall direction
+                    vA = intensity * (1.0 - end * 0.7) * smoothstep(box * 0.5, box * 0.2, length(p - cam));
+                    gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
+                }`,
+            fragmentShader: /* glsl */`
+                varying float vA;
+                void main() { gl_FragColor = vec4(0.72, 0.78, 0.86, vA * 0.45); }`,
+        });
+        this.rain = new THREE.LineSegments(g, this.rainMat);
+        this.rain.frustumCulled = false;
+        this.rain.renderOrder = 11;
+        this.rain.visible = false;
+        this.scene.add(this.rain);
+        // lightning bolt (re-shaped each strike)
+        const bg = new THREE.BufferGeometry();
+        bg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(40 * 3), 3));
+        this.bolt = new THREE.Line(bg, new THREE.LineBasicMaterial({ color: new THREE.Color(6, 6, 8), transparent: true, blending: THREE.AdditiveBlending, fog: false }));
+        this.bolt.frustumCulled = false;
+        this.bolt.visible = false;
+        this.scene.add(this.bolt);
+    }
+
+    updateWeather(dt, camera, game) {
+        const w = this.weather;
+        const raining = w === 'rain' || w === 'storm';
+        this.rain.visible = raining;
+        if (raining) {
+            const u = this.rainMat.uniforms;
+            u.cam.value.copy(camera.position);
+            u.time.value = this.time;
+            // rain falls below the cloud base
+            u.intensity.value = (w === 'storm' ? 1 : 0.7) * THREE.MathUtils.clamp((1900 - camera.position.y) / 600, 0, 1);
+            u.fall.value.set(game.wind.x * (w === 'storm' ? 3 : 1.5), -42, game.wind.z * (w === 'storm' ? 3 : 1.5));
+        }
+        // lightning
+        this.flash = Math.max(0, this.flash - dt * 6);
+        this.bolt.visible = this.flash > 0.2;
+        if (w === 'storm') {
+            this.lightningT -= dt;
+            if (this.lightningT <= 0) {
+                this.lightningT = 3 + Math.random() * 9;
+                this.strike(camera, game);
+            }
+        }
+        const f = this.flash;
+        this.hemi.intensity = this.baseHemi + f * 3;
+        this.skyMat.uniforms.zenith.value.copy(this.palette.zenith).lerp(new THREE.Color(0.8, 0.82, 0.95), f * 0.6);
+    }
+
+    strike(camera, game) {
+        const a = Math.random() * Math.PI * 2, d = 1500 + Math.random() * 7000;
+        const x = camera.position.x + Math.cos(a) * d, z = camera.position.z + Math.sin(a) * d;
+        const top = 1700, ground = Math.max(terrainHeight(x, z), 0);
+        const pos = this.bolt.geometry.attributes.position;
+        let px = x, pz = z;
+        for (let i = 0; i < 40; i++) {
+            const t = i / 39;
+            px += (Math.random() - 0.5) * 60; pz += (Math.random() - 0.5) * 60;
+            pos.setXYZ(i, px, top + (ground - top) * t, pz);
+        }
+        pos.needsUpdate = true;
+        this.flash = 1;
+        const dist = camera.position.distanceTo(new THREE.Vector3(x, (top + ground) / 2, z));
+        setTimeout(() => game.audio.thunder && game.audio.thunder(dist), (dist / 343) * 1000);
     }
 
     // ── Time of day ──
@@ -111,6 +223,7 @@ export class World {
             // moonlight comes from high up
             this.sunDir.set(0.35, 0.6, -0.4).normalize();
         }
+        this.applyWeather(P);
         this.palette = P;
         this.fogColor.copy(P.horizon);
         this.scene.fog.color.copy(P.horizon);
@@ -122,6 +235,7 @@ export class World {
         this.hemi.color.copy(P.hemiSky);
         this.hemi.groundColor.copy(P.hemiGround);
         this.hemi.intensity = P.hemiI;
+        this.baseHemi = P.hemiI;
 
         const su = this.skyMat.uniforms;
         su.zenith.value.copy(P.zenith);

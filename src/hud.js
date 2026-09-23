@@ -60,6 +60,12 @@ export class HUD {
         const cam = game.camera;
         cam.updateMatrixWorld();
 
+        if (game.photo) {
+            ctx.font = '600 12px "Share Tech Mono", ui-monospace, monospace';
+            ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.textAlign = 'center';
+            ctx.fillText('PHOTO MODE · mouse: orbit · wheel: zoom · O: exit', this.w / 2, this.h - 18);
+            return;
+        }
         this.drawScreenEffects(game);
         if (game.hideHud) return;
         if (game.pilotMode) { this.drawPilotMode(game); return; }
@@ -87,6 +93,7 @@ export class HUD {
         }
         if (p.alive && !game.missileCam) this.drawControlAids(game);
         this.drawTargets(game);
+        this.drawNav(game);
         this.drawThreats(game);
         this.drawPanels(game);
         if (game.cameraMode !== 'cockpit') this.drawRadar(game);
@@ -431,6 +438,23 @@ export class HUD {
             ctx.lineWidth = 1.6;
             ctx.beginPath(); ctx.arc(game.seeker.x, game.seeker.y, 30, 0, Math.PI * 2); ctx.stroke();
         }
+    }
+
+    // Waypoint / next-ring marker
+    drawNav(game) {
+        const n = game.navTarget, p = game.player;
+        if (!n || !p) return;
+        const ctx = this.ctx, cam = game.camera;
+        const P = this.project(n.pos, cam, {});
+        const dist = n.pos.distanceTo(p.pos);
+        if (!P.front || P.x < 0 || P.x > this.w || P.y < 0 || P.y > this.h) { this.edgeArrow(P, '#5dffa0', dist); return; }
+        ctx.strokeStyle = '#5dffa0'; ctx.lineWidth = 2;
+        const r = clamp(4000 / Math.max(dist, 1), 10, 60);
+        ctx.beginPath();
+        for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2 + Math.PI / 6; ctx[k ? 'lineTo' : 'moveTo'](P.x + Math.cos(a) * r, P.y + Math.sin(a) * r); }
+        ctx.closePath(); ctx.stroke();
+        ctx.fillStyle = '#5dffa0'; ctx.textAlign = 'center';
+        ctx.fillText(n.label + ' · ' + (dist < 1000 ? Math.round(dist) + 'm' : (dist / 1000).toFixed(1) + 'km'), P.x, P.y - r - 12);
     }
 
     edgeArrow(P, col, dist) {
