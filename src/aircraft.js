@@ -61,7 +61,15 @@ function makeFlameMaterial() {
 }
 const navTex = makeRadialTexture(64, [[0, 'rgba(255,255,255,1)'], [0.2, 'rgba(255,255,255,0.8)'], [1, 'rgba(255,255,255,0)']]);
 
+// Handy reference speeds (m/s): stall with a flap setting, takeoff and approach
+export function refSpeeds(spec) {
+    const liftK = LIFT_K * spec.flight.lift;
+    const vs = (flaps) => Math.sqrt(G / (liftK * CL_MAX * (1 + 0.2 * flaps)));
+    return { stall: vs(0), takeoff: vs(1) * 1.12, approach: vs(2) * 1.3, flapLimit: 175 };
+}
+
 let nextId = 1;
+const SURF_MAT = new THREE.MeshStandardMaterial({ color: 0x6f777f, metalness: 0.35, roughness: 0.5, side: THREE.DoubleSide });
 const GEAR_MATS = {
     strutMat: new THREE.MeshStandardMaterial({ color: 0xb8bcc0, metalness: 0.7, roughness: 0.35 }),
     tyreMat: new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.9 }),
@@ -108,7 +116,7 @@ export class Aircraft {
         this.airbrake = false;
         this.gear = false;
         this.gearAnim = 0;
-        this.flaps = 0;
+        this.flaps = 0; this.flapAnim = 0; this.brakeAnim = 0;
         this.fuel = 1;
         this.flameout = false;
         this.fuelTime = this.spec.fuelTime || (this.spec.category === 'civil' ? 3000 : this.spec.category === 'bomber' ? 3600 : 1500);
@@ -169,6 +177,7 @@ export class Aircraft {
         this.contrails = [];
         this.wingVapor = 0;
         this.buildGear();
+        this.buildSurfaces();
     }
 
     buildGear() {
@@ -209,6 +218,66 @@ export class Aircraft {
             this.gearLegs.push(pivot);
         }
         this.updateGearVisual();
+    }
+
+    // Visible flaps (wing trailing edge) and speed brake (spine panel, or wing spoilers on big jets)
+    buildSurfaces() {
+        const L = this.spec.length, rig = this.rig;
+        const hs = rig.halfSpan || this.spec.span / 2;
+        const tip = rig.wingtips[1] || new THREE.Vector3(hs, 0, L * 0.15);
+        const wingY = tip.y, teZ = tip.z + L * 0.015;
+        const mat = SURF_MAT;
+        const chord = Math.max(0.6, L * 0.055), span = hs * 0.42, thick = Math.max(0.05, L * 0.004);
+        this.flapPanels = [];
+        for (const s of [-1, 1]) {
+            const pivot = new THREE.Group();
+            pivot.position.set(s * hs * 0.4, wingY, teZ);
+            const panel = new THREE.Mesh(new THREE.BoxGeometry(span, thick, chord), mat);
+            panel.position.z = chord / 2;
+            panel.castShadow = true;
+            pivot.add(panel);
+            pivot.visible = false;
+            this.model.add(pivot);
+            this.flapPanels.push(pivot);
+        }
+        this.brakePanels = [];
+        const big = this.spec.category !== 'fighter';
+        if (big) {
+            // spoilers pop up from the top of each wing
+            for (const s of [-1, 1]) {
+                const pivot = new THREE.Group();
+                pivot.position.set(s * hs * 0.45, wingY + thick, teZ - chord * 1.6);
+                const panel = new THREE.Mesh(new THREE.BoxGeometry(span * 0.9, thick, chord * 0.9), mat);
+                panel.position.z = chord * 0.45;
+                panel.castShadow = true;
+                pivot.add(panel);
+                pivot.visible = false;
+                this.model.add(pivot);
+                this.brakePanels.push(pivot);
+            }
+        } else {
+            const topY = rig.minY != null && rig.height ? rig.minY + rig.height * 0.62 : L * 0.05;
+            const pivot = new THREE.Group();
+            pivot.position.set(0, topY, L * 0.0);
+            const len = L * 0.13, w = L * 0.065;
+            const panel = new THREE.Mesh(new THREE.BoxGeometry(w, thick, len), mat);
+            panel.position.z = len / 2;
+            panel.castShadow = true;
+            pivot.add(panel);
+            pivot.visible = false;
+            this.model.add(pivot);
+            this.brakePanels.push(pivot);
+        }
+    }
+
+    updateSurfaces(dt) {
+        const onGroundBrake = this.onGround && this.isPlayer && this.game.input.down('Space');
+        const brakeTarget = this.airbrake && !onGroundBrake ? 1 : this.airbrake && this.onGround ? 1 : 0;
+        this.brakeAnim = damp(this.brakeAnim, this.alive ? brakeTarget : 0, 5, dt);
+        this.flapAnim = damp(this.flapAnim, this.flaps / 2, 2.5, dt);
+        for (const p of this.flapPanels) { p.visible = this.flapAnim > 0.03; p.rotation.x = this.flapAnim * 0.7; }
+        const big = this.spec.category !== 'fighter';
+        for (const p of this.brakePanels) { p.visible = this.brakeAnim > 0.03; p.rotation.x = -this.brakeAnim * (big ? 0.9 : 0.85); }
     }
 
     updateGearVisual() {
@@ -269,7 +338,7 @@ export class Aircraft {
 
     // Engine thrust (m/s²) for the current throttle, including fuel starvation
     thrustFor(rho) {
-        if (this.flameout) return 0;
+        if (this.flameout || this.bellied) return 0;
         const t = this.throttle;
         return (t <= 0.9 ? this.thrustMil * (t / 0.9) : this.thrustMil + (this.thrustAB - this.thrustMil) * ((t - 0.9) / 0.1)) * (0.45 + 0.55 * rho);
     }
@@ -355,10 +424,10 @@ export class Aircraft {
         lift = clamp(lift, -maxLift * 0.45, maxLift);
         const side = -q * this.clSlope * 0.45 * this.beta;
 
-        let cd = this.cd0 * (this.airbrake ? 3.2 : 1) + K_INDUCED * Cl * Cl / f.lift + 0.6 * this.beta * this.beta;
+        let cd = this.cd0 * (1 + 3.5 * this.brakeAnim) + K_INDUCED * Cl * Cl / f.lift + 0.6 * this.beta * this.beta;
         if (this.gearAnim > 0.05) cd += this.cd0 * 0.8 * this.gearAnim;
-        cd += this.cd0 * 0.45 * this.flaps;
-        if (this.flaps && V > 155 && this.isPlayer) { this.flaps = 0; this.game.events.emit('flapsBlown', this); }
+        cd += this.cd0 * 0.85 * this.flapAnim * 2;
+        if (this.flaps && V > 175 && this.isPlayer) { this.flaps = 0; this.game.events.emit('flapsBlown', this); }
         // transonic drag rise
         if (this.mach > 0.9) cd += this.cd0 * clamp((this.mach - 0.9) * 2.2, 0, 0.8);
         const drag = q * cd;
@@ -377,6 +446,8 @@ export class Aircraft {
         // wind
         if (this.game.wind) _acc.addScaledVector(this.game.wind, 0.02);
 
+        // speed brake: extra parasitic drag plus a fixed bite so it works at any speed
+        if (this.brakeAnim > 0.05) _acc.addScaledVector(vhat, -1.8 * this.brakeAnim);
         this.gLoad = lift / G + (this.gLoad - lift / G) * Math.exp(-10 * dt);
 
         const oldDir = _v2.copy(vhat);
@@ -422,20 +493,21 @@ export class Aircraft {
             const fwd = _v1.set(0, 0, -1).applyQuaternion(this.qv);
             heading = Math.atan2(-fwd.x, -fwd.z);
         }
-        const steer = (c.yaw * 0.6 - c.roll * 0.35) * clamp(1 - V / 120, 0.1, 1) * 0.6;
+        const steer = this.bellied ? 0 : (c.yaw * 0.6 - c.roll * 0.35) * clamp(1 - V / 120, 0.1, 1) * 0.6;
         if (ship) this.deckHeading += steer * dt; else heading += steer * dt;
         if (ship) heading = ship.heading + this.deckHeading;
         this.qv.setFromAxisAngle(AY, heading);
         this.rollRate = 0; this.beta = 0;
 
         const rotateSpeed = Math.sqrt(G / (this.liftK * rho * CL_MAX * (1 + 0.2 * this.flaps))) * 1.05;
-        const pitchTarget = V > rotateSpeed * 0.85 ? clamp(c.pitch, 0, 1) * 0.28 : 0;
+        const pitchTarget = V > rotateSpeed * 0.85 && !this.bellied ? clamp(c.pitch, 0, 1) * 0.28 : 0;
         this.alpha = damp(this.alpha, pitchTarget, 2.5, dt);
         const Cl = this.clEff * this.alpha;
         // spoilers: airbrake on the ground dumps lift and brakes hard
         const lift = this.liftK * V * V * rho * Cl * (this.airbrake ? 0.3 : 1);
-        const friction = (this.airbrake ? 6 : 0.25) + (c.throttle < 0.05 && V < 30 ? 1.5 : 0);
-        const drag = this.liftK * V * V * rho * (this.cd0 * (this.airbrake ? 3.2 : 1) + K_INDUCED * Cl * Cl);
+        let friction = (this.airbrake ? 6 : 0.25) + (c.throttle < 0.05 && V < 30 ? 1.5 : 0);
+        if (this.bellied) friction = this.bellyWater ? 10 : 8;
+        const drag = this.liftK * V * V * rho * (this.cd0 * (1 + 3.5 * this.brakeAnim + 1.7 * this.flapAnim) + K_INDUCED * Cl * Cl);
         let acc = thrust - drag - (V > 0.1 ? friction : 0);
         // carrier catapult: a violent shove down the deck
         if (this.catapult > 0) {
@@ -467,7 +539,11 @@ export class Aircraft {
             return;
         }
         this.pos.y = surf.h + this.gearOffset;
-        if (lift > G * 1.02) {
+        if (this.bellied) {
+            this.pos.y = surf.h + (this.bellyWater ? 0 : 0.2) + 1.0 - this.sinkDepth;
+            this.updateBelly(dt, V);
+            if (V > 5) { this.qv.multiply(_q1.setFromAxisAngle(AZ, (Math.random() - 0.5) * 0.02)); }
+        } else if (lift > G * 1.02) {
             this.onGround = false;
             this.deck = null;
             this.vel.y = 2.5;
@@ -476,18 +552,18 @@ export class Aircraft {
         }
         if (!ship) {
             // rolled off the runway at speed on rough ground?
-            if (!surf.runway && V > 40 && surf.h > 1) {
+            if (!surf.runway && V > 40 && surf.h > 1 && !(this.bellied && V < 90)) {
                 const e = 5;
                 const slope = Math.abs(terrainHeight(this.pos.x + e, this.pos.z) - terrainHeight(this.pos.x - e, this.pos.z)) / (2 * e);
                 if (slope > 0.12) this.crash();
             }
-            if (surf.water) this.crash(true);
+            if (surf.water && !this.bellied) this.crash(true);
         }
         this.syncBody();
     }
 
     startCatapult() {
-        if (!this.onGround || !this.deck || this.relSpeed > 5 || this.catapult > 0) return false;
+        if (!this.onGround || !this.deck || this.bellied || this.relSpeed > 5 || this.catapult > 0) return false;
         this.catapult = 3;
         this.flaps = Math.max(this.flaps, 1);
         return true;
@@ -525,7 +601,54 @@ export class Aircraft {
             this.game.events.emit('touchdown', this, { vs, onRunway: !!surf.runway, onDeck: !!surf.ship, trap: this.trap });
             return;
         }
+        // too hard / gear up / off-field — but still survivable? Then it's a belly landing (or ditching)
+        const canBelly = !surf.hull && vs > -6.5 && upY > 0.8 && pitch > -0.15 && pitch < 0.4 && relSpeed < this.spec.flight.speed * 0.75;
+        if (canBelly) { this.startBelly(surf, rel, relSpeed, vs); return; }
         this.crash(surf.water && !surf.hull);
+    }
+
+    startBelly(surf, rel, relSpeed, vs) {
+        const collapsed = this.gearAnim > 0.5;
+        const dmgPct = clamp((relSpeed - 45) * 0.45 + (-vs) * 5 + (surf.water ? 5 : 12), 8, 90);
+        const dmg = dmgPct / 100 * this.maxHealth;
+        if (this.health - dmg <= 0) { this.crash(surf.water); return; }
+        this.health -= dmg;
+        this.bellied = true;
+        this.bellyWater = !!surf.water;
+        this.bellyStopped = false;
+        this.gear = false; this.gearAnim = 0; this.updateGearVisual();
+        this.flaps = 0;
+        this.onGround = true;
+        this.deck = surf.ship || null;
+        this.relSpeed = relSpeed;
+        const heading = Math.atan2(-rel.x, -rel.z);
+        this.qv.setFromAxisAngle(AY, heading);
+        if (this.deck) this.deckHeading = heading - this.deck.heading;
+        this.alpha = 0; this.sinkDepth = 0;
+        this.controls.throttle = 0;
+        this.addDamagePoint(!surf.water);
+        this.game.events.emit('bellyLanded', this, { water: !!surf.water, collapsed, dmg: dmgPct });
+    }
+
+    // Grinding along on the belly: sparks, dust or spray, then a stop (and a slow sink at sea)
+    updateBelly(dt, V) {
+        const fx = this.game.effects;
+        const L = this.spec.length;
+        if (V > 3 && Math.random() < 0.9) {
+            const p = _v1.set(rand(-1, 1) * L * 0.08, -this.gearOffset + 1.2, rand(-0.3, 0.3) * L).applyMatrix4(this.root.matrixWorld);
+            const back = _v2.copy(this.vel).multiplyScalar(-0.15);
+            if (this.bellyWater) {
+                for (let k = 0; k < 2; k++) fx.smoke.emit(p, _v3.set(rand(-8, 8), rand(6, 18), rand(-8, 8)).add(back), rand(0.8, 1.6), 2, 9, [0.92, 0.96, 1], [0.85, 0.9, 0.95], 0.7, 0, 1, -18);
+            } else {
+                for (let k = 0; k < 3; k++) fx.fire.emit(p, _v3.set(rand(-12, 12), rand(3, 14), rand(-12, 12)).add(back), rand(0.2, 0.5), 0.6, 0.15, [6, 4.5, 2], [3, 1, 0.2], 1, 0, 1, -20);
+                fx.smoke.emit(p, _v3.set(rand(-3, 3), rand(2, 6), rand(-3, 3)), rand(1.5, 3), 3, 14, [0.45, 0.4, 0.33], [0.55, 0.5, 0.42], 0.55, 0, 1.2, 1);
+            }
+        }
+        if (V < 1 && !this.bellyStopped) {
+            this.bellyStopped = true;
+            this.game.events.emit('bellyStopped', this, { water: this.bellyWater });
+        }
+        if (this.bellyWater && V < 3) this.sinkDepth = Math.min(this.gearOffset + 2.5, (this.sinkDepth || 0) + dt * 0.25);
     }
 
     crash(water = false) {
@@ -657,6 +780,7 @@ export class Aircraft {
             this.gearAnim = gTarget > this.gearAnim ? Math.min(1, this.gearAnim + dt / 2.2) : Math.max(0, this.gearAnim - dt / 2.2);
             this.updateGearVisual();
         }
+        this.updateSurfaces(dt);
         this.updateFlight(dt);
         this.updateVisuals(dt);
     }

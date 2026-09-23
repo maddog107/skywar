@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { clamp, MS_TO_KTS, M_TO_FT, DEG, interceptTime, G } from './util.js';
 import { WEAPONS } from './config.js';
 import { terrainHeight } from './world.js';
+import { refSpeeds } from './aircraft.js';
 
 const GREEN = '#5dffa0';
 const GREEN_DIM = 'rgba(93,255,160,0.55)';
@@ -191,7 +192,20 @@ export class HUD {
         ctx.fillText('M ' + p.mach.toFixed(2), lx, ly);
         ctx.fillText('G ' + p.gLoad.toFixed(1), lx, ly + 16);
         ctx.fillText('α ' + (p.alpha / DEG).toFixed(0) + '°', lx, ly + 32);
-        ctx.fillText((p.afterburner ? 'AB ' : 'THR ') + Math.round(p.throttle * 100) + '%', lx, ly + 48);
+        {
+            const rs = refSpeeds(p.spec);
+            if (!p.onGround && (p.gearAnim > 0.5 || p.flaps)) {
+                const app = rs.approach * MS_TO_KTS;
+                const d = kts - app;
+                ctx.fillStyle = Math.abs(d) < 15 ? GREEN : d > 0 ? AMBER : RED;
+                ctx.fillText('APP ' + Math.round(app) + (d > 15 ? ' ▼' : d < -15 ? ' ▲' : ' ✓'), lx, ly + 64);
+                ctx.fillStyle = GREEN;
+            } else if (p.onGround && !p.bellied) {
+                ctx.fillText('ROT ' + Math.round(rs.takeoff * MS_TO_KTS), lx, ly + 64);
+            }
+        }
+        const step = p.controls.throttle >= 0.95 ? 10 : Math.round(p.controls.throttle / 0.9 * 8) + 1;
+        ctx.fillText((p.afterburner ? 'AB ' : 'THR ') + Math.round(p.throttle * 100) + '%  [' + (step === 10 ? '0' : step) + ']', lx, ly + 48);
         // readouts under altitude
         ctx.textAlign = 'right';
         const agl = (p.pos.y - Math.max(terrainHeight(p.pos.x, p.pos.z), 0)) * M_TO_FT;
@@ -628,7 +642,7 @@ export class HUD {
         if (p.onGround && p.speed < 4) {
             ctx.font = '600 13px "Share Tech Mono", ui-monospace, monospace';
             ctx.fillStyle = GREEN;
-            const msg = p.deck ? 'FULL THROTTLE (SHIFT) TO FIRE THE CATAPULT' : 'SHIFT: THROTTLE UP · ←/→: STEER · S: ROTATE AT ' + Math.round(game.rotateSpeed * MS_TO_KTS) + ' KTS · SPACE: BRAKES';
+            const msg = p.bellied ? 'CRASH LANDED — ENTER: NEW JET · J J: BAIL OUT' : p.deck ? 'FULL POWER (9 or 0) TO FIRE THE CATAPULT' : 'Z / 1–0: THROTTLE · ←/→: STEER · S: ROTATE AT ' + Math.round(game.rotateSpeed * MS_TO_KTS) + ' KTS · SPACE: BRAKES';
             ctx.fillText(msg, this.w / 2, this.h * 0.8);
             if (game.atFriendlyPad(p)) ctx.fillText('STOPPED ON A FRIENDLY PAD: REPAIR · REFUEL · REARM  (L: CHANGE LOADOUT)', this.w / 2, this.h * 0.8 + 20);
         }

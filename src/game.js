@@ -127,7 +127,7 @@ export class Game {
         const enemy = BASES[1];
         if (this.mode === 'freeflight') {
             this.objective = 'FREE FLIGHT — EXPLORE';
-            this.showBanner('FREE FLIGHT', p.onGround ? 'SHIFT: throttle · S: rotate at takeoff speed · G: gear · F: flaps' : 'Fly anywhere. The carrier and airbase are open for landing.', 6);
+            this.showBanner('FREE FLIGHT', p.onGround ? 'Z or 1–0: throttle · S: rotate at takeoff speed · G: gear · F: flaps' : 'Fly anywhere. The carrier and airbase are open for landing.', 6);
         } else if (this.mode === 'strike') {
             this.spawnEnemies(2, enemy);
             this.strikeCapT = 60;
@@ -185,7 +185,7 @@ export class Game {
         const carrier = this.naval.homeCarrier;
         if (where === 'carrier' && carrier) {
             p.spawnDeck(carrier);
-            this.addFeed('FULL THROTTLE ON DECK TO LAUNCH', '#5dffa0');
+            this.addFeed('FULL POWER (9 OR 0) ON DECK TO LAUNCH', '#5dffa0');
         } else if (where === 'runway') {
             p.spawnRunway(home);
         } else if (where === 'apron') {
@@ -427,8 +427,14 @@ export class Game {
             if (ac.isPlayer) {
                 this.state = 'dead';
                 this.deathT = 0;
-                this.showBanner('SHOT DOWN', source && source.spec ? 'by ' + source.spec.name : '', 4, '#ff4a3d');
-                this.audio.say('Mayday, mayday! Ejecting!', true);
+                const crashed = kind === 'crash' && (!source || this.time - ac.lastHitTime > 5);
+                if (crashed) {
+                    this.showBanner('CRASHED', ac.onGround || ac.pos.y < 300 ? 'Too fast, too hard, or not level — check the approach speed on the HUD' : '', 4, '#ff4a3d');
+                    this.audio.say(pick(['That was not a landing.', 'Ouch.', 'Well, that was a mess.']), true);
+                } else {
+                    this.showBanner('SHOT DOWN', source && source.spec ? 'by ' + source.spec.name : '', 4, '#ff4a3d');
+                    this.audio.say('Mayday, mayday! Ejecting!', true);
+                }
                 return;
             }
             if (ac.abandoned) return;
@@ -518,12 +524,30 @@ export class Game {
             this.addFeed('TOUCHDOWN ' + fpm + ' FPM' + (onRunway ? '' : ' (OFF-RUNWAY)'), fpm < 300 ? '#5dffa0' : '#ffc23f');
             if (fpm < 200 && onRunway) { this.score += 200; this.showBanner('BUTTER!', 'Perfect landing +200', 2.5); }
         });
+        ev.on('bellyLanded', (ac, { water, collapsed, dmg }) => {
+            if (!ac.isPlayer) return;
+            this.shake = 1.5;
+            this.showBanner(water ? 'DITCHED!' : collapsed ? 'GEAR COLLAPSED!' : 'BELLY LANDING!', 'Hull -' + Math.round(dmg) + '%', 3.5, '#ffc23f');
+            this.audio.say(water ? 'Ditching, ditching!' : 'Brace, brace, brace!', true);
+            this.audio.boom(0, 0.6);
+        });
+        ev.on('bellyStopped', (ac, { water }) => {
+            if (!ac.isPlayer) return;
+            const pts = this.mode === 'freeflight' || this.mode === 'sandbox' ? 150 : 0;
+            this.score += pts;
+            this.showBanner(water ? 'DITCHED — YOU SURVIVED' : 'CRASH LANDED — YOU SURVIVED', 'ENTER: new jet · J J: bail out' + (pts ? '  +' + pts : ''), 6, '#5dffa0');
+            this.audio.say(pick(['We walked away from that one.', 'Any landing you can walk away from!', 'Well, that happened.']));
+        });
         ev.on('flameout', (ac) => {
             if (!ac.isPlayer) return;
             this.showBanner('FLAMEOUT', 'Out of fuel — glide to a runway or carrier!', 5, '#ff4a3d');
             this.audio.say('Flameout! Flameout! We are out of gas!', true);
         });
-        ev.on('flapsBlown', (ac) => { if (ac.isPlayer) this.addFeed('FLAPS BLOWN UP — OVERSPEED', '#ffc23f'); });
+        ev.on('shipSecondary', (ship, { stage }) => {
+            if (ship.team === 'red') this.addFeed(ship.name + (stage === 3 ? ' IS BURNING OUT OF CONTROL' : ' — SECONDARY EXPLOSION'), '#ffc23f');
+            else this.addFeed(ship.name + ' IS TAKING DAMAGE', '#ff4a3d');
+        });
+        ev.on('flapsBlown', (ac) => { if (ac.isPlayer) this.addFeed('FLAPS AUTO-RETRACTED — OVER 340 KT', '#ffc23f'); });
         ev.on('ciwsKill', (ship, { missile }) => {
             if (missile.owner === this.player) this.addFeed('MISSILE SHOT DOWN BY CIWS', '#ffc23f');
         });
@@ -600,6 +624,16 @@ export class Game {
             case 'slot2': this.selectSlot(1); break;
             case 'slot3': this.selectSlot(2); break;
             case 'slot4': this.selectSlot(3); break;
+            case 'thr1': case 'thr2': case 'thr3': case 'thr4': case 'thr5':
+            case 'thr6': case 'thr7': case 'thr8': case 'thr9': case 'thr10': {
+                // 1 = idle … 9 = full military power, 0 (10) = afterburner
+                const n = parseInt(a.slice(3), 10);
+                p.controls.throttle = n >= 10 ? 1 : ((n - 1) / 8) * 0.9;
+                this.throttleStep = n;
+                this.throttleStepT = this.time;
+                this.audio.tick(500 + n * 60, 0.06, 0.04);
+                break;
+            }
             case 'flaps':
                 p.flaps = (p.flaps + 1) % 3;
                 this.addFeed('FLAPS ' + ['UP', 'HALF', 'FULL'][p.flaps], '#5dffa0');
@@ -615,9 +649,15 @@ export class Game {
             case 'loadout':
                 if (p.onGround && p.speed < 3 && this.atFriendlyPad(p)) this.cycleLoadout();
                 break;
-            case 'missile': this.firePlayerMissile(); break;
+            case 'confirm':
+                if (p.bellied && p.speed < 2) this.respawnPlayer();
+                break;
+            case 'missile':
+                if (p.bellied) break;
+                this.firePlayerMissile(); break;
             case 'flares': this.weapons.dropFlares(p, this.time); break;
             case 'gear':
+                if (p.bellied) break;
                 p.gear = !p.gear;
                 this.addFeed(p.gear ? 'GEAR DOWN' : 'GEAR UP', '#5dffa0');
                 this.audio.tick(400, 0.15, 0.2);
@@ -846,7 +886,7 @@ export class Game {
         this.whiteout = damp(this.whiteout, this.world.cloudDensityAt(this.camera.position) * 0.9, 4, dt);
 
         // repair / rearm / refuel on a friendly runway or carrier deck
-        if (p.onGround && p.speed < 3 && this.atFriendlyPad(p)) {
+        if (p.onGround && p.speed < 3 && !p.bellied && this.atFriendlyPad(p)) {
             this.rearmT = (this.rearmT || 0) + dt;
             if (this.rearmT > 1) {
                 p.health = Math.min(p.maxHealth, p.health + 30 * dt);
@@ -931,6 +971,7 @@ export class Game {
             spiked: p && p.lockedBy && p.lockedBy.size > 0,
             pullUp: this.pullUp,
             stall: p && p.stalling,
+            scrape: p && p.bellied && p.alive ? Math.min(1, p.speed / 60) : 0,
         });
     }
 

@@ -15,7 +15,7 @@ import { HUD } from './hud.js';
 import { Cockpit } from './cockpit.js';
 import { Game, LOADOUT_LABELS } from './game.js';
 import { applyLivery, LIVERIES } from './models.js';
-import { Aircraft } from './aircraft.js';
+import { Aircraft, refSpeeds } from './aircraft.js';
 import { Pilot } from './ai.js';
 import { preloadModels, hasFileModel } from './models.js';
 import { clamp, damp } from './util.js';
@@ -271,7 +271,8 @@ function selectAircraft(id) {
         <div class="desc">${esc(s.desc)}</div>
         ${statBars(s)}
         <div class="spec-line">LENGTH <b>${s.length} m</b> · SPAN <b>${s.span} m</b> · G-LIMIT <b>${s.flight.gLimit}</b><br>
-        GUN <b>${s.gun ? esc(s.gun.name) : 'NONE'}</b> · MISSILES <b>${s.missiles}</b> · FLARES <b>${s.flares}</b></div>`;
+        GUN <b>${s.gun ? esc(s.gun.name) : 'NONE'}</b> · MISSILES <b>${s.missiles}</b> · FLARES <b>${s.flares}</b><br>
+        TAKEOFF <b>~${Math.round(refSpeeds(s).takeoff * 1.944)} KT</b> · LANDING <b>~${Math.round(refSpeeds(s).approach * 1.944)} KT</b> · STALL <b>${Math.round(refSpeeds(s).stall * 1.944)} KT</b></div>`;
     spawnShowcase(id);
     updateBest();
 }

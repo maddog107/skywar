@@ -37,7 +37,8 @@ You need a local server because the game uses ES modules and loads `.glb` models
   down missiles, SAMs, a naval gun and deck-launched fighters. Destroyed ships burn and sink.
 - **Airmanship**: animated landing gear, flaps (more lift, lower stall speed), speed brakes that dump
   lift on the ground, wheel brakes, and fuel (the afterburner burns it 4× faster, then BINGO, then a
-  flameout that leaves you gliding). Start in the air, on the runway, on the apron (taxi out) or on the
+  flameout that leaves you gliding). Land gear-up or too hard and you belly-land in sparks, or ditch at
+  sea and slowly sink, instead of exploding. Start in the air, on the runway, on the apron (taxi out) or on the
   carrier. Stop on a friendly runway or deck to repair, refuel and rearm.
 - **Hangar**: seven paint schemes and three loadouts (Balanced, Air Superiority, Strike). Bombs
   have a CCIP impact pipper and leave craters.
@@ -55,10 +56,11 @@ You need a local server because the game uses ES modules and loads `.glb` models
 |---|---|
 | Mouse | Aim (Mouse-Aim mode), stick (Mouse-Stick / GeoFS mode), or look (Keys mode) |
 | W/S, A/D, Q/E | Pitch, roll, rudder |
-| Shift / Z, mouse wheel | Throttle (above 90% is afterburner) |
+| 1 … 9, 0 | Throttle steps: 1 idle, 9 full power without afterburner, 0 afterburner |
+| Z / Shift, mouse wheel | Throttle up / down |
 | LMB / Space | Cannon (Space means wheel brakes on the ground) |
 | RMB / M | Fire selected weapon |
-| X or 1/2/3/4 | Switch weapon: SRM, LRM, rockets, bombs |
+| X | Cycle weapon: SRM, LRM, rockets, bombs |
 | R | Flares |
 | F | Flaps |
 | J J | Eject; then E hijacks, R reloads, WASD/arrows steer the chute |
@@ -68,6 +70,7 @@ You need a local server because the game uses ES modules and loads `.glb` models
 | C (hold) / L (hold) | Padlock target / look behind |
 | V | Camera: chase, cockpit, far, cinematic |
 | B / G | Speed brake / landing gear |
+| Enter | New jet after a crash landing or parachute landing |
 | Esc | Pause |
 
 A gamepad is supported: sticks fly, RT fires guns, A fires the weapon, B drops flares, X cycles

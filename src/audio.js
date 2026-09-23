@@ -92,6 +92,12 @@ export class Audio {
         gunNoise.connect(this.gunF);
         this.gunF.connect(this.gunG).connect(this.sfx);
         this.gunOsc.start(); gunNoise.start();
+        // metal-on-concrete scrape for belly landings
+        const scr = this.noiseSrc(this.white);
+        this.scrapeF = ctx.createBiquadFilter(); this.scrapeF.type = 'bandpass'; this.scrapeF.frequency.value = 2600; this.scrapeF.Q.value = 1.5;
+        this.scrapeG = ctx.createGain(); this.scrapeG.gain.value = 0;
+        scr.connect(this.scrapeF).connect(this.scrapeG).connect(this.sfx);
+        scr.start();
     }
 
     buildTones() {
@@ -119,7 +125,7 @@ export class Audio {
         const t = this.ctx.currentTime;
         const set = (param, v, tc = 0.08) => param.setTargetAtTime(v, t, tc);
         if (!p || !p.alive || !state.playing) {
-            set(this.engine.gain, 0, 0.3); set(this.windG.gain, 0, 0.3); set(this.gunG.gain, 0, 0.05);
+            set(this.engine.gain, 0, 0.3); set(this.windG.gain, 0, 0.3); set(this.gunG.gain, 0, 0.05); set(this.scrapeG.gain, 0, 0.1);
             for (const k in this.tones) set(this.tones[k].g.gain, 0, 0.03);
             return;
         }
@@ -138,6 +144,8 @@ export class Audio {
         set(this.gunG.gain, firing ? 0.55 : 0, firing ? 0.01 : 0.04);
         set(this.gunOsc.frequency, p.spec.gun ? p.spec.gun.rate * 3.5 : 50);
 
+        set(this.scrapeG.gain, (state.scrape || 0) * 0.35 * (0.7 + Math.random() * 0.6), 0.03);
+        set(this.scrapeF.frequency, 1200 + (state.scrape || 0) * 2400);
         // tones
         set(this.tones.seek.g.gain, state.seeking ? 0.05 : 0, 0.02);
         set(this.tones.lock.g.gain, state.locked ? 0.06 : 0, 0.02);

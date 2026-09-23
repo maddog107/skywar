@@ -15,6 +15,7 @@ import { rand, clamp, lerp, interceptTime } from './util.js';
 import { WEAPONS } from './config.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3();
+const damp01 = (a, b, dt) => a + (b - a) * (1 - Math.exp(-0.5 * dt));
 
 const TYPES = {
     carrier: { name: 'CARRIER', L: 320, B: 76, deckY: 19, hp: 1300, score: 3000, speed: 12 },
@@ -245,17 +246,20 @@ export class Ship {
 
     place(dt) {
         const o = this.orbit;
-        o.a += o.w * dt;
+        o.a += o.w * dt * (this.alive ? 1 - 0.6 * (1 - Math.max(this.hp, 0) / this.maxHp) : 0.15);
         const x = o.cx + Math.cos(o.a) * o.R, z = o.cz + Math.sin(o.a) * o.R;
         // tangent direction of travel
         const tx = -Math.sin(o.a) * Math.sign(o.w), tz = Math.cos(o.a) * Math.sign(o.w);
         this.heading = Math.atan2(-tx, -tz);
         const sink = this.alive ? 0 : Math.min(this.sinkT / 60, 1);
-        const y = -sink * (this.deckY + 25);
+        const dmgFrac = 1 - Math.max(this.hp, 0) / this.maxHp;
+        const y = -sink * (this.def.deckY + 25) - dmgFrac * 1.5;
         if (dt > 0) this.vel.set((x - this.mesh.position.x) / dt, (y - this.mesh.position.y) / dt, (z - this.mesh.position.z) / dt);
         this.mesh.position.set(x, y, z);
         this.mesh.rotation.set(0, this.heading, 0);
-        if (!this.alive) { this.mesh.rotation.z = sink * 0.28; this.mesh.rotation.x = -sink * 0.08; }
+        this.listAngle = damp01(this.listAngle || 0, (1 - Math.max(this.hp, 0) / this.maxHp) * 0.05, dt);
+        this.mesh.rotation.z = this.listAngle + sink * 0.28;
+        if (!this.alive) this.mesh.rotation.x = -sink * 0.08;
         this.deckY = this.def.deckY + y;
         this.center.set(x, y + this.def.deckY * 0.55, z);
     }
@@ -295,9 +299,26 @@ export class Ship {
         this.hp -= amount * mult;
         this.health = this.hp;
         this.lastHitBy = source;
-        if (Math.random() < 0.25 || kind === 'missile') {
-            this.fires = this.fires || [];
-            if (this.fires.length < 6) this.fires.push(new THREE.Vector3(rand(-this.def.B * 0.35, this.def.B * 0.35), this.def.deckY + 1, rand(-this.def.L * 0.4, this.def.L * 0.4)));
+        const dmgFrac = 1 - Math.max(this.hp, 0) / this.maxHp;
+        // fires spread as damage accumulates: one small blaze at first, a burning wreck near the end
+        this.fires = this.fires || [];
+        const wantFires = Math.ceil(dmgFrac * 9);
+        while (this.fires.length < wantFires) {
+            this.fires.push({
+                p: new THREE.Vector3(rand(-this.def.B * 0.35, this.def.B * 0.35), this.def.deckY + 1, rand(-this.def.L * 0.42, this.def.L * 0.42)),
+                size: 0.5 + Math.random() * 0.5, grow: 0,
+            });
+        }
+        // secondary explosions (ammo, fuel) at 75 / 50 / 25 %
+        this.stage = this.stage || 0;
+        const stageNow = dmgFrac >= 0.75 ? 3 : dmgFrac >= 0.5 ? 2 : dmgFrac >= 0.25 ? 1 : 0;
+        while (this.stage < stageNow && this.hp > 0) {
+            this.stage++;
+            const at = this.toWorld(rand(-this.def.B * 0.3, this.def.B * 0.3), this.def.deckY + 2, rand(-this.def.L * 0.4, this.def.L * 0.4));
+            this.game.effects.explosion(at, 1.6 + this.stage * 0.5);
+            this.game.effects.debrisBurst(at, _v.set(0, 50, 0), 6, 1.2);
+            this.game.audio.boom(this.game.camera.position.distanceTo(at), 1.3);
+            this.game.events.emit('shipSecondary', this, { stage: this.stage });
         }
         if (this.hp <= 0) this.destroy(source);
     }
@@ -305,6 +326,8 @@ export class Ship {
     destroy(source) {
         this.alive = false;
         this.hp = this.health = 0;
+        this.fires = this.fires || [];
+        while (this.fires.length < 12) this.fires.push({ p: new THREE.Vector3(rand(-this.def.B * 0.35, this.def.B * 0.35), this.def.deckY + 1, rand(-this.def.L * 0.45, this.def.L * 0.45)), size: 1, grow: 0.5 });
         const fx = this.game.effects;
         for (let i = 0; i < 6; i++) {
             setTimeout(() => {
@@ -332,11 +355,17 @@ export class Ship {
             fx.smoke.emit(bow, _v.set(rand(-5, 5), 3, 0), 1.5, 3, 9, [1, 1, 1], [0.95, 0.95, 1], 0.5, 0, 1, -3);
         }
         // fires from battle damage
-        if (this.fires) for (const f of this.fires) {
-            if (Math.random() < (this.alive ? 0.25 : 0.6)) {
-                const p = this.toWorld(f.x, f.y, f.z);
-                fx.smoke.emit(p, _v.set(rand(-2, 2), rand(10, 16), rand(-2, 2)), rand(6, 10), 8, 45, [0.06, 0.06, 0.06], [0.25, 0.25, 0.25], 0.7, 0, 0.1, 5);
-                fx.puffFire(p, _v.set(0, 10, 0), 7, 0.5);
+        if (this.fires) {
+            const dmgFrac = this.alive ? 1 - this.hp / this.maxHp : 1;
+            for (const f of this.fires) {
+                f.grow = Math.min(1, f.grow + dt * 0.15); // each blaze builds up over a few seconds
+                const k = f.size * (0.35 + f.grow * 0.65) * (0.6 + dmgFrac * 0.8);
+                if (Math.random() < 0.2 + dmgFrac * 0.5) {
+                    const p = this.toWorld(f.p.x, f.p.y, f.p.z);
+                    const dark = dmgFrac > 0.5 ? 0.05 : 0.18;
+                    fx.smoke.emit(p, _v.set(rand(-2, 2), rand(8, 16), rand(-2, 2)), rand(5, 10) * (0.6 + k), 6 * k + 3, 40 * k + 12, [dark, dark, dark], [0.28, 0.27, 0.26], 0.75, 0, 0.1, 5);
+                    fx.puffFire(p, _v.set(rand(-2, 2), 8 + k * 6, rand(-2, 2)), 4 + 6 * k, 0.4 + k * 0.3);
+                }
             }
         }
         if (!this.alive) return;

@@ -5,8 +5,9 @@ import { clamp } from './util.js';
 
 const ACTIONS = {
     KeyV: 'camera', KeyT: 'target', Tab: 'target', KeyG: 'gear', KeyH: 'help', Escape: 'pause', KeyP: 'pause',
-    KeyM: 'missile', Enter: 'missile', KeyR: 'flares', KeyF: 'flaps', KeyJ: 'eject', KeyN: 'spawn', KeyL: 'loadout',
-    KeyX: 'weapon', KeyK: 'missilecam', Digit1: 'slot1', Digit2: 'slot2', Digit3: 'slot3', Digit4: 'slot4',
+    KeyM: 'missile', Enter: 'confirm', KeyR: 'flares', KeyF: 'flaps', KeyJ: 'eject', KeyN: 'spawn', KeyL: 'loadout',
+    KeyX: 'weapon', KeyK: 'missilecam',
+    Digit1: 'thr1', Digit2: 'thr2', Digit3: 'thr3', Digit4: 'thr4', Digit5: 'thr5', Digit6: 'thr6', Digit7: 'thr7', Digit8: 'thr8', Digit9: 'thr9', Digit0: 'thr10',
 };
 
 export class Input {
@@ -98,8 +99,8 @@ export function readStick(input, settings) {
     if (input.down('KeyD', 'ArrowRight')) s.roll += 1;
     if (input.down('KeyQ')) s.yaw += 1;
     if (input.down('KeyE')) s.yaw -= 1;
-    if (input.down('ShiftLeft', 'ShiftRight', 'Equal', 'NumpadAdd')) s.throttleDelta += 1;
-    if (input.down('KeyZ', 'Minus', 'NumpadSubtract')) s.throttleDelta -= 1;
+    if (input.down('KeyZ', 'Equal', 'NumpadAdd')) s.throttleDelta += 1;
+    if (input.down('ShiftLeft', 'ShiftRight', 'Minus', 'NumpadSubtract')) s.throttleDelta -= 1;
     s.fire = input.down('Space') || input.mouse.left;
     s.airbrake = input.down('KeyB');
     s.manual = s.pitch !== 0 || s.roll !== 0;
