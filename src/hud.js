@@ -221,6 +221,7 @@ export class HUD {
         if (p.gear) ctx.fillText('GEAR DN', rx, ly + 32);
         if (p.airbrake || p.wheelBrake) ctx.fillText(p.airbrake ? 'SPOILERS' : 'BRAKES', rx, ly + 48);
         if (p.flaps) ctx.fillText('FLAPS ' + (p.flaps === 1 ? 'HALF' : 'FULL'), rx, ly + 64);
+        if (p.hook) ctx.fillText(p.trap ? 'HOOK — TRAPPED' : 'HOOK DN', rx, ly + 80);
         if (game.settings.fuel !== false && game.mode !== 'sandbox') {
             ctx.fillStyle = p.fuel < 0.1 ? RED : p.fuel < 0.2 ? AMBER : GREEN;
             ctx.fillText('FUEL ' + Math.round(p.fuel * 100) + '%', lx + 80, ly);
@@ -370,7 +371,7 @@ export class HUD {
         const list = [];
         for (const a of game.aircraft) if (a !== p && a !== game.player && a.alive) list.push(a);
         if (game.pilotMode && game.player && game.player.alive && game.player.abandoned) list.push(game.player);
-        if (game.ground) for (const t of game.ground.targets) if (t.alive) list.push(t);
+        if (game.ground) for (const t of game.ground.targets) if (t.alive && (!t.isBridge || t.objective)) list.push(t);
         const tmp = {};
         for (const a of list) {
             const P = this.project(a.pos, cam, tmp);
@@ -586,7 +587,7 @@ export class HUD {
             else if (shape === 'dia') { ctx.beginPath(); ctx.moveTo(x, y - size - 1); ctx.lineTo(x + size + 1, y); ctx.lineTo(x, y + size + 1); ctx.lineTo(x - size - 1, y); ctx.fill(); }
         };
         for (const b of game.basesInfo || []) plot(b, b.friendly ? 'rgba(90,184,255,0.7)' : 'rgba(255,160,90,0.7)', 'dia', 4);
-        if (game.ground) for (const t of game.ground.targets) if (t.alive) plot(t.pos, t.team === 'blue' ? BLUE : AMBER, 'dia', t.isShip ? 4.5 : 2.5);
+        if (game.ground) for (const t of game.ground.targets) if (t.alive && (!t.isBridge || t.objective)) plot(t.pos, t.team === 'blue' ? BLUE : AMBER, 'dia', t.isShip ? 4.5 : 2.5);
         for (const a of game.aircraft) {
             if (a === p || !a.alive) continue;
             plot(a.pos, a.team === 'blue' ? BLUE : (a === game.lockTarget ? RED : '#ff9f5a'), 'sq', a === game.lockTarget ? 4 : 3);

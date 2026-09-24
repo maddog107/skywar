@@ -43,6 +43,7 @@ export const MEDALS = {
     rings_fast: { name: 'THREAD THE NEEDLE', desc: 'Finish the Ring Race in under 3:00.' },
     deadstick: { name: 'GLIDER PILOT', desc: 'Complete the Deadstick mission.' },
     bomber: { name: 'BOMBS AWAY', desc: 'Destroy a ground target with a bomb.' },
+    bridge: { name: 'A BRIDGE TOO FAR', desc: 'Drop a bridge.' },
 };
 
 const DEFAULT = { xp: 0, sorties: 0, kills: 0, groundKills: 0, deaths: 0, wins: 0, traps: 0, landings: 0, flightTime: 0, medals: {}, missionsWon: {} };
@@ -92,6 +93,7 @@ export class Career {
             if (source !== game.player) return;
             this.data.groundKills++;
             if (t.isShip) this.award('ship_sunk');
+            if (t.isBridge) this.award('bridge');
             if (t.lastKind === 'bomb') this.award('bomber');
         });
         ev.on('touchdown', (ac, { vs, onRunway, onDeck, trap }) => {
@@ -125,7 +127,7 @@ export class Career {
             if (r.missionId === 'deadstick') this.award('deadstick');
         }
         if (r.victory && r.mode === 'rings' && r.seconds < 180) this.award('rings_fast');
-        const allIds = ['clean_sweep', 'five_on_one', 'ace_duel', 'sam_alley', 'escort', 'scramble', 'carrier_killer', 'deadstick', 'trap'];
+        const allIds = ['clean_sweep', 'five_on_one', 'ace_duel', 'sam_alley', 'escort', 'scramble', 'carrier_killer', 'deadstick', 'trap', 'bridge_out'];
         if (allIds.every(id => d.missionsWon[id])) this.award('all_missions');
         this.changed();
         const after = this.rankIndex;

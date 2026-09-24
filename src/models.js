@@ -34,6 +34,8 @@ export const MODEL_FILES = {
     jaguar: { file: 'jaguar.glb', rot: [0, Q, 0] },
     su47: { file: 'su47.glb', rot: [0, 0, 0], paint: true },
     b2: { file: 'b2.glb', rot: [0, 0, 0], paint: true },
+    racer: { file: 'air_racer.glb', rot: [0, Math.PI, 0], nozzles: [], prop: { y: -0.04, r: 0.17, blades: 4 }, cockpit: [0.08, 0.02] },
+    pitts: { file: 'stunt_biplane.glb', rot: [0, Math.PI / 2, 0], nozzles: [], fixedGear: true, prop: { y: -0.04, r: 0.16, blades: 2 }, cockpit: [0.1, 0.1] },
 };
 
 const cache = {};
@@ -109,7 +111,24 @@ function normaliseGLTF(root, id, info) {
         nozzleR: (info.nozzleR ?? 0.028) * spec.length,
         wingtips: findWingtips(holder, box2),
         cockpit: new THREE.Vector3(0, (info.cockpit?.[0] ?? 0.05) * spec.length, (info.cockpit?.[1] ?? -0.27) * spec.length),
+        fixedGear: !!info.fixedGear, // the model has its own (non-retracting) wheels
     };
+    // propeller planes: a separate spinning prop at the nose (the model's own prop is static)
+    if (info.prop) {
+        const L = spec.length, R = info.prop.r * L;
+        const prop = new THREE.Group();
+        const bladeMat = new THREE.MeshStandardMaterial({ color: 0x1c1c1c, roughness: 0.5, metalness: 0.4 });
+        for (let k = 0; k < info.prop.blades; k++) {
+            const b = new THREE.Mesh(new THREE.BoxGeometry(0.07 * R, R, 0.03 * R), bladeMat);
+            b.position.y = R / 2;
+            const piv = new THREE.Group(); piv.rotation.z = (k / info.prop.blades) * Math.PI * 2; piv.add(b); prop.add(piv);
+        }
+        const disc = new THREE.Mesh(new THREE.CircleGeometry(R, 28), new THREE.MeshBasicMaterial({ color: 0x222222, transparent: true, opacity: 0.18, depthWrite: false, side: THREE.DoubleSide }));
+        disc.userData.noPaint = true; bladeMat.userData.noPaint = true;
+        prop.add(disc);
+        prop.position.set(0, info.prop.y * L, box2.min.z - 0.015 * L);
+        rig.propTemplates = [prop];
+    }
     return { object: holder, rig };
 }
 
@@ -182,7 +201,9 @@ export function createAircraftModel(id) {
     if (cache[id]) {
         const src = cache[id];
         const object = src.object.clone(true);
-        return { object, rig: cloneRig(src.rig), fromFile: true };
+        const rig = cloneRig(src.rig);
+        rig.props = (src.rig.propTemplates || []).map(t => { const c = t.clone(true); object.add(c); return c; });
+        return { object, rig, fromFile: true };
     }
     if (!cache['proc_' + id]) {
         const r = buildProcedural(id);

@@ -62,6 +62,42 @@ function makeFlameMaterial() {
 }
 const navTex = makeRadialTexture(64, [[0, 'rgba(255,255,255,1)'], [0.2, 'rgba(255,255,255,0.8)'], [1, 'rgba(255,255,255,0)']]);
 
+// ── Compressibility ──
+// Real top speeds (Mach, at ~11 km). Drag rises through the transonic region,
+// peaks just past Mach 1 and falls off again at supersonic speed; each type's
+// wave-drag strength is calibrated so it tops out at its real Mach number.
+const MMAX = {
+    f22: 2.25, f35: 1.6, f16: 2.05, f15: 2.5, fa18: 1.8, f14: 2.34, a10: 0.75, f4: 2.23, f2: 2.0,
+    su57: 2.0, su35: 2.25, mig29: 2.25, mig31: 2.83, typhoon: 2.0, rafale: 1.8, j20: 2.0, gripen: 2.0,
+    mig21: 2.05, mig25: 2.83, j10: 2.2, j8: 2.2, f5: 1.6, mirage: 2.2, jaguar: 1.6, su47: 1.65, b2: 0.95,
+    cessna: 0.25, b737: 0.82, b747: 0.92, c130: 0.6, racer: 0.72, pitts: 0.35,
+};
+const soundSpeed = (h) => 340 - Math.max(h, 0) * 0.004;
+const airDensity = (h) => Math.exp(-Math.max(h, 0) / 9000);
+// wave-drag shape: 0 below the critical Mach, 1 at the peak (~M1.1), decaying when supersonic
+function waveShape(M, mmax) {
+    if (mmax < 1) { const mc = mmax - 0.04; return M > mc ? 60 * (M - mc) * (M - mc) : 0; } // subsonic types hit a wall
+    if (M < 0.85) return 0;
+    if (M < 1.1) { const t = (M - 0.85) / 0.25; return t * t * (3 - 2 * t); }
+    return 1 / (1 + 1.6 * (M - 1.1));
+}
+// supersonic ram recovery gives afterburning jets more thrust at speed
+const ramFactor = (M, spec) => (spec.category === 'civil' || spec.prop ? 1 : 1 + 0.18 * clamp(M - 0.9, 0, 1.8));
+const waveCache = {};
+function waveStrength(typeId, spec) {
+    if (waveCache[typeId] != null) return waveCache[typeId];
+    const f = spec.flight, mmax = MMAX[typeId] ?? (spec.category === 'civil' ? 0.85 : 1.8);
+    const liftK = LIFT_K * f.lift, cd0 = f.accel / (liftK * f.speed * f.speed), h = 11000, rho = airDensity(h);
+    const V = mmax * soundSpeed(h), q = liftK * V * V * rho;
+    const Cl = G / q;
+    const thrust = f.accel * (0.45 + 0.55 * rho) * ramFactor(mmax, spec);
+    // thrust = q·(cd0·(1 + W·shape) + K·Cl²/lift)  →  solve for W
+    const W = ((thrust / q - K_INDUCED * Cl * Cl / f.lift) / cd0 - 1) / Math.max(waveShape(mmax, mmax), 1e-3);
+    waveCache[typeId] = Math.max(0, W);
+    return waveCache[typeId];
+}
+export function maxMach(typeId) { return MMAX[typeId] ?? 1.8; }
+
 // Handy reference speeds (m/s): stall with a flap setting, takeoff and approach
 export function refSpeeds(spec) {
     const liftK = LIFT_K * spec.flight.lift;
@@ -100,11 +136,17 @@ export class Aircraft {
         this.alphaMax = f.alpha * DEG;
         this.clSlope = CL_MAX / this.alphaMax;
         this.cd0 = f.accel / (this.liftK * f.speed * f.speed);
+        this.mmax = maxMach(typeId);
+        this.waveK = waveStrength(typeId, this.spec);
         this.thrustAB = f.accel;
-        this.thrustMil = f.accel * 0.62;
+        // no afterburner on civil and propeller aircraft: 90% throttle is nearly full power
+        this.hasAB = !(this.spec.category === 'civil' || this.spec.prop);
+        this.thrustMil = f.accel * (this.hasAB ? 0.62 : 0.92);
         this.hitRadius = clamp(this.spec.length * 0.55, 7, 22);
         this.gearOffset = -(rig.minY ?? -this.spec.length * 0.08) + 1.2;
         if (!rig.minY) this.gearOffset = this.spec.length * 0.09 + 1.2;
+        this.fixedGear = !!rig.fixedGear;
+        if (this.fixedGear) this.gearOffset = -rig.minY + 0.05; // sits on the model's own wheels
 
         // state
         this.pos = this.root.position;
@@ -182,6 +224,7 @@ export class Aircraft {
     }
 
     buildGear() {
+        if (this.fixedGear) { this.gearLegs = []; this.gear = true; this.gearAnim = 1; return; }
         const L = this.spec.length;
         const H = this.gearOffset;
         const sc = clamp(L / 17, 0.8, 3.2);
@@ -219,6 +262,91 @@ export class Aircraft {
             this.gearLegs.push(pivot);
         }
         this.updateGearVisual();
+        // tailhook: an arm under the tail that swings down for carrier traps (H)
+        if (this.spec.category === 'fighter') {
+            const hook = new THREE.Group();
+            hook.position.set(0, bellyY + 0.15, L * 0.34);
+            const len = clamp(L * 0.17, 2, 5);
+            const arm = new THREE.Mesh(new THREE.BoxGeometry(0.16 * sc, 0.16 * sc, len), strutMat);
+            arm.position.z = len / 2;
+            const tip = new THREE.Mesh(new THREE.BoxGeometry(0.3 * sc, 0.34 * sc, 0.42 * sc), new THREE.MeshStandardMaterial({ color: 0xf2c200, roughness: 0.5, metalness: 0.3 }));
+            tip.position.set(0, -0.1 * sc, len);
+            hook.add(arm, tip);
+            hook.traverse(o => { if (o.isMesh) o.castShadow = true; });
+            this.model.add(hook);
+            this.hookMesh = hook;
+            this.hookTip = tip;
+            // lowered far enough to drag on the deck, never through it
+            this.hookDown = 0.62;
+            this.hookLen = len;
+        }
+        this.hook = false;
+        this.hookAnim = 0;
+        this.updateHookVisual();
+    }
+
+    // Hook engages an arresting wire: remember where, so the cable can be drawn to the hook
+    catchWire() {
+        if (this.trap || !this.deck) return;
+        this.trap = true;
+        const tip = this.hookPoint(_v1);
+        const { lz } = this.deck.toLocal(tip.x, tip.z);
+        const B = this.deck.def.B;
+        this.wire = { ship: this.deck, lz, x0: -4 - B * 0.36, x1: -4 + B * 0.36, fade: 1.5 };
+        if (!this.wireMeshes) {
+            const mat = new THREE.MeshStandardMaterial({ color: 0xb8b4a4, roughness: 0.35, metalness: 0.7 });
+            this.wireMeshes = [0, 1].map(() => {
+                const m = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 1, 6), mat);
+                m.geometry.translate(0, 0.5, 0);
+                return m;
+            });
+        }
+        this.wireMeshes.forEach(m => this.game.scene.add(m));
+        if (this.isPlayer) this.game.audio.tick(160, 0.35, 0.4);
+    }
+
+    updateWire(dt) {
+        const w = this.wire;
+        if (!this.trap) w.fade -= dt;
+        if (w.fade <= 0 || !w.ship.alive || !this.alive) {
+            this.wireMeshes.forEach(m => this.game.scene.remove(m));
+            this.wire = null;
+            return;
+        }
+        const tip = this.hookPoint(_v1);
+        const deckY = w.ship.deckY + 0.45;
+        [w.x0, w.x1].forEach((x, i) => {
+            const a = w.ship.toWorld(x, deckY, w.lz);
+            const m = this.wireMeshes[i];
+            m.position.copy(a);
+            const d = _v2.subVectors(tip, a);
+            m.scale.set(1, d.length(), 1);
+            m.quaternion.setFromUnitVectors(_v3.set(0, 1, 0), d.normalize());
+        });
+    }
+
+    updateHookVisual() {
+        if (!this.hookMesh) return;
+        // stowed flat along the belly, lowered ~38°
+        this.hookMesh.rotation.x = 0.04 + this.hookAnim * (this.hookDown - 0.04);
+    }
+
+    // on the deck/runway the hook rides on the surface instead of sinking into it
+    settleHook() {
+        if (!this.hookMesh || this.hookAnim <= 0) return;
+        this.root.updateMatrixWorld(true);
+        const tip = this.hookPoint(_v1);
+        const floor = (this.deck ? this.deck.deckY : this.game.surfaceAt(tip.x, tip.z, tip.y + 3).h) + 0.25;
+        // swing toward the surface (gently, so it settles instead of oscillating)
+        const want = 0.04 + this.hookAnim * (this.hookDown - 0.04);
+        const r = clamp(this.hookMesh.rotation.x + (tip.y - floor) / this.hookLen * 0.5, 0.04, want);
+        if (Math.abs(r - this.hookMesh.rotation.x) > 1e-4) { this.hookMesh.rotation.x = r; this.hookMesh.updateMatrixWorld(true); }
+    }
+
+    // world position of the hook point
+    hookPoint(out) {
+        if (!this.hookTip) return out.copy(this.pos);
+        return this.hookTip.getWorldPosition(out);
     }
 
     // Visible flaps (wing trailing edge) and speed brake (spine panel, or wing spoilers on big jets)
@@ -298,7 +426,7 @@ export class Aircraft {
         const spot = ship.catapultSpot();
         this.qv.setFromAxisAngle(AY, ship.heading);
         this.pos.copy(spot).setY(ship.deckY + this.gearOffset);
-        this.deck = ship; this.deckHeading = 0; this.relSpeed = 0;
+        this.deck = ship; this._dl = null; this.deckHeading = 0; this.relSpeed = 0;
         this.vel.copy(ship.vel);
         this.speed = 0; this.alpha = 0;
         this.throttle = this.controls.throttle = 0;
@@ -331,7 +459,7 @@ export class Aircraft {
     burnFuel(dt) {
         if (!this.isPlayer || this.game.settings?.fuel === false || this.flameout) return;
         const t = this.throttle;
-        const rate = t <= 0.9 ? 0.12 + 0.88 * (t / 0.9) : 1 + 3 * ((t - 0.9) / 0.1);
+        const rate = t <= 0.9 || !this.hasAB ? 0.12 + 0.88 * Math.min(t / 0.9, 1.1) : 1 + 3 * ((t - 0.9) / 0.1);
         this.fuel = Math.max(0, this.fuel - rate * dt / this.fuelTime);
         if (this.fuel <= 0 && !this.flameout) {
             this.flameout = true;
@@ -348,6 +476,7 @@ export class Aircraft {
 
     syncBody() {
         if (this.gearLegs && this._gearShown !== this.gearAnim) { this._gearShown = this.gearAnim; this.updateGearVisual(); }
+        if (this._hookShown !== this.hookAnim) { this._hookShown = this.hookAnim; this.updateHookVisual(); }
         _q1.setFromAxisAngle(AX, this.alpha);
         _q2.setFromAxisAngle(AY, this.beta);
         this.quat.copy(this.qv).multiply(_q1).multiply(_q2);
@@ -357,10 +486,10 @@ export class Aircraft {
     updateFlight(dt) {
         const c = this.controls, f = this.spec.flight;
         const alt = this.pos.y;
-        const rho = Math.exp(-Math.max(alt, 0) / 9000);
+        const rho = airDensity(alt);
         let V = this.vel.length();
         this.speed = V;
-        this.mach = V / (340 - Math.max(alt, 0) * 0.004);
+        this.mach = V / soundSpeed(alt);
 
         // Throttle target (0..1) with engine spool
         this.throttle = damp(this.throttle, clamp(c.throttle, 0, 1), this.throttle < c.throttle ? 1.6 : 2.5, dt);
@@ -419,12 +548,12 @@ export class Aircraft {
         if (this.gearAnim > 0.05) cd += this.cd0 * 0.8 * this.gearAnim;
         cd += this.cd0 * 0.85 * this.flapAnim * 2;
         if (this.flaps && V > 175 && this.isPlayer) { this.flaps = 0; this.game.events.emit('flapsBlown', this); }
-        // transonic drag rise
-        if (this.mach > 0.9) cd += this.cd0 * clamp((this.mach - 0.9) * 2.2, 0, 0.8);
+        // compressibility: transonic drag rise, easing off once supersonic
+        cd += this.cd0 * this.waveK * waveShape(this.mach, this.mmax);
         const drag = q * cd;
 
-        const thrustN = this.thrustFor(rho);
-        this.afterburner = this.throttle > 0.905 && !this.flameout;
+        const thrustN = this.thrustFor(rho) * ramFactor(this.mach, this.spec);
+        this.afterburner = this.hasAB && this.throttle > 0.905 && !this.flameout;
         this.burnFuel(dt);
 
         const rightW = _v3.set(1, 0, 0).applyQuaternion(this.qv);
@@ -454,7 +583,7 @@ export class Aircraft {
         V = this.vel.length();
         if (V < 5) { this.vel.addScaledVector(bodyFwd, 5 - V); V = 5; }
         // cap absurd speeds
-        const vcap = f.speed * 1.6;
+        const vcap = Math.max(f.speed * 1.6, this.mmax * 300 * 1.08);
         if (V > vcap) this.vel.multiplyScalar(vcap / V);
         const newDir = _v3.copy(this.vel).normalize();
         _q1.setFromUnitVectors(oldDir, newDir);
@@ -481,7 +610,7 @@ export class Aircraft {
     updateGround(dt, rho) {
         const c = this.controls;
         const thrust = this.thrustFor(rho);
-        this.afterburner = this.throttle > 0.905 && !this.flameout;
+        this.afterburner = this.hasAB && this.throttle > 0.905 && !this.flameout;
         this.burnFuel(dt);
         const ship = this.deck;
         let V = this.relSpeed;
@@ -515,6 +644,8 @@ export class Aircraft {
             acc = Math.max(acc, 34);
             if (V > rotateSpeed * 1.2) this.catapult = 0;
         }
+        // hook dropped late while rolling through the wires still catches one
+        if (!this.trap && this.deck && this.hook && this.hookAnim > 0.8 && V > 15 && !this.catapult && this.deck.inWireZone(this.pos.x, this.pos.z)) this.catchWire();
         // arresting wire: stops a landing jet in ~100 m
         if (this.trap) {
             acc = Math.min(acc, -26);
@@ -528,8 +659,19 @@ export class Aircraft {
         this.mach = V / 340;
         const dir = _v2.set(0, 0, -1).applyQuaternion(this.qv);
         this.vel.copy(dir).multiplyScalar(V);
-        if (ship) this.vel.add(ship.vel);
-        this.pos.addScaledVector(this.vel, dt);
+        if (ship) {
+            this.vel.add(ship.vel);
+            // ride in the deck's frame so a turning carrier carries us round with it
+            if (!this._dl || this._dl.ship !== ship) { const l = ship.toLocal(this.pos.x, this.pos.z); this._dl = { ship, lx: l.lx, lz: l.lz }; }
+            const dh = this.deckHeading;
+            this._dl.lx -= Math.sin(dh) * V * dt;
+            this._dl.lz -= Math.cos(dh) * V * dt;
+            const w = ship.toWorld(this._dl.lx, 0, this._dl.lz, _v3);
+            this.pos.x = w.x; this.pos.z = w.z;
+        } else {
+            this._dl = null;
+            this.pos.addScaledVector(this.vel, dt);
+        }
         const surf = this.game.surfaceAt(this.pos.x, this.pos.z, this.pos.y - this.gearOffset + 3);
         if (ship && surf.ship !== ship) {
             // off the end (or edge) of the deck: flying if fast enough, otherwise dropping
@@ -554,7 +696,7 @@ export class Aircraft {
         }
         if (!ship) {
             // rolled off the runway at speed on rough ground?
-            if (!surf.runway && V > (this.bellied ? 8 : 40) && surf.h > 1) {
+            if (!surf.runway && !surf.bridge && V > (this.bellied ? 8 : 40) && surf.h > 1) {
                 const e = 5;
                 const dx = terrainHeight(this.pos.x + e, this.pos.z) - terrainHeight(this.pos.x - e, this.pos.z);
                 const dz = terrainHeight(this.pos.x, this.pos.z + e) - terrainHeight(this.pos.x, this.pos.z - e);
@@ -591,7 +733,7 @@ export class Aircraft {
         const vsLimit = surf.ship ? -9.5 : -7;
         if (this.gearAnim > 0.9 && vs > vsLimit && upY > 0.94 && pitch > -0.08 && pitch < 0.35 && relSpeed < this.spec.flight.speed * 0.6 && (surf.runway || surf.ship || flatEnough)) {
             this.onGround = true;
-            this.deck = surf.ship || null;
+            this.deck = surf.ship || null; this._dl = null;
             this.pos.y = surf.h + this.gearOffset;
             this.relSpeed = relSpeed;
             const heading = Math.atan2(-rel.x, -rel.z);
@@ -599,7 +741,10 @@ export class Aircraft {
             this.trap = false;
             if (this.deck) {
                 this.deckHeading = heading - this.deck.heading;
-                this.trap = this.deck.inWireZone(this.pos.x, this.pos.z);
+                if (this.deck.inWireZone(this.pos.x, this.pos.z)) {
+                    if (this.hook || !this.hookMesh) this.catchWire();
+                    else if (this.isPlayer) this.game.addFeed('HOOK UP — NO WIRE! (H)', '#ff4a3d');
+                }
             }
             this.vel.y = shipVel.y;
             this.alpha = Math.max(0, pitch);
@@ -632,7 +777,7 @@ export class Aircraft {
         this.bellyOffset = isFinite(box.min.y) ? clamp(this.root.position.y - box.min.y, 0.3, this.gearOffset) : this.gearOffset * 0.5;
         this.flaps = 0;
         this.onGround = true;
-        this.deck = surf.ship || null;
+        this.deck = surf.ship || null; this._dl = null;
         this.relSpeed = relSpeed;
         const heading = Math.atan2(-rel.x, -rel.z);
         this.qv.setFromAxisAngle(AY, heading);
@@ -765,6 +910,8 @@ export class Aircraft {
 
     remove() {
         this.stopTrails();
+        if (this.wireMeshes) this.wireMeshes.forEach(m => this.game.scene.remove(m));
+        this.wire = null;
         this.game.scene.remove(this.root);
         // free per-instance GPU resources (shared geometries/materials are kept)
         for (const m of this.flames) m.material.dispose();
@@ -788,6 +935,11 @@ export class Aircraft {
             this.fallTimer -= dt;
             if (this.fallTimer <= 0) this.explode(false);
         }
+        const hTarget = this.hook ? 1 : 0;
+        if (this.hookAnim !== hTarget) this.hookAnim = hTarget > this.hookAnim ? Math.min(1, this.hookAnim + dt / 1.2) : Math.max(0, this.hookAnim - dt / 1.2);
+        if (this.onGround) this.settleHook(); else if (this.hookMesh) this.updateHookVisual();
+        if (this.wire) this.updateWire(dt);
+        if (this.fixedGear) this.gear = true;
         const gTarget = this.gear ? 1 : 0;
         if (this.gearAnim !== gTarget) {
             this.gearAnim = gTarget > this.gearAnim ? Math.min(1, this.gearAnim + dt / 2.2) : Math.max(0, this.gearAnim - dt / 2.2);

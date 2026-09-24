@@ -132,11 +132,12 @@ export class Audio {
         const th = p.throttle, sp = clamp(p.speed / 400, 0, 1.3);
         const inside = state.cockpit ? 0.55 : 1;
         set(this.engine.gain, (0.25 + th * 0.35) * inside);
-        set(this.rumbleF.frequency, 180 + th * 380);
-        set(this.roarF.frequency, 500 + th * 1400);
-        set(this.roarG.gain, 0.08 + th * 0.2);
-        set(this.whine.frequency, 700 + th * 1500);
-        set(this.whineG.gain, 0.01 + th * 0.03);
+        const prop = !!p.spec.prop; // piston engine: low growl, no turbine whine
+        set(this.rumbleF.frequency, prop ? 90 + th * 220 : 180 + th * 380);
+        set(this.roarF.frequency, prop ? 260 + th * 600 : 500 + th * 1400);
+        set(this.roarG.gain, prop ? 0.12 + th * 0.28 : 0.08 + th * 0.2);
+        set(this.whine.frequency, prop ? 120 + th * 160 : 700 + th * 1500);
+        set(this.whineG.gain, prop ? 0.02 + th * 0.05 : 0.01 + th * 0.03);
         set(this.abG.gain, p.afterburner ? 1.1 : 0, 0.2);
         set(this.windG.gain, sp * sp * 0.12 * (state.cockpit ? 0.6 : 1) + (p.airbrake ? 0.08 : 0));
         set(this.windF.frequency, 500 + sp * 1500);

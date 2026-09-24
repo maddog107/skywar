@@ -9,6 +9,7 @@ import * as THREE from 'three';
 import { BASES, isOnRunway } from './world.js';
 import { mulberry32 } from './util.js';
 import { AIRCRAFT } from './config.js';
+import { ConvoyOp, pickConvoyBridge } from './convoy.js';
 
 const home = () => BASES.find(b => b.friendly);
 const redsAlive = (g) => g.aircraft.filter(a => a.team === 'red' && a.alive && !a.pilotDead);
@@ -138,9 +139,24 @@ export const MISSIONS = {
         },
         objective: (g) => { const b = home(), p = g.player; return 'DEADSTICK — ' + km(Math.hypot(p.pos.x - b.x, p.pos.z - b.z)) + ' TO THE RUNWAY'; },
     },
+    bridge_out: {
+        title: 'BRIDGE OUT', tag: 'STRIKE',
+        desc: 'An armoured convoy is racing for a river bridge. Bomb the bridge before it crosses, then wipe out the stranded column.',
+        base: 'custom', start: 'air', lives: 1,
+        loadout: (p) => { p.bombs = Math.max(p.bombs, 6); },
+        setup: (g) => {
+            const pick = pickConvoyBridge(g.world.towns?.bridges);
+            if (!pick) { g.mstate = { op: null }; return; }
+            g.mstate = { op: new ConvoyOp(g, pick) };
+            g.audio.say('Convoy on the move toward the river. Bombs will drop that bridge — missiles won\'t.', true);
+        },
+        update: (g) => g.mstate.op && g.mstate.op.update(),
+        check: (g) => (g.mstate.op ? g.mstate.op.result : 'lose'),
+        objective: (g) => (g.mstate.op ? g.mstate.op.objective() : 'NO BRIDGE FOUND'),
+    },
     trap: {
         title: 'TRAP', tag: 'SKILL',
-        desc: 'Land on the moving carrier and catch a wire. Gear and flaps down, on speed, don\'t float.',
+        desc: 'Land on the moving carrier and catch a wire. Gear, flaps and hook (H) down, on speed, don\'t float.',
         base: 'custom', start: 'air', lives: 0,
         setup: (g) => { g.placeApproach('cv_approach', 4500); },
         check: (g) => {

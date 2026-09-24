@@ -6,6 +6,8 @@
 import * as THREE from 'three';
 import { terrainHeight, BASES } from './world.js';
 import { fbm, mulberry32, makeRadialTexture } from './util.js';
+import { buildRoads } from './roads.js';
+import { Traffic } from './traffic.js';
 
 const EXTENT = 24000, CELL = 3200;
 
@@ -101,44 +103,17 @@ export class Towns {
 
     buildRoads() {
         const nodes = [...this.towns.map(t => ({ x: t.x, z: t.z })), ...BASES.map(b => ({ x: b.x, z: b.z }))];
-        const edges = new Set();
-        nodes.forEach((a, i) => {
-            const near = nodes.map((b, j) => ({ j, d: Math.hypot(a.x - b.x, a.z - b.z) })).filter(o => o.j !== i && o.d < 9000).sort((p, q) => p.d - q.d).slice(0, 2);
-            near.forEach(o => edges.add(Math.min(i, o.j) + ',' + Math.max(i, o.j)));
-        });
-        const pos = [], idx = [];
-        const W = 5;
-        for (const e of edges) {
-            const [i, j] = e.split(',').map(Number);
-            const a = nodes[i], b = nodes[j];
-            const len = Math.hypot(b.x - a.x, b.z - a.z);
-            const steps = Math.ceil(len / 35);
-            const dx = (b.x - a.x) / len, dz = (b.z - a.z) / len;
-            const nx = -dz, nz = dx;
-            let prev = null;
-            for (let k = 0; k <= steps; k++) {
-                const t = k / steps;
-                // gentle meander so roads don't look ruler-straight
-                const wob = Math.sin(t * Math.PI * 3 + i) * Math.min(len * 0.04, 180) * Math.sin(t * Math.PI);
-                const x = a.x + (b.x - a.x) * t + nx * wob, z = a.z + (b.z - a.z) * t + nz * wob;
-                const h = terrainHeight(x, z);
-                if (h < 1 || slopeAt(x, z) > 0.45) { prev = null; continue; } // no roads through the sea or up cliffs
-                const y = h + 0.8;
-                const base = pos.length / 3;
-                pos.push(x + nx * W, y, z + nz * W, x - nx * W, y, z - nz * W);
-                if (prev !== null) idx.push(prev, prev + 1, base, prev + 1, base + 1, base);
-                prev = base;
-            }
-        }
-        const g = new THREE.BufferGeometry();
-        g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-        g.setIndex(idx);
-        g.computeVertexNormals();
-        const road = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0x3a3c3e, roughness: 0.95, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, side: THREE.DoubleSide }));
-        road.receiveShadow = true;
-        road.frustumCulled = false;
-        this.group.add(road);
+        const { paths, bridges } = buildRoads(this.group, nodes);
+        this.paths = paths;
+        this.bridges = bridges;
+        this.traffic = new Traffic(this.group, paths);
     }
 
-    setNight(on) { this.lights.visible = on; }
+    // Deck height of a standing bridge under (x, z) for something at height y, or null
+    bridgeAt(x, z, y) {
+        for (const b of this.bridges) { const h = b.deckAt(x, z, y); if (h != null) return h; }
+        return null;
+    }
+
+    setNight(on) { this.lights.visible = on; if (this.traffic) this.traffic.setNight(on); }
 }

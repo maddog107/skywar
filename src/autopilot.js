@@ -191,6 +191,7 @@ export class Autopilot {
 
         // final approach: centreline + glide slope, configured and on speed
         if (along < 7000 && !p.gear) p.gear = true;
+        if (along < 7000 && t.kind === 'carrier' && !p.hook) p.hook = true;
         if (along < 6000 && p.speed < 175) p.flaps = 2;
         g.input.spoilersOn = false;
         p.airbrake = p.speed > app * 1.25;

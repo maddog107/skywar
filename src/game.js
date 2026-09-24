@@ -85,6 +85,12 @@ export class Game {
         if (d) return d;
         const th = terrainHeight(x, z);
         const r = this._surf;
+        const bh = this.world.towns ? this.world.towns.bridgeAt(x, z, y) : null;
+        if (bh != null) {
+            r.runway = null; r.h = bh; r.water = false; r.ship = null; r.hull = false; r.bridge = true;
+            return r;
+        }
+        r.bridge = false;
         r.runway = isOnRunway(x, z);
         r.h = Math.max(th, 0);
         r.water = th < -0.5 && !r.runway;
@@ -140,6 +146,11 @@ export class Game {
         const storm = this.world.weather === 'storm', rain = this.world.weather === 'rain';
         this.wind.set(storm ? 14 : rain ? 7 : 3, 0, storm ? -10 : rain ? -5 : -2);
         this.naval.spawnHomeCarrier();
+        if (this.world.towns) {
+            this.ground.addBridges(this.world.towns.bridges);
+            for (const b of this.world.towns.bridges) b.game = this;
+            this.world.towns.traffic.reset();
+        }
         if (this.mode === 'strike' || this.mode === 'sandbox') this.ground.spawnEnemyBase();
         if (this.mode === 'naval' || this.mode === 'sandbox') this.naval.spawnEnemyGroup();
         else if (this.mode === 'freeflight') this.naval.spawnEnemyGroup(true); // unarmed target ships to shoot at for fun
@@ -364,6 +375,7 @@ export class Game {
             p.spawnAir(pos, Math.atan2(-fwd.x, -fwd.z), 0.3);
             // already configured: gear and full flaps down, on speed, on the glide slope
             p.gear = true; p.gearAnim = 1; p.flaps = 2; p.flapAnim = 1; p._lastFlaps = 2; p.balloon = 0;
+            if (kind === 'cv_approach') { p.hook = true; p.hookAnim = 1; }
             p.vel.copy(fwd).multiplyScalar(app).add(shipVel);
             p.vel.y = -app * Math.tan(GLIDE_SLOPE);
             p.throttle = p.controls.throttle = 0.45;
@@ -837,9 +849,16 @@ export class Game {
             case 'flares': this.weapons.dropFlares(p, this.time); break;
             case 'gear':
                 if (p.bellied) break;
+                if (p.fixedGear) { this.addFeed('FIXED GEAR', '#ffc23f'); break; }
                 p.gear = !p.gear;
                 this.addFeed(p.gear ? 'GEAR DOWN' : 'GEAR UP', '#5dffa0');
                 this.audio.tick(400, 0.15, 0.2);
+                break;
+            case 'hook':
+                if (!p.hookMesh) { this.addFeed('NO TAILHOOK ON THIS AIRCRAFT', '#ffc23f'); break; }
+                p.hook = !p.hook;
+                this.addFeed(p.hook ? 'HOOK DOWN' : 'HOOK UP', '#5dffa0');
+                this.audio.tick(300, 0.15, 0.2);
                 break;
             case 'help': this.onHelp && this.onHelp(); break;
             case 'missilecam': {
@@ -903,7 +922,7 @@ export class Game {
     candidates() {
         const out = [];
         for (const a of this.aircraft) if (a.alive && a.team !== 'blue' && !a.onGround) out.push(a);
-        if (this.ground) for (const t of this.ground.targets) if (t.alive && t.team !== 'blue') out.push(t);
+        if (this.ground) for (const t of this.ground.targets) if (t.alive && t.team !== 'blue' && (!t.isBridge || t.objective)) out.push(t);
         return out;
     }
 
@@ -1139,6 +1158,10 @@ export class Game {
         this.wreckage.update(dt);
         this.ground.update(dt);
         this.naval.update(dt);
+        if (this.world.towns) this.world.towns.traffic.update(dt, this);
+        // the home carrier holds its course while someone is on approach with the gear down
+        const cv = this.naval.homeCarrier, pl = this.player;
+        if (cv && pl && pl.alive && !pl.onGround && pl.gear && cv.mesh.position.distanceToSquared(pl.pos) < 9000 * 9000) cv.straight = 4;
         this.updateMode(dt);
 
         // purge dead AI that finished exploding

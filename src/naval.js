@@ -247,7 +247,17 @@ export class Ship {
 
     place(dt) {
         const o = this.orbit;
-        o.a += o.w * dt * (this.alive ? 1 - 0.6 * (1 - Math.max(this.hp, 0) / this.maxHp) : 0.15);
+        const rate = this.alive ? 1 - 0.6 * (1 - Math.max(this.hp, 0) / this.maxHp) : 0.15;
+        // recovering aircraft: steam straight into the wind (slide the circle along instead of turning),
+        // as long as there's open water ahead
+        if (this.straight > 0 && this.alive) {
+            this.straight -= dt;
+            const sg = Math.sign(o.w), v = Math.abs(o.w) * o.R * rate;
+            const tx = -Math.sin(o.a) * sg, tz = Math.cos(o.a) * sg;
+            const ax = o.cx + Math.cos(o.a) * o.R + tx * 2500, az = o.cz + Math.sin(o.a) * o.R + tz * 2500;
+            if (terrainHeight(ax, az) < -8) { o.cx += tx * v * dt; o.cz += tz * v * dt; }
+            else { this.straight = 0; o.a += o.w * dt * rate; }
+        } else o.a += o.w * dt * rate;
         const x = o.cx + Math.cos(o.a) * o.R, z = o.cz + Math.sin(o.a) * o.R;
         // tangent direction of travel
         const tx = -Math.sin(o.a) * Math.sign(o.w), tz = Math.cos(o.a) * Math.sign(o.w);

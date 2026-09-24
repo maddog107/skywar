@@ -104,6 +104,11 @@ export class PilotOnFoot {
             this.landedT += dt;
             this.hint = g.lives > 0 ? 'ENTER — REQUEST A NEW JET  (' + (g.lives === Infinity ? '∞' : g.lives) + ' LEFT)' : 'NO AIRFRAMES LEFT';
             if ((input.down('Enter') || input.down('Space')) && this.landedT > 1) g.respawnPlayer();
+        } else if (s.deployed) {
+            // a long ride down from altitude: allow skipping it (the hijack prompt takes priority)
+            this.airT = (this.airT || 0) + dt;
+            if (!this.hint && this.airT > 3 && g.lives > 0) this.hint = 'ENTER — SKIP THE DESCENT, REQUEST A NEW JET';
+            if (this.airT > 3 && g.lives > 0 && input.down('Enter')) g.respawnPlayer();
         }
         this.updateEnemyShooters(dt);
     }

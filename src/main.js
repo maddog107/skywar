@@ -158,6 +158,7 @@ function buildMenu() {
     const groups = [
         ['FIGHTERS', k => AIRCRAFT[k].category === 'fighter'],
         ['BOMBER', k => AIRCRAFT[k].category === 'bomber'],
+        ['RACING & AEROBATIC', k => AIRCRAFT[k].category === 'racer'],
         ['CIVIL & TRANSPORT', k => AIRCRAFT[k].category === 'civil'],
     ];
     const list = $('acList');
@@ -516,6 +517,8 @@ function buildCredits() {
         ['Jet (F-35 stand-in)', 'jeremy', 'CC BY 3.0', 'https://poly.pizza/m/6fyLMORhgGK'],
         ['Jumbo Jet', 'NuclearOsmosis', 'CC0', 'https://opengameart.org/content/jumbo-jetwide-body'],
         ['Airplane (C-130 stand-in)', 'Remy Tauziac', 'CC BY 3.0', 'https://poly.pizza/m/bjlICuVX1Sg'],
+        ['Aeroplane (Unlimited Air Racer)', 'Gilang Romadhan', 'CC BY 3.0', 'https://poly.pizza/m/9VeIc0cybp4'],
+        ['Airplane (Stunt Biplane)', 'Poly by Google', 'CC BY 3.0', 'https://poly.pizza/m/8VysVKMXN2J'],
     ];
     const body = $('creditsBody');
     body.innerHTML = '';

@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { BASES, RUNWAY, groundHeight } from './world.js';
 import { rand, clamp, interceptTime, lerp } from './util.js';
 import { WEAPONS } from './config.js';
+import { samplePath, LANE } from './roads.js';
 
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3();
 
@@ -28,6 +29,11 @@ const TYPES = {
     tank: { name: 'ARMOR', hp: 90, radius: 7, score: 100, boom: 1 },
     bunker: { name: 'COMMAND', hp: 400, radius: 22, score: 500, boom: 2.6 },
     board: { name: 'TARGET', hp: 20, radius: 9, score: 150, boom: 0.6 },
+    // convoy vehicles
+    truck: { name: 'TRUCK', hp: 45, radius: 6, score: 80, boom: 0.9 },
+    fueltruck: { name: 'FUEL TRUCK', hp: 40, radius: 6, score: 100, boom: 2.4 },
+    spaag: { name: 'MOBILE AAA', hp: 75, radius: 7, score: 180, boom: 1.1, role: 'aaa' },
+    msam: { name: 'MOBILE SAM', hp: 80, radius: 7, score: 300, boom: 1.5, role: 'sam', ammo: 3 },
 };
 
 function box(w, h, d, mat, x = 0, y = 0, z = 0) {
@@ -126,6 +132,37 @@ function buildMesh(type) {
             for (const s of [-1.6, 1.6]) g.add(box(0.8, 1.1, 7.2, M.dark, s, 0, 0));
             break;
         }
+        case 'truck':
+        case 'fueltruck': {
+            g.add(box(2.6, 2.4, 2.6, M.olive, 0, 0.9, -3.2));             // cab
+            g.add(box(2.7, 0.5, 8.6, M.dark, 0, 0.6, 0));                 // chassis
+            if (type === 'truck') g.add(box(2.7, 2.6, 5.6, M.sand, 0, 1.1, 1.3)); // canvas cargo
+            else { const t = cyl(1.3, 1.3, 5.6, M.steel, 0, 0, 0); t.rotation.x = Math.PI / 2; t.position.set(0, 2.5, 1.3); g.add(t); }
+            for (const z of [-3, 1, 3]) for (const x of [-1.25, 1.25]) { const w = cyl(0.55, 0.55, 0.5, M.dark, 0, 0, 0, 10); w.rotation.z = Math.PI / 2; w.position.set(x, 0.55, z); g.add(w); }
+            break;
+        }
+        case 'spaag':
+        case 'msam': {
+            g.add(box(3.4, 1.5, 7, M.olive, 0, 0.45, 0));
+            for (const x of [-1.5, 1.5]) g.add(box(0.8, 1.1, 7.2, M.dark, x, 0, 0));
+            const tur = new THREE.Group();
+            if (type === 'spaag') {
+                tur.add(box(2.8, 1.3, 3, M.olive));
+                for (const x of [-0.5, 0.5]) { const b = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 4, 6), M.dark); b.rotation.x = Math.PI / 2 - 0.5; b.position.set(x, 1.6, -1.6); tur.add(b); }
+                const dish = box(1.2, 0.9, 0.2, M.steel, 0, 1.3, 1.3); tur.add(dish);
+            } else {
+                tur.add(box(2.4, 0.6, 2.4, M.olive));
+                const rack = new THREE.Group();
+                for (let i = 0; i < 3; i++) { const t = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 4, 8), M.white); t.rotation.x = Math.PI / 2; t.position.set(-0.7 + i * 0.7, 0, 0); rack.add(t); }
+                rack.position.set(0, 1.4, 0); rack.rotation.x = 0.5;
+                tur.add(rack);
+                parts.rack = tur;
+            }
+            tur.position.y = 1.95;
+            g.add(tur);
+            parts.turret = tur;
+            break;
+        }
         case 'board': {
             const c = document.createElement('canvas');
             c.width = c.height = 128;
@@ -183,7 +220,40 @@ class GroundTarget {
         this.smokeT = 0;
         this.burnT = 0;
         this.launchDir = new THREE.Vector3(0, 1, 0);
-        this.ammo = type === 'sam' ? 4 : Infinity;
+        this.role = this.def.role || type;
+        this.ammo = this.def.ammo || (type === 'sam' ? 4 : Infinity);
+        this.route = null;
+    }
+
+    // Drive along a road path: route = { path, s, dir, speed, target }
+    follow(path, s, dir) {
+        this.route = { path, s, dir, speed: 0, cruise: 12, stopAt: null };
+        this.placeOnRoute();
+    }
+
+    placeOnRoute() {
+        const r = this.route;
+        const p = samplePath(r.path, r.s, _v1, _v2);
+        if (r.dir < 0) _v2.negate();
+        const rl = Math.hypot(_v2.x, _v2.z) || 1;
+        p.x += -_v2.z / rl * LANE * 0.5; p.z += _v2.x / rl * LANE * 0.5;
+        this.mesh.position.set(p.x, p.y, p.z);
+        this.mesh.rotation.set(0, Math.atan2(-_v2.x, -_v2.z), 0);
+        this.pos.set(p.x, p.y + this.radius * 0.4, p.z);
+    }
+
+    driveRoute(dt) {
+        const r = this.route;
+        let target = r.cruise;
+        if (r.stopAt != null) {
+            const d = (r.stopAt - r.s) * r.dir;
+            target = d <= 0.5 ? 0 : Math.min(r.cruise, d * 0.35);
+        }
+        r.speed += clamp(target - r.speed, -6 * dt, 2.5 * dt);
+        r.s = clamp(r.s + r.dir * r.speed * dt, 0, r.path.len);
+        this.vel.set(0, 0, 0);
+        this.placeOnRoute();
+        if (dt > 0) this.vel.copy(_v2).multiplyScalar(r.speed);
     }
 
     damage(amount, source, kind) {
@@ -207,12 +277,20 @@ class GroundTarget {
         this.mesh.scale.y = 0.45;
         this.burnT = rand(40, 80);
         this.game.events.emit('groundKilled', this, { source });
+        if (this.route) this.route.speed = 0;
     }
 
     update(dt) {
         const g = this.game;
         const fx = g.effects;
         if (!this.alive) {
+            if (this.sinking) {
+                // fell off a broken bridge
+                this.sinkV = (this.sinkV || 0) + 9.8 * dt;
+                if (this.mesh.position.y > -30) this.mesh.position.y -= this.sinkV * dt;
+                if (!this.splashed && this.mesh.position.y < 0.5) { this.splashed = true; fx.waterSplash(_v1.copy(this.mesh.position).setY(0.5), 1.2); this.burnT = 0; }
+                return;
+            }
             if (this.burnT > 0) {
                 this.burnT -= dt;
                 this.smokeT -= dt;
@@ -226,8 +304,9 @@ class GroundTarget {
             return;
         }
         if (this.parts.dish) this.parts.dish.rotation.y += dt * 1.2;
+        if (this.route) this.driveRoute(dt);
         if (!g.player) return;
-        if (this.type !== 'aaa' && this.type !== 'sam') return;
+        if (this.role !== 'aaa' && this.role !== 'sam') return;
         const targets = g.aircraft.filter(a => a.alive && a.team !== this.team && !a.onGround);
         if (!targets.length) return;
         // nearest target
@@ -237,7 +316,7 @@ class GroundTarget {
         const agl = t.pos.y - groundHeight(t.pos.x, t.pos.z);
         const diff = g.difficulty;
 
-        if (this.type === 'aaa' && dist < 2800) {
+        if (this.role === 'aaa' && dist < 2800) {
             // aim with lead and jitter
             const rel = _v1.subVectors(t.pos, this.pos);
             const tt = interceptTime(rel.x, rel.y, rel.z, t.vel.x, t.vel.y, t.vel.z, 900);
@@ -258,8 +337,8 @@ class GroundTarget {
             }
         }
 
-        if (this.type === 'sam' && this.ammo > 0 && dist < WEAPONS.sam.range && dist > 600 && agl > 50) {
-            const radarsUp = this.sys.targets.some(x => x.alive && x.type === 'radar');
+        if (this.role === 'sam' && this.ammo > 0 && dist < WEAPONS.sam.range && dist > 600 && agl > 50) {
+            const radarsUp = this.type === 'msam' || this.sys.targets.some(x => x.alive && x.type === 'radar');
             this.lockT += dt * (radarsUp ? 1 : 0.4);
             t.lockedBy = t.lockedBy || new Set();
             t.lockedBy.add(this);
@@ -272,7 +351,7 @@ class GroundTarget {
                 this.fireT = lerp(16, 9, diff.skill);
                 this.lockT = 1.5;
             }
-        } else if (this.type === 'sam') {
+        } else if (this.role === 'sam') {
             this.lockT = Math.max(0, this.lockT - dt);
             if (t.lockedBy) t.lockedBy.delete(this);
         }
@@ -320,8 +399,13 @@ export class GroundForces {
         return t;
     }
 
-    get remaining() { return this.targets.filter(t => t.alive && !t.isShip && t.type !== 'tank' && t.type !== 'board').length; }
-    get total() { return this.targets.filter(t => !t.isShip && t.type !== 'tank' && t.type !== 'board').length; }
+    get remaining() { return this.targets.filter(t => t.alive && !t.isShip && !t.isBridge && !t.route && t.type !== 'tank' && t.type !== 'board').length; }
+    get total() { return this.targets.filter(t => !t.isShip && !t.isBridge && !t.route && t.type !== 'tank' && t.type !== 'board').length; }
+
+    // Bridges live in the world; while a game runs they're (neutral) targets too
+    addBridges(bridges) {
+        for (const b of bridges || []) this.targets.push(b);
+    }
 
     update(dt) { for (const t of this.targets) if (!t.isShip) t.update(dt); }
 

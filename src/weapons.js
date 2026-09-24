@@ -301,9 +301,10 @@ export class Weapons {
         for (const t of g.ground.targets) {
             if (!t.alive || t.team === m.team || t === exclude) continue;
             if (t.hitTest && t.hitTest(m.pos)) { t.damage(m.W.damage, m.owner, m.kind === 'rkt' ? 'rocket' : 'missile'); continue; }
-            const d = t.pos.distanceTo(m.pos);
-            if (d < R + t.radius) t.damage(m.W.damage * clamp(1.2 - d / (R + t.radius), 0.3, 1), m.owner);
+            const d = t.distTo ? t.distTo(m.pos) : t.pos.distanceTo(m.pos);
+            if (d < R + t.radius) t.damage(m.W.damage * clamp(1.2 - d / (R + t.radius), 0.3, 1), m.owner, m.kind === 'rkt' ? 'rocket' : 'missile');
         }
+        g.world.towns?.traffic.blast(m.pos, R * 0.6, g);
     }
 
     checkFlares(m, dir, distToTarget) {
@@ -386,9 +387,10 @@ export class Weapons {
             if (g.ground) for (const t of g.ground.targets) {
                 if (!t.alive || t.team === b.team) continue;
                 if (t === hitShip) { t.damage(W.damage * 1.6, b.owner, 'bomb'); continue; }
-                const d = t.pos.distanceTo(at);
+                const d = t.distTo ? t.distTo(at) : t.pos.distanceTo(at);
                 if (d < W.splash + t.radius) t.damage(W.damage * clamp(1.2 - d / (W.splash + t.radius), 0.2, 1), b.owner, 'bomb');
             }
+            g.world.towns?.traffic.blast(at, W.splash * 0.7, g);
             for (const a of g.aircraft) {
                 if (!a.alive || a.team === b.team) continue;
                 const d = a.pos.distanceTo(at);

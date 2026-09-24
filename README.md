@@ -30,14 +30,14 @@ You need a local server because the game uses ES modules and loads `.glb` models
   jink when under fire, extend when hurt, and avoid terrain. Skill scales with difficulty.
   Every fourth wave brings a named ace.
 - **Missions**: Clean Sweep, Five on One, Ace Duel, SAM Alley, Escort, Scramble, Carrier Killer,
-  Deadstick and Trap, plus a Daily Mission picked from the date (the mission, jet and time of day change every day).
+  Deadstick, Trap and Bridge Out (bomb a river bridge ahead of an armoured convoy, then destroy the stranded column), plus a Daily Mission picked from the date (the mission, jet and time of day change every day).
 - **Modes**: Dogfight waves, Strike (destroy an airbase), Naval Strike (sink a carrier group),
   Survival, Target Practice (timed range), Sandbox (unlimited everything, invincible, bombs, N spawns
   bandits), Ring Race (timed canyon course) and Free Flight (with an unarmed carrier group offshore to shoot at).
 - **Weather**: clear, cloudy, rain or storm, with rain streaks, darker skies, turbulence, and lightning
   whose thunder arrives late depending on distance. **Photo mode** (O) freezes the action for orbit shots. Four times of day: dawn, midday, dusk and night.
 - **Aircraft carriers**: take off by catapult (full throttle on deck) and land on the angled deck to
-  catch an arresting wire. Enemy carriers and destroyers defend themselves with CIWS guns that shoot
+  catch an arresting wire with the tailhook (H), and the wire stretches out to the hook as it stops you. Enemy carriers and destroyers defend themselves with CIWS guns that shoot
   down missiles, SAMs, a naval gun and deck-launched fighters. Destroyed ships burn and sink.
 - **Airmanship**: animated landing gear, flaps (more lift, lower stall speed), speed brakes that dump
   lift on the ground, wheel brakes, and fuel (the afterburner burns it 4× faster, then BINGO, then a
@@ -46,6 +46,9 @@ You need a local server because the game uses ES modules and loads `.glb` models
   carrier. Stop on a friendly runway or deck to repair, refuel and rearm. In Free Flight and Sandbox the
   pause menu has Quick Position buttons (runway/carrier approach, runway takeoff, catapult), and the
   autopilot can auto-land (Y) at the nearest runway or carrier, or auto-takeoff (U).
+- **Towns, roads and bridges**: about 50 villages, towns and cities joined by marked two-lane roads with
+  civilian traffic (headlights at night). Roads cross water on concrete and cable-stayed bridges. Bombs drop them
+  (missiles barely scratch them), the span falls into the water, and cars stop at the gap and turn back.
 - **Hangar**: nine paint schemes and three loadouts (Balanced, Air Superiority, Strike). Bombs
   have a CCIP impact pipper and leave craters.
 - **Ejection, War Thunder trailer style**: eject (J J) into a first-person view under the parachute.
@@ -77,7 +80,8 @@ You need a local server because the game uses ES modules and loads `.glb` models
 | C (hold) / L (hold) | Padlock target / look behind |
 | V / K | Camera: chase, cockpit, far, cinematic / missile cam |
 | O | Photo mode (freeze, orbit, zoom, no HUD) |
-| H | Help (controls) |
+| H | Tailhook up/down (catch a carrier wire) |
+| F1 / ? | Help (controls) |
 | B / G | Spoilers on/off / landing gear |
 | Enter | New jet after a crash landing or parachute landing |
 | Esc / P | Pause (Quick Position in Free Flight / Sandbox) |
