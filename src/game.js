@@ -258,12 +258,14 @@ export class Game {
         const destroy = bl.destroy.bind(bl);
         bl.destroy = (b, game, source) => {
             const mine = !!game && !!source && (source === game.player || source === game.pilotMode);
-            destroy(b, game, mine ? null : source); // its own scoring only ever covers the player
-            if (mine && game === this) this.buildingDestroyed(b);
+            destroy(b, game, mine || b.target ? null : source); // its own scoring only ever covers the player
+            if (game === this) this.buildingDestroyed(b, source, mine);
         };
     }
 
-    buildingDestroyed(b) {
+    buildingDestroyed(b, source, mine) {
+        if (b.target) { b.target.fell(source); return; } // a mission's marked building: scored as a ground target
+        if (!mine) return;
         const pts = b.kind === 'tower' ? 150 : b.kind === 'apt' ? 80 : 40;
         const what = b.kind === 'tower' ? 'TOWER BLOCK' : b.kind === 'apt' ? 'APARTMENT BLOCK' : 'BUILDING';
         if (b.enemy || this.collateralFree) {
@@ -499,6 +501,7 @@ export class Game {
         this.pilotMode = new PilotOnFoot(this, seat, ac);
         this.state = 'playing';
         this.missileCam = null;
+        this.lockTarget = null; this.lockProgress = 0; this.seeker.visible = false; // no missiles on foot
         if (seat.walkedOut) this.showBanner('CLIMBED OUT', 'WASD walk · SHIFT run · Mouse look · LMB: AK-47 · E: board a jet · ENTER: new jet', 5, '#5dffa0');
         else this.showBanner('EJECTED', 'A/D steer the canopy · W dive / S brake · SPACE flare near the ground · V: first person · LMB: AK-47', 6, '#ffc23f');
         this.input.lock();
@@ -726,7 +729,7 @@ export class Game {
                     this.audio.say(pick(['That was not a landing.', 'Ouch.', 'Well, that was a mess.']), true);
                 } else {
                     this.showBanner('SHOT DOWN', source && source.spec ? 'by ' + source.spec.name : '', 4, '#ff4a3d');
-                    this.audio.say('Mayday, mayday! Ejecting!', true);
+                    this.audio.say(ac.spec.category === 'civil' ? 'Mayday, mayday! We are going down!' : 'Mayday, mayday! Ejecting!', true); // (airliners have no ejection seat)
                 }
                 return;
             }
@@ -980,7 +983,7 @@ export class Game {
                 this.audio.tick(300, 0.12, 0.3);
                 break;
             case 'eject':
-                if (p.spec.category === 'civil') this.addFeed('NO EJECTION SEAT — LAND IT, STOP, THEN E TO CLIMB OUT', '#ff9f5a');
+                if (p.spec.category === 'civil') this.addFeed('NO EJECTION SEAT IN A ' + p.spec.name.toUpperCase() + ' — LAND, STOP, THEN E TO CLIMB OUT', '#ff9f5a');
                 else if (this.time - (this.lastEjectPress || -9) < 0.6) this.ejectPlayer();
                 else { this.lastEjectPress = this.time; this.addFeed('PRESS J AGAIN TO EJECT', '#ff4a3d'); }
                 break;

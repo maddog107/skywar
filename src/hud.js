@@ -72,6 +72,7 @@ export class HUD {
         const ctx = this.ctx;
         ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
         ctx.clearRect(0, 0, this.w, this.h);
+        this.labels = [];
         const p = game.player;
         if (!p || game.state === 'menu') return;
         const cam = game.camera;
@@ -429,7 +430,7 @@ export class HUD {
         for (const e of entries) {
             const a = e.a, dist = e.dist;
             const locked = a === lock;
-            if (e.kind === 'neutral' && !locked && dist > 5000) continue;
+            if (e.kind === 'neutral' && !locked && dist > 3000) continue; // air traffic: only close by (or locked)
             const P = this.project(a.pos, cam, tmp);
             if (!P.front || P.x < -20 || P.x > this.w + 20 || P.y < -20 || P.y > this.h + 20) {
                 if (locked || (e.kind === 'air' && dist < 4000)) this.edgeArrow(P, locked ? RED : AMBER, dist);
@@ -489,6 +490,7 @@ export class HUD {
                 }
             }
         }
+        this.labels = labels; // (drawNav keeps its label clear of these)
         ctx.textAlign = 'center';
         for (const L of labels) {
             font(L.big);
@@ -518,7 +520,11 @@ export class HUD {
         for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2 + Math.PI / 6; ctx[k ? 'lineTo' : 'moveTo'](P.x + Math.cos(a) * r, P.y + Math.sin(a) * r); }
         ctx.closePath(); ctx.stroke();
         ctx.fillStyle = '#5dffa0'; ctx.textAlign = 'center';
-        ctx.fillText(n.label + ' · ' + (dist < 1000 ? Math.round(dist) + 'm' : (dist / 1000).toFixed(1) + 'km'), P.x, P.y - r - 12);
+        const text = n.label + ' · ' + (dist < 1000 ? Math.round(dist) + 'm' : (dist / 1000).toFixed(1) + 'km');
+        // above the marker, or below it when target labels already sit there
+        const hw = ctx.measureText(text).width / 2 + 3, clash = (y) => (this.labels || []).some(q => P.x - hw < q.x1 && P.x + hw > q.x0 && y - 8 < q.y1 && y + 8 > q.y0);
+        const ly = !clash(P.y - r - 12) ? P.y - r - 12 : !clash(P.y + r + 14) ? P.y + r + 14 : null;
+        if (ly !== null) ctx.fillText(text, P.x, ly); // (boxed in by target labels: the hexagon alone marks it)
     }
 
     edgeArrow(P, col, dist) {
