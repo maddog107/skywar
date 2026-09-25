@@ -1,0 +1,13 @@
+{
+ "source": "island_tree_02_1k.gltf",
+ "height": 3.407,
+ "radius": 2.643,
+ "frame": 512,
+ "grid": 3,
+ "sideFrames": 8,
+ "topFrame": 8,
+ "elevationDeg": 8.0,
+ "sideExtent": 5.497,
+ "topExtent": 5.497,
+ "note": "frames 0-7: viewed from azimuth k*45deg around the tree (0 = from -Y in Blender = +Z in three.js), frame 8: from above; sRGB, straight alpha"
+}
