@@ -35,6 +35,26 @@ licence was re-checked against the live Sketchfab API (`api.sketchfab.com/v3/mod
 | `su57.glb` | Su-57 Felon | "PAK FA" by jratanatharathorn (Yo Boy) | CC BY 4.0 | https://sketchfab.com/3d-models/pak-fa-245cebbc76e34a9d8b77e81a54d9cdf1 |
 | `typhoon.glb` | Eurofighter Typhoon | "Eurofighter Typhoon Game Prop" by robnewman76 | CC BY 4.0 | https://sketchfab.com/3d-models/eurofighter-typhoon-game-prop-01d9a26a89dc4a17a9fa4c4c1f7ac39f |
 | `rafale.glb` | Dassault Rafale | "Dassault Rafale" by so_O (quick_loop) | CC BY 4.0 | https://sketchfab.com/3d-models/dassault-rafale-d8bbfb0970ca4128b73e7e5364828fd3 |
+| `racer.glb` | Unlimited air racer (P-51 airframe) | "P-51 Mustang" by UlissesVinicios | CC BY 4.0 | https://sketchfab.com/3d-models/p-51-mustang-36f0f3e71d2a4c18b479db1ae8f9e7a7 |
+| `pitts.glb` | Stunt biplane (Stearman-style) | "Airplane biplane" by BlueHour (KaramellGlass) | CC BY 4.0 | https://sketchfab.com/3d-models/airplane-biplane-be48f3f906ed431b98b1bf03ab7aadd6 |
+
+### Built for SKYWAR in Blender (CC0 1.0)
+
+Made with the parametric kit `tools/aircraft_kit.py`; each spec is `tools/aircraft/<id>.py`. Proportions were
+measured off three-view drawings, used only as measuring references (nothing from the drawings is copied into
+the models).
+
+| File | Aircraft | Reference |
+|---|---|---|
+| `mig31.glb` | MiG-31 Foxhound | https://commons.wikimedia.org/wiki/File:Mikoyan_MiG-31_3-view_line_drawing.png (public domain) and File:Mikoyan_MiG-31_3-view.svg |
+| `mig25.glb` | MiG-25P Foxbat | https://commons.wikimedia.org/wiki/File:Mikoyan-Gurevich_MiG-25_3-view_line_drawing.gif (public domain) |
+| `j20.glb` | Chengdu J-20 | https://commons.wikimedia.org/wiki/File:Chengdu_J-20.svg |
+| `j10.glb` | Chengdu J-10A | https://commons.wikimedia.org/wiki/File:Chengdu_J-10.svg |
+| `j8.glb` | Shenyang J-8II | published dimensions and photographs (no free three-view found) |
+| `f5.glb` | Northrop F-5E Tiger II | https://commons.wikimedia.org/wiki/File:Northrop_F-5E_Tiger_II_3-view.svg |
+| `mig21.glb` | MiG-21bis | https://commons.wikimedia.org/wiki/File:Mikoyan-Gurevich_MiG-21_3-view_line_drawing.png (public domain) |
+| `mirage.glb` | Dassault Mirage IIIE | https://commons.wikimedia.org/wiki/File:Dassault_Mirage_III_3-view_line_drawing.png (public domain) |
+| `jaguar.glb` | SEPECAT Jaguar | https://commons.wikimedia.org/wiki/File:SEPECAT_Jaguar_3-view_line_drawing.png (public domain) |
 
 ## Attribution lines (for the in-game credits)
 
@@ -45,8 +65,10 @@ licence was re-checked against the live Sketchfab API (`api.sketchfab.com/v3/mod
 - "Su 30" (https://sketchfab.com/3d-models/su-30-fbcbe88be95e4bada5064f3f8f3893de) by akashritharan, CC BY 4.0. Changes: re-coloured, re-levelled, textures downscaled.
 - "JAS39 Gripen" (https://sketchfab.com/3d-models/jas39-gripen-a2b70c2f92af45d18d95f02b60621dbf) by helijah, CC BY 4.0. Changes: landing gear removed, textures downscaled.
 - "Cessna 172 Skyhawk - Stormworks" (https://sketchfab.com/3d-models/cessna-172-skyhawk-stormworks-49ac79d106934cb299f3c5ab645f9bda) by ThalesMML, CC BY 4.0. Changes: propeller removed, decimated.
-- "737 Max-8 (Free)" (https://sketchfab.com/3d-models/737-max-8-free-197ae72ceb5441efa91b8bdc2ee37050) by AMGP3D, CC BY 4.0. Changes: landing gear removed, re-oriented.
-- "Boeing747" (https://sketchfab.com/3d-models/boeing747-4eadf04e705b41a2b272ee5aed4d01d5) by kaymanv, CC BY 4.0. Changes: re-oriented.
+- "737 Max-8 (Free)" (https://sketchfab.com/3d-models/737-max-8-free-197ae72ceb5441efa91b8bdc2ee37050) by AMGP3D, CC BY 4.0. Changes: landing gear removed, painted, re-oriented.
+- "Boeing747" (https://sketchfab.com/3d-models/boeing747-4eadf04e705b41a2b272ee5aed4d01d5) by kaymanv, CC BY 4.0. Changes: painted, re-oriented.
+- "P-51 Mustang" (https://sketchfab.com/3d-models/p-51-mustang-36f0f3e71d2a4c18b479db1ae8f9e7a7) by UlissesVinicios, CC BY 4.0. Changes: propeller, guns and tailwheel removed, textures downscaled, re-oriented.
+- "Airplane biplane" (https://sketchfab.com/3d-models/airplane-biplane-be48f3f906ed431b98b1bf03ab7aadd6) by BlueHour, CC BY 4.0. Changes: levelled, textures re-encoded, re-oriented.
 - "F-14 Tomcat Top Gun (Gear UP) Downloadable" (https://sketchfab.com/3d-models/f-14-tomcat-top-gun-gear-up-downloadable-9d2d0c87539046aa8c2198fcc47cdcf8) by dwsd, CC BY 4.0. Changes: re-oriented.
 - "F-15 Eagle" (https://sketchfab.com/3d-models/f-15-eagle-f874bffa8e314743b4a7cb9ad4b9f3a8) by dashdu (Trouvaille), CC BY 4.0. Changes: landing gear removed, re-oriented.
 - "F-4 Phantom II Recreation" (https://sketchfab.com/3d-models/f-4-phantom-ii-recreation-666403b893024c8c88409f9feb2277eb) by jpford63, CC BY 4.0. Changes: painted.

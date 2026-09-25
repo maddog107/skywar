@@ -18,8 +18,10 @@ Each was cleaned with
 | su35 | `fbcbe88be95e4bada5064f3f8f3893de.glb` | `--nose -Y --level-pitch --mono '#8ea3b4' --mono-mat 'Material_(2\|3\|5\|6\|7\|8\|12)$' --tex 1024 --img JPEG --weld 35` |
 | gripen | `a2b70c2f92af45d18d95f02b60621dbf.glb` | `--nose -X --below 0.4 --below-max 0.2 --tex 1024 --img JPEG` |
 | cessna | `49ac79d106934cb299f3c5ab645f9bda.glb` | `--nose -Y --box-delete 0,0.965,0,1,1,1 --decimate 0.6 --weld 35` (drops the static propeller; the game spins its own) |
-| b737 | `197ae72ceb5441efa91b8bdc2ee37050.glb` | `--nose +X --delete-mat 'Gear' --weld 35` |
-| b747 | `4eadf04e705b41a2b272ee5aed4d01d5.glb` | `--nose -Y --weld 35` |
+| b737 | `197ae72ceb5441efa91b8bdc2ee37050.glb` | `--nose +X --below 0.22 --below-max 0.07 --weld 35 --paint 'Tail1Mtl=~1d4aa8,Blades\|wipers=~2b2d30,Strobe\|Light=~c9ced2,.*=~f2f2ef' --length 39.5 --img JPEG` |
+| b747 | `4eadf04e705b41a2b272ee5aed4d01d5.glb` | `--nose -Y --weld 35 --paint 'phong1=~f2f2ef' --length 70.6 --img JPEG` |
+| racer | `36f0f3e71d2a4c18b479db1ae8f9e7a7.glb` | `--nose -Y --delete 'BLADES\|back_wheels\|CANNON' --tex 1024 --img JPEG` |
+| pitts | `be48f3f906ed431b98b1bf03ab7aadd6.glb` | `--nose -Y --pitch -11 --img JPEG --tex 1024` |
 | c130 | `C130_WFF_AIR_0626.glb` (NASA) | `--nose -Y --tex 1024 --strip-maps --mono '#737b6c' --img JPEG --decimate 0.6 --weld 35` (the monochrome repaint removes the NASA worm/meatball) |
 | f14 | `9d2d0c87539046aa8c2198fcc47cdcf8.glb` | `--nose +X` |
 | f15 | `f874bffa8e314743b4a7cb9ad4b9f3a8.glb` | `--nose +X --delete 'TomGroup_[2345]_'` |

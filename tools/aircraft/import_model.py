@@ -14,6 +14,20 @@
 #   --glass REGEX          make matching materials alpha-blended canopy glass
 #   --decimate RATIO       collapse-decimate every mesh (0..1)
 #   --keep-gear            skip the gear heuristics
+#   --keep-abs x0,y0,z0,x1,y1,z1   keep only objects inside this box (file coordinates, see --list)
+#   --box-delete f,f,f,f,f,f       delete loose parts fully inside this box (fractions of the bbox)
+#   --rotate-part REGEX:axis:fx,fy,fz:deg   rotate matching objects about a hinge (e.g. close a canopy)
+#   --level-roll / --level-pitch   auto-level a model that was exported banked / nose-up
+#   --weld ANGLE           merge split vertices and re-smooth with sharp edges above ANGLE (smaller files)
+#   --strip-maps           drop normal / metal-rough / emissive maps (keep base colour)
+#   --mono '#hex' [--mono-mat REGEX] [--mono-sat S]   repaint base-colour textures in one paint colour
+#                          (keeps shading/panel lines; removes logos and national markings)
+#   --paint 'REGEX=#hex,REGEX=~hex,...'   repaint untextured materials; '#' adds the SKYWAR panel-line
+#                          texture (box-mapped, needs --length L in metres), '~' is a flat colour
+#   --tint '#hex'          multiply the colour of every textured material (darken a washed-out skin)
+#   --one-uv / --uv0       drop extra UV sets / put the panel texture on UV0
+#   --img JPEG             re-encode textures as JPEG on export
+#   --list                 print every object with triangles, bbox and materials
 # Output is joined into one mesh (materials kept), nose toward +Y (three.js -Z), centred, metres
 # unchanged (the game rescales to the real length). Prints triangle count / size / bbox.
 # ═══════════════════════════════════════════════════════════════
