@@ -492,9 +492,9 @@ export class Towns {
         // every building is also a solid, destructible record (buildings.js) that knows the instances drawing it
         const B = this.buildings = new Buildings(this.group);
         for (const o of [...all, ...items.tower]) o.rec = B.add({ ...o, kind: o.kind || 'tower', roofH: o.kind === 'house' ? 2 + o.d * 0.2 : 0 });
-        const own = (o, im, i) => { const b = o.rec || (o.b && o.b.rec); if (b) B.part(b, im, i); };
+        const own = (o, im, i, role) => { const b = o.rec || (o.b && o.b.rec); if (b) B.part(b, im, i, role); };
         this.perTown(wallGeo, houseMat, all, (im, i, o) => {
-            own(o, im, i);
+            own(o, im, i, 'wall');
             q.setFromAxisAngle(up, o.yaw);
             im.setMatrixAt(i, m.compose(p.set(o.x, o.y, o.z), q, s.set(o.w, o.ht, o.d)));
             im.setColorAt(i, c.setHex(o.kind === 'apt' ? aptCols[Math.floor(o.hue * aptCols.length)] : wallCols[Math.floor(o.hue * wallCols.length)]));
@@ -505,7 +505,7 @@ export class Towns {
             if (o.ht > 80) acUnits.push({ t: o.t, x: o.x, y: o.y + o.ht, z: o.z, yaw: 0, s: 0.5, mast: 18, b: o });
         }
         this.perTown(wallGeo, towerMat, items.tower, (im, i, o) => {
-            own(o, im, i);
+            own(o, im, i, 'wall');
             q.setFromAxisAngle(up, o.yaw);
             im.setMatrixAt(i, m.compose(p.set(o.x, o.y, o.z), q, s.set(o.w, o.ht, o.d)));
             im.setColorAt(i, c.setHex(towerCols[Math.floor(o.hue * towerCols.length)]));
@@ -815,7 +815,7 @@ export class Towns {
 
     update(dt, cam) {
         this.time += dt;
-        if (this.buildings) this.buildings.update(dt);
+        if (this.buildings) this.buildings.update(dt, cam);
         // parked cars: re-pick the ones near the camera when it has moved a fair way
         // (and the street furniture, and which towns' rooftop clutter / trees are close enough to draw)
         if (cam && (!this._parkAt || this._parkAt.distanceToSquared(cam) > 150 * 150)) {
@@ -844,6 +844,7 @@ export class Towns {
         if (this.lampGlow) this.lampGlow.visible = on;
         for (const m of this.buildingMats || []) m.userData.night.value = on ? 1 : 0;
         if (this.traffic) this.traffic.setNight(on);
+        if (this.buildings) this.buildings.setNight(on);
         setBridgeNight(on);
     }
 }
