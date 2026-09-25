@@ -7,7 +7,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
+import { PostFX, ScenePass } from './postfx.js'; // [postfx] AO, water SSR, motion blur, DOF, flare, FXAA, adaptive resolution
 import { AIRCRAFT, MODES, DIFFICULTY, TIMES } from './config.js';
 import { World, BASES, terrainHeight } from './world.js';
 import { Effects } from './effects.js';
@@ -37,7 +37,7 @@ const $ = (id) => document.getElementById(id);
 const DEFAULTS = {
     aircraft: 'f16', mode: 'dogfight', difficulty: 'veteran', time: 'day', wingmen: 1,
     controlMode: 'mouseaim', sensitivity: 1, stickResponse: 1, invertPitch: false, quality: 'high', volume: 0.7,
-    callouts: true, gEffects: true, defaultCockpit: false,
+    callouts: true, gEffects: true, defaultCockpit: false, motionBlur: true, dynRes: true,
     start: 'auto', loadout: 'balanced', livery: 'default', fuel: true, weather: 'clear', unlockAll: false, music: 0.5,
 };
 let settings = { ...DEFAULTS };
@@ -49,7 +49,9 @@ try { best = JSON.parse(localStorage.getItem('skywar.best') || '{}'); } catch (e
 // ── Renderer ──
 // reversed depth buffer (with a float depth target, below): far better depth precision over a 60 km view,
 // so distant coastlines, roads and terrain never z-fight. Falls back quietly if EXT_clip_control is missing.
-const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance', reversedDepthBuffer: true });
+// [postfx] no MSAA on the canvas: everything is drawn through the composer, so the default framebuffer's
+// multisampling only cost bandwidth. Anti-aliasing is MSAA on the scene target (ultra) + FXAA at the end.
+const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance', reversedDepthBuffer: true });
 DEPTH.reversed = !!renderer.capabilities.reversedDepthBuffer;
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -68,7 +70,7 @@ const composerTarget = new THREE.WebGLRenderTarget(window.innerWidth, window.inn
     depthTexture: new THREE.DepthTexture(window.innerWidth, window.innerHeight, THREE.FloatType),
 });
 const composer = new EffectComposer(renderer, composerTarget);
-const renderPass = new RenderPass(scene, camera);
+const renderPass = new ScenePass(scene, camera); // [postfx] a RenderPass that can draw into its own (MSAA) target
 composer.addPass(renderPass);
 const cockpit = new Cockpit(renderer);
 const cockpitPass = new RenderPass(cockpit.scene, cockpit.camera);
@@ -94,19 +96,15 @@ const grade = new ShaderPass({
         }`,
 });
 composer.addPass(grade);
-// MSAA doesn't reach inside the composer's target, so anti-alias the final image (high quality only)
-const smaa = new SMAAPass();
-composer.addPass(smaa);
+// [postfx] inserts the scene effects (AO / water reflections / flare, motion blur, photo DOF) before the
+// cockpit pass and FXAA at the end; also owns the pixel ratio (adaptive resolution)
+const postfx = new PostFX({ renderer, composer, camera, scenePass: renderPass, cockpitPass });
 
 function applyQuality() {
     const q = settings.quality;
-    const pr = Math.min(window.devicePixelRatio || 1, q === 'high' ? 1.75 : q === 'medium' ? 1.25 : 1);
-    renderer.setPixelRatio(pr);
-    composer.setPixelRatio(pr);
+    postfx.setQuality(q, settings); // [postfx] pixel ratio (fixed or adaptive), MSAA, AO, SSR, blur, flare
     renderer.shadowMap.enabled = q !== 'low';
     bloom.enabled = q !== 'low';
-    // SMAA costs ~5 ms at 1.75x on a laptop GPU; on high-DPI screens the extra pixels already smooth edges
-    smaa.enabled = q === 'high' && pr < 1.5;
     if (world) {
         world.VIEW_TILES = q === 'low' ? 6 : q === 'medium' ? 8 : 9;
         world.sun.castShadow = q !== 'low';
@@ -174,7 +172,7 @@ async function boot() {
     game.onHelp = () => { if (game.state === 'playing') game.pause(true); openModal('controlsModal'); };
     game.onSettingsChange = () => { save(); document.querySelectorAll('.seg').forEach(sg => { const k = sg.dataset.key; if (k) sg.querySelectorAll('button').forEach(b => b.classList.toggle('sel', b.dataset.val === String(settings[k]))); }); };
     game.applyLivery = (ac) => applyLivery(ac.model, settings.livery, ac.type);
-    window.skywar = { game, settings, world, effects, cockpit, camera, Pilot, renderer, post: { composer, bloom, grade, smaa } };
+    window.skywar = { game, settings, world, effects, cockpit, camera, Pilot, renderer, post: { composer, bloom, grade, postfx } };
     applyQuality();
     audio.setVolume(settings.volume);
     audio.callouts = settings.callouts;
@@ -262,7 +260,9 @@ function buildMenu() {
     // settings modal
     seg('setControls', controlOpts, 'controlMode', syncControlHint);
     seg('setInvert', [[false, 'OFF'], [true, 'ON']], 'invertPitch');
-    seg('setQuality', [['low', 'LOW'], ['medium', 'MEDIUM'], ['high', 'HIGH']], 'quality', applyQuality);
+    seg('setQuality', [['low', 'LOW'], ['medium', 'MEDIUM'], ['high', 'HIGH'], ['ultra', 'ULTRA']], 'quality', applyQuality);
+    seg('setMotionBlur', [[true, 'ON'], [false, 'OFF']], 'motionBlur', () => postfx.setQuality(settings.quality, settings)); // [postfx]
+    seg('setDynRes', [[true, 'ON'], [false, 'OFF']], 'dynRes', () => postfx.setQuality(settings.quality, settings)); // [postfx]
     seg('setCallouts', [[true, 'ON'], [false, 'OFF']], 'callouts', () => (audio.callouts = settings.callouts));
     seg('setG', [[true, 'ON'], [false, 'OFF']], 'gEffects');
     seg('setCockpit', [[false, 'OFF'], [true, 'ON']], 'defaultCockpit');
@@ -620,7 +620,7 @@ function frame(dt) {
     const agl = camera.position.y - Math.max(terrainHeight(camera.position.x, camera.position.z), 0);
     const near = clamp(agl / 80, 0.5, 6);
     if (Math.abs(camera.near - near) > 0.05) { camera.near = near; camera.updateProjectionMatrix(); }
-    composer.render(dt);
+    postfx.render(dt, game); // [postfx] composer.render + GPU timing for adaptive resolution
     hud.draw(game, dt);
     music.update(dt, game);
     if (touchUI) touchUI.classList.toggle('show', game.state === 'playing' && !game.pilotMode);
