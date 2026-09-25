@@ -5,29 +5,27 @@
 //   - a 2D weather map (tileable, 32 km) says where cumulus stand, how tall they grow, where the rain deck
 //     is thick and how high the cloud base sits; a coverage threshold from the weather turns scattered fair
 //     weather cumulus into broken stratocumulus;
-//   - each cumulus is a flat-bottomed dome (an ellipsoid cap over the weather blob), eroded by a tileable
-//     Perlin-Worley noise volume into cauliflower billows, with a fine Worley volume fraying its edges;
-//   - rain and storms add a stratus deck at DECK_Y with a ragged base and a lumpy top.
+//   - each cumulus is a flat-bottomed dome over its weather blob, eroded by a tileable Perlin-Worley noise
+//     volume into cauliflower towers and billows, with a fine Worley volume roughening the surface;
+//   - rain and storms add a broad stratus deck at DECK_Y (thin and broken in rain, closed in a storm).
 // Lighting: Beer-Lambert extinction, a short light march toward the sun with a multiple-scattering
 // approximation (a few octaves of weaker extinction and flatter phase), a two-lobe Henyey-Greenstein phase
 // for the silver lining, sky light from above / darker bounce below, and the shared aerial perspective.
 //
 // Rendering: a full-screen triangle in the main scene (renderOrder 5, like the old clouds). Just before it
 // draws (onBeforeRender), the opaque scene is already in the render target, so its depth texture is marched
-// against in a nested pass into a small two-target buffer: premultiplied colour + alpha, and the distance the
-// cloud starts at + the scene distance the ray stopped at. The triangle then upsamples that buffer (ignoring
-// low-res texels whose ray hit a nearer object than their neighbours) and writes the cloud's entry depth to
+// against in a nested pass into a small two-target buffer (half the CSS resolution on 'high'): premultiplied
+// colour + alpha, and the distance the cloud starts at + the scene distance the ray stopped at. Every frame
+// jitters its samples differently and a temporal resolve pass averages them (reprojected by the cloud's mean
+// depth, clamped to the new frame's neighbourhood). The triangle then upsamples the result (ignoring low-res
+// texels whose ray hit a nearer object than their neighbours) and writes the cloud's entry depth to
 // gl_FragDepth, so the hardware depth test cuts it cleanly around aircraft and terrain at full resolution.
+// The same weather map also dims the sun on the ground under each cloud (installCloudShadows).
 import * as THREE from 'three';
+import { makeCloudNoise, sat, WEATHER_SIZE, WEATHER_RES, BASE_SIZE, BASE_RES, DETAIL_SIZE, DETAIL_RES } from './cloudnoise.js';
 
 export const DECK_Y = 2400;          // base of the overcast deck in rain and storms (m)
 const DECK_THICK = 650;              // its thickness where fully covered (m)
-const WEATHER_SIZE = 32768;          // weather map tile (m)
-const WEATHER_RES = 512;
-const BASE_SIZE = 1400;              // shape noise tile (m)
-const BASE_RES = 64;
-const DETAIL_SIZE = 260;             // detail noise tile (m)
-const DETAIL_RES = 32;
 const SIGMA = 0.065;                 // extinction at full density (1/m)
 const EDGE = 20;                     // metres over which density ramps up at a cloud's surface
 const EDGE_SCALE = 0.0011;           // field units per metre, roughly (see cloudDensity)
@@ -48,195 +46,6 @@ const QUALITY = {
     medium: { scale: 0.42, steps: 88, light: 4, detail: 1 },
     low:    { scale: 0.28, steps: 56, light: 3, detail: 0 },
 };
-
-// ═══════════════════════════════════════════════════════════════
-// Noise (generated once on the CPU; the same arrays answer densityAt() for the whiteout)
-// ═══════════════════════════════════════════════════════════════
-function hash(a, b, c, s) {
-    let h = Math.imul(s + 0x3c6ef372, 0x9e3779b1);
-    h = Math.imul(h ^ a, 0x85ebca6b); h ^= h >>> 13;
-    h = Math.imul(h ^ b, 0xc2b2ae35); h ^= h >>> 16;
-    h = Math.imul(h ^ c, 0x27d4eb2f); h ^= h >>> 15;
-    h = Math.imul(h, 0x165667b1); h ^= h >>> 16;
-    return (h >>> 0) / 4294967296;
-}
-
-// feature points of a tileable 3D Worley grid with P cells per side
-function worleyPoints(P, seed) {
-    const pts = new Float32Array(P * P * P * 3);
-    for (let z = 0; z < P; z++) for (let y = 0; y < P; y++) for (let x = 0; x < P; x++) {
-        const k = ((z * P + y) * P + x) * 3;
-        pts[k] = x + hash(x, y, z, seed); pts[k + 1] = y + hash(x, y, z, seed + 1); pts[k + 2] = z + hash(x, y, z, seed + 2);
-    }
-    return pts;
-}
-// distance to the nearest feature point (in cells) at u, v, w in [0, 1)
-function worley3(pts, P, u, v, w) {
-    const x = u * P, y = v * P, z = w * P;
-    const ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
-    let best = 9;
-    for (let dz = -1; dz <= 1; dz++) {
-        const cz = iz + dz, wz = (cz + P) % P, oz = cz - wz;
-        for (let dy = -1; dy <= 1; dy++) {
-            const cy = iy + dy, wy = (cy + P) % P, oy = cy - wy;
-            for (let dx = -1; dx <= 1; dx++) {
-                const cx = ix + dx, wx = (cx + P) % P, ox = cx - wx;
-                const k = ((wz * P + wy) * P + wx) * 3;
-                const ex = pts[k] + ox - x, ey = pts[k + 1] + oy - y, ez = pts[k + 2] + oz - z;
-                const d = ex * ex + ey * ey + ez * ez;
-                if (d < best) best = d;
-            }
-        }
-    }
-    return Math.sqrt(best);
-}
-
-// tileable gradient noise with period P (lattice gradients precomputed per period and seed)
-const GR3 = [[1, 1, 0], [-1, 1, 0], [1, -1, 0], [-1, -1, 0], [1, 0, 1], [-1, 0, 1], [1, 0, -1], [-1, 0, -1], [0, 1, 1], [0, -1, 1], [0, 1, -1], [0, -1, -1]];
-const fade = (t) => t * t * t * (t * (t * 6 - 15) + 10);
-function perlin3(P, seed) {
-    const G = new Float32Array(P * P * P * 3);
-    for (let k = 0; k < P; k++) for (let j = 0; j < P; j++) for (let i = 0; i < P; i++) {
-        const q = GR3[Math.floor(hash(i, j, k, seed) * 12)], o = ((k * P + j) * P + i) * 3;
-        G[o] = q[0]; G[o + 1] = q[1]; G[o + 2] = q[2];
-    }
-    const g = (i, j, k, dx, dy, dz) => {
-        const o = ((((k % P) * P) + (j % P)) * P + (i % P)) * 3;
-        return G[o] * dx + G[o + 1] * dy + G[o + 2] * dz;
-    };
-    // u, v, w in [0, 1): one period
-    return (u, v, w) => {
-        const x = u * P, y = v * P, z = w * P;
-        const ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
-        const fx = x - ix, fy = y - iy, fz = z - iz;
-        const a = fade(fx), b = fade(fy), c = fade(fz);
-        const x0 = ix % P, y0 = iy % P, z0 = iz % P, x1 = x0 + 1, y1 = y0 + 1, z1 = z0 + 1;
-        const l = (p, q, t) => p + (q - p) * t;
-        return l(
-            l(l(g(x0, y0, z0, fx, fy, fz), g(x1, y0, z0, fx - 1, fy, fz), a), l(g(x0, y1, z0, fx, fy - 1, fz), g(x1, y1, z0, fx - 1, fy - 1, fz), a), b),
-            l(l(g(x0, y0, z1, fx, fy, fz - 1), g(x1, y0, z1, fx - 1, fy, fz - 1), a), l(g(x0, y1, z1, fx, fy - 1, fz - 1), g(x1, y1, z1, fx - 1, fy - 1, fz - 1), a), b),
-            c);
-    };
-}
-function perlin2(P, seed) {
-    const G = new Float32Array(P * P * 2);
-    for (let j = 0; j < P; j++) for (let i = 0; i < P; i++) {
-        const a = hash(i, j, 0, seed) * Math.PI * 2;
-        G[(j * P + i) * 2] = Math.cos(a); G[(j * P + i) * 2 + 1] = Math.sin(a);
-    }
-    const g = (i, j, dx, dy) => { const o = ((j % P) * P + (i % P)) * 2; return G[o] * dx + G[o + 1] * dy; };
-    // u, v in [0, 1) (any real: wrapped)
-    return (u, v) => {
-        const x = (u - Math.floor(u)) * P, y = (v - Math.floor(v)) * P;
-        const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
-        const s = fade(fx), t = fade(fy);
-        const a = g(ix, iy, fx, fy), b = g(ix + 1, iy, fx - 1, fy), c = g(ix, iy + 1, fx, fy - 1), d = g(ix + 1, iy + 1, fx - 1, fy - 1);
-        return (a + (b - a) * s + (c - a) * t + (a - b - c + d) * s * t) * 1.41;
-    };
-}
-
-const sat = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
-
-// stretch a field to 0..1 between its 1st and 99th percentiles (so every tile uses the full range);
-// out: Float32Array (kept smooth: 8-bit fields show terraces once they are filtered) or Uint8Array
-function normalize(f, out, stride, offset) {
-    const sorted = Float32Array.from(f).sort();
-    const lo = sorted[Math.floor(f.length * 0.01)], hi = sorted[Math.floor(f.length * 0.99)];
-    const k = out instanceof Uint8Array ? 255 : 1;
-    for (let i = 0; i < f.length; i++) out[i * stride + offset] = sat((f[i] - lo) / (hi - lo)) * k;
-}
-
-// Shape noise, RG: R = billows (Worley fbm dilated by Perlin: rounded, connected cauliflower heads),
-// G = low-frequency Perlin (slow variation of how deep the billows cut)
-export function makeBaseNoise(N = BASE_RES) {
-    const w4 = worleyPoints(4, 11), w8 = worleyPoints(8, 12), w16 = worleyPoints(16, 13);
-    const p4 = perlin3(4, 21), p8 = perlin3(8, 22), p2 = perlin3(2, 24);
-    const R = new Float32Array(N * N * N), G = new Float32Array(N * N * N);
-    for (let z = 0, i = 0; z < N; z++) for (let y = 0; y < N; y++) for (let x = 0; x < N; x++, i++) {
-        const u = (x + 0.5) / N, v = (y + 0.5) / N, w = (z + 0.5) / N;
-        const wf = (1 - worley3(w4, 4, u, v, w)) * 0.45 + (1 - worley3(w8, 8, u, v, w)) * 0.33 + (1 - worley3(w16, 16, u, v, w)) * 0.22;
-        const pn = p4(u, v, w) + p8(u, v, w) * 0.5;
-        R[i] = wf + pn * 0.18;
-        G[i] = p2(u, v, w);
-    }
-    const out = new Float32Array(N * N * N * 2);
-    normalize(R, out, 2, 0);
-    normalize(G, out, 2, 1);
-    return out;
-}
-
-// Detail noise, R: Worley fbm that frays the edges into wisps
-export function makeDetailNoise(N = DETAIL_RES) {
-    const a = worleyPoints(2, 31), b = worleyPoints(4, 32), c = worleyPoints(8, 33);
-    const F = new Float32Array(N * N * N);
-    for (let z = 0, i = 0; z < N; z++) for (let y = 0; y < N; y++) for (let x = 0; x < N; x++, i++) {
-        const u = (x + 0.5) / N, v = (y + 0.5) / N, w = (z + 0.5) / N;
-        F[i] = (1 - worley3(a, 2, u, v, w)) * 0.55 + (1 - worley3(b, 4, u, v, w)) * 0.3 + (1 - worley3(c, 8, u, v, w)) * 0.15;
-    }
-    const out = new Uint8Array(N * N * N);
-    normalize(F, out, 1, 0);
-    return out;
-}
-
-// Weather map, RGBA: R = cumulus potential (blobs of many sizes), G = how tall the cloud there grows,
-// B = deck cover noise, A = cloud base altitude variation
-export function makeWeatherMap(N = WEATHER_RES) {
-    const S = WEATHER_SIZE;
-    const octaves = [
-        { cell: 2048, rMin: 0.3, rMax: 0.62, amp: 1, seed: 41 },
-        { cell: 1024, rMin: 0.3, rMax: 0.6, amp: 0.85, seed: 42 },
-        { cell: 512, rMin: 0.32, rMax: 0.55, amp: 0.45, seed: 43 },
-    ].map(o => {
-        // per cell: x, z, 1/R², amplitude, height, cos/sx, sin/sx, cos, sin
-        const P = S / o.cell, pts = new Float32Array(P * P * 9);
-        for (let j = 0; j < P; j++) for (let i = 0; i < P; i++) {
-            const size = hash(i, j, 7, o.seed), R = o.cell * (o.rMin + (o.rMax - o.rMin) * size);
-            const sx = 1 + 0.5 * hash(i, j, 5, o.seed), ang = hash(i, j, 6, o.seed) * Math.PI;
-            const k = (j * P + i) * 9;
-            pts[k] = (i + 0.15 + 0.7 * hash(i, j, 1, o.seed)) * o.cell; pts[k + 1] = (j + 0.15 + 0.7 * hash(i, j, 2, o.seed)) * o.cell;
-            pts[k + 2] = 1 / (R * R);
-            pts[k + 3] = o.amp * (0.55 + 0.45 * hash(i, j, 3, o.seed));
-            pts[k + 4] = (0.4 + 0.6 * size) * (0.72 + 0.28 * hash(i, j, 4, o.seed));
-            pts[k + 5] = Math.cos(ang) / sx; pts[k + 6] = Math.sin(ang) / sx; pts[k + 7] = Math.cos(ang); pts[k + 8] = Math.sin(ang);
-        }
-        return { ...o, P, pts };
-    });
-    const warpX = perlin2(10, 51), warpZ = perlin2(10, 52), region = perlin2(3, 53), lumps = perlin2(48, 54), lumps2 = perlin2(112, 59);
-    const d4 = perlin2(4, 55), d12 = perlin2(12, 56), d32 = perlin2(32, 57), baseN = perlin2(3, 58);
-    const out = new Float32Array(N * N * 4);
-    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
-        const u = (x + 0.5) / N, v = (y + 0.5) / N;
-        // warped domain: irregular outlines instead of circles
-        const px = u * S + warpX(u, v) * 300, pz = v * S + warpZ(u + 0.37, v + 0.13) * 300;
-        let pot = 0, hw = 0, hs = 0;
-        for (const o of octaves) {
-            const cx = Math.floor(px / o.cell), cz = Math.floor(pz / o.cell), P = o.P, pts = o.pts;
-            for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
-                const i = cx + dx, j = cz + dz;
-                const wi = ((i % P) + P) % P, wj = ((j % P) + P) % P, k = (wj * P + wi) * 9;
-                // elliptical footprint: paraboloid potential, so a threshold cut gives an ellipsoid dome (see shader)
-                const ex = px - (pts[k] + (i - wi) * o.cell), ez = pz - (pts[k + 1] + (j - wj) * o.cell);
-                const lx = ex * pts[k + 5] + ez * pts[k + 6], lz = -ex * pts[k + 8] + ez * pts[k + 7];
-                const r2 = (lx * lx + lz * lz) * pts[k + 2];
-                if (r2 >= 1) continue;
-                const c = pts[k + 3] * (1 - r2);
-                pot = pot > c ? pot + c * c * 0.35 : c + pot * pot * 0.35; // soft union: overlapping blobs merge
-                const wgt = c * c * c * c;
-                hw += wgt; hs += wgt * pts[k + 4];
-            }
-        }
-        // regional variation: fields of cloud and clearer areas, and lumpy outlines
-        pot *= 0.82 + 0.3 * region(u, v);
-        pot += lumps(u, v) * 0.07 + lumps2(u, v) * 0.04;
-        const k = (y * N + x) * 4;
-        out[k] = sat(pot);
-        out[k + 1] = sat(hw > 0 ? hs / hw : 0.5);
-        const deck = d4(u, v) * 0.5 + d12(u, v) * 0.32 + d32(u, v) * 0.18;
-        out[k + 2] = sat(deck * 0.8 + 0.5);
-        out[k + 3] = sat(baseN(u, v) * 0.7 + 0.5);
-    }
-    return out;
-}
 
 // ═══════════════════════════════════════════════════════════════
 // Shaders
@@ -276,7 +85,7 @@ const FIELD_GLSL = /* glsl */`
     }
     // The field is in "coverage units": 0 at a cloud's surface, growing inward; noise erodes it in the same units,
     // so it can bite into the sides as easily as the top (a steep metre-based wall would look extruded).
-    // cumulus before noise: a dome over the weather blob (its top at sqrt(cover) of the tallest height), flat base
+    // cumulus before noise: a dome over the weather blob (full height a little way in from its edge), flat base
     float cumulusShape(vec3 p, vec4 wm, out float hf) {
         float cov = clamp((wm.r - cu.x) / (1.0 - cu.x), 0.0, 1.0);
         float h = p.y - (cu.y + (wm.a - 0.5) * cu.w);
@@ -350,9 +159,6 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
     float hg(float mu, float g) { float g2 = g * g; return (1.0 - g2) / pow(1.0 + g2 - 2.0 * g * mu, 1.5); }
     float phase(float mu, float k) { return min(0.7 * hg(mu, 0.6 * k) + 0.3 * hg(mu, -0.25 * k), 2.5); }
 
-    // optical depth toward the sun: LIGHT_STEPS samples, each step longer than the last (~680 m in all), spread
-    // over a cone around the sun direction with a new random offset every frame, so small billows cast soft
-    // shadows once the resolve pass has averaged a few frames (a thin exact ray would streak)
     // well-mixed integer hash (pcg3d): pixel, frame, sample -> three uniform numbers. White noise on purpose:
     // any dither pattern shared with the view ray's jitter, or walked along a fixed sequence, shows as bands
     vec3 rand3(float a, float b) {
@@ -363,6 +169,9 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
         v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
         return vec3(v) * (1.0 / 4294967296.0);
     }
+    // optical depth toward the sun: LIGHT_STEPS samples, each step longer than the last (~680 m in all), spread
+    // over a cone around the sun direction with a new random offset every frame, so small billows cast soft
+    // shadows once the resolve pass has averaged a few frames (a thin exact ray would streak)
     float lightDepth(vec3 p, float lod) {
         float od = 0.0, d = 0.0, st = LIGHT_STEP0;
         for (int j = 0; j < LIGHT_STEPS; j++) {
@@ -414,9 +223,8 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
 
         float mu = dot(rd, sunDir);
         float ph0 = phase(mu, 1.0), ph1 = phase(mu, 0.5), ph2 = phase(mu, 0.25);
-        // interleaved gradient noise: a per-pixel start offset turns step banding into fine grain
-        // (interleaved gradient noise, shifted every frame: evenly spread offsets that the resolve pass
-        // averages into a smooth result faster than white noise would)
+        // a per-pixel start offset turns step banding into grain: interleaved gradient noise, shifted every frame
+        // (evenly spread offsets that the resolve pass averages into a smooth result faster than white noise)
         float jit = fract(52.9829189 * fract(dot(gl_FragCoord.xy + frame * 5.588238, vec2(0.06711056, 0.00583715))));
         float t = t0 + stepAt(t0) * jit;
         float T = 1.0, entry = NO_HIT, tw = 0.0, aw = 0.0, empty = 0.0;
@@ -604,20 +412,20 @@ export class Clouds {
     constructor(scene, renderer, { FOG_GLSL, SKY_FOG }) {
         this.renderer = renderer;
         this.SKY_FOG = SKY_FOG;
-        this.weatherData = makeWeatherMap();
-        this.baseData = makeBaseNoise();
-        this.detailData = makeDetailNoise();
-        // half floats on the GPU: 8-bit data would show as terraces on the smooth cloud surfaces
-        const weather = new THREE.DataTexture(toHalf(this.weatherData), WEATHER_RES, WEATHER_RES, THREE.RGBAFormat, THREE.HalfFloatType);
+        // the noise textures start as one-texel stand-ins; the real data comes from a worker (setNoise), and
+        // the clouds stay hidden until it has arrived
+        this.ready = false;
+        this.enabled = true;
+        const weather = new THREE.DataTexture(new Uint16Array(4), 1, 1, THREE.RGBAFormat, THREE.HalfFloatType);
         weather.wrapS = weather.wrapT = THREE.RepeatWrapping;
         weather.magFilter = THREE.LinearFilter;
         weather.minFilter = THREE.LinearMipmapLinearFilter; // the march reads level 0; far terrain its mips
         weather.generateMipmaps = true;
         weather.needsUpdate = true;
-        const base = new THREE.Data3DTexture(toHalf(this.baseData), BASE_RES, BASE_RES, BASE_RES);
+        const base = new THREE.Data3DTexture(new Uint16Array(2), 1, 1, 1);
         base.format = THREE.RGFormat;
         base.type = THREE.HalfFloatType;
-        const detail = new THREE.Data3DTexture(this.detailData, DETAIL_RES, DETAIL_RES, DETAIL_RES);
+        const detail = new THREE.Data3DTexture(new Uint8Array(1), 1, 1, 1);
         detail.format = THREE.RedFormat;
         detail.unpackAlignment = 1;
         for (const t of [base, detail]) {
@@ -700,17 +508,44 @@ export class Clouds {
         this.mesh.renderOrder = 5;
         this.mesh.raycast = () => {};
         this.mesh.onBeforeRender = (r, s, cam) => this.march(r, cam);
+        this.mesh.visible = false;
         scene.add(this.mesh);
 
         // cloud shadows: on while the world scene renders
         this.shadows = installCloudShadows(weather);
         const before = scene.onBeforeRender, after = scene.onAfterRender;
+        this.scene = scene;
+        this.unhook = () => { scene.onBeforeRender = before; scene.onAfterRender = after; SHADOW.a[3] = 0; };
         scene.onBeforeRender = (...a) => { SHADOW.a[3] = this.shadows && this.mesh.visible ? 1 : 0; before.apply(scene, a); };
         scene.onAfterRender = (...a) => { SHADOW.a[3] = 0; after.apply(scene, a); };
 
         this.setWeather('clear', 0);
         this.setQuality('high');
         this.compile();
+        this.loadNoise();
+    }
+
+    // a few hundred ms of noise generation, off the main thread when module workers are available
+    loadNoise() {
+        const here = () => setTimeout(() => this.setNoise(makeCloudNoise()), 0);
+        try {
+            const w = new Worker(new URL('./cloudnoise.js', import.meta.url), { type: 'module' });
+            w.onmessage = (e) => { w.terminate(); this.setNoise(e.data); };
+            w.onerror = (e) => { e.preventDefault?.(); w.terminate(); here(); };
+            w.postMessage(0);
+        } catch (e) { here(); }
+    }
+    setNoise({ weather, weatherHalf, base, baseHalf, detail }) {
+        if (this.disposed) return;
+        this.weatherData = weather; this.baseData = base;
+        const [tw, tb, td] = this.textures;
+        tw.image = { data: weatherHalf, width: WEATHER_RES, height: WEATHER_RES };
+        tb.image = { data: baseHalf, width: BASE_RES, height: BASE_RES, depth: BASE_RES };
+        td.image = { data: detail, width: DETAIL_RES, height: DETAIL_RES, depth: DETAIL_RES };
+        for (const t of this.textures) t.needsUpdate = true;
+        this.ready = true;
+        this.mesh.visible = this.enabled;
+        this.resetHistory = true;
     }
 
     // compile the offscreen passes now rather than on the first frame that shows a cloud
@@ -718,8 +553,8 @@ export class Clouds {
         try { this.renderer.compile(this.marchScene, this.marchCam); this.renderer.compile(this.resolveScene, this.marchCam); } catch (e) { /* no GL (tests) */ }
     }
 
-    get visible() { return this.mesh.visible; }
-    set visible(v) { this.mesh.visible = v; }
+    get visible() { return this.enabled; }
+    set visible(v) { this.enabled = v; this.mesh.visible = v && this.ready; }
     // lightning (0..1): a flash lights the clouds from inside; the history would smear it, so it resets
     get flash() { return this.marchMat.uniforms.flash.value; }
     set flash(f) {
@@ -783,7 +618,7 @@ export class Clouds {
         const lw = Math.max(1, Math.round(w * s)), lh = Math.max(1, Math.round(h * s));
         if (this.rt.width !== lw || this.rt.height !== lh) {
             this.rt.setSize(lw, lh);
-            for (const h of this.hist) h.setSize(lw, lh);
+            for (const hr of this.hist) hr.setSize(lw, lh);
             this.resetHistory = true;
         }
         const depth = target && target.depthTexture && !(target.samples > 0) ? target.depthTexture : null;
@@ -857,7 +692,7 @@ export class Clouds {
 
     // 0..1: cloud density at a world point (the same field the shader marches, minus the finest detail)
     densityAt(p) {
-        if (!this.mesh.visible) return 0;
+        if (!this.ready || !this.enabled) return 0;
         const f = this.fieldU, cu = f.cu.value, dk = f.dk.value;
         if (p.y < f.slab.value.x || p.y > f.slab.value.y) return 0;
         const wm = this.weatherAt(p.x, p.z, _wm);
@@ -877,6 +712,8 @@ export class Clouds {
     }
 
     dispose() {
+        this.disposed = true;
+        this.unhook();
         this.mesh.removeFromParent();
         this.rt.dispose();
         for (const h of this.hist) h.dispose();
@@ -886,9 +723,4 @@ export class Clouds {
     }
 }
 const _size = new THREE.Vector2();
-function toHalf(f) {
-    const out = new Uint16Array(f.length);
-    for (let i = 0; i < f.length; i++) out[i] = THREE.DataUtils.toHalfFloat(f[i]);
-    return out;
-}
 const _wm = [0, 0, 0, 0], _n = [0, 0];
