@@ -14,6 +14,8 @@ import { Autopilot, runwayApproach, GLIDE_SLOPE } from './autopilot.js';
 import { refSpeeds } from './aircraft.js';
 import { MISSIONS } from './missions.js';
 import { RingCourse } from './rings.js';
+import { GroundStart } from './groundstart.js';
+import { updateCharacters } from './character.js';
 import { readStick } from './input.js';
 import { clamp, damp, lerp, rand, pick, formatTime, G } from './util.js';
 import { BASES, RUNWAY, terrainHeight, isOnRunway } from './world.js';
@@ -152,6 +154,8 @@ export class Game {
             this.world.towns.traffic.reset();
         }
         if (this.mode === 'strike' || this.mode === 'sandbox') this.ground.spawnEnemyBase();
+        // enemy parked jets are real targets when the enemy base is live, decoration otherwise
+        if (this.world.airbases) this.world.airbases.setEnemyParkedVisible(!(this.mode === 'strike' || this.mode === 'sandbox'));
         if (this.mode === 'naval' || this.mode === 'sandbox') this.naval.spawnEnemyGroup();
         else if (this.mode === 'freeflight') this.naval.spawnEnemyGroup(true); // unarmed target ships to shoot at for fun
         if (this.mode === 'practice' || this.mode === 'sandbox') this.spawnPractice(this.mode === 'practice' ? 16 : 10);
@@ -230,13 +234,18 @@ export class Game {
             this.addFeed('FULL POWER (9 OR 0) ON DECK TO LAUNCH', '#5dffa0');
         } else if (where === 'runway') {
             p.spawnRunway(home);
-        } else if (where === 'apron') {
+        } else if (where === 'apron' || where === 'barracks') {
             // parked by the hangars: taxi out to the runway
             p.spawnRunway(home);
             p.pos.set(home.x + 290, home.h + p.gearOffset, home.z + 60);
             p.qv.setFromAxisAngle(_v.set(0, 1, 0), Math.PI / 2); // facing west toward the taxiway
             p.syncBody();
-            this.addFeed('TAXI: FOLLOW THE TAXIWAY TO THE RUNWAY (A/D STEER)', '#5dffa0');
+            if (where === 'barracks') {
+                // Ready Room: the jet waits, cold, on the apron; you start at the barracks in a Humvee
+                p.throttle = p.controls.throttle = 0;
+                if (this.groundStartObj) this.groundStartObj.dispose();
+                this.groundStart = this.groundStartObj = new GroundStart(this, p);
+            } else this.addFeed('TAXI: FOLLOW THE TAXIWAY TO THE RUNWAY (A/D STEER)', '#5dffa0');
         } else {
             let pos, heading = 0;
             if (this.mode === 'strike') {
@@ -330,7 +339,9 @@ export class Game {
         if (old) { old.remove(); const i = this.aircraft.indexOf(old); if (i >= 0) this.aircraft.splice(i, 1); }
         this.autopilot.disengage();
         this.input.spoilersOn = false;
+        if (this.groundStartObj) { this.groundStartObj.dispose(); this.groundStartObj = null; this.groundStart = null; }
         if (kind === 'rwy_takeoff') this.spawnPlayer('runway');
+        else if (kind === 'barracks' || kind === 'apron') this.spawnPlayer(kind);
         else if (kind === 'cv_takeoff') this.spawnPlayer('carrier');
         else {
             this.spawnPlayer('air');
@@ -388,7 +399,9 @@ export class Game {
 
     removeSeat(seat) {
         if (!seat) return;
+        if (this.pilotMode && this.pilotMode.seat === seat) this.pilotMode.dispose();
         this.scene.remove(seat.root);
+        if (seat.chute && seat.chute.parent === this.scene) this.scene.remove(seat.chute);
         const i = this.wreckage.seats.indexOf(seat);
         if (i >= 0) this.wreckage.seats.splice(i, 1);
     }
@@ -406,10 +419,13 @@ export class Game {
         ac.isPlayer = false;
         ac.abandoned = true;
         this.autopilot.disengage();
+        if (this.cameraMode === 'cockpit' && !seat.walkedOut) this.prevCam = 'cockpit';
+        this.cameraMode = 'chase'; // third person: see your canopy (V switches to first person with the AK)
         this.pilotMode = new PilotOnFoot(this, seat, ac);
         this.state = 'playing';
         this.missileCam = null;
-        this.showBanner('EJECTED', 'Mouse: look · LMB: AK-47 · R: reload · WASD: steer canopy · E: hijack a nearby jet', 5, '#ffc23f');
+        if (seat.walkedOut) this.showBanner('CLIMBED OUT', 'WASD walk · SHIFT run · Mouse look · LMB: AK-47 · E: board a jet · ENTER: new jet', 5, '#5dffa0');
+        else this.showBanner('EJECTED', 'A/D steer the canopy · W dive / S brake · SPACE flare near the ground · V: first person · LMB: AK-47', 6, '#ffc23f');
         this.input.lock();
     }
 
@@ -492,6 +508,9 @@ export class Game {
     }
 
     cleanup() {
+        if (this.pilotMode) this.pilotMode.dispose();
+        if (this.groundStartObj) { this.groundStartObj.dispose(); this.groundStartObj = null; }
+        this.groundStart = null;
         this.aircraft.forEach(a => a.remove());
         this.aircraft = [];
         this.player = null;
@@ -690,7 +709,7 @@ export class Game {
             if (!ac.isPlayer) return;
             const pts = this.mode === 'freeflight' || this.mode === 'sandbox' ? 150 : 0;
             this.score += pts;
-            this.showBanner(water ? 'DITCHED — YOU SURVIVED' : 'CRASH LANDED — YOU SURVIVED', 'ENTER: new jet · J J: bail out' + (pts ? '  +' + pts : ''), 6, '#5dffa0');
+            this.showBanner(water ? 'DITCHED — YOU SURVIVED' : 'CRASH LANDED — YOU SURVIVED', 'E: climb out · ENTER: new jet' + (pts ? '  +' + pts : ''), 6, '#5dffa0');
             this.audio.say(pick(['We walked away from that one.', 'Any landing you can walk away from!', 'Well, that happened.']));
         });
         ev.on('flameout', (ac) => {
@@ -781,6 +800,7 @@ export class Game {
             if (a === 'camera') this.cameraMode = this.cameraMode === 'cockpit' ? 'chase' : 'cockpit';
             return;
         }
+        if (this.groundStart) return; // driving / walking: keys are read directly
         if (!this.player || !this.player.alive) return;
         const p = this.player;
         switch (a) {
@@ -981,8 +1001,22 @@ export class Game {
     }
 
     // ═════════════ Player control ═════════════
+    // Stopped on the ground (after a crash landing, or just parked): climb out and walk
+    canClimbOut(p) { return p.onGround && p.speed < 0.8 && p.controls.throttle < 0.06 && !p.deck; }
+    climbOut() {
+        const p = this.player;
+        const seat = this.wreckage.groundSeat(p);
+        p.controls.throttle = 0; p.throttle = 0;
+        this.addFeed('CLIMBED OUT', '#5dffa0');
+        this.audio.tick(300, 0.12, 0.2);
+        this.enterPilotMode(p, seat);
+    }
+
     updatePlayer(dt, mouse) {
         const p = this.player;
+        const eDown = this.input.down('KeyE');
+        if (eDown && !this.prevE && this.canClimbOut(p)) { this.prevE = eDown; this.climbOut(); return; }
+        this.prevE = eDown;
         const s = readStick(this.input, this.settings);
         const c = p.controls;
         const mode = this.settings.controlMode;
@@ -1141,7 +1175,10 @@ export class Game {
 
         const p = this.player;
         const pm = this.pilotMode;
-        if (pm && this.state === 'playing') {
+        if (this.groundStart && this.state === 'playing') {
+            this.groundStart.update(dt, mouse);
+            this.firing = false;
+        } else if (pm && this.state === 'playing') {
             if (pm.alive) pm.update(dt, mouse);
             this.firing = false;
         } else if (this.state === 'playing' && p.alive) {
@@ -1158,7 +1195,10 @@ export class Game {
         this.wreckage.update(dt);
         this.ground.update(dt);
         this.naval.update(dt);
-        if (this.world.towns) this.world.towns.traffic.update(dt, this);
+        if (this.world.towns) { this.world.towns.update(dt); this.world.towns.traffic.update(dt, this); }
+        if (this.world.airbases) this.world.airbases.update(dt, this.world.towns && this.world.towns.traffic, this.wind);
+        if (this.world.airTraffic) this.world.airTraffic.update(dt);
+        updateCharacters(dt);
         // the home carrier holds its course while someone is on approach with the gear down
         const cv = this.naval.homeCarrier, pl = this.player;
         if (cv && pl && pl.alive && !pl.onGround && pl.gear && cv.mesh.position.distanceToSquared(pl.pos) < 9000 * 9000) cv.straight = 4;
@@ -1210,6 +1250,7 @@ export class Game {
 
     updateMode(dt) {
         if (this.state !== 'playing') return;
+        if (this.groundStart) return; // still on the ground in the Ready Room: the sortie hasn't started
         const p = this.pilotMode ? { pos: this.pilotMode.pos, vel: this.pilotMode.seat.vel } : this.player;
         const enemiesAlive = this.aircraft.filter(a => a.team === 'red' && a.alive && !a.pilotDead).length;
         if (this.mode === 'dogfight') {
@@ -1344,6 +1385,31 @@ export class Game {
         const cam = this.camera, p = this.player;
         if (!p) return;
         const pm = this.pilotMode;
+        if (this.groundStart) {
+            p.root.visible = true;
+            if (this.cockpit) this.cockpit.enabled = false;
+            this.groundStart.updateCamera(cam, dt);
+            return;
+        }
+        if (pm && pm.thirdPerson && !(pm.hijackT > 0)) {
+            // third person: behind and above you (the canopy fills the top of the frame), aim at the crosshair
+            p.root.visible = !p.exploded;
+            this.cockpit.enabled = false;
+            const under = !pm.walker;
+            const target = _v.copy(pm.pos).add(_v2.set(0, under ? 3.5 : 1.6, 0));
+            const dist = under ? 17 : 4.6;
+            const dir = pm.viewDir(_v2);
+            const want = _v3.copy(target).addScaledVector(dir, -dist).add(new THREE.Vector3(0, under ? 1.5 : 0.5, 0));
+            const gy = Math.max(terrainHeight(want.x, want.z), 0) + 0.5;
+            if (want.y < gy) want.y = gy;
+            if (!this._tpInit) cam.position.copy(want); else cam.position.lerp(want, Math.min(1, dt * 10));
+            this._tpInit = true;
+            cam.quaternion.setFromEuler(new THREE.Euler(pm.pitch + pm.recoil, pm.yaw, 0, 'YXZ'));
+            cam.fov = damp(cam.fov, 66, 4, dt);
+            cam.updateProjectionMatrix();
+            return;
+        }
+        this._tpInit = false;
         if (pm) {
             p.root.visible = !p.exploded;
             this.cockpit.enabled = true;

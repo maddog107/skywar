@@ -19,6 +19,10 @@ import { MISSIONS, dailyMission } from './missions.js';
 import { Career, RANKS, MEDALS } from './career.js';
 import { Music } from './music.js';
 import { Towns } from './towns.js';
+import { Airbases } from './airbase.js';
+import { AirTraffic } from './airtraffic.js';
+import { preloadProps } from './props.js';
+import { preloadCharacter } from './character.js';
 import { setupTouch, isTouchDevice } from './touch.js';
 import { Aircraft, refSpeeds } from './aircraft.js';
 import { Pilot } from './ai.js';
@@ -114,13 +118,20 @@ async function boot() {
     world.weather = settings.weather || 'clear';
     world.setTime(settings.time);
     world.updateTerrain(new THREE.Vector3(0, 0, 0), true);
-    $('loadText').textContent = 'BUILDING TOWNS…';
-    await new Promise(r => setTimeout(r, 20));
-    world.towns = new Towns(scene);
-    world.towns.setNight(world.timeKey === 'night' || world.timeKey === 'dusk');
-    $('loadFill').style.width = '35%';
     $('loadText').textContent = 'LOADING AIRFRAMES…';
-    await preloadModels((f) => { $('loadFill').style.width = (35 + f * 60) + '%'; });
+    await Promise.all([preloadModels((f) => { $('loadFill').style.width = (10 + f * 60) + '%'; }), preloadProps(), preloadCharacter()]);
+    $('loadText').textContent = 'BUILDING TOWNS & ROADS…';
+    await new Promise(r => setTimeout(r, 20));
+    world.towns = new Towns(scene, world);
+    world.airbases = new Airbases(scene);
+    world.airbases.addTownRoutes(world.towns.towns);
+    world.airTraffic = new AirTraffic(scene);
+    const night0 = world.timeKey === 'night' || world.timeKey === 'dusk';
+    world.towns.setNight(night0);
+    world.airbases.setNight(night0);
+    world.airTraffic.setNight(night0);
+    world.updateTerrain(new THREE.Vector3(0, 0, 0), true);
+    $('loadFill').style.width = '95%';
     game = new Game({ scene, camera, world, effects, audio, input, hud, cockpit, settings });
     game.onGameOver = showGameOver;
     game.onNvg = (on) => { renderer.domElement.style.filter = on ? 'grayscale(1) brightness(2.3) contrast(1.35) sepia(1) hue-rotate(55deg) saturate(3.5)' : ''; };
@@ -212,7 +223,7 @@ function buildMenu() {
     seg('segTime', Object.entries(TIMES).map(([k, v]) => [k, v.label]), 'time', () => world.setTime(settings.time));
     seg('segWingmen', [[0, 'SOLO'], [1, '1'], [2, '2']], 'wingmen');
     seg('segWeather', [['clear', 'CLEAR'], ['cloudy', 'CLOUDY'], ['rain', 'RAIN'], ['storm', 'STORM']], 'weather', () => world.setWeather(settings.weather));
-    seg('segStart', [['auto', 'AUTO'], ['air', 'AIR'], ['runway', 'RWY'], ['apron', 'TAXI'], ['carrier', 'CVN']], 'start');
+    seg('segStart', [['auto', 'AUTO'], ['air', 'AIR'], ['runway', 'RWY'], ['apron', 'TAXI'], ['carrier', 'CVN'], ['barracks', 'BARRACKS']], 'start');
     seg('segLoadout', Object.entries(LOADOUT_LABELS).map(([k, v]) => [k, v.label.split(' ')[0]]), 'loadout');
     seg('segLivery', Object.entries(LIVERIES).map(([k, v]) => [k, v.label]), 'livery', () => { if (showcase) applyLivery(showcase.model, settings.livery, showcase.type); });
     seg('setFuel', [[true, 'ON'], [false, 'OFF']], 'fuel');
@@ -519,6 +530,14 @@ function buildCredits() {
         ['Airplane (C-130 stand-in)', 'Remy Tauziac', 'CC BY 3.0', 'https://poly.pizza/m/bjlICuVX1Sg'],
         ['Aeroplane (Unlimited Air Racer)', 'Gilang Romadhan', 'CC BY 3.0', 'https://poly.pizza/m/9VeIc0cybp4'],
         ['Airplane (Stunt Biplane)', 'Poly by Google', 'CC BY 3.0', 'https://poly.pizza/m/8VysVKMXN2J'],
+        ['Helicopter (military)', 'Zsky', 'CC BY 3.0', 'https://poly.pizza/m/hG2Qr0A3zR'],
+        ['Helicopter (civil)', 'jeremy', 'CC BY 3.0', 'https://poly.pizza/m/eb7b31pjGtQ'],
+        ['Humvee', 'madtrollstudio', 'CC BY 3.0', 'https://poly.pizza/m/Ebryot9iKM'],
+        ['Buggy', 'Nick', 'CC BY 3.0', 'https://poly.pizza/m/eZ_13w7qZh7'],
+        ['Cars Bundle (sedan, hatchback, SUV, sports cars, taxi, police car)', 'Quaternius', 'CC0', 'https://poly.pizza/bundle/Cars-Bundle-FE5IWe6OMk'],
+        ['Tank', 'Zsky', 'CC BY 3.0', 'https://poly.pizza/m/7GG1xDtc8l'],
+        ['SWAT (the pilot on foot and under the parachute)', 'Quaternius', 'CC0', 'https://poly.pizza/m/Btfn3G5Xv4'],
+        ['M939 Truck', 'J-Toastie', 'CC BY 3.0', 'https://poly.pizza/m/y8lBpvMlim'],
     ];
     const body = $('creditsBody');
     body.innerHTML = '';
@@ -558,7 +577,7 @@ function frame(dt) {
         input.readPad(); // keep gamepad buttons (Start to unpause) alive outside flight
     } else if (game.pilotMode) input.readPad();
 
-    cockpitPass.enabled = cockpit.enabled && game.state !== 'menu' && ((game.player && game.player.alive) || !!game.pilotMode);
+    cockpitPass.enabled = cockpit.enabled && !game.groundStart && game.state !== 'menu' && ((game.player && game.player.alive) || !!game.pilotMode);
     $('clickToFly').classList.toggle('show', game.state === 'playing' && !game.photo && settings.controlMode !== 'mousestick' && !input.locked);
     composer.render(dt);
     hud.draw(game, dt);

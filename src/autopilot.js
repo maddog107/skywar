@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import { steerToward, avoidTerrain } from './ai.js';
 import { refSpeeds } from './aircraft.js';
-import { BASES, RUNWAY, terrainHeight } from './world.js';
+import { BASES, terrainHeight, runwayInfo } from './world.js';
 import { clamp, DEG } from './util.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
@@ -14,12 +14,12 @@ const GLIDE = 3.5 * DEG;
 export const GLIDE_SLOPE = GLIDE;
 
 // Landing direction and touchdown point for a runway (picks the end with clearer approach terrain)
-export function runwayApproach(base) {
+export function runwayApproach(base, rwIndex = 0) {
     let best = null;
+    const R = runwayInfo(base, base.runways[rwIndex] || base.runways[0]);
     for (const dir of [1, -1]) {
-        const h = -base.heading + (dir < 0 ? Math.PI : 0);
-        const fwd = new THREE.Vector3(-Math.sin(h), 0, -Math.cos(h));
-        const thr = new THREE.Vector3(base.x, base.h, base.z).addScaledVector(fwd, -RUNWAY.length / 2);
+        const fwd = new THREE.Vector3(R.dirX * dir, 0, R.dirZ * dir);
+        const thr = new THREE.Vector3(R.x, base.h, R.z).addScaledVector(fwd, -R.half);
         // how far out the glide slope stays clear of terrain (with a margin), and the worst intrusion
         let worst = -Infinity, clearDist = 9000;
         for (let d = 100; d <= 9000; d += 100) {
@@ -66,8 +66,8 @@ export class Autopilot {
     land() {
         const g = this.game, p = g.player;
         if (p.onGround) { this.game.addFeed('ALREADY ON THE GROUND', '#ffc23f'); return; }
-        // nearest friendly landing spot: home runway or the home carrier
-        const home = BASES.find(b => b.friendly);
+        // nearest friendly landing spot: any friendly airfield, or the home carrier
+        const home = BASES.filter(b => b.friendly).sort((a, b) => Math.hypot(p.pos.x - a.x, p.pos.z - a.z) - Math.hypot(p.pos.x - b.x, p.pos.z - b.z))[0];
         const cv = g.naval.homeCarrier && g.naval.homeCarrier.alive ? g.naval.homeCarrier : null;
         const dRunway = Math.hypot(p.pos.x - home.x, p.pos.z - home.z);
         const dCarrier = cv ? cv.pos.distanceTo(p.pos) : Infinity;
@@ -80,7 +80,7 @@ export class Autopilot {
         const rel = _v.subVectors(p.pos, t.touch);
         const along = -rel.dot(t.fwd), lateral = rel.x * t.fwd.z - rel.z * t.fwd.x;
         if (along > 300 && along < 12000 && Math.abs(lateral) < 500 && _v2.copy(p.vel).normalize().dot(t.fwd) > 0.85) this.phase = 'final';
-        g.addFeed('AUTOPILOT: LANDING AT ' + (this.target.kind === 'carrier' ? 'CARRIER ' + cv.name : 'HOME AIRBASE'), '#5dffa0');
+        g.addFeed('AUTOPILOT: LANDING AT ' + (this.target.kind === 'carrier' ? 'CARRIER ' + cv.name : home.name || 'HOME AIRBASE'), '#5dffa0');
     }
 
     // Use whichever runway direction has the lower terrain under its approach

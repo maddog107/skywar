@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import { BASES, terrainHeight } from './world.js';
 
-const LINEUP = ['tank', 'spaag', 'truck', 'truck', 'fueltruck', 'msam', 'truck', 'fueltruck', 'tank', 'spaag'];
+const LINEUP = ['humvee', 'tank', 'spaag', 'truck', 'truck', 'fueltruck', 'msam', 'truck', 'fueltruck', 'tank', 'spaag', 'humvee'];
 const SPACING = 32, APPROACH = 2300, CRUISE = 12;
 const _v = new THREE.Vector3();
 

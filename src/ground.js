@@ -2,7 +2,9 @@
 // Ground targets for Strike mode: SAM sites, AAA, radars, hangars, fuel, armour
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
-import { BASES, RUNWAY, groundHeight } from './world.js';
+import { BASES, RUNWAY, groundHeight, baseToWorld } from './world.js';
+import { makeParkedModel } from './airbase.js';
+import { propInstance, hasProp } from './props.js';
 import { rand, clamp, interceptTime, lerp } from './util.js';
 import { WEAPONS } from './config.js';
 import { samplePath, LANE } from './roads.js';
@@ -29,8 +31,10 @@ const TYPES = {
     tank: { name: 'ARMOR', hp: 90, radius: 7, score: 100, boom: 1 },
     bunker: { name: 'COMMAND', hp: 400, radius: 22, score: 500, boom: 2.6 },
     board: { name: 'TARGET', hp: 20, radius: 9, score: 150, boom: 0.6 },
+    parked: { name: 'PARKED JET', hp: 35, radius: 9, score: 250, boom: 1.6 },
     // convoy vehicles
     truck: { name: 'TRUCK', hp: 45, radius: 6, score: 80, boom: 0.9 },
+    humvee: { name: 'HUMVEE', hp: 35, radius: 4, score: 70, boom: 0.8 },
     fueltruck: { name: 'FUEL TRUCK', hp: 40, radius: 6, score: 100, boom: 2.4 },
     spaag: { name: 'MOBILE AAA', hp: 75, radius: 7, score: 180, boom: 1.1, role: 'aaa' },
     msam: { name: 'MOBILE SAM', hp: 80, radius: 7, score: 300, boom: 1.5, role: 'sam', ammo: 3 },
@@ -49,10 +53,16 @@ function cyl(r1, r2, h, mat, x = 0, y = 0, z = 0, seg = 12) {
     return m;
 }
 
-function buildMesh(type) {
+function buildMesh(type, opts = {}) {
     const g = new THREE.Group();
     const parts = {};
     switch (type) {
+        case 'parked': {
+            const m = makeParkedModel(opts.model || 'mig29');
+            m.rotation.y = opts.modelRot || 0;
+            g.add(m);
+            break;
+        }
         case 'sam': {
             g.add(box(4, 1.8, 10, M.olive, 0, 0.6, 0));
             g.add(box(3.6, 2, 3, M.olive, 0, 1.2, -4));
@@ -120,6 +130,7 @@ function buildMesh(type) {
             break;
         }
         case 'tank': {
+            if (hasProp('tank')) { g.add(propInstance('tank')); break; }
             g.add(box(3.6, 1.4, 7, M.olive, 0, 0.5, 0));
             const tur = new THREE.Group();
             tur.add(box(2.6, 1, 3, M.olive));
@@ -132,7 +143,12 @@ function buildMesh(type) {
             for (const s of [-1.6, 1.6]) g.add(box(0.8, 1.1, 7.2, M.dark, s, 0, 0));
             break;
         }
+        case 'humvee':
+            if (hasProp('humvee')) { g.add(propInstance('humvee')); break; }
+        // falls through (no model loaded)
         case 'truck':
+            if (hasProp('m939')) { g.add(propInstance('m939')); break; }
+        // falls through (no model loaded)
         case 'fueltruck': {
             g.add(box(2.6, 2.4, 2.6, M.olive, 0, 0.9, -3.2));             // cab
             g.add(box(2.7, 0.5, 8.6, M.dark, 0, 0.6, 0));                 // chassis
@@ -142,7 +158,20 @@ function buildMesh(type) {
             break;
         }
         case 'spaag':
+            if (hasProp('tank')) { g.add(propInstance('tank')); parts.turret = null; break; }
+        // falls through (no model loaded)
         case 'msam': {
+            if (type === 'msam' && hasProp('m939')) {
+                // truck-mounted SAM: missile rack on the cargo bed
+                g.add(propInstance('m939'));
+                const rack = new THREE.Group();
+                for (let i = 0; i < 4; i++) { const t = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 3.8, 8), M.white); t.rotation.x = Math.PI / 2; t.position.set(-0.9 + i * 0.6, 0, 0); t.castShadow = true; rack.add(t); }
+                rack.add(box(2.6, 0.3, 3.9, M.olive, 0, -0.45, 0));
+                const mount = new THREE.Group(); mount.position.set(0, 3.1, 1.8); mount.add(rack); rack.rotation.x = 0.45;
+                g.add(mount);
+                parts.rack = mount;
+                break;
+            }
             g.add(box(3.4, 1.5, 7, M.olive, 0, 0.45, 0));
             for (const x of [-1.5, 1.5]) g.add(box(0.8, 1.1, 7.2, M.dark, x, 0, 0));
             const tur = new THREE.Group();
@@ -191,7 +220,7 @@ function buildMesh(type) {
 }
 
 class GroundTarget {
-    constructor(sys, type, x, z, rot, team = 'red') {
+    constructor(sys, type, x, z, rot, team = 'red', opts = {}) {
         this.sys = sys;
         this.game = sys.game;
         this.type = type;
@@ -205,7 +234,7 @@ class GroundTarget {
         this.radius = this.def.radius;
         this.hitRadius = this.def.radius;
         const y = groundHeight(x, z);
-        const { group, parts } = buildMesh(type);
+        const { group, parts } = buildMesh(type, opts);
         group.position.set(x, y, z);
         group.rotation.y = rot;
         this.mesh = group;
@@ -370,10 +399,13 @@ export class GroundForces {
         const b = BASES.find(x => !x.friendly);
         const c = Math.cos(b.heading), s = Math.sin(b.heading);
         // local coords: x across runway, z along runway
-        const place = (type, lx, lz, rot = 0) => {
-            const x = b.x + lx * c + lz * s, z = b.z - lx * s + lz * c;
-            this.addTarget(type, x, z, -b.heading + rot);
+        void c; void s;
+        const place = (type, lx, lz, rot = 0, opts) => {
+            const w = baseToWorld(b, lx, lz);
+            return this.addTarget(type, w.x, w.z, -b.heading + rot, 'red', opts);
         };
+        // jets parked on the apron, nose toward the taxiway
+        for (const [id, x, z] of [['mig29', 335, 200], ['mig29', 335, 240], ['su35', 335, 285], ['su57', 335, 330], ['j20', 335, 372]]) place('parked', x, z, Math.PI / 2, { model: id });
         place('bunker', 360, 200);
         place('radar', 420, -350);
         place('radar', -700, 600);
@@ -393,14 +425,14 @@ export class GroundForces {
         void RUNWAY;
     }
 
-    addTarget(type, x, z, rot = 0, team = 'red') {
-        const t = new GroundTarget(this, type, x, z, rot, team);
+    addTarget(type, x, z, rot = 0, team = 'red', opts = {}) {
+        const t = new GroundTarget(this, type, x, z, rot, team, opts);
         this.targets.push(t);
         return t;
     }
 
-    get remaining() { return this.targets.filter(t => t.alive && !t.isShip && !t.isBridge && !t.route && t.type !== 'tank' && t.type !== 'board').length; }
-    get total() { return this.targets.filter(t => !t.isShip && !t.isBridge && !t.route && t.type !== 'tank' && t.type !== 'board').length; }
+    get remaining() { return this.targets.filter(t => t.alive && !t.isShip && !t.isBridge && !t.route && t.type !== 'tank' && t.type !== 'board' && t.type !== 'parked').length; }
+    get total() { return this.targets.filter(t => !t.isShip && !t.isBridge && !t.route && t.type !== 'tank' && t.type !== 'board' && t.type !== 'parked').length; }
 
     // Bridges live in the world; while a game runs they're (neutral) targets too
     addBridges(bridges) {

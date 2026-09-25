@@ -69,6 +69,7 @@ export class HUD {
         this.drawScreenEffects(game);
         if (game.hideHud) return;
         if (game.pilotMode) { this.drawPilotMode(game); return; }
+        if (game.groundStart) { this.drawGroundStart(game); return; }
         const cockpit = game.cameraMode === 'cockpit';
         ctx.lineWidth = 1.6;
         ctx.font = '600 13px "Share Tech Mono", ui-monospace, monospace';
@@ -447,7 +448,7 @@ export class HUD {
         if (!n || !p) return;
         const ctx = this.ctx, cam = game.camera;
         const P = this.project(n.pos, cam, {});
-        const dist = n.pos.distanceTo(p.pos);
+        const dist = n.pos.distanceTo(game.groundStart ? game.groundStart.focus : p.pos);
         if (!P.front || P.x < 0 || P.x > this.w || P.y < 0 || P.y > this.h) { this.edgeArrow(P, '#5dffa0', dist); return; }
         ctx.strokeStyle = '#5dffa0'; ctx.lineWidth = 2;
         const r = clamp(4000 / Math.max(dist, 1), 10, 60);
@@ -680,9 +681,41 @@ export class HUD {
         if (p.onGround && p.speed < 4) {
             ctx.font = '600 13px "Share Tech Mono", ui-monospace, monospace';
             ctx.fillStyle = GREEN;
-            const msg = p.bellied ? 'CRASH LANDED — ENTER: NEW JET · J J: BAIL OUT' : p.deck ? 'FULL POWER (9 or 0) TO FIRE THE CATAPULT · U: AUTO-TAKEOFF' : 'Z / 1–0: THROTTLE · ←/→: STEER · S: ROTATE AT ' + Math.round(game.rotateSpeed * MS_TO_KTS) + ' KTS · U: AUTO-TAKEOFF';
+            const msg = p.bellied ? 'CRASH LANDED — E: CLIMB OUT · ENTER: NEW JET' : p.speed < 0.8 && p.controls.throttle < 0.06 && !p.deck ? 'E: CLIMB OUT AND WALK · Z / 1–0: THROTTLE · U: AUTO-TAKEOFF' : p.deck ? 'FULL POWER (9 or 0) TO FIRE THE CATAPULT · U: AUTO-TAKEOFF' : 'Z / 1–0: THROTTLE · ←/→: STEER · S: ROTATE AT ' + Math.round(game.rotateSpeed * MS_TO_KTS) + ' KTS · U: AUTO-TAKEOFF';
             ctx.fillText(msg, this.w / 2, this.h * 0.8);
             if (game.atFriendlyPad(p)) ctx.fillText('STOPPED ON A FRIENDLY PAD: REPAIR · REFUEL · REARM  (L: CHANGE LOADOUT)', this.w / 2, this.h * 0.8 + 20);
+        }
+    }
+
+    // ── Ready Room: driving / walking ──
+    drawGroundStart(game) {
+        const ctx = this.ctx, W = this.w, H = this.h, gs = game.groundStart;
+        ctx.textBaseline = 'middle';
+        this.drawMessages(game);
+        this.drawNav && this.drawNav(game);
+        ctx.textAlign = 'left';
+        ctx.font = '700 14px "Share Tech Mono", ui-monospace, monospace';
+        ctx.fillStyle = AMBER;
+        ctx.fillText(game.objective || '', 28, 34);
+        if (gs.state === 'drive') {
+            ctx.textAlign = 'right';
+            ctx.font = '700 34px "Share Tech Mono", ui-monospace, monospace';
+            ctx.fillStyle = '#fff';
+            ctx.fillText(Math.round(Math.abs(gs.car.v) * 3.6) + '', W - 80, H - 44);
+            ctx.font = '600 13px "Share Tech Mono", ui-monospace, monospace';
+            ctx.fillStyle = 'rgba(255,255,255,0.7)';
+            ctx.fillText('KM/H', W - 28, H - 40);
+            ctx.fillText(gs.car.v < -0.3 ? 'R' : 'D', W - 28, H - 70);
+        }
+        ctx.textAlign = 'left';
+        ctx.font = '600 12px "Share Tech Mono", ui-monospace, monospace';
+        ctx.fillStyle = 'rgba(255,255,255,0.65)';
+        ctx.fillText(gs.state === 'drive' ? 'W/S DRIVE · A/D STEER · E GET OUT · MOUSE LOOK' : 'WASD WALK · SHIFT RUN · E INTERACT · MOUSE LOOK', 28, H - 40);
+        if (gs.hint) {
+            ctx.textAlign = 'center';
+            ctx.font = '700 17px "Share Tech Mono", ui-monospace, monospace';
+            ctx.fillStyle = AMBER;
+            ctx.fillText(gs.hint, W / 2, H * 0.7);
         }
     }
 
@@ -724,7 +757,13 @@ export class HUD {
         ctx.font = '600 12px "Share Tech Mono", ui-monospace, monospace';
         ctx.fillStyle = 'rgba(255,255,255,0.7)';
         const agl = pm.pos.y - Math.max(terrainHeight(pm.pos.x, pm.pos.z), 0);
-        ctx.fillText((pm.seat.landed ? 'ON THE GROUND' : pm.seat.deployed ? 'CANOPY OPEN' : 'SEAT FIRING') + ' · ' + Math.round(agl * M_TO_FT) + ' FT', 28, H - 70);
+        ctx.fillText((pm.seat.landed ? 'ON THE GROUND' : pm.seat.deployed ? 'CANOPY OPEN · SINK ' + Math.round(-pm.seat.vel.y * 196.85) + ' FPM' : 'SEAT FIRING') + ' · ' + Math.round(agl * M_TO_FT) + ' FT', 28, H - 70);
+        ctx.fillText(pm.walker ? 'WASD WALK · SHIFT RUN · E BOARD A JET · ENTER NEW JET · V VIEW' : pm.seat.deployed ? 'A/D TURN · W DIVE · S BRAKE · SPACE FLARE (LOW) · V VIEW' + (pm.flareUsed ? '' : '') : '', 28, H - 92);
+        if (pm.seat.deployed && !pm.seat.landed && agl < 18 && !pm.flareUsed && Math.floor(game.time * 3) % 2) {
+            ctx.textAlign = 'center'; ctx.font = '700 18px "Share Tech Mono", ui-monospace, monospace'; ctx.fillStyle = GREEN;
+            ctx.fillText('SPACE — FLARE!', W / 2, H * 0.6);
+            ctx.textAlign = 'left'; ctx.font = '600 12px "Share Tech Mono", ui-monospace, monospace'; ctx.fillStyle = 'rgba(255,255,255,0.7)';
+        }
         ctx.fillText('SCORE ' + Math.floor(game.score) + (game.lives !== Infinity ? '   SPARE JETS ' + game.lives : ''), 28, 34);
         // hint
         if (pm.hint) {

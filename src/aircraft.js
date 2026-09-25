@@ -472,7 +472,9 @@ export class Aircraft {
         if (this.fuel > 0.01) this.flameout = false;
     }
 
-    get clEff() { return this.clSlope * (1 + 0.2 * this.flaps); }
+    get clEff() { return this.clSlope; }
+    // flaps add camber: extra lift even at zero angle of attack (same max-lift gain as before: +20% of CLmax per notch)
+    get flapCl() { return CL_MAX * 0.2 * this.flaps * clamp(this.flapAnim * 2 / Math.max(this.flaps, 1), 0, 1); }
 
     syncBody() {
         if (this.gearLegs && this._gearShown !== this.gearAnim) { this._gearShown = this.gearAnim; this.updateGearVisual(); }
@@ -524,8 +526,8 @@ export class Aircraft {
         nCmd += this.balloon * clamp(V / 90, 0, 1.2) - 0.75 * this.brakeAnim * clamp(V / 70, 0, 1);
 
         // AoA needed to produce the commanded G, limited by stall AoA
-        const clS = this.clEff;
-        let alphaCmd = (nCmd * G) / Math.max(q * clS, 1e-3);
+        const clS = this.clEff, cl0 = this.flapCl;
+        let alphaCmd = ((nCmd * G) / Math.max(q, 1e-3) - cl0) / clS;
         const alphaLim = this.alphaMax;
         this.stalling = alphaCmd > alphaLim * 0.98 && c.pitch > -0.2 && V < f.speed * 0.45;
         alphaCmd = clamp(alphaCmd, -alphaLim * 0.55, alphaLim);
@@ -538,7 +540,7 @@ export class Aircraft {
         const betaCmd = c.yaw * 7 * DEG * authority;
         this.beta = damp(this.beta, betaCmd, 4, dt);
 
-        const Cl = clS * this.alpha;
+        const Cl = clS * this.alpha + cl0;
         let lift = q * Cl * (1 - (this.lostRegions.has('wingL') ? 0.22 : 0) - (this.lostRegions.has('wingR') ? 0.22 : 0));
         const maxLift = gLim * G * 1.05;
         lift = clamp(lift, -maxLift * 0.45, maxLift);
@@ -629,9 +631,11 @@ export class Aircraft {
 
         this._lastFlaps = this.flaps; this.balloon = 0;
         const rotateSpeed = Math.sqrt(G / (this.liftK * rho * CL_MAX * (1 + 0.2 * this.flaps))) * 1.05;
-        const pitchTarget = V > rotateSpeed * 0.85 && !this.bellied ? clamp(c.pitch, 0, 1) * 0.28 : 0;
+        let pitchTarget = V > rotateSpeed * 0.85 && !this.bellied ? clamp(c.pitch, 0, 1) * 0.28 : 0;
+        // with flaps out the nose comes up by itself once past rotation speed, and the jet flies off
+        if (this.flaps > 0 && !this.bellied && !this.deck && V > rotateSpeed && c.pitch > -0.3) pitchTarget = Math.max(pitchTarget, 0.06 * this.flaps);
         this.alpha = damp(this.alpha, pitchTarget, 2.5, dt);
-        const Cl = this.clEff * this.alpha;
+        const Cl = this.clEff * this.alpha + this.flapCl;
         // spoilers: airbrake on the ground dumps lift and brakes hard
         const lift = this.liftK * V * V * rho * Cl * (this.airbrake ? 0.3 : 1);
         let friction = (this.airbrake || this.wheelBrake ? 6 : 0.25) + (c.throttle < 0.05 && V < 30 ? 1.5 : 0);

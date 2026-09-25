@@ -46,9 +46,31 @@ You need a local server because the game uses ES modules and loads `.glb` models
   carrier. Stop on a friendly runway or deck to repair, refuel and rearm. In Free Flight and Sandbox the
   pause menu has Quick Position buttons (runway/carrier approach, runway takeoff, catapult), and the
   autopilot can auto-land (Y) at the nearest runway or carrier, or auto-takeoff (U).
-- **Towns, roads and bridges**: about 50 villages, towns and cities joined by marked two-lane roads with
-  civilian traffic (headlights at night). Roads cross water on concrete and cable-stayed bridges. Bombs drop them
-  (missiles barely scratch them), the span falls into the water, and cars stop at the gap and turn back.
+- **Towns, roads and bridges**: about 30 villages, towns and cities built on street grids: houses with
+  pitched roofs, townhouses, apartment blocks and downtown towers (windows light up at night), churches,
+  parks, street lamps, and crossroads with working traffic lights and stop signs that the traffic obeys.
+  Marked two-lane roads join the towns (and go round the airbases, never across a runway); dirt trails
+  run out into the hills with dune buggies kicking up dust. Roads cross water on concrete and
+  cable-stayed bridges. Bombs drop them, and the cars stop at the gap.
+- **Airbases**: perimeter fences, a gate checkpoint (guard booth, boom barriers that lift for traffic,
+  Humvees, jersey barriers, flag), control tower with a beacon, rotating radar, windsock, helipads,
+  parked jets and a C-130, and helicopters flying circuits (plus a news chopper over the city).
+- **More airports**: MCAS Miramar (parallel runways 32L/32R + crosswind 27/09, a flight line of
+  F/A-18s, F-35s, C-130s and helicopters, hangars and base buildings) and Harbor International (runway
+  16/34 on the waterfront, two terminals with airliners at the jet bridges, parking garage). Every runway
+  has painted designators worked out from its real compass heading. Both airports have scheduled
+  traffic: arrivals fly the glide path, land, roll out and taxi in; departures hold short, line up and
+  take off. The autopilot lands at the nearest friendly airfield.
+- **Real vehicles**: traffic and the cars in driveways are real car models (sedans, hatchbacks, SUVs,
+  sports cars, taxis, police cars); convoys use a modern tank, M939 trucks and Humvees. Houses have
+  front yards and driveways with one or two cars, and people walk the sidewalks.
+- **Steerable parachute**: after ejecting you see your canopy in third person (V for first person);
+  A/D turn, W dives, S brakes, SPACE flares just before touchdown. Once down you can walk (WASD, SHIFT
+  to run), board a jet (E) or call for a new one (ENTER). Stopped on the ground (after a crash landing
+  or just parked)? Press E to climb out.
+- **Ready Room start** (Start: BARRACKS, or the pause-menu quick position): begin at the pilot quarters
+  in a Humvee, drive to the gate, stop for the sentry, drive onto the apron, get out (E), walk to your
+  jet, climb in (E), then taxi and take off. Flaps help: with full flaps a jet lifts off on its own.
 - **Hangar**: nine paint schemes and three loadouts (Balanced, Air Superiority, Strike). Bombs
   have a CCIP impact pipper and leave craters.
 - **Ejection, War Thunder trailer style**: eject (J J) into a first-person view under the parachute.

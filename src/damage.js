@@ -6,6 +6,7 @@
 //    ejection seats fire, separate and float down under parachutes.
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
+import { Character } from './character.js';
 import { rand, clamp } from './util.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion();
@@ -161,10 +162,11 @@ export class Wreckage {
         const s1 = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.9, 0.6), this.seatMat); s1.position.y = 0.2;
         const s2 = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.8, 0.15), this.seatMat); s2.position.set(0, 0.8, 0.3);
         seat.add(s1, s2);
-        const pilot = new THREE.Group();
-        const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.7, 4, 8), this.suitMat); body.position.y = 0.55;
-        const head = new THREE.Mesh(new THREE.SphereGeometry(0.17, 10, 8), this.helmetMat); head.position.y = 1.15;
-        pilot.add(body, head);
+        // the pilot: an animated character (the root is scaled up 1.6× so it reads from the chase camera)
+        const character = new Character();
+        const pilot = character.root;
+        pilot.scale.setScalar(1 / 1.6 * 1.15);
+        pilot.position.y = -0.1;
         root.add(seat, pilot);
         root.traverse(o => { if (o.isMesh) o.castShadow = true; });
         root.position.copy(start);
@@ -191,11 +193,27 @@ export class Wreckage {
         chute.scale.setScalar(0.01);
         root.add(chute);
         const vel = ac.vel.clone().multiplyScalar(0.8).addScaledVector(up, 55);
-        const seatObj = { root, seat, pilot, chute, vel, t: 0, deployed: false, landed: false, landT: 0, owner: ac };
+        const seatObj = { root, seat, pilot, character, chute, vel, t: 0, deployed: false, landed: false, landT: 0, owner: ac };
         this.seats.push(seatObj);
         ac.ejectSeat = seatObj;
         this.game.events.emit('eject', ac, { seat: seatObj });
         return seatObj;
+    }
+
+    // Climbing out of a jet that's stopped on the ground: a "seat" already on the ground, no canopy
+    groundSeat(ac) {
+        const right = ac.getRight(new THREE.Vector3());
+        const at = ac.rig.cockpit.clone().applyMatrix4(ac.model.matrixWorld).addScaledVector(right, -(ac.spec.span * 0.25 + 2.5));
+        const su = this.game.surfaceAt(at.x, at.z, at.y + 3);
+        at.y = su.h + 0.3;
+        const root = new THREE.Group();
+        root.position.copy(at);
+        const seat = new THREE.Group(), pilot = new THREE.Group(), chute = new THREE.Group();
+        root.add(seat, pilot, chute);
+        this.game.scene.add(root);
+        const s = { root, seat, pilot, chute, vel: new THREE.Vector3(), t: 10, deployed: true, landed: true, landT: 0, owner: ac, walkedOut: true };
+        this.seats.push(s);
+        return s;
     }
 
     update(dt) {
@@ -262,12 +280,13 @@ export class Wreckage {
                     const k = clamp((s.t - 1.4) / 0.9, 0, 1);
                     s.chute.scale.setScalar(0.1 + k * 0.9);
                     // strong drag toward drift with the wind, gentle sink
-                    const target = _v.set(g.wind.x * 1.5 + (s.glide ? s.glide.x : 0), s.dead ? -9 : -6.5, g.wind.z * 1.5 + (s.glide ? s.glide.z : 0));
-                    s.vel.lerp(target, 1 - Math.exp(-2.2 * dt));
-                    // upright + gentle sway
+                    const sink = s.dead ? -9 : s.sink != null ? -s.sink : -6.5;
+                    const target = _v.set(g.wind.x * 1.5 + (s.glide ? s.glide.x : 0), sink, g.wind.z * 1.5 + (s.glide ? s.glide.z : 0));
+                    s.vel.lerp(target, 1 - Math.exp(-(s.player ? 1.6 : 2.2) * dt));
+                    // upright + gentle sway; a steered canopy banks into its turns
                     const sway = Math.sin(s.t * 1.3) * 0.12;
-                    const yaw = s.glide && s.glide.lengthSq() > 0.1 ? Math.atan2(-s.glide.x, -s.glide.z) : s.t * 0.15;
-                    _q.setFromEuler(new THREE.Euler(sway + (s.dead ? 0.5 : 0), yaw, Math.cos(s.t * 1.1) * 0.1));
+                    const yaw = s.heading != null ? s.heading : s.glide && s.glide.lengthSq() > 0.1 ? Math.atan2(-s.glide.x, -s.glide.z) : s.t * 0.15;
+                    _q.setFromEuler(new THREE.Euler(sway * (s.player ? 0.4 : 1) + (s.dead ? 0.5 : 0) + (s.pitchLean || 0), yaw, (s.bank || 0) + Math.cos(s.t * 1.1) * 0.1 * (s.player ? 0.4 : 1)));
                     r.quaternion.slerp(_q, 1 - Math.exp(-2 * dt));
                 } else {
                     s.vel.y -= 9.81 * dt;

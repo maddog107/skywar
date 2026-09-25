@@ -5,13 +5,31 @@
 // convoys can drive along it.
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
-import { terrainHeight } from './world.js';
+import { terrainHeight, BASES, fenceOf, baseToWorld, worldToBase } from './world.js';
 import { Bridge } from './bridges.js';
 
 export const ROAD_HALF = 7;      // 14 m wide: two 7 m lanes
 export const LANE = 3.3;          // lane centre offset from the middle
 const STEP = 30;
 const MAX_BRIDGE = 1400, MIN_BRIDGE = 50;
+
+// Keep roads outside airbase fences (they go round, not across the runway)
+const FENCE_MARGIN = 35;
+export function outsideBases(x, z) {
+    for (const b of BASES) {
+        const { lx, lz } = worldToBase(b, x, z);
+        const FENCE = fenceOf(b);
+        const x0 = FENCE.x0 - FENCE_MARGIN, x1 = FENCE.x1 + FENCE_MARGIN, z0 = FENCE.z0 - FENCE_MARGIN, z1 = FENCE.z1 + FENCE_MARGIN;
+        if (lx > x0 && lx < x1 && lz > z0 && lz < z1) {
+            // push to the nearest side of the fence
+            const d = [lx - x0, x1 - lx, lz - z0, z1 - lz];
+            const k = d.indexOf(Math.min(...d));
+            const nlx = k === 0 ? x0 : k === 1 ? x1 : lx, nlz = k === 2 ? z0 : k === 3 ? z1 : lz;
+            return { ...baseToWorld(b, nlx, nlz), base: b, side: k, lx: nlx, lz: nlz, box: [x0, x1, z0, z1] };
+        }
+    }
+    return null;
+}
 
 function slopeAt(x, z) {
     const e = 20, h = terrainHeight(x, z);
@@ -86,11 +104,32 @@ export function buildRoads(group, nodes) {
         const dx = (b.x - a.x) / len, dz = (b.z - a.z) / len;
         const nx = -dz, nz = dx;
         const samples = [];
+        let prevOut = null;
         for (let k = 0; k <= steps; k++) {
             const t = k / steps;
             // gentle meander so roads don't look ruler-straight
             const wob = Math.sin(t * Math.PI * 3 + i) * Math.min(len * 0.04, 180) * Math.sin(t * Math.PI);
-            const x = a.x + (b.x - a.x) * t + nx * wob, z = a.z + (b.z - a.z) * t + nz * wob;
+            let x = a.x + (b.x - a.x) * t + nx * wob, z = a.z + (b.z - a.z) * t + nz * wob;
+            const out = outsideBases(x, z);
+            if (out) {
+                // switching fence sides: go round the corner(s) instead of cutting across the base
+                if (prevOut && prevOut.base === out.base && prevOut.side !== out.side) {
+                    const [x0, x1, z0, z1] = out.box;
+                    const xSide = (sd) => (sd === 0 ? x0 : x1), zSide = (sd) => (sd === 2 ? z0 : z1);
+                    const corners = [];
+                    const a1 = prevOut.side, a2 = out.side;
+                    if (a1 < 2 && a2 >= 2) corners.push([xSide(a1), zSide(a2)]);
+                    else if (a1 >= 2 && a2 < 2) corners.push([xSide(a2), zSide(a1)]);
+                    else if (a1 < 2) { const zs = Math.abs(prevOut.lz - z0) < Math.abs(prevOut.lz - z1) ? z0 : z1; corners.push([xSide(a1), zs], [xSide(a2), zs]); }
+                    else { const xs = Math.abs(prevOut.lx - x0) < Math.abs(prevOut.lx - x1) ? x0 : x1; corners.push([xs, zSide(a1)], [xs, zSide(a2)]); }
+                    for (const [clx, clz] of corners) {
+                        const w = baseToWorld(out.base, clx, clz), ch = terrainHeight(w.x, w.z);
+                        samples.push({ x: w.x, z: w.z, h: ch, kind: ch < 1 ? 'water' : 'land' });
+                    }
+                }
+                x = out.x; z = out.z;
+            }
+            prevOut = out;
             const h = terrainHeight(x, z);
             samples.push({ x, z, h, kind: h < 1 ? 'water' : slopeAt(x, z) > 0.45 ? 'cliff' : 'land' });
         }

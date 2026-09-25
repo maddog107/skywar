@@ -6,11 +6,68 @@ import { fbm, ridged, smoothstep, lerp, clamp, mulberry32, DEG, makeRadialTextur
 import { TIMES } from './config.js';
 
 // ── Airbases (terrain is flattened around them) ──
+// Each base lists its runways in base-local metres (lx across, lz along; rot = extra rotation).
+// layout picks the dressing: 'standard' (the original bases), 'miramar' (military, parallel runways),
+// 'civil' (airline terminals). Runway numbers are worked out from the real compass heading.
 export const BASES = [
-    { id: 'home', x: 0, z: 0, h: 22, r: 1500, heading: 0, friendly: true },
-    { id: 'enemy', x: 7000, z: -17000, h: 38, r: 1700, heading: 0.35, friendly: false },
+    { id: 'home', name: 'SKYWAR AIR BASE', x: 0, z: 0, h: 22, r: 1500, heading: 0, friendly: true, layout: 'standard',
+        runways: [{ lx: 0, lz: 0, len: 3000, w: 55 }] },
+    { id: 'enemy', name: 'ENEMY AIR BASE', x: 7000, z: -17000, h: 38, r: 1700, heading: 0.35, friendly: false, layout: 'standard',
+        runways: [{ lx: 0, lz: 0, len: 3000, w: 55 }] },
+    { id: 'miramar', name: 'MCAS MIRAMAR', x: -10000, z: -19100, h: 58, r: 2800, heading: 0.698, friendly: true, layout: 'miramar',
+        runways: [{ lx: -520, lz: 0, len: 3650, w: 60 }, { lx: -220, lz: 300, len: 2900, w: 46 }, { lx: -430, lz: -250, len: 1150, w: 45, rot: 0.87 }],
+        fence: { x0: -900, x1: 1450, z0: -2150, z1: 2150 }, gate: { lx: 1450, lz: -300 } },
+    { id: 'civil', name: 'HARBOR INTERNATIONAL', x: -13600, z: 10900, h: 14, r: 2100, heading: 0.315, friendly: true, layout: 'civil', civil: true,
+        runways: [{ lx: 0, lz: 0, len: 2900, w: 60 }],
+        fence: { x0: -250, x1: 900, z0: -1650, z1: 1650 }, gate: { lx: 900, lz: 0 } },
 ];
 export const RUNWAY = { length: 3000, width: 55 };
+// Perimeter fence and main gate, in base-local metres (x across the runway, toward the apron = +x; z along it)
+export const FENCE = { x0: -190, x1: 570, z0: -1720, z1: 1720 };
+export const GATE = { lx: 570, lz: -300 }; // between the tower and the helipads, clear of the hangars
+export const fenceOf = (b) => b.fence || FENCE;
+export const gateOf = (b) => b.gate || GATE;
+
+// ── Runways ──
+// world-space description: centre, unit direction toward the runway's local -z end, half length, width
+export function runwayInfo(b, rw) {
+    const H = b.heading + (rw.rot || 0);
+    const c = baseToWorld(b, rw.lx, rw.lz);
+    return { x: c.x, z: c.z, y: b.h, dirX: Math.sin(H), dirZ: -Math.cos(H), half: rw.len / 2, w: rw.w, H };
+}
+// compass heading (as the HUD shows it) when rolling toward the runway's -z end, and the reciprocal
+export function runwayNumbers(b, rw) {
+    const H = b.heading + (rw.rot || 0);
+    const hdg = (((-H * 180 / Math.PI) % 360) + 360) % 360;
+    const n = (d) => { let k = Math.round(d / 10) % 36; if (k === 0) k = 36; return String(k).padStart(2, '0'); };
+    let a = n(hdg), bnum = n((hdg + 180) % 360);
+    // parallel runways get L / R (left and right as seen by the pilot on each heading)
+    const parallels = b.runways.filter(o => Math.abs((o.rot || 0) - (rw.rot || 0)) < 0.05);
+    if (parallels.length > 1) {
+        const sorted = [...parallels].sort((p, q) => p.lx - q.lx);
+        const i = sorted.indexOf(rw), last = sorted.length - 1;
+        const la = i === 0 ? 'L' : i === last ? 'R' : 'C', lb = i === 0 ? 'R' : i === last ? 'L' : 'C';
+        a += la; bnum += lb;
+    }
+    return { toward: a, from: bnum }; // 'toward' is painted at the +z end (where you land heading -z)
+}
+function onRunway(b, rw, x, z) {
+    const { lx, lz } = worldToBase(b, x, z);
+    const dx = lx - rw.lx, dz = lz - rw.lz, r = -(rw.rot || 0);
+    const c = Math.cos(r), s = Math.sin(r);
+    const rx = dx * c - dz * s, rz = dx * s + dz * c;
+    return Math.abs(rx) < rw.w * 0.6 && Math.abs(rz) < rw.len / 2 + 40;
+}
+
+// base-local → world (matches the dressing group's rotation.y = -heading)
+export function baseToWorld(b, lx, lz) {
+    const c = Math.cos(b.heading), s = Math.sin(b.heading);
+    return { x: b.x + lx * c - lz * s, z: b.z + lx * s + lz * c };
+}
+export function worldToBase(b, x, z) {
+    const c = Math.cos(b.heading), s = Math.sin(b.heading), dx = x - b.x, dz = z - b.z;
+    return { lx: dx * c + dz * s, lz: -dx * s + dz * c };
+}
 
 // ── Height function (metres). Shared by rendering, collisions and AI ──
 export function terrainHeight(x, z) {
@@ -50,10 +107,8 @@ export function groundHeight(x, z) {
 
 export function isOnRunway(x, z) {
     for (const b of BASES) {
-        const c = Math.cos(b.heading), s = Math.sin(b.heading);
-        const lx = (x - b.x) * c + (z - b.z) * s;
-        const lz = -(x - b.x) * s + (z - b.z) * c;
-        if (Math.abs(lx) < RUNWAY.width * 0.6 && Math.abs(lz) < RUNWAY.length / 2 + 40) return b;
+        if (Math.hypot(x - b.x, z - b.z) > b.r * 1.6) continue;
+        for (const rw of b.runways) if (onRunway(b, rw, x, z)) return b;
     }
     return null;
 }
@@ -269,6 +324,8 @@ export class World {
         this.terrainMat.emissive = new THREE.Color(night ? 0x020306 : 0x000000);
         this.baseLights.forEach(l => (l.visible = night || key === 'dusk'));
         if (this.towns) this.towns.setNight(night || key === 'dusk');
+        if (this.airbases) this.airbases.setNight(night || key === 'dusk');
+        if (this.airTraffic) this.airTraffic.setNight(night || key === 'dusk');
         this.updateEnvironment();
     }
 
@@ -609,6 +666,13 @@ export class World {
         this.treeMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, flatShading: true });
     }
 
+    // Rebuild tree tiles (after towns/roads exist, so no trees grow on them)
+    refreshTrees() {
+        for (const t of this.tiles ? this.tiles.values() : []) {
+            if (t.trees) { this.scene.remove(t.trees); t.trees.dispose(); t.trees = null; }
+        }
+    }
+
     buildTrees(tx, tz) {
         const T = this.TILE;
         const r = mulberry32((tx * 73856093) ^ (tz * 19349663));
@@ -621,6 +685,7 @@ export class World {
             if (forest < 0.05 + r() * 0.15) continue;
             const h = terrainHeight(x, z);
             if (h < 10 || h > 900) continue;
+            if (this.blockTree && this.blockTree(x, z)) continue; // roads, streets and buildings
             let near = false;
             for (const b of BASES) if (Math.hypot(x - b.x, z - b.z) < b.r * 1.15) near = true;
             if (near) continue;
@@ -816,16 +881,25 @@ export class World {
     // ── Airbase dressing: runway, taxiways, hangars, tower, lights ──
     initBases() {
         this.baseLights = [];
-        const rwTex = this.makeRunwayTexture();
         for (const b of BASES) {
             const g = new THREE.Group();
             g.position.set(b.x, b.h, b.z);
             g.rotation.y = -b.heading;
-            const rw = new THREE.Mesh(new THREE.PlaneGeometry(RUNWAY.width, RUNWAY.length), new THREE.MeshStandardMaterial({ map: rwTex, roughness: 0.85 }));
-            rw.rotation.x = -Math.PI / 2;
-            rw.position.y = 0.15;
-            rw.receiveShadow = true;
-            g.add(rw);
+            for (const r of b.runways) {
+                const nums = runwayNumbers(b, r);
+                const rw = new THREE.Mesh(new THREE.PlaneGeometry(r.w, r.len), new THREE.MeshStandardMaterial({ map: this.makeRunwayTexture(nums, r.len, r.w), roughness: 0.85, polygonOffset: true, polygonOffsetFactor: -1 }));
+                rw.rotation.x = -Math.PI / 2;
+                const holder = new THREE.Group();
+                holder.position.set(r.lx, 0.15 + (r.rot ? 0.03 : 0), r.lz);
+                holder.rotation.y = -(r.rot || 0);
+                holder.add(rw);
+                rw.receiveShadow = true;
+                g.add(holder);
+                r.holder = holder;
+            }
+            this.scene.add(g);
+            this.buildRunwayLights(b, g);
+            if (b.layout !== 'standard') continue;
             const apronMat = new THREE.MeshStandardMaterial({ color: 0x6b6f72, roughness: 0.95 });
             const taxi = new THREE.Mesh(new THREE.PlaneGeometry(22, RUNWAY.length * 0.8), apronMat);
             taxi.rotation.x = -Math.PI / 2; taxi.position.set(140, 0.1, 0); taxi.receiveShadow = true;
@@ -847,34 +921,60 @@ export class World {
                     h.castShadow = true; h.receiveShadow = true;
                     g.add(h);
                 }
-                const tower = new THREE.Group();
-                const tBase = new THREE.Mesh(new THREE.CylinderGeometry(5, 6, 30, 10), new THREE.MeshStandardMaterial({ color: 0xd8d4c8, roughness: 0.8 }));
-                tBase.position.y = 15; tower.add(tBase);
-                const cab = new THREE.Mesh(new THREE.CylinderGeometry(9, 7, 7, 10), new THREE.MeshStandardMaterial({ color: 0x223344, roughness: 0.1, metalness: 0.8 }));
-                cab.position.y = 33; tower.add(cab);
-                tower.position.set(230, 0, -200);
-                tower.traverse(o => { o.castShadow = true; });
-                g.add(tower);
             }
-            // Runway edge lights (emissive sprites that glow with bloom at night)
-            const lightTex = makeRadialTexture(64, [[0, 'rgba(255,255,255,1)'], [0.25, 'rgba(255,230,180,0.8)'], [1, 'rgba(255,200,120,0)']]);
-            const lightMat = new THREE.SpriteMaterial({ map: lightTex, color: 0xffd9a0, depthWrite: false, blending: THREE.AdditiveBlending, fog: true });
-            const lights = new THREE.Group();
-            for (let z = -RUNWAY.length / 2; z <= RUNWAY.length / 2; z += 60) {
-                for (const s of [-1, 1]) {
-                    const sp = new THREE.Sprite(lightMat);
-                    sp.position.set(s * (RUNWAY.width / 2 + 2), 1, z);
-                    sp.scale.set(5, 5, 5);
-                    lights.add(sp);
-                }
-            }
-            g.add(lights);
-            this.baseLights.push(lights);
-            this.scene.add(g);
         }
     }
 
-    makeRunwayTexture() {
+    // Runway edge lights (emissive sprites that glow with bloom at night), every runway
+    buildRunwayLights(b, g) {
+        const lightTex = this.lightTex || (this.lightTex = makeRadialTexture(64, [[0, 'rgba(255,255,255,1)'], [0.25, 'rgba(255,230,180,0.8)'], [1, 'rgba(255,200,120,0)']]));
+        const lightMat = this.rwLightMat || (this.rwLightMat = new THREE.SpriteMaterial({ map: lightTex, color: 0xffd9a0, depthWrite: false, blending: THREE.AdditiveBlending, fog: true }));
+        const sprites = [];
+        for (const r of b.runways) {
+            for (let z = -r.len / 2; z <= r.len / 2; z += 60) {
+                for (const sd of [-1, 1]) {
+                    const sp = new THREE.Sprite(lightMat);
+                    sp.position.set(sd * (r.w / 2 + 2), 1, z);
+                    sp.scale.set(5, 5, 5);
+                    r.holder.add(sp);
+                    sprites.push(sp);
+                }
+            }
+        }
+        let vis = true;
+        this.baseLights.push({ get visible() { return vis; }, set visible(v) { vis = v; for (const sp of sprites) sp.visible = v; } });
+    }
+
+    // Runway surface with markings and painted designators (e.g. 32L at one end, 14R at the other)
+    makeRunwayTexture(nums, len = 3000, w = 55) {
+        const tex = this.makeRunwayTextureBase();
+        if (!nums) return tex;
+        const c = tex.image;
+        const ctx = c.getContext('2d');
+        const pxV = 4096 / len, pxU = 256 / w;
+        const drawNum = (txt, atBottom) => {
+            ctx.save();
+            // numbers ~18 m tall, just past the threshold piano keys
+            const yCenter = atBottom ? 4096 - 180 - 22 * pxV : 180 + 22 * pxV;
+            ctx.translate(128, yCenter);
+            if (!atBottom) ctx.rotate(Math.PI);
+            ctx.scale(pxU / 6.5, pxV * 18 / 100);
+            ctx.fillStyle = '#cfcfca';
+            ctx.font = 'bold 100px Arial';
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            const num = txt.replace(/[LRC]/, ''), letter = txt.replace(/\d/g, '');
+            // the L/R/C letter sits nearest the threshold, the number further along
+            ctx.fillText(num, 0, letter ? -60 : 0);
+            if (letter) ctx.fillText(letter, 0, 60);
+            ctx.restore();
+        };
+        drawNum(nums.toward, true);
+        drawNum(nums.from, false);
+        tex.needsUpdate = true;
+        return tex;
+    }
+
+    makeRunwayTextureBase() {
         const c = document.createElement('canvas');
         c.width = 256; c.height = 4096;
         const ctx = c.getContext('2d');
@@ -892,7 +992,7 @@ export class World {
             ctx.fillRect(90 + Math.random() * 70, 300 + Math.random() * 500, 3, 60 + Math.random() * 120);
             ctx.fillRect(90 + Math.random() * 70, 3300 + Math.random() * 500, 3, 60 + Math.random() * 120);
         }
-        ctx.fillStyle = '#e8e8e8';
+        ctx.fillStyle = '#c9c9c4';
         // edge lines
         ctx.fillRect(8, 0, 5, 4096); ctx.fillRect(243, 0, 5, 4096);
         // centreline dashes
