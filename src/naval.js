@@ -9,8 +9,8 @@
 // so HUD, targeting and weapons work on them unchanged.
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { mergeInPlace } from './meshmerge.js';
 import { ShipFX, seaMotion, SEA_MOTION, deckHeightAt, foamTexture } from './shipfx.js';
 import { terrainHeight } from './world.js';
 import { loft, createAircraftModel } from './models.js';
@@ -141,6 +141,7 @@ function buildFromGltf(type, gltf) {
             if (m.map) m.map.anisotropy = 16;
             // painted steel in the open: the sky (and the sea's bounce) light the shaded sides a lot
             m.envMapIntensity = m.name === 'Deck' ? 0.6 : 1.25;
+            if (m.name === 'Under') m.userData.noMerge = true; // shipfx.js tints it as the light changes: keep it a material of its own
         }
     });
     const radar = root.getObjectByName('radar');
@@ -275,56 +276,14 @@ function addMount(g, m) {
     m.turret = turret;
 }
 
-// Bake every static mesh of a ship (not the turning radar / turrets) into one mesh per material:
-// a carrier drops from ~84 draw calls to ~15, and the shadow pass likewise.
+// Bake every static mesh of a ship (not the turning radar / turrets) into as few meshes as possible
+// (meshmerge.js: one per textured material, one for all the plain painted ones), and each turret's and
+// radar's own parts likewise: a carrier with its deck park is a handful of draw calls, and the shadow pass too.
 function mergeStatic(g) {
-    g.updateMatrixWorld(true);
-    const moving = new Set();
-    g.traverse(o => { if (o.name.startsWith('ship:radar') || o.name.startsWith('ship:mount')) o.traverse(c => moving.add(c)); });
-    const byMat = new Map(), merged = [];
-    g.traverse(o => {
-        if (!o.isMesh || moving.has(o) || o.isSkinnedMesh || o.isInstancedMesh) return;
-        if (o.geometry.morphAttributes && Object.keys(o.geometry.morphAttributes).length) return;
-        let geo = o.geometry.clone().applyMatrix4(o.matrixWorld);
-        for (const k of Object.keys(geo.attributes)) if (!['position', 'normal', 'uv'].includes(k)) geo.deleteAttribute(k);
-        if (!geo.attributes.normal) geo.computeVertexNormals();
-        if (!geo.attributes.uv) geo.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(geo.attributes.position.count * 2), 2));
-        if (geo.index) { const ni = geo.toNonIndexed(); geo.dispose(); geo = ni; }
-        if (o.matrixWorld.determinant() < 0) {
-            // mirrored node: restore the winding
-            for (const a of Object.values(geo.attributes)) {
-                const n = a.itemSize, arr = a.array;
-                for (let t = 0; t < a.count; t += 3) for (let c = 0; c < n; c++) {
-                    const i1 = (t + 1) * n + c, i2 = (t + 2) * n + c, tmp = arr[i1]; arr[i1] = arr[i2]; arr[i2] = tmp;
-                }
-            }
-        }
-        const mats = Array.isArray(o.material) ? o.material : [o.material];
-        const groups = Array.isArray(o.material) && geo.groups.length ? geo.groups : [{ start: 0, count: geo.attributes.position.count, materialIndex: 0 }];
-        for (const grp of groups) {
-            const mat = mats[grp.materialIndex];
-            if (!mat) continue;
-            const part = new THREE.BufferGeometry();
-            for (const [k, a] of Object.entries(geo.attributes)) {
-                part.setAttribute(k, new THREE.BufferAttribute(a.array.slice(grp.start * a.itemSize, (grp.start + grp.count) * a.itemSize), a.itemSize));
-            }
-            if (!byMat.has(mat)) byMat.set(mat, []);
-            byMat.get(mat).push(part);
-        }
-        geo.dispose();
-        merged.push(o);
-    });
-    const out = [];
-    for (const [mat, geos] of byMat) {
-        const mg = mergeGeometries(geos);
-        geos.forEach(x => x.dispose());
-        if (!mg) return; // incompatible parts: leave the ship unmerged
-        const m = new THREE.Mesh(mg, mat);
-        m.castShadow = true; m.receiveShadow = true;
-        out.push(m);
-    }
-    for (const o of merged) o.parent.remove(o);
-    g.add(...out);
+    const moving = [];
+    g.traverse(o => { if (o.name.startsWith('ship:radar') || o.name.startsWith('ship:mount')) moving.push(o); });
+    mergeInPlace(g, moving);
+    for (const o of moving) mergeInPlace(o, moving.filter(x => x !== o));
 }
 
 // Ships are built once per type and cloned: clones share geometry and materials, so a sortie that

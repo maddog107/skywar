@@ -11,6 +11,7 @@ import { propParts } from './props.js';
 import { makeBuildingMaterial } from './towns.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createAircraftModel } from './models.js';
+import { mergeStaticModel } from './meshmerge.js';
 import { AIRCRAFT } from './config.js';
 import { propInstance, propSize, hasProp } from './props.js';
 import { makeRadialTexture, clamp, rand, freezeStatic, offsetUnits } from './util.js';
@@ -113,8 +114,17 @@ function simpleGear(L, halfSpan, bellyY, H) {
 }
 
 // A parked aircraft: model + gear, origin on the ground. Returned facing -Z.
+// Nothing on a parked (or scripted air traffic) airframe moves by itself, so its meshes are merged once per type
+// (meshmerge.js: a few draw calls instead of up to ~40) and every copy shares that geometry.
+const _parkedTemplates = new Map();
 export function makeParkedModel(id) {
-    const { object, rig } = createAircraftModel(id);
+    let tpl = _parkedTemplates.get(id);
+    if (!tpl) {
+        const m = createAircraftModel(id);
+        tpl = { object: mergeStaticModel(m.object), rig: m.rig };
+        _parkedTemplates.set(id, tpl);
+    }
+    const object = tpl.object.clone(), rig = tpl.rig;
     const spec = AIRCRAFT[id];
     const H = -(rig.minY ?? -spec.length * 0.08) + 1.2;
     const root = new THREE.Group();
@@ -681,7 +691,9 @@ export class Airbases {
         root.traverse(o => {
             if (!o.isMesh || Array.isArray(o.material)) return;
             const gg = o.geometry.clone().applyMatrix4(o.matrixWorld);
-            for (const k of Object.keys(gg.attributes)) if (!['position', 'normal', 'uv'].includes(k)) gg.deleteAttribute(k);
+            // (merged plain parts carry colour, roughness / metalness and emissive per vertex: meshmerge.js)
+            const keep = o.material.vertexColors ? ['position', 'normal', 'uv', 'color', 'aRM', 'aEmi'] : ['position', 'normal', 'uv'];
+            for (const k of Object.keys(gg.attributes)) if (!keep.includes(k)) gg.deleteAttribute(k);
             if (!gg.attributes.uv) gg.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(gg.attributes.position.count * 2), 2));
             if (!gg.attributes.normal) gg.computeVertexNormals();
             const ng = gg.index ? gg.toNonIndexed() : gg;
