@@ -28,12 +28,15 @@ Test files must `import { src } from './helpers/setup.mjs'` first and load game 
 
 | file | covers |
 |---|---|
-| `flight.test.mjs` | Every aircraft built headlessly and flown level at full throttle with `Aircraft.updateFlight` until speed settles, at sea level and 11 km. Prints a top-speed table. Checks: `refSpeeds` stall < takeoff < approach < top speed; sea-level top speed near `flight.speed`; fitted wave-drag strength > 0; 11 km top speed within 0.03 Mach of the type's MMAX. |
+| `flight.test.mjs` | Every aircraft built headlessly and flown level at full throttle with `Aircraft.updateFlight` until speed settles, at sea level, 5 km and 11 km (plus military power at 11 km). Prints a table of top speeds, the fitted drag/thrust terms (`flightCalibration`), climb rate, takeoff roll and approach speed. Checks: sea-level top speed within 0.03 Mach of `flight.speed` and 11 km top within 0.03 Mach of `flight.mach` (the two calibration points in `config.js`); 5 km in between; calibration terms sane; no supercruise-like mil-power top; takes off within 2.6 km; sane climb rate per category; `refSpeeds` ordering; approach speed below the touchdown limit. |
+| `stall.test.mjs` | Types without an AoA limiter stall when pulled at the stall speed (post-stall depth, wing drop, STALL warning) and recover when the stick is eased; a full-stick turn at 1.4x stall speed doesn't stall; fly-by-wire types never post-stall. |
 | `missions.test.mjs` | `dailyMission`: deterministic per date, valid mission/fighter/time, varies over a year, never `f35n`, no subsonic jet for non-strike missions. |
 | `convoy.test.mjs` | `pickConvoyBridge`: empty/null lists, missing paths, not enough road, direction choice, picks among the top three. |
 | `world.test.mjs` | `baseToWorld`/`worldToBase` round trip for every base; `runwayNumbers` gives 01-36 designators, reciprocal ends, L/R only on parallels, no duplicates; `terrainHeight` finite and deterministic over a 60 km grid; airfields flattened; `isOnRunway` at runway centres and ends. |
 | `damage.test.mjs` | `segmentModel` bucketing into nose / tail / wingL / wingR / center (tests the private `regionOf` through it), world positions kept. |
 | `smoke.test.mjs` | Every `src/*.js` imports without throwing, each in a fresh process: first with no browser globals, then with the DOM stub. Lists the modules that need the DOM at import time. `main.js` is skipped (it creates a WebGLRenderer). |
 
-Known problems are marked `todo` rather than hidden (they show as `# TODO` and don't fail the run),
-e.g. the MiG-29 wave-drag fit (see `KNOWN_BAD_WAVE_FIT` in `flight.test.mjs`). Remove the entry once fixed.
+Known problems are marked `todo` rather than hidden (they show as `# TODO` and don't fail the run).
+
+`helpers/flight.mjs` builds headless aircraft (a stub game with nothing to hit, or a flat runway) and a
+re-levelled level-flight harness.
