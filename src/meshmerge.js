@@ -20,9 +20,12 @@ function plainSignature(m) {
 }
 
 // The material for merged plain meshes: a copy of the first one, reading colour, roughness / metalness (aRM) and
-// emissive (aEmi) per vertex
-function plainMaterial(src) {
+// emissive (aEmi) per vertex. One per signature, shared by every merged model (fewer material switches a frame).
+const _plainMats = new Map();
+function plainMaterial(src, sig) {
+    if (_plainMats.has(sig)) return _plainMats.get(sig);
     const m = src.clone();
+    _plainMats.set(sig, m);
     m.color.setRGB(1, 1, 1);
     m.vertexColors = true;
     m.roughness = 1; m.metalness = 1; m.emissive.setRGB(0, 0, 0); m.emissiveIntensity = 1;
@@ -110,7 +113,7 @@ function collect(root, keep) {
                     }
                     const key = (sig || m.uuid) + '#' + names.join(',');
                     let e = groups.get(key);
-                    if (!e) groups.set(key, e = { mat: m, plain: !!sig, geos: [], cast: false, receive: false });
+                    if (!e) groups.set(key, e = { mat: m, plain: !!sig, sig, geos: [], cast: false, receive: false });
                     e.geos.push(flat);
                     e.cast = e.cast || o.castShadow; e.receive = e.receive || o.receiveShadow;
                 }
@@ -126,12 +129,36 @@ function collect(root, keep) {
         try { geo = mergeGeometries(e.geos); } catch (err) { geo = null; }
         e.geos.forEach(g => g.dispose());
         if (!geo) return { meshes: [], used: [] }; // odd attribute sets: leave everything as it was
-        const mat = e.plain ? plainMaterial(e.mat) : e.mat;
+        const mat = e.plain ? plainMaterial(e.mat, e.sig) : e.mat;
+        if (mat.transparent && mat.side === THREE.DoubleSide && !mat.forceSinglePass) {
+            // see-through and two-sided (canopy glass): three.js draws such a mesh twice, back faces then front, and
+            // has to re-resolve its shader for each pass every frame. Two meshes (back then front, same place, so
+            // they sort next to each other in that order) draw the same without that.
+            const [back, front] = twoSided(mat);
+            const b = new THREE.Mesh(geo, back), f = new THREE.Mesh(geo, front);
+            b.receiveShadow = f.receiveShadow = e.receive;
+            f.castShadow = e.cast; // (one shadow, drawn both-sided as before: see twoSided)
+            meshes.push(b, f);
+            continue;
+        }
         const mesh = new THREE.Mesh(geo, mat);
         mesh.castShadow = e.cast; mesh.receiveShadow = e.receive;
         meshes.push(mesh);
     }
     return { meshes, used };
+}
+
+// back-face and front-face copies of a two-sided transparent material (one pair per material)
+const _twoSided = new WeakMap();
+function twoSided(mat) {
+    let p = _twoSided.get(mat);
+    if (!p) {
+        const back = mat.clone(), front = mat.clone();
+        back.side = THREE.BackSide; front.side = THREE.FrontSide;
+        front.shadowSide = mat.shadowSide ?? THREE.DoubleSide; // a DoubleSide material's shadow is drawn both-sided
+        _twoSided.set(mat, p = [back, front]);
+    }
+    return p;
 }
 
 // A new Group (with the object's own transform) holding the object's visible meshes, merged (see collect).

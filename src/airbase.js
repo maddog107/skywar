@@ -14,7 +14,7 @@ import { createAircraftModel } from './models.js';
 import { mergeStaticModel } from './meshmerge.js';
 import { AIRCRAFT } from './config.js';
 import { propInstance, propSize, hasProp } from './props.js';
-import { makeRadialTexture, clamp, rand, freezeStatic, offsetUnits } from './util.js';
+import { makeRadialTexture, clamp, rand, freezeStatic, freezeLocal, offsetUnits } from './util.js';
 import { roadMaterial } from './roads.js';
 import { registerAirTarget, Downed, AIR } from './softtargets.js';
 import { WORLD_BUILDINGS } from './buildings.js';
@@ -147,7 +147,9 @@ function makeRotor(R, blades, tail = false) {
         b.position.z = R / 2;
         const piv = new THREE.Group(); piv.rotation.y = (k / blades) * Math.PI * 2; piv.add(b); g.add(piv);
     }
-    const disc = new THREE.Mesh(new THREE.CircleGeometry(R, 32), new THREE.MeshBasicMaterial({ color: 0x111111, transparent: true, opacity: 0.12, depthWrite: false, side: THREE.DoubleSide }));
+    // (flat: one pass shows both faces exactly as three.js's back-then-front passes would, without re-resolving
+    // the shader twice a frame)
+    const disc = new THREE.Mesh(new THREE.CircleGeometry(R, 32), new THREE.MeshBasicMaterial({ color: 0x111111, transparent: true, opacity: 0.12, depthWrite: false, side: THREE.DoubleSide, forceSinglePass: true }));
     disc.rotation.x = -Math.PI / 2;
     g.add(disc);
     g.userData.disc = disc;
@@ -171,6 +173,7 @@ export function makeHelicopter(id) {
 class Heli {
     constructor(scene, id, waypoints, alt, speed) {
         this.mesh = makeHelicopter(id);
+        freezeLocal(this.mesh, [this.mesh.userData.rotor]); // the airframe moves as a whole, the rotor turns on it
         scene.add(this.mesh);
         const pts = waypoints.map(p => new THREE.Vector3(p.x, Math.max(terrainHeight(p.x, p.z), 0) + alt, p.z));
         // keep clear of hills between waypoints

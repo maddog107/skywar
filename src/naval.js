@@ -14,7 +14,7 @@ import { mergeInPlace } from './meshmerge.js';
 import { ShipFX, seaMotion, SEA_MOTION, deckHeightAt, foamTexture } from './shipfx.js';
 import { terrainHeight } from './world.js';
 import { loft, createAircraftModel } from './models.js';
-import { rand, clamp, lerp, interceptTime } from './util.js';
+import { rand, clamp, lerp, interceptTime, freezeLocal } from './util.js';
 import { WEAPONS } from './config.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3();
@@ -335,6 +335,8 @@ export class Ship {
         this.motionT = Math.random() * 100;
         this.motionSeed = Math.random() * 10;
         this.motion = { heave: 0, pitch: 0, roll: 0 };
+        // the hull moves as a whole: only the radars and turrets turn on it
+        freezeLocal(this.mesh, [this.parts.radar, this.parts.radar2, ...this.mounts.map(m => m.turret)].filter(Boolean));
         this.game.scene.add(this.mesh);
         if (naval.fx) naval.fx.add(this, this.layout);
         this.heading = 0;

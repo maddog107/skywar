@@ -146,21 +146,25 @@ export class Traffic {
 
     // every lane's vehicles, ordered in their direction of travel: each car gets its lane (c._lane) and the
     // oncoming one (c._other). Returns the lanes.
+    // (every frame: the per-path lists are kept and refilled, not reallocated)
     lanes() {
         const L = this._lanes || (this._lanes = new Map());
-        for (const l of L.values()) l.length = 0;
+        for (const e of L.values()) { e.fw.length = 0; e.bw.length = 0; }
         for (const c of this.cars) {
             if (c.stolen || !c.path) continue;
-            let m = L.get(c.path);
-            if (!m) L.set(c.path, m = []);
-            m.push(c);
+            let e = L.get(c.path);
+            if (!e) L.set(c.path, e = { fw: [], bw: [] });
+            (c.dir > 0 ? e.fw : e.bw).push(c);
         }
         const out = [];
-        for (const [p, list] of L) {
-            if (!list.length) { L.delete(p); continue; }
-            const fw = list.filter(c => c.dir > 0).sort((a, b) => a.s - b.s), bw = list.filter(c => c.dir < 0).sort((a, b) => b.s - a.s);
-            for (const c of fw) { c._lane = fw; c._other = bw; }
-            for (const c of bw) { c._lane = bw; c._other = fw; }
+        for (const [p, e] of L) {
+            const { fw, bw } = e;
+            if (!fw.length && !bw.length) { if (p.turn) L.delete(p); continue; } // a turn's path is used once
+            // stable insertion sorts (short lists): the same order as sorting a filtered copy
+            for (let i = 1; i < fw.length; i++) { const c = fw[i]; let j = i - 1; while (j >= 0 && fw[j].s > c.s) { fw[j + 1] = fw[j]; j--; } fw[j + 1] = c; }
+            for (let i = 1; i < bw.length; i++) { const c = bw[i]; let j = i - 1; while (j >= 0 && bw[j].s < c.s) { bw[j + 1] = bw[j]; j--; } bw[j + 1] = c; }
+            for (let i = 0; i < fw.length; i++) { const c = fw[i]; c._lane = fw; c._other = bw; c._k = i; }
+            for (let i = 0; i < bw.length; i++) { const c = bw[i]; c._lane = bw; c._other = fw; c._k = i; }
             out.push(fw, bw);
         }
         return out;
@@ -309,7 +313,7 @@ export class Traffic {
         // keep a gap to the vehicle ahead (a wreck too), pulling round a wreck when the other lane is clear
         const lane = c._lane;
         if (lane) {
-            const k = lane.indexOf(c);
+            const k = lane[c._k] === c ? c._k : lane.indexOf(c);
             let lead = lane[k + 1];
             if (lead && lead === c.passing) lead = lane[k + 2];
             if (lead) {

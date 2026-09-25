@@ -73,6 +73,19 @@ export function makeRadialTexture(size = 128, stops = [[0, 'rgba(255,255,255,1)'
     return tex;
 }
 
+// A model that moves as a whole (a ship, a helicopter, an airliner): its parts keep their place on it, so compose
+// their local matrices once and stop three.js recomposing them every frame (their world matrices still follow the
+// root). `moving`: parts that turn or move on their own (radars, turrets, rotors) keep updating; what's under them
+// is fixed to them.
+export function freezeLocal(root, moving = []) {
+    const own = new Set(moving);
+    root.traverse(o => {
+        if (o === root || own.has(o)) return;
+        o.updateMatrix();
+        o.matrixAutoUpdate = false;
+    });
+}
+
 // Static scenery: work out world matrices once, then stop three.js recomposing them every frame.
 // `animated`: objects that move (they keep updating, and everything under them follows).
 export function freezeStatic(root, animated = []) {
