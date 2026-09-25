@@ -2,7 +2,7 @@
 // World: sky, lighting, streamed LOD terrain, ocean, clouds, forests, airbases
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
-import { fbm, ridged, smoothstep, lerp, clamp, mulberry32, DEG, makeRadialTexture } from './util.js';
+import { fbm, ridged, smoothstep, lerp, clamp, mulberry32, DEG, makeRadialTexture, freezeStatic } from './util.js';
 import { TIMES } from './config.js';
 
 // ── Airbases (terrain is flattened around them) ──
@@ -112,6 +112,16 @@ export function isOnRunway(x, z) {
     }
     return null;
 }
+
+// Directional-light shadows go through seaFade() (defined in the terrain shader)
+function seabedShadows(chunk) {
+    const a = '? getShadow( directionalShadowMap[ i ]', b = 'vDirectionalShadowCoord[ i ] ) : 1.0;';
+    if (!chunk.includes(a) || !chunk.includes(b)) return chunk; // three.js changed: leave shadows alone
+    return chunk.replace(a, '? seaFade( getShadow( directionalShadowMap[ i ]').replace(b, 'vDirectionalShadowCoord[ i ] ) ) : 1.0;');
+}
+
+// run a build generator (see World.tileGeometryJob) to completion
+function runJob(it) { let r; do { r = it.next(); } while (!r.done); return r.value; }
 
 // ═══════════════════════════════════════════════════════════════
 export class World {
@@ -279,8 +289,8 @@ export class World {
             P.hemiSky.set(0x7f7fb0); P.hemiGround.set(0x40302a); P.hemiI = 0.75; P.glow.set(0xff6a20);
             P.clouds.set(0xffb38a); P.cloudShadow.set(0x6a5577); P.fogDensity = 0.00007; P.water.set(0x1a2a40);
         } else if (night) {
-            P.zenith.set(0x02050d); P.horizon.set(0x0f1a2e); P.sun.set(0x9fb6e0); P.sunI = 0.8;
-            P.hemiSky.set(0x33456b); P.hemiGround.set(0x10141a); P.hemiI = 0.7; P.glow.set(0x3a4a70);
+            P.zenith.set(0x02050d); P.horizon.set(0x0f1a2e); P.sun.set(0x9fb6e0); P.sunI = 0.35;
+            P.hemiSky.set(0x33456b); P.hemiGround.set(0x10141a); P.hemiI = 0.35; P.glow.set(0x3a4a70);
             P.clouds.set(0x39455e); P.cloudShadow.set(0x161c28); P.fogDensity = 0.00008; P.water.set(0x040b14);
             // moonlight comes from high up
             this.sunDir.set(0.35, 0.6, -0.4).normalize();
@@ -313,7 +323,7 @@ export class World {
         wu.deepColor.value.copy(P.water);
         wu.skyColor.value.copy(P.zenith);
         wu.horizonColor.value.copy(P.horizon);
-        wu.sunColor.value.copy(P.sun).multiplyScalar(night ? 0.25 : 1);
+        wu.sunColor.value.copy(P.sun).multiplyScalar(night ? 0.4 : 1); // a moon glint on the water at night
         wu.sunDir.value.copy(this.sunDir);
 
         const cu = this.cloudMat.uniforms;
@@ -322,6 +332,7 @@ export class World {
         cu.sunDir.value.copy(this.sunDir);
 
         this.terrainMat.emissive = new THREE.Color(night ? 0x020306 : 0x000000);
+        this.terrainDesat.value = night ? 0.45 : 0; // moonlight washes the colour out of grass and sand
         this.baseLights.forEach(l => (l.visible = night || key === 'dusk'));
         if (this.towns) this.towns.setNight(night || key === 'dusk');
         if (this.airbases) this.airbases.setNight(night || key === 'dusk');
@@ -464,18 +475,27 @@ export class World {
     initTerrainMaterial() {
         this.terrainMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.93, metalness: 0 });
         const detail = this.detailTex;
+        this.terrainDesat = { value: 0 };
         this.terrainMat.onBeforeCompile = (shader) => {
             shader.uniforms.detailMap = { value: detail };
+            shader.uniforms.uDesat = this.terrainDesat;
             shader.vertexShader = shader.vertexShader
                 .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;')
                 .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(position, 1.0)).xyz;');
             shader.fragmentShader = shader.fragmentShader
-                .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nuniform sampler2D detailMap;')
+                .replace('#include <common>', `#include <common>
+                    varying vec3 vWPos;
+                    uniform sampler2D detailMap;
+                    uniform float uDesat;
+                    // the sea bed doesn't get shadows (a ship's shadow would show through the water)
+                    float seaFade(float s) { return mix(s, 1.0, smoothstep(-0.5, -4.0, vWPos.y)); }`)
+                .replace('#include <lights_fragment_begin>', seabedShadows(THREE.ShaderChunk.lights_fragment_begin))
                 .replace('#include <color_fragment>', `#include <color_fragment>
                     float d1 = texture2D(detailMap, vWPos.xz / 38.0).r;
                     float d2 = texture2D(detailMap, vWPos.xz / 460.0).r;
                     float d3 = texture2D(detailMap, vWPos.xz / 3100.0).r;
-                    diffuseColor.rgb *= mix(0.72, 1.22, d1) * mix(0.82, 1.16, d2) * mix(0.85, 1.12, d3);`);
+                    diffuseColor.rgb *= mix(0.72, 1.22, d1) * mix(0.82, 1.16, d2) * mix(0.85, 1.12, d3);
+                    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11))), uDesat);`);
         };
         this.TILE = 2048;
         this.VIEW_TILES = 9;
@@ -490,12 +510,17 @@ export class World {
         return 24;
     }
 
-    buildTileGeometry(tx, tz, seg) {
+    buildTileGeometry(tx, tz, seg) { return runJob(this.tileGeometryJob(tx, tz, seg)); }
+
+    // Tile builds are generators that yield every few rows, so updateTerrain can spread a big tile
+    // over several frames instead of hitching for 20-60 ms.
+    *tileGeometryJob(tx, tz, seg) {
         const T = this.TILE, step = T / seg, x0 = tx * T, z0 = tz * T;
         const N = seg + 3; // one extra ring on each side for normals
         const H = new Float32Array(N * N);
-        for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
-            H[j * N + i] = terrainHeight(x0 + (i - 1) * step, z0 + (j - 1) * step);
+        for (let j = 0; j < N; j++) {
+            for (let i = 0; i < N; i++) H[j * N + i] = terrainHeight(x0 + (i - 1) * step, z0 + (j - 1) * step);
+            if ((j & 3) === 3) yield;
         }
         const V = seg + 1;
         const vCount = V * V + V * 4;
@@ -515,7 +540,10 @@ export class World {
             this.colorAt(pos[k * 3], h, pos[k * 3 + 2], cN.y, col, k * 3);
         };
         let k = 0;
-        for (let j = 0; j < V; j++) for (let i = 0; i < V; i++) setVert(k++, i, j, 0);
+        for (let j = 0; j < V; j++) {
+            for (let i = 0; i < V; i++) setVert(k++, i, j, 0);
+            if (j & 1) yield;
+        }
         // skirts: top, bottom, left, right edges
         const skirtStart = k;
         for (let i = 0; i < V; i++) setVert(k++, i, 0, skirt);
@@ -523,30 +551,32 @@ export class World {
         for (let j = 0; j < V; j++) setVert(k++, 0, j, skirt);
         for (let j = 0; j < V; j++) setVert(k++, seg, j, skirt);
 
-        const idx = [];
+        const idx = new (vCount > 65535 ? Uint32Array : Uint16Array)(seg * seg * 6 + seg * 24);
+        let n = 0;
+        const tri = (a, b, c) => { idx[n++] = a; idx[n++] = b; idx[n++] = c; };
         for (let j = 0; j < seg; j++) for (let i = 0; i < seg; i++) {
             const a = j * V + i, b = a + 1, c = a + V, d = c + 1;
-            idx.push(a, c, b, b, c, d);
+            tri(a, c, b); tri(b, c, d);
         }
         const s0 = skirtStart, s1 = s0 + V, s2 = s1 + V, s3 = s2 + V;
         for (let i = 0; i < seg; i++) {
             // top edge (j=0) faces -z
-            idx.push(i, i + 1, s0 + i, i + 1, s0 + i + 1, s0 + i);
+            tri(i, i + 1, s0 + i); tri(i + 1, s0 + i + 1, s0 + i);
             // bottom edge (j=seg)
             const b0 = seg * V + i;
-            idx.push(b0, s1 + i, b0 + 1, b0 + 1, s1 + i, s1 + i + 1);
+            tri(b0, s1 + i, b0 + 1); tri(b0 + 1, s1 + i, s1 + i + 1);
             // left edge (i=0)
             const l0 = i * V, l1 = (i + 1) * V;
-            idx.push(l0, s2 + i, l1, l1, s2 + i, s2 + i + 1);
+            tri(l0, s2 + i, l1); tri(l1, s2 + i, s2 + i + 1);
             // right edge (i=seg)
             const r0 = i * V + seg, r1 = (i + 1) * V + seg;
-            idx.push(r0, r1, s3 + i, r1, s3 + i + 1, s3 + i);
+            tri(r0, r1, s3 + i); tri(r1, s3 + i + 1, s3 + i);
         }
         const geo = new THREE.BufferGeometry();
         geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
         geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
         geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-        geo.setIndex(idx);
+        geo.setIndex(new THREE.BufferAttribute(idx, 1));
         geo.computeBoundingSphere();
         return geo;
     }
@@ -607,9 +637,11 @@ export class World {
             wanted.add(key);
             const seg = this.lodFor(dist);
             const t = this.tiles.get(key);
+            // trees only on close tiles (built as their own job, after the ground)
+            if (t && t.seg >= 48 && !t.treesDone) jobs.push({ kind: 'trees', tx, tz, key, dist, has: true });
             // hysteresis: a tile sitting right on a ring boundary keeps its resolution instead of flipping back and forth
             if (t && t.seg !== seg && (this.lodFor(dist - 0.35) === t.seg || this.lodFor(dist + 0.35) === t.seg)) continue;
-            if (!t || t.seg !== seg) jobs.push({ tx, tz, seg, key, dist, has: !!t });
+            if (!t || t.seg !== seg) jobs.push({ kind: 'tile', tx, tz, seg, key, dist, has: !!t });
         }
         // remove tiles out of range
         for (const [key, t] of this.tiles) {
@@ -621,31 +653,69 @@ export class World {
         }
         // missing tiles first, then nearest
         jobs.sort((a, b) => (a.has - b.has) || (a.dist - b.dist));
-        const start = performance.now();
-        for (const j of jobs) {
-            if (!force && performance.now() - start > 5) break;
-            const geo = this.buildTileGeometry(j.tx, j.tz, j.seg);
-            let t = this.tiles.get(j.key);
-            if (t) {
-                t.mesh.geometry.dispose();
-                t.mesh.geometry = geo;
-                t.seg = j.seg;
-            } else {
-                const mesh = new THREE.Mesh(geo, this.terrainMat);
-                mesh.receiveShadow = true;
-                mesh.matrixAutoUpdate = false;
-                this.scene.add(mesh);
-                t = { mesh, seg: j.seg, trees: null };
-                this.tiles.set(j.key, t);
+        // a job part-way through carries on only if it's still wanted (the old mesh stays up meanwhile)
+        const P = this.pendingJob;
+        if (P && !jobs.some(j => j.kind === P.job.kind && j.key === P.job.key && j.seg === P.job.seg)) this.pendingJob = null;
+        if (force) {
+            this.pendingJob = null;
+            for (const j of jobs) if (this.jobNeeded(j)) this.finishJob(j, runJob(this.startJob(j)));
+            // ground that just got close enough for trees
+            for (const [key, t] of this.tiles) if (t.seg >= 48 && !t.treesDone) { const [tx, tz] = key.split(',').map(Number); this.finishJob({ kind: 'trees', key, tx, tz }, runJob(this.treesJob(tx, tz))); }
+            return;
+        }
+        // time-sliced: ~4 ms of terrain work per frame, resumed next frame
+        const end = performance.now() + 4;
+        let next = 0;
+        while (performance.now() < end) {
+            if (!this.pendingJob) {
+                const j = jobs[next++];
+                if (!j) break;
+                if (!this.jobNeeded(j)) continue; // done earlier this frame
+                this.pendingJob = { job: j, it: this.startJob(j) };
             }
-            // trees only on close tiles
-            const wantTrees = j.seg >= 48;
-            if (wantTrees && !t.trees) {
-                t.trees = this.buildTrees(j.tx, j.tz);
-                if (t.trees) this.scene.add(t.trees);
-            } else if (!wantTrees && t.trees) {
-                this.scene.remove(t.trees); t.trees.dispose(); t.trees = null;
-            }
+            let r;
+            do { r = this.pendingJob.it.next(); } while (!r.done && performance.now() < end);
+            if (!r.done) break;
+            const j = this.pendingJob.job;
+            this.pendingJob = null;
+            this.finishJob(j, r.value);
+        }
+    }
+
+    jobNeeded(j) {
+        const t = this.tiles.get(j.key);
+        return j.kind === 'trees' ? !!t && t.seg >= 48 && !t.treesDone : !t || t.seg !== j.seg;
+    }
+
+    startJob(j) { return j.kind === 'trees' ? this.treesJob(j.tx, j.tz) : this.tileGeometryJob(j.tx, j.tz, j.seg); }
+
+    finishJob(j, result) {
+        let t = this.tiles.get(j.key);
+        if (j.kind === 'trees') {
+            if (!t) { if (result) result.dispose(); return; }
+            if (t.trees) { this.scene.remove(t.trees); t.trees.dispose(); }
+            t.trees = result; t.treesDone = true;
+            if (result) this.scene.add(result);
+            return;
+        }
+        const geo = result;
+        if (t) {
+            t.mesh.geometry.dispose();
+            t.mesh.geometry = geo;
+            t.seg = j.seg;
+        } else {
+            const mesh = new THREE.Mesh(geo, this.terrainMat);
+            mesh.receiveShadow = true;
+            mesh.matrixAutoUpdate = false;
+            mesh.matrixWorldAutoUpdate = false;
+            this.scene.add(mesh);
+            t = { mesh, seg: j.seg, trees: null, treesDone: false };
+            this.tiles.set(j.key, t);
+        }
+        // trees only on close tiles: far ones drop theirs
+        if (j.seg < 48 && (t.trees || t.treesDone)) {
+            if (t.trees) { this.scene.remove(t.trees); t.trees.dispose(); }
+            t.trees = null; t.treesDone = false;
         }
     }
 
@@ -680,20 +750,23 @@ export class World {
         this.treeMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, flatShading: true });
     }
 
-    // Rebuild tree tiles (after towns/roads exist, so no trees grow on them)
+    // Rebuild tree tiles (after towns/roads exist, so no trees grow on them): the old trees stay up until
+    // updateTerrain has rebuilt each tile's set
     refreshTrees() {
-        for (const t of this.tiles ? this.tiles.values() : []) {
-            if (t.trees) { this.scene.remove(t.trees); t.trees.dispose(); t.trees = null; }
-        }
+        for (const t of this.tiles ? this.tiles.values() : []) t.treesDone = false;
+        if (this.pendingJob && this.pendingJob.job.kind === 'trees') this.pendingJob = null;
     }
 
-    buildTrees(tx, tz) {
+    buildTrees(tx, tz) { return runJob(this.treesJob(tx, tz)); }
+
+    *treesJob(tx, tz) {
         const T = this.TILE;
         const r = mulberry32((tx * 73856093) ^ (tz * 19349663));
         const mats = [];
         const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3();
         const up = new THREE.Vector3(0, 1, 0);
         for (let i = 0; i < 1400 && mats.length < 650; i++) {
+            if ((i & 63) === 63) yield;
             const x = (tx + r()) * T, z = (tz + r()) * T;
             const forest = fbm(x * 0.0006 + 40, z * 0.0006 - 12, 3);
             if (forest < 0.05 + r() * 0.15) continue;
@@ -745,6 +818,10 @@ export class World {
                 void main() {
                     vec2 p = vWPos.xz;
                     float dist = length(cameraPosition - vWPos);
+                    vec3 v = normalize(cameraPosition - vWPos);
+                    // roughly how many metres of water one pixel covers (grazing angles stretch it): detail
+                    // finer than that only makes sparkling noise, so it fades out
+                    float fp = dist * 0.0015 / max(v.y, 0.06);
                     vec3 n = vec3(0.0, 1.0, 0.0);
                     // irregular directional swell (small slopes) + scrolling noise ripples
                     const int W = 6;
@@ -752,23 +829,24 @@ export class World {
                     float freqs[6]; freqs[0]=0.0131; freqs[1]=0.0197; freqs[2]=0.0313; freqs[3]=0.0571; freqs[4]=0.0917; freqs[5]=0.1433;
                     for (int i = 0; i < W; i++) {
                         float f = freqs[i];
-                        float amp = 0.5 / (float(i) * 0.7 + 1.0);
+                        float amp = 0.5 / (float(i) * 0.7 + 1.0) * (1.0 - smoothstep(0.08, 0.3, fp * f / 6.2832));
                         vec2 q = p + vec2(sin(p.y * 0.0021 + float(i)), cos(p.x * 0.0017 - float(i))) * 60.0;
                         float ph = dot(dirs[i], q) * f + time * sqrt(9.8 * f) * 1.2;
                         n.xz -= dirs[i] * f * amp * 2.2 * cos(ph);
                     }
                     float r1 = texture2D(detailMap, p / 140.0 + vec2(time * 0.010, time * 0.006)).r;
                     float r2 = texture2D(detailMap, p / 53.0 - vec2(time * 0.014, -time * 0.009)).r;
-                    float r3 = texture2D(detailMap, p / 17.0 + vec2(-time * 0.02, time * 0.017)).r;
-                    n.xz += (vec2(r1 - r3, r2 - r3)) * 0.35;
+                    float r3 = mix(0.5, texture2D(detailMap, p / 17.0 + vec2(-time * 0.02, time * 0.017)).r, 1.0 - smoothstep(0.6, 3.0, fp));
+                    n.xz += (vec2(r1 - r3, r2 - r3)) * 0.3 * mix(0.1, 1.0, 1.0 - smoothstep(60.0, 900.0, dist)); // fine ripples only up close
                     n = normalize(mix(normalize(n), vec3(0.0, 1.0, 0.0), smoothstep(1500.0, 14000.0, dist) * 0.85));
-                    vec3 v = normalize(cameraPosition - vWPos);
                     float fres = 0.02 + 0.98 * pow(1.0 - max(dot(n, v), 0.0), 5.0);
                     vec3 rf = reflect(-v, n);
                     vec3 sky = mix(horizonColor, skyColor, clamp(rf.y * 1.6, 0.0, 1.0));
                     vec3 col = mix(deepColor, sky, fres);
                     float sd = max(dot(rf, normalize(sunDir)), 0.0);
-                    col += sunColor * (pow(sd, 900.0) * 14.0 + pow(sd, 80.0) * 0.35);
+                    // the sun's glitter spreads into a broader, dimmer path with distance instead of pixel-sized spikes
+                    float wide = smoothstep(200.0, 5000.0, dist);
+                    col += sunColor * (pow(sd, mix(900.0, 150.0, wide)) * mix(14.0, 3.0, wide) + pow(sd, 80.0) * 0.35);
                     float alpha = mix(0.72, 0.97, clamp(fres * 2.0 + smoothstep(200.0, 3000.0, dist), 0.0, 1.0));
                     float fogF = 1.0 - exp(-pow(fogDensity * dist, 2.0));
                     col = mix(col, fogColor, fogF);
@@ -913,7 +991,7 @@ export class World {
             }
             this.scene.add(g);
             this.buildRunwayLights(b, g);
-            if (b.layout !== 'standard') continue;
+            if (b.layout !== 'standard') { freezeStatic(g); continue; }
             const apronMat = new THREE.MeshStandardMaterial({ color: 0x6b6f72, roughness: 0.95 });
             const taxi = new THREE.Mesh(new THREE.PlaneGeometry(22, RUNWAY.length * 0.8), apronMat);
             taxi.rotation.x = -Math.PI / 2; taxi.position.set(140, 0.1, 0); taxi.receiveShadow = true;
@@ -936,6 +1014,7 @@ export class World {
                     g.add(h);
                 }
             }
+            freezeStatic(g);
         }
     }
 
@@ -1000,11 +1079,11 @@ export class World {
             ctx.fillStyle = `rgba(${v},${v},${v},0.25)`;
             ctx.fillRect(Math.random() * 256, Math.random() * 4096, 2, 2);
         }
-        // tyre marks near ends
-        ctx.fillStyle = 'rgba(15,15,15,0.35)';
-        for (let i = 0; i < 60; i++) {
-            ctx.fillRect(90 + Math.random() * 70, 300 + Math.random() * 500, 3, 60 + Math.random() * 120);
-            ctx.fillRect(90 + Math.random() * 70, 3300 + Math.random() * 500, 3, 60 + Math.random() * 120);
+        // tyre marks near ends: short streaks (1 px is ~0.7 m along the runway)
+        ctx.fillStyle = 'rgba(20,20,20,0.2)';
+        for (let i = 0; i < 140; i++) {
+            ctx.fillRect(90 + Math.random() * 70, 300 + Math.random() * 500, 2, 8 + Math.random() * 20);
+            ctx.fillRect(90 + Math.random() * 70, 3300 + Math.random() * 500, 2, 8 + Math.random() * 20);
         }
         ctx.fillStyle = '#c9c9c4';
         // edge lines

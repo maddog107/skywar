@@ -6,6 +6,8 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 import { AIRCRAFT, MODES, DIFFICULTY, TIMES } from './config.js';
 import { World, BASES, terrainHeight } from './world.js';
 import { Effects } from './effects.js';
@@ -74,9 +76,27 @@ cockpitPass.clear = false;
 cockpitPass.clearDepth = true;
 cockpitPass.enabled = false;
 composer.addPass(cockpitPass);
-const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.55, 0.45, 0.92);
+// only real emitters (lights, fire, the sun's glint) are bright enough to bloom
+const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.35, 0.25, 1.0); // tight radius: a wide one hazes the whole night scene
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
+// a light grade on the tone-mapped image: a touch more saturation and contrast, so it isn't milky
+const grade = new ShaderPass({
+    uniforms: { tDiffuse: { value: null }, saturation: { value: 1.08 }, contrast: { value: 1.05 } },
+    vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: `uniform sampler2D tDiffuse; uniform float saturation, contrast; varying vec2 vUv;
+        void main() {
+            vec4 c = texture2D(tDiffuse, vUv);
+            float l = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
+            c.rgb = mix(vec3(l), c.rgb, saturation);
+            c.rgb = (c.rgb - 0.5) * contrast + 0.5;
+            gl_FragColor = vec4(clamp(c.rgb, 0.0, 1.0), c.a);
+        }`,
+});
+composer.addPass(grade);
+// MSAA doesn't reach inside the composer's target, so anti-alias the final image (high quality only)
+const smaa = new SMAAPass();
+composer.addPass(smaa);
 
 function applyQuality() {
     const q = settings.quality;
@@ -85,6 +105,8 @@ function applyQuality() {
     composer.setPixelRatio(pr);
     renderer.shadowMap.enabled = q !== 'low';
     bloom.enabled = q !== 'low';
+    // SMAA costs ~5 ms at 1.75x on a laptop GPU; on high-DPI screens the extra pixels already smooth edges
+    smaa.enabled = q === 'high' && pr < 1.5;
     if (world) {
         world.VIEW_TILES = q === 'low' ? 6 : q === 'medium' ? 8 : 9;
         world.sun.castShadow = q !== 'low';
@@ -152,7 +174,7 @@ async function boot() {
     game.onHelp = () => { if (game.state === 'playing') game.pause(true); openModal('controlsModal'); };
     game.onSettingsChange = () => { save(); document.querySelectorAll('.seg').forEach(sg => { const k = sg.dataset.key; if (k) sg.querySelectorAll('button').forEach(b => b.classList.toggle('sel', b.dataset.val === String(settings[k]))); }); };
     game.applyLivery = (ac) => applyLivery(ac.model, settings.livery, ac.type);
-    window.skywar = { game, settings, world, effects, cockpit, camera, Pilot, renderer };
+    window.skywar = { game, settings, world, effects, cockpit, camera, Pilot, renderer, post: { composer, bloom, grade, smaa } };
     applyQuality();
     audio.setVolume(settings.volume);
     audio.callouts = settings.callouts;
@@ -625,6 +647,7 @@ function updateMenuScene(dt) {
         camera.updateProjectionMatrix();
         world.update(dt, camera, target, game.wind);
         world.updateWeather(dt, camera, game);
+        if (world.towns) world.towns.update(dt, camera.position); // street furniture, parked cars near the camera
         effects.update(dt, camera, scene.fog, () => 0);
     }
 }

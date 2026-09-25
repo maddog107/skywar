@@ -139,3 +139,15 @@ export function makeRadialTexture(size = 128, stops = [[0, 'rgba(255,255,255,1)'
     tex.colorSpace = THREE.SRGBColorSpace;
     return tex;
 }
+
+// Static scenery: work out world matrices once, then stop three.js recomposing them every frame.
+// `animated`: objects that move (they keep updating, and everything under them follows).
+export function freezeStatic(root, animated = []) {
+    root.updateMatrixWorld(true);
+    const moving = new Set();
+    for (const a of animated) a.traverse(o => moving.add(o));
+    root.traverse(o => {
+        o.matrixWorldAutoUpdate = moving.has(o);
+        o.matrixAutoUpdate = animated.includes(o);
+    });
+}

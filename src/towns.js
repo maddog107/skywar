@@ -11,11 +11,12 @@
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
 import { terrainHeight, BASES, gateOf, baseToWorld } from './world.js';
-import { fbm, mulberry32, makeRadialTexture, offsetUnits } from './util.js';
+import { fbm, mulberry32, makeRadialTexture, offsetUnits, freezeStatic } from './util.js';
 import { buildRoads, roadMaterial, outsideBases, samplePath, liftWithDistance } from './roads.js';
 import { mergeGeometries as mergeGeos } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Traffic } from './traffic.js';
-import { CarSet, PAINTS } from './carset.js';
+import { setBridgeNight } from './bridges.js';
+import { CarSet, PAINTS, NearInstances } from './carset.js';
 
 const EXTENT = 24000, CELL = 3200;
 const STREET_HALF = 5, BLOCK_CELL = 4;
@@ -40,16 +41,19 @@ export function makeBuildingMaterial(kind) {
             .replace('#include <common>', `#include <common>
                 uniform float uNight; varying vec3 vLp; varying vec3 vLn; varying vec3 vScale; varying float vInst;
                 float hash12(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+                // box-filtered repeating pulse (1 inside [a, b] of each unit period): far-away facades average
+                // out to a flat tint instead of shimmering in moire patterns
+                float pulseI(float x, float a, float b) { return floor(x) * (b - a) + clamp(fract(x), a, b) - a; }
+                float pulseAA(float x, float a, float b) { float w = max(fwidth(x), 1e-4); return (pulseI(x + 0.5 * w, a, b) - pulseI(x - 0.5 * w, a, b)) / w; }
                 float winMask(out vec2 cell) {
                     cell = vec2(0.0);
                     if (abs(vLn.y) > 0.5) return 0.0;
                     float u = abs(vLn.x) > 0.5 ? vLp.z : vLp.x;
                     float y = vLp.y;
                     ${kind === 'tower' ? 'float fw = 2.4, fh = 3.6, wx0 = 0.08, wx1 = 0.92, wy0 = 0.18, wy1 = 0.9;' : 'float fw = 3.2, fh = 3.0, wx0 = 0.3, wx1 = 0.7, wy0 = 0.35, wy1 = 0.78;'}
-                    float fu = fract(u / fw), fv = fract(y / fh);
                     cell = vec2(floor(u / fw) + (vLn.x + vLn.z) * 57.0, floor(y / fh));
-                    float inX = step(wx0, fu) * step(fu, wx1);
-                    float inY = step(wy0, fv) * step(fv, wy1);
+                    float inX = pulseAA(u / fw, wx0, wx1);
+                    float inY = pulseAA(y / fh, wy0, wy1);
                     float edge = step(1.0, y) * step(y, vScale.y - 0.8);
                     float halfW = (abs(vLn.x) > 0.5 ? vScale.z : vScale.x) * 0.5;
                     float side = step(abs(u), halfW - 0.9);
@@ -57,11 +61,13 @@ export function makeBuildingMaterial(kind) {
                 }`)
             .replace('#include <color_fragment>', `#include <color_fragment>
                 vec2 wcell; float wm = winMask(wcell);
-                float lit = step(0.52, hash12(wcell + vInst * 1.37));
+                float hw = hash12(wcell + vInst * 1.37);
+                float lit = step(0.72, hw); // about a quarter of the windows are lit at night
                 vec3 glass = ${kind === 'tower' ? 'vec3(0.18, 0.26, 0.34)' : 'vec3(0.12, 0.14, 0.17)'};
                 diffuseColor.rgb = mix(diffuseColor.rgb, glass, wm);`)
             .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-                totalEmissiveRadiance += wm * lit * uNight * vec3(1.0, 0.78, 0.45) * 1.6;`);
+                // just under the bloom threshold: lit windows read as bright, not as a glowing haze
+                totalEmissiveRadiance += wm * lit * uNight * mix(vec3(1.0, 0.72, 0.4), vec3(0.75, 0.85, 1.0), step(0.93, hw)) * 0.8;`);
     };
     mat.customProgramCacheKey = () => 'bld_' + kind;
     return mat;
@@ -117,6 +123,8 @@ export class Towns {
         this.buildRoadblocks(this.deadEnds);
         this.traffic = new Traffic(this.group, [...paths, ...this.streetPaths], this.dirtPaths, this);
         this.time = 0;
+        // nothing in a town moves as an object (cars and people are instances) except collapsing bridges
+        freezeStatic(this.group, this.bridges.map(b => b.group));
         if (world) {
             world.blockTree = (x, z) => this.blocked(x, z) || this.towns.some(t => Math.hypot(x - t.x, z - t.z) < t.radius * 0.9);
             world.refreshTrees();
@@ -290,13 +298,13 @@ export class Towns {
         const stopTex = canvasTex(128, 128, (ctx) => { ctx.fillStyle = '#c4161c'; ctx.fillRect(0, 0, 128, 128); ctx.fillStyle = '#fff'; ctx.font = 'bold 38px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('STOP', 64, 66); }, false);
         const darkMat = new THREE.MeshStandardMaterial({ color: 0x2a2d30, roughness: 0.6, metalness: 0.4 });
         const nL = Math.max(1, lights.length * 4), nS = Math.max(1, stops.length * 4);
-        const poles = new THREE.InstancedMesh(poleGeo, darkMat, nL);
-        const heads = new THREE.InstancedMesh(headGeo, darkMat, nL);
-        this.lamps = new THREE.InstancedMesh(lampGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }), nL);
-        const sPoles = new THREE.InstancedMesh(signPoleGeo, new THREE.MeshStandardMaterial({ color: 0x9aa0a4, metalness: 0.5, roughness: 0.4 }), nS);
-        const signs = new THREE.InstancedMesh(signGeo, new THREE.MeshStandardMaterial({ map: stopTex, roughness: 0.6 }), nS);
+        // street furniture is only drawn within a couple of km of the camera (see update)
+        const poles = this.near(poleGeo, darkMat, nL);
+        const heads = this.near(headGeo, darkMat, nL);
+        this.lamps = this.near(lampGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }), nL, { colors: true });
+        const sPoles = this.near(signPoleGeo, new THREE.MeshStandardMaterial({ color: 0x9aa0a4, metalness: 0.5, roughness: 0.4 }), nS);
+        const signs = this.near(signGeo, new THREE.MeshStandardMaterial({ map: stopTex, roughness: 0.6 }), nS);
         const m = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), one = new THREE.Vector3(1, 1, 1), p = new THREE.Vector3();
-        let li = 0, si = 0;
         const zebra = [];
         for (const it of this.intersections) {
             const t = it.t;
@@ -312,31 +320,50 @@ export class Towns {
                 const y = terrainHeight(x, z) - 0.1;
                 q.setFromAxisAngle(up, Math.atan2(-fx, -fz) + Math.PI); // face the oncoming drivers
                 if (it.type === 'light') {
-                    poles.setMatrixAt(li, m.compose(p.set(x, y, z), q, one));
-                    heads.setMatrixAt(li, m.compose(p.set(x, y + 5.6, z), q, one));
-                    this.lamps.setMatrixAt(li, m.compose(p.set(x - fx * 0.22, y + 5.6, z - fz * 0.22), q, one));
+                    poles.add(m.compose(p.set(x, y, z), q, one));
+                    heads.add(m.compose(p.set(x, y + 5.6, z), q, one));
+                    const li = this.lamps.add(m.compose(p.set(x - fx * 0.22, y + 5.6, z - fz * 0.22), q, one));
                     it.heads.push({ idx: li, axis: ap.axis, state: null });
-                    li++;
                     zebra.push({ x: it.x - fx * 11, z: it.z - fz * 11, rot: Math.atan2(fx, fz) });
                 } else {
-                    sPoles.setMatrixAt(si, m.compose(p.set(x, y, z), q, one));
-                    signs.setMatrixAt(si, m.compose(p.set(x, y + 2.25, z), q, one));
-                    si++;
+                    sPoles.add(m.compose(p.set(x, y, z), q, one));
+                    signs.add(m.compose(p.set(x, y + 2.25, z), q, one));
                 }
             }
         }
-        poles.count = heads.count = this.lamps.count = li;
-        sPoles.count = signs.count = si;
         this.lampColors = { red: new THREE.Color(4, 0.2, 0.1), amber: new THREE.Color(4, 2, 0.1), green: new THREE.Color(0.3, 4, 1) };
-        for (let i = 0; i < nL; i++) this.lamps.setColorAt(i, this.lampColors.red);
-        for (const im of [poles, heads, this.lamps, sPoles, signs]) { im.computeBoundingSphere(); im.frustumCulled = false; this.group.add(im); }
+        for (let i = 0; i < this.lamps.n; i++) this.lamps.setColor(i, this.lampColors.red);
         const zTex = canvasTex(64, 64, (ctx) => { ctx.clearRect(0, 0, 64, 64); ctx.fillStyle = 'rgba(240,240,232,0.95)'; for (let i = 0; i < 4; i++) ctx.fillRect(4 + i * 16, 0, 8, 64); }, false);
         const zGeo = new THREE.PlaneGeometry(STREET_HALF * 2 - 1, 3.5); zGeo.rotateX(-Math.PI / 2);
-        const zm = new THREE.InstancedMesh(zGeo, new THREE.MeshStandardMaterial({ map: zTex, color: 0xb8b8b0, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, roughness: 0.9 }), Math.max(1, zebra.length));
-        zebra.forEach((zb, i) => zm.setMatrixAt(i, m.compose(p.set(zb.x, terrainHeight(zb.x, zb.z) + 0.5, zb.z), q.setFromAxisAngle(up, zb.rot), one)));
-        zm.count = zebra.length;
-        zm.frustumCulled = false;
-        this.group.add(zm);
+        const zm = this.near(zGeo, new THREE.MeshStandardMaterial({ map: zTex, color: 0xb8b8b0, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, roughness: 0.9 }), Math.max(1, zebra.length));
+        zebra.forEach((zb) => zm.add(m.compose(p.set(zb.x, terrainHeight(zb.x, zb.z) + 0.5, zb.z), q.setFromAxisAngle(up, zb.rot), one)));
+    }
+
+    // a NearInstances set that update() re-packs around the camera
+    near(geo, mat, max, opts) {
+        const set = new NearInstances(this.group, geo, mat, max, opts);
+        (this.nearSets || (this.nearSets = [])).push(set);
+        return set;
+    }
+
+    // One InstancedMesh per town for a kind of building part, each with its own tight bounding sphere,
+    // so towns out of view (or out of the small shadow frustum) cost nothing. `far`: not drawn beyond this.
+    perTown(geo, mat, list, write, { shadow = true, far = Infinity } = {}) {
+        const byTown = new Map();
+        for (const o of list) { if (!byTown.has(o.t)) byTown.set(o.t, []); byTown.get(o.t).push(o); }
+        const out = [];
+        for (const items of byTown.values()) {
+            const im = new THREE.InstancedMesh(geo, mat, items.length);
+            items.forEach((o, i) => write(im, i, o));
+            im.castShadow = shadow; im.receiveShadow = true;
+            im.computeBoundingSphere();
+            im.matrixAutoUpdate = false;
+            im.userData.far = far;
+            this.group.add(im);
+            (this.townMeshes || (this.townMeshes = [])).push(im);
+            out.push(im);
+        }
+        return out;
     }
 
     // phase of a traffic light for an axis: 'green' | 'amber' | 'red'
@@ -364,6 +391,11 @@ export class Towns {
                 hmin = Math.min(hmin, h); hmax = Math.max(hmax, h);
             }
             if (hmax - hmin > Math.max(3, w * 0.25)) return false;
+            // lots are axis-aligned in the town grid: keep a 2 m gap to every footprint already placed
+            const sw = Math.abs(Math.sin(rot)) > 0.5, hu = (sw ? d : w) / 2 + 1, hv = (sw ? w : d) / 2 + 1;
+            const fp = t.footprints || (t.footprints = []);
+            if (fp.some(f => Math.abs(f.u - u) < f.hu + hu && Math.abs(f.v - v) < f.hv + hv)) return false;
+            fp.push({ u, v, hu, hv });
             for (const q of corners) this.mark(q.x, q.z, 2);
             items[kind].push({ x: c.x, z: c.z, y: hmin - 0.6, w, d, ht: ht + (hmax - hmin), yaw: t.theta + rot, hue: r(), t });
             return true;
@@ -383,6 +415,7 @@ export class Towns {
                     const c = this.tw(t, cu, cv);
                     if (!this.blocked(c.x, c.z) && terrainHeight(c.x, c.z) > 2 && slopeAt(c.x, c.z) < 0.1) {
                         church = true;
+                        (t.footprints || (t.footprints = [])).push({ u: cu, v: cv, hu: 16, hv: 20 });
                         specials.push({ x: c.x, z: c.z, y: terrainHeight(c.x, c.z) - 0.5, yaw: t.theta });
                         this.mark(c.x, c.z, 18);
                         continue;
@@ -422,13 +455,13 @@ export class Towns {
                             const lat = o + (w / 2 + 2);
                             const du = alongU ? cu + lat : cu + sgn * mid, dv = alongU ? cv + sgn * mid : cv + lat;
                             const c = this.tw(t, du, dv);
-                            const k = r(); driveways.push({ x: c.x, z: c.z, len, yaw: t.theta + rot, cars: k < 0.15 ? 0 : k < 0.6 ? 1 : 2, hue: r(), hue2: r(), flip: r() < 0.5 });
+                            const k = r(); driveways.push({ t, x: c.x, z: c.z, len, yaw: t.theta + rot, cars: k < 0.15 ? 0 : k < 0.6 ? 1 : 2, hue: r(), hue2: r(), flip: r() < 0.5 });
                         }
                     }
                 }
                 if (zone === 'house' || zone === 'town') for (let k = 0; k < 2; k++) {
                     const c = this.tw(t, cu + (r() - 0.5) * inner * 0.35, cv + (r() - 0.5) * inner * 0.35);
-                    if (!this.blocked(c.x, c.z)) trees.push({ x: c.x, z: c.z, s: 0.5 + r() * 0.4 });
+                    if (!this.blocked(c.x, c.z)) trees.push({ x: c.x, z: c.z, s: 0.5 + r() * 0.4, t });
                 }
             }
         }
@@ -441,44 +474,42 @@ export class Towns {
         const towerCols = [0x7d8fa0, 0x8a98a8, 0x5f7488, 0x9aa7b3, 0x6b7c70, 0xb0a898];
         const roofCols = [0x9a3b2a, 0x7a3326, 0x5a5f66, 0x8a4a2e, 0x4a4f55, 0x6e2f22];
         const all = [...items.house.map(o => ({ ...o, kind: 'house' })), ...items.town.map(o => ({ ...o, kind: 'town' })), ...items.apt.map(o => ({ ...o, kind: 'apt' }))];
-        const walls = new THREE.InstancedMesh(wallGeo, houseMat, Math.max(1, all.length));
-        all.forEach((o, i) => {
-            q.setFromAxisAngle(up, o.yaw);
-            walls.setMatrixAt(i, m.compose(p.set(o.x, o.y, o.z), q, s.set(o.w, o.ht, o.d)));
-            walls.setColorAt(i, c.setHex(o.kind === 'apt' ? aptCols[Math.floor(o.hue * aptCols.length)] : wallCols[Math.floor(o.hue * wallCols.length)]));
+        for (const o of all) {
             const top = o.y + o.ht;
-            if (o.kind === 'house') roofs.push({ x: o.x, y: top, z: o.z, w: o.w * 1.12, d: o.d * 1.14, h: 2 + o.d * 0.2, yaw: o.yaw, hue: o.hue });
+            if (o.kind === 'house') roofs.push({ t: o.t, x: o.x, y: top, z: o.z, w: o.w * 1.12, d: o.d * 1.14, h: 2 + o.d * 0.2, yaw: o.yaw, hue: o.hue });
             else {
-                flatRoofs.push({ x: o.x, y: top, z: o.z, w: o.w + 0.4, d: o.d + 0.4, yaw: o.yaw });
-                if (o.kind === 'apt' || o.hue < 0.4) acUnits.push({ x: o.x + (o.hue - 0.5) * o.w * 0.4, y: top + 0.1, z: o.z, yaw: o.yaw, s: 1.4 + o.hue * 1.4 });
+                flatRoofs.push({ t: o.t, x: o.x, y: top, z: o.z, w: o.w + 0.4, d: o.d + 0.4, yaw: o.yaw });
+                if (o.kind === 'apt' || o.hue < 0.4) acUnits.push({ t: o.t, x: o.x + (o.hue - 0.5) * o.w * 0.4, y: top + 0.1, z: o.z, yaw: o.yaw, s: 1.4 + o.hue * 1.4 });
             }
-        });
-        walls.count = all.length;
-        const towers = new THREE.InstancedMesh(wallGeo, towerMat, Math.max(1, items.tower.length));
-        items.tower.forEach((o, i) => {
+        }
+        this.perTown(wallGeo, houseMat, all, (im, i, o) => {
             q.setFromAxisAngle(up, o.yaw);
-            towers.setMatrixAt(i, m.compose(p.set(o.x, o.y, o.z), q, s.set(o.w, o.ht, o.d)));
-            towers.setColorAt(i, c.setHex(towerCols[Math.floor(o.hue * towerCols.length)]));
-            flatRoofs.push({ x: o.x, y: o.y + o.ht, z: o.z, w: o.w + 0.6, d: o.d + 0.6, yaw: o.yaw });
-            acUnits.push({ x: o.x, y: o.y + o.ht + 0.1, z: o.z, yaw: o.yaw, s: 3 + o.hue * 3 });
-            if (o.ht > 80) acUnits.push({ x: o.x, y: o.y + o.ht, z: o.z, yaw: 0, s: 0.5, mast: 18 });
+            im.setMatrixAt(i, m.compose(p.set(o.x, o.y, o.z), q, s.set(o.w, o.ht, o.d)));
+            im.setColorAt(i, c.setHex(o.kind === 'apt' ? aptCols[Math.floor(o.hue * aptCols.length)] : wallCols[Math.floor(o.hue * wallCols.length)]));
         });
-        towers.count = items.tower.length;
+        for (const o of items.tower) {
+            flatRoofs.push({ t: o.t, x: o.x, y: o.y + o.ht, z: o.z, w: o.w + 0.6, d: o.d + 0.6, yaw: o.yaw });
+            acUnits.push({ t: o.t, x: o.x, y: o.y + o.ht + 0.1, z: o.z, yaw: o.yaw, s: 3 + o.hue * 3 });
+            if (o.ht > 80) acUnits.push({ t: o.t, x: o.x, y: o.y + o.ht, z: o.z, yaw: 0, s: 0.5, mast: 18 });
+        }
+        this.perTown(wallGeo, towerMat, items.tower, (im, i, o) => {
+            q.setFromAxisAngle(up, o.yaw);
+            im.setMatrixAt(i, m.compose(p.set(o.x, o.y, o.z), q, s.set(o.w, o.ht, o.d)));
+            im.setColorAt(i, c.setHex(towerCols[Math.floor(o.hue * towerCols.length)]));
+        });
         // gable roofs: ridge along the building's long side (w), gables at the ends
-        const roofMesh = new THREE.InstancedMesh(gableGeometry(), new THREE.MeshStandardMaterial({ roughness: 0.8, side: THREE.DoubleSide }), Math.max(1, roofs.length));
-        roofs.forEach((o, i) => {
+        this.perTown(gableGeometry(), new THREE.MeshStandardMaterial({ roughness: 0.8, side: THREE.DoubleSide }), roofs, (im, i, o) => {
             q.setFromAxisAngle(up, o.yaw + Math.PI / 2);
-            roofMesh.setMatrixAt(i, m.compose(p.set(o.x, o.y, o.z), q, s.set(o.d, o.h, o.w)));
-            roofMesh.setColorAt(i, c.setHex(roofCols[Math.floor(o.hue * 7) % roofCols.length]));
+            im.setMatrixAt(i, m.compose(p.set(o.x, o.y, o.z), q, s.set(o.d, o.h, o.w)));
+            im.setColorAt(i, c.setHex(roofCols[Math.floor(o.hue * 7) % roofCols.length]));
         });
-        roofMesh.count = roofs.length;
-        const flat = new THREE.InstancedMesh(wallGeo, new THREE.MeshStandardMaterial({ color: 0x55585c, roughness: 0.9 }), Math.max(1, flatRoofs.length));
-        flatRoofs.forEach((o, i) => { q.setFromAxisAngle(up, o.yaw); flat.setMatrixAt(i, m.compose(p.set(o.x, o.y - 0.2, o.z), q, s.set(o.w, 0.6, o.d))); });
-        flat.count = flatRoofs.length;
-        const ac = new THREE.InstancedMesh(wallGeo, new THREE.MeshStandardMaterial({ color: 0x9da3a6, roughness: 0.6, metalness: 0.4 }), Math.max(1, acUnits.length));
-        acUnits.forEach((o, i) => { q.setFromAxisAngle(up, o.yaw); ac.setMatrixAt(i, m.compose(p.set(o.x, o.y, o.z), q, o.mast ? s.set(o.s, o.mast, o.s) : s.set(o.s * 1.6, o.s * 0.7, o.s))); });
-        ac.count = acUnits.length;
-        for (const im of [walls, towers, roofMesh, flat, ac]) { im.castShadow = true; im.receiveShadow = true; im.computeBoundingSphere(); this.group.add(im); }
+        this.perTown(wallGeo, new THREE.MeshStandardMaterial({ color: 0x55585c, roughness: 0.9 }), flatRoofs, (im, i, o) => {
+            q.setFromAxisAngle(up, o.yaw); im.setMatrixAt(i, m.compose(p.set(o.x, o.y - 0.2, o.z), q, s.set(o.w, 0.6, o.d)));
+        });
+        // rooftop clutter is too small to see from far away
+        this.perTown(wallGeo, new THREE.MeshStandardMaterial({ color: 0x9da3a6, roughness: 0.6, metalness: 0.4 }), acUnits, (im, i, o) => {
+            q.setFromAxisAngle(up, o.yaw); im.setMatrixAt(i, m.compose(p.set(o.x, o.y, o.z), q, o.mast ? s.set(o.s, o.mast, o.s) : s.set(o.s * 1.6, o.s * 0.7, o.s)));
+        }, { far: 7000 });
         for (const sp of specials) this.group.add(this.makeChurch(sp));
         this.buildDriveways(driveways);
         // parks: a lawn following the ground, and trees
@@ -498,14 +529,13 @@ export class Towns {
             this.group.add(lawn);
             for (let k = 0; k < 9; k++) {
                 const tp = this.tw(pk.t, pk.cu + (this.rand() - 0.5) * pk.size * 0.85, pk.cv + (this.rand() - 0.5) * pk.size * 0.85);
-                trees.push({ x: tp.x, z: tp.z, s: 0.6 + this.rand() * 0.5 });
+                trees.push({ x: tp.x, z: tp.z, s: 0.6 + this.rand() * 0.5, t: pk.t });
             }
         }
         if (this.world && this.world.treeGeo && trees.length) {
-            const tm = new THREE.InstancedMesh(this.world.treeGeo, this.world.treeMat, trees.length);
-            trees.forEach((o, i) => { q.setFromAxisAngle(up, this.rand() * 6.28); tm.setMatrixAt(i, m.compose(p.set(o.x, terrainHeight(o.x, o.z) - 0.5, o.z), q, s.set(o.s, o.s, o.s))); });
-            tm.computeBoundingSphere();
-            this.group.add(tm);
+            this.perTown(this.world.treeGeo, this.world.treeMat, trees, (im, i, o) => {
+                q.setFromAxisAngle(up, this.rand() * 6.28); im.setMatrixAt(i, m.compose(p.set(o.x, terrainHeight(o.x, o.z) - 0.5, o.z), q, s.set(o.s, o.s, o.s)));
+            }, { shadow: false, far: 12000 });
         }
         this.buildingCount = all.length + items.tower.length;
     }
@@ -513,14 +543,10 @@ export class Towns {
     buildDriveways(list) {
         const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0), c = new THREE.Color();
         const slab = new THREE.BoxGeometry(1, 1, 1); slab.translate(0, 0.5, 0);
-        const dw = new THREE.InstancedMesh(slab, new THREE.MeshStandardMaterial({ color: 0x9a978f, roughness: 0.95 }), Math.max(1, list.length));
-        list.forEach((o, i) => {
+        this.perTown(slab, new THREE.MeshStandardMaterial({ color: 0x9a978f, roughness: 0.95 }), list, (im, i, o) => {
             q.setFromAxisAngle(up, o.yaw);
-            dw.setMatrixAt(i, m.compose(p.set(o.x, terrainHeight(o.x, o.z) - 0.3, o.z), q, s.set(3.6, 0.75, o.len)));
-        });
-        dw.count = list.length;
-        dw.receiveShadow = true; dw.computeBoundingSphere();
-        this.group.add(dw);
+            im.setMatrixAt(i, m.compose(p.set(o.x, terrainHeight(o.x, o.z) - 0.3, o.z), q, s.set(3.6, 0.75, o.len)));
+        }, { shadow: false, far: 9000 });
         // parked cars
         // one or two cars per driveway (two parked nose to tail)
         const cars = [];
@@ -555,7 +581,7 @@ export class Towns {
         // shirts take a per-person colour; heads and legs are shared
         this.people = new THREE.InstancedMesh(body, new THREE.MeshStandardMaterial({ roughness: 0.85 }), Math.max(1, n));
         this.peopleRest = new THREE.InstancedMesh(mergeGeos([merge(head, skin), merge(legs, dark)]), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85 }), Math.max(1, n));
-        for (const im of [this.people, this.peopleRest]) { im.frustumCulled = false; im.castShadow = false; }
+        for (const im of [this.people, this.peopleRest]) { im.frustumCulled = false; im.castShadow = false; im.instanceMatrix.setUsage(THREE.DynamicDrawUsage); }
         const SHIRTS = [0xc0392b, 0x2980b9, 0x27ae60, 0xf1c40f, 0xecf0f1, 0x8e44ad, 0x34495e, 0xe67e22, 0x16a085, 0xd35400];
         this.walkers = [];
         const c = new THREE.Color();
@@ -569,18 +595,17 @@ export class Towns {
         this.group.add(this.people, this.peopleRest);
     }
 
-    _shirt(w) { return (this._sc || (this._sc = new THREE.Color())).setHex(w.shirt); }
-
     updatePeople(dt, cam) {
         if (!this.people) return;
-        const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3(), t = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
+        const T = this._pt || (this._pt = { m: new THREE.Matrix4(), q: new THREE.Quaternion(), s: new THREE.Vector3(), p: new THREE.Vector3(), t: new THREE.Vector3(), up: new THREE.Vector3(0, 1, 0), c: new THREE.Color() });
+        const { m, q, s, p, t, up } = T;
         const R2 = 1800 * 1800;
         let k = 0;
-        this.walkers.forEach((w) => {
+        for (const w of this.walkers) {
             w.s += w.dir * w.speed * dt;
             if (w.s < 1 || w.s > w.path.len - 1) { w.dir = -w.dir; w.s = Math.max(1, Math.min(w.path.len - 1, w.s)); }
             // too far away to see: just keep walking, don't draw
-            if (cam && w.x !== undefined && (w.x - cam.x) ** 2 + (w.z - cam.z) ** 2 > R2) return;
+            if (cam && w.x !== undefined && (w.x - cam.x) ** 2 + (w.z - cam.z) ** 2 > R2) continue;
             samplePath(w.path, w.s, p, t);
             w.x = p.x; w.z = p.z;
             const i = k++;
@@ -590,13 +615,20 @@ export class Towns {
             p.y += -0.35 + Math.abs(Math.sin(w.ph)) * 0.06; // street height (cheaper than sampling the terrain)
             q.setFromAxisAngle(up, Math.atan2(-t.x * w.dir, -t.z * w.dir));
             m.compose(p, q, s.set(1, w.h, 1));
-            this.people.setMatrixAt(i, m);
-            this.peopleRest.setMatrixAt(i, m);
-            this.people.setColorAt(i, this._shirt(w));
-        });
+            m.toArray(this.people.instanceMatrix.array, i * 16);
+            m.toArray(this.peopleRest.instanceMatrix.array, i * 16);
+            T.c.setHex(w.shirt).toArray(this.people.instanceColor.array, i * 3);
+        }
+        const was = this.people.count;
         this.people.count = this.peopleRest.count = k;
-        if (this.people.instanceColor) this.people.instanceColor.needsUpdate = true;
-        this.people.instanceMatrix.needsUpdate = this.peopleRest.instanceMatrix.needsUpdate = true;
+        this.people.visible = this.peopleRest.visible = k > 0;
+        if (!k && !was) return;
+        // upload only the walkers actually drawn
+        for (const [attr, n] of [[this.people.instanceMatrix, k * 16], [this.peopleRest.instanceMatrix, k * 16], [this.people.instanceColor, k * 3]]) {
+            attr.clearUpdateRanges();
+            if (n) attr.addUpdateRange(0, n);
+            attr.needsUpdate = n > 0;
+        }
     }
 
     makeChurch(sp) {
@@ -654,10 +686,8 @@ export class Towns {
         }
         const add = (geo, mat, list, scaleW) => {
             if (!list.length) return;
-            const im = new THREE.InstancedMesh(geo, mat, list.length);
-            list.forEach(([x, y, z, yaw, w], i) => im.setMatrixAt(i, m.compose(p.set(x, y, z), q.setFromAxisAngle(up, yaw), scaleW ? s.set(w, 1, 1) : one)));
-            im.castShadow = true; im.computeBoundingSphere();
-            this.group.add(im);
+            const set = this.near(geo, mat, list.length, { castShadow: true });
+            for (const [x, y, z, yaw, w] of list) set.add(m.compose(p.set(x, y, z), q.setFromAxisAngle(up, yaw), scaleW ? s.set(w, 1, 1) : one));
         };
         add(plankGeo, new THREE.MeshStandardMaterial({ map: stripe, roughness: 0.6 }), planks, true);
         add(postGeo, new THREE.MeshStandardMaterial({ color: 0x555a5e, roughness: 0.6 }), posts);
@@ -673,28 +703,25 @@ export class Towns {
             for (let k = 1; k < p.pts.length - 1; k += 4) {
                 const a = p.pts[k], b = p.pts[k + 1];
                 let tx = b.x - a.x, tz = b.z - a.z; const L = Math.hypot(tx, tz) || 1; tx /= L; tz /= L;
-                const side = (k / 4) % 2 ? 1 : -1;
+                const side = Math.floor(k / 4) % 2 ? 1 : -1; // alternate sides of the street
                 const x = a.x - tz * (STREET_HALF + 1.5) * side, z = a.z + tx * (STREET_HALF + 1.5) * side;
                 if (terrainHeight(x, z) < 2) continue;
                 pts.push({ x, z, y: terrainHeight(x, z), rx: tz * side, rz: -tx * side });
             }
         }
         const poleGeo = new THREE.CylinderGeometry(0.08, 0.11, 7, 5); poleGeo.translate(0, 3.5, 0);
-        const poles = new THREE.InstancedMesh(poleGeo, new THREE.MeshStandardMaterial({ color: 0x3b3f44, metalness: 0.5, roughness: 0.5 }), Math.max(1, pts.length));
+        const poles = this.near(poleGeo, new THREE.MeshStandardMaterial({ color: 0x3b3f44, metalness: 0.5, roughness: 0.5 }), Math.max(1, pts.length));
         const m = new THREE.Matrix4();
         const glow = [];
-        pts.forEach((o, i) => {
-            poles.setMatrixAt(i, m.makeTranslation(o.x, o.y - 0.2, o.z));
+        for (const o of pts) {
+            poles.add(m.makeTranslation(o.x, o.y - 0.2, o.z));
             glow.push(o.x + o.rx * 1.2, o.y + 6.9, o.z + o.rz * 1.2);
-        });
-        poles.count = pts.length;
-        poles.computeBoundingSphere();
-        this.group.add(poles);
+        }
         const lg = new THREE.BufferGeometry();
         lg.setAttribute('position', new THREE.Float32BufferAttribute(glow, 3));
         this.lampGlow = new THREE.Points(lg, new THREE.PointsMaterial({
             map: makeRadialTexture(32, [[0, 'rgba(255,255,255,1)'], [0.3, 'rgba(255,225,170,0.6)'], [1, 'rgba(255,190,110,0)']]),
-            color: new THREE.Color(3, 2.3, 1.3), size: 16, sizeAttenuation: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: true,
+            color: new THREE.Color(1.6, 1.2, 0.7), size: 5, sizeAttenuation: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: true,
         }));
         this.lampGlow.visible = false;
         this.lampGlow.frustumCulled = false;
@@ -772,9 +799,15 @@ export class Towns {
     update(dt, cam) {
         this.time += dt;
         // parked cars: re-pick the ones near the camera when it has moved a fair way
-        if (this.parkedSet && cam && (!this._parkAt || this._parkAt.distanceToSquared(cam) > 150 * 150)) {
+        // (and the street furniture, and which towns' rooftop clutter / trees are close enough to draw)
+        if (cam && (!this._parkAt || this._parkAt.distanceToSquared(cam) > 150 * 150)) {
             this._parkAt = (this._parkAt || new THREE.Vector3()).copy(cam);
-            this.parkedSet.commit(cam, 2200);
+            if (this.parkedSet) this.parkedSet.commit(cam, 2200);
+            for (const set of this.nearSets || []) set.commit(cam, 2000);
+            for (const im of this.townMeshes || []) {
+                const sp = im.boundingSphere, far = im.userData.far;
+                if (far < Infinity) im.visible = Math.hypot(sp.center.x - cam.x, sp.center.z - cam.z) - sp.radius < far;
+            }
         }
         this.updatePeople(dt, cam);
         if (!this.lamps) return;
@@ -783,15 +816,16 @@ export class Towns {
             if (it.type !== 'light') continue;
             for (const h of it.heads) {
                 const st = this.lightState(it, h.axis);
-                if (h.state !== st) { h.state = st; this.lamps.setColorAt(h.idx, this.lampColors[st]); dirty = true; }
+                if (h.state !== st) { h.state = st; this.lamps.setColor(h.idx, this.lampColors[st]); dirty = true; }
             }
         }
-        if (dirty && this.lamps.instanceColor) this.lamps.instanceColor.needsUpdate = true;
+        if (dirty) this.lamps.refreshColors();
     }
 
     setNight(on) {
         if (this.lampGlow) this.lampGlow.visible = on;
         for (const m of this.buildingMats || []) m.userData.night.value = on ? 1 : 0;
         if (this.traffic) this.traffic.setNight(on);
+        setBridgeNight(on);
     }
 }

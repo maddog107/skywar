@@ -91,9 +91,22 @@ function normaliseGLTF(root, id, info) {
                     const lum = m.color.r + m.color.g + m.color.b;
                     if (lum > 0.4 && !m.transparent) m.color.setHex(spec.proc?.paint ?? 0x7a848e);
                 }
+                // KHR_materials_transmission makes three.js re-render every opaque object into a
+                // transmission target each frame: plain transparency looks the same on a canopy
+                const glass = m.transmission > 0 || (m.transparent && m.opacity < 1) || /glass|canopy|cockpit|window/i.test(m.name || '');
+                if (m.transmission > 0) {
+                    m.transmission = 0;
+                    m.transparent = true;
+                    m.opacity = Math.min(m.opacity ?? 1, 0.35);
+                }
                 if ('roughness' in m) {
-                    m.roughness = Math.min(m.roughness ?? 0.6, 0.7);
-                    m.metalness = Math.max(m.metalness ?? 0.2, info.metal ?? 0.25);
+                    if (glass) {
+                        m.roughness = Math.min(m.roughness ?? 0.1, 0.15);
+                    } else {
+                        // painted airframes: GLB metalness 1 turns them into sky mirrors (dark navy)
+                        m.roughness = clamp01(m.roughness ?? 0.6, 0.35, 0.7);
+                        m.metalness = clamp01(m.metalness ?? 0.2, 0.05, info.metal ?? 0.3);
+                    }
                     m.envMapIntensity = 1.0;
                 }
                 if (m.transparent && m.opacity < 1) {

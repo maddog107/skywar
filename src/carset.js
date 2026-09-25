@@ -99,10 +99,73 @@ export class CarSet {
                 k++;
             }
             for (const p of list) {
+                const was = p.im.count;
                 p.im.count = k;
-                p.im.instanceMatrix.needsUpdate = true;
-                p.im.instanceColor.needsUpdate = true;
+                p.im.visible = k > 0;
+                if (!k && !was) continue; // nothing near before or now: no upload
+                upload(p.im.instanceMatrix, k * 16);
+                upload(p.im.instanceColor, k * 3);
             }
         }
+    }
+}
+
+// flag just the first n floats of an instance buffer for upload (not the whole buffer)
+function upload(attr, n) {
+    attr.clearUpdateRanges();
+    if (n > 0) attr.addUpdateRange(0, n);
+    attr.needsUpdate = n > 0;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Small things only worth drawing near the camera (street furniture): every
+// transform lives here, and commit() uploads just the ones within a radius,
+// packed to the front of the InstancedMesh. The bounding sphere is refit to
+// the near set so the shadow pass can cull it too.
+// ═══════════════════════════════════════════════════════════════
+export class NearInstances {
+    constructor(parent, geometry, material, max, { castShadow = false, receiveShadow = true, colors = false } = {}) {
+        this.n = 0;
+        this.mats = new Float32Array(max * 16);
+        this.cols = colors ? new Float32Array(max * 3).fill(1) : null;
+        this.slots = new Int32Array(Math.max(1, max)); // packed slot → source index
+        this.k = 0;
+        const im = this.im = new THREE.InstancedMesh(geometry, material, Math.max(1, max));
+        if (colors) im.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(1, max) * 3).fill(1), 3);
+        im.count = 0;
+        im.visible = false;
+        im.castShadow = castShadow;
+        im.receiveShadow = receiveShadow;
+        im.matrixAutoUpdate = false;
+        parent.add(im);
+    }
+
+    add(m) { m.toArray(this.mats, this.n * 16); return this.n++; }
+
+    setColor(i, c) { c.toArray(this.cols, i * 3); }
+
+    commit(center, radius) {
+        const r2 = radius * radius, M = this.mats, im = this.im, A = im.instanceMatrix.array;
+        let k = 0;
+        for (let i = 0; i < this.n; i++) {
+            const o = i * 16, dx = M[o + 12] - center.x, dz = M[o + 14] - center.z;
+            if (dx * dx + dz * dz > r2) continue;
+            A.set(M.subarray(o, o + 16), k * 16);
+            this.slots[k++] = i;
+        }
+        const was = this.k;
+        this.k = im.count = k;
+        im.visible = k > 0;
+        if (!k && !was) return;
+        upload(im.instanceMatrix, k * 16);
+        if (this.cols) this.refreshColors();
+        if (k) im.computeBoundingSphere();
+    }
+
+    // re-copy the colours of the packed instances (e.g. traffic lights changing)
+    refreshColors() {
+        const C = this.cols, ca = this.im.instanceColor.array;
+        for (let s = 0; s < this.k; s++) { const i = this.slots[s] * 3; ca[s * 3] = C[i]; ca[s * 3 + 1] = C[i + 1]; ca[s * 3 + 2] = C[i + 2]; }
+        upload(this.im.instanceColor, this.k * 3);
     }
 }

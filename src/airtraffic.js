@@ -189,7 +189,11 @@ class Flight {
         }
     }
 
-    remove() { this.sys.scene.remove(this.mesh); }
+    remove() {
+        this.sys.scene.remove(this.mesh);
+        // the model's geometry and materials are shared; only the light sprites' materials are this flight's own
+        if (this.lights) for (const sp of [this.lights.beacon, this.lights.land, ...this.lights.wing]) sp.material.dispose();
+    }
 }
 
 class Airport {

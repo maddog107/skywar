@@ -13,7 +13,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createAircraftModel } from './models.js';
 import { AIRCRAFT } from './config.js';
 import { propInstance, propSize, hasProp } from './props.js';
-import { makeRadialTexture, clamp, rand } from './util.js';
+import { makeRadialTexture, clamp, rand, freezeStatic } from './util.js';
 import { roadMaterial } from './roads.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler(0, 0, 0, 'YXZ');
@@ -56,16 +56,25 @@ function canvasTex(w, h, draw, repeat = false) {
     return t;
 }
 
+// gear geometry is shared between every parked / taxiing aircraft of the same size (never disposed)
+const _gearGeo = new Map();
+function gearGeo(key, make) { if (!_gearGeo.has(key)) _gearGeo.set(key, make()); return _gearGeo.get(key); }
+
 // Simple fixed landing gear for a parked (non-flying) aircraft model
 function simpleGear(L, halfSpan, bellyY, H) {
     const g = new THREE.Group();
     const sc = clamp(L / 17, 0.8, 3.2), wheelR = 0.33 * sc;
     const strutLen = Math.max(0.4, bellyY - (-H + wheelR));
     const mainX = L > 25 ? Math.min(halfSpan * 0.25, L * 0.09) : Math.max(1, L * 0.075);
+    const k = sc.toFixed(3) + ':' + strutLen.toFixed(3);
+    const strutGeo = gearGeo('s' + k, () => new THREE.CylinderGeometry(0.07 * sc, 0.09 * sc, strutLen, 6));
+    const wheelGeo = gearGeo('w' + k, () => new THREE.CylinderGeometry(wheelR, wheelR, 0.24 * sc, 12));
     for (const [x, z] of [[0, -0.3 * L], [-mainX, 0.04 * L], [mainX, 0.04 * L]]) {
-        const s = cyl(0.07 * sc, 0.09 * sc, strutLen, MAT.steel, x, bellyY - strutLen, z, g, 6);
-        s.castShadow = true;
-        const w = new THREE.Mesh(new THREE.CylinderGeometry(wheelR, wheelR, 0.24 * sc, 12), MAT.dark);
+        const s = new THREE.Mesh(strutGeo, MAT.steel);
+        s.position.set(x, bellyY - strutLen / 2, z);
+        s.castShadow = true; s.receiveShadow = true;
+        g.add(s);
+        const w = new THREE.Mesh(wheelGeo, MAT.dark);
         w.rotation.z = Math.PI / 2; w.position.set(x, -H + wheelR, z);
         g.add(w);
     }
@@ -171,10 +180,23 @@ export class Airbases {
         g.rotation.y = -b.heading;
         this.scene.add(g);
         const info = { base: b, group: g, parked: new THREE.Group(), arms: [], radar: null, sock: null };
-        g.add(info.parked);
+        // parked aircraft: detailed models, only drawn near the base (the holder is culled; `parked` itself is
+        // hidden when the enemy's jets are live targets instead)
+        const parkedHolder = new THREE.Group();
+        parkedHolder.add(info.parked);
+        g.add(parkedHolder);
+        this.heavy(b, true).push(parkedHolder);
         this.buildFence(b, g);
-        if (b.layout === 'miramar') { this.buildMiramar(b, g, info); return info; }
-        if (b.layout === 'civil') { this.buildCivil(b, g, info); return info; }
+        if (b.layout === 'miramar') this.buildMiramar(b, g, info);
+        else if (b.layout === 'civil') this.buildCivil(b, g, info);
+        else this.buildStandard(b, g, info);
+        // everything here stands still except the gate arms, radar, windsock: stop three.js recomposing
+        // thousands of static matrices every frame
+        freezeStatic(g, [...info.arms.map(a => a.pivot), info.radar, info.sock].filter(Boolean));
+        return info;
+    }
+
+    buildStandard(b, g, info) {
         this.buildGate(b, g, info);
         this.buildAccessRoad(b, g);
         this.buildTower(g, info);
@@ -183,7 +205,6 @@ export class Airbases {
         this.buildHelipad(b, g, info);
         this.buildParked(b, info);
         if (b.id === 'home') this.buildBarracks(b, g);
-        return info;
     }
 
     // local height (relative to the base's flattened level)
@@ -242,7 +263,9 @@ export class Airbases {
         g.add(inst);
         const wg = new THREE.BufferGeometry();
         wg.setAttribute('position', new THREE.Float32BufferAttribute(wire, 3));
-        const wl = new THREE.LineSegments(wg, new THREE.LineBasicMaterial({ color: 0x9a9a98, transparent: true, opacity: 0.8 }));
+        // lines are unlit, so the wire is darkened by hand at night (see setNight)
+        const wireMat = this._wireMat || (this._wireMat = new THREE.LineBasicMaterial({ color: 0x9a9a98, transparent: true, opacity: 0.8 }));
+        const wl = new THREE.LineSegments(wg, wireMat);
         wl.frustumCulled = false;
         g.add(wl);
     }
@@ -384,7 +407,8 @@ export class Airbases {
         const cabY = 38;
         const floor = cyl(7.5, 6, 2, MAT.concrete, -6, cabY, 0, t, 8);
         floor.rotation.y = Math.PI / 8;
-        const cab = new THREE.Mesh(new THREE.CylinderGeometry(7.6, 6.6, 4.4, 8, 1, true), MAT.glass);
+        // own material: it glows at night, the shared glass must not
+        const cab = new THREE.Mesh(new THREE.CylinderGeometry(7.6, 6.6, 4.4, 8, 1, true), MAT.glass.clone());
         cab.position.set(-6, cabY + 2 + 2.2, 0); cab.rotation.y = Math.PI / 8;
         t.add(cab);
         const roof = cyl(8.4, 8, 0.8, MAT.white, -6, cabY + 6.4, 0, t, 8);
@@ -481,6 +505,7 @@ export class Airbases {
             h.rotation.y = Math.PI / 2 + rand(-0.3, 0.3);
             g.add(h);
             info.parkedHelis.push(h);
+            this.heavy(b, true).push(h);
         }
     }
 
@@ -533,12 +558,17 @@ export class Airbases {
             im.castShadow = true; im.receiveShadow = true;
             im.computeBoundingSphere();
             g.add(im);
-            this.heavy(b).push(im);
+            this.heavy(b, true).push(im);
         }
     }
 
-    // big instanced groups (flight lines, airliners, base buildings) are only drawn when you're near that base
-    heavy(b) { this._heavy = this._heavy || new Map(); if (!this._heavy.has(b)) this._heavy.set(b, []); return this._heavy.get(b); }
+    // big groups are only drawn when you're near that base: buildings within 11 km,
+    // parked aircraft (flight lines, airliners, helicopters) within 4 km (`aircraft`)
+    heavy(b, aircraft = false) {
+        const map = aircraft ? (this._heavyAc = this._heavyAc || new Map()) : (this._heavy = this._heavy || new Map());
+        if (!map.has(b)) map.set(b, []);
+        return map.get(b);
+    }
 
     pave(g, x, z, w, d, color = 0x7d8083, y = 0.08, rot = 0) {
         const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshStandardMaterial({ color, roughness: 0.95, polygonOffset: true, polygonOffsetFactor: -1 }));
@@ -719,13 +749,15 @@ export class Airbases {
         for (const m of this.buildingMats || []) m.userData.night.value = on ? 1 : 0;
         for (const s of this.floods) s.visible = on;
         for (const i of this.bases) if (i.cabLight) i.cabLight.material.emissive.setHex(on ? 0x3a5a44 : 0x000000);
+        MAT.glass.emissive.setHex(0x000000);
+        if (this._wireMat) this._wireMat.color.setHex(on ? 0x202224 : 0x9a9a98);
     }
 
     update(dt, traffic, wind, cam) {
         this.time += dt;
         const t = this.time;
-        if (cam && this._heavy) for (const [b, list] of this._heavy) {
-            const near = (cam.x - b.x) ** 2 + (cam.z - b.z) ** 2 < 11000 * 11000;
+        if (cam) for (const [map, R, kr] of [[this._heavy, 11000, 0], [this._heavyAc, 4000, 0.5]]) if (map) for (const [b, list] of map) {
+            const near = (cam.x - b.x) ** 2 + (cam.z - b.z) ** 2 < (R + b.r * kr) ** 2;
             if (list.near !== near) { list.near = near; for (const o of list) o.visible = near; }
         }
         for (const h of this.helis) h.update(dt);

@@ -217,6 +217,8 @@ export class Effects {
         const fireTex = makeRadialTexture(64, [[0, 'rgba(255,255,255,1)'], [0.3, 'rgba(255,255,255,0.75)'], [0.7, 'rgba(255,255,255,0.15)'], [1, 'rgba(255,255,255,0)']]);
         this.smoke = new ParticleSystem(scene, 9000, { additive: false, texture: smokeTex, renderOrder: 6 });
         this.fire = new ParticleSystem(scene, 5000, { additive: true, texture: fireTex, renderOrder: 8 });
+        // fireballs blend normally: dozens of overlapping additive puffs just sum to a white disc
+        this.flame = new ParticleSystem(scene, 3000, { additive: false, texture: fireTex, renderOrder: 7 });
 
         this.trails = [];
         this.trailMats = new Map();
@@ -274,6 +276,8 @@ export class Effects {
                     #include <colorspace_fragment>
                 }`,
         });
+        m.userData.base = new THREE.Color(...color);
+        m.userData.additive = additive;
         this.trailMats.set(key, m);
         return m;
     }
@@ -311,17 +315,17 @@ export class Effects {
         // fireball
         for (let i = 0; i < 26 * size; i++) {
             V.set(rand(-1, 1), rand(-1, 1), rand(-1, 1)).normalize().multiplyScalar(rand(8, 40) * size).add(base);
-            this.fire.emit(pos, V, rand(0.5, 1.1), rand(4, 8) * size, rand(16, 30) * size, [5, 3.2, 1.6], [1.4, 0.35, 0.05], 1, 0, 2.2, 4);
+            this.flame.emit(pos, V, rand(0.5, 1.1), rand(4, 8) * size, rand(16, 30) * size, [1.5, 0.55, 0.12], [0.5, 0.12, 0.03], 0.9, 0, 2.2, 4);
         }
         // hot core
         for (let i = 0; i < 6; i++) {
             V.set(rand(-1, 1), rand(-1, 1), rand(-1, 1)).multiplyScalar(6 * size).add(base);
-            this.fire.emit(pos, V, rand(0.2, 0.35), 10 * size, 34 * size, [8, 7, 5], [4, 1.5, 0.3], 1, 0, 3, 0);
+            this.fire.emit(pos, V, rand(0.2, 0.35), 10 * size, 34 * size, [2.2, 1.3, 0.5], [1.2, 0.4, 0.1], 0.35, 0, 3, 0);
         }
         // sparks
         for (let i = 0; i < 30 * size; i++) {
             V.set(rand(-1, 1), rand(-0.6, 1), rand(-1, 1)).normalize().multiplyScalar(rand(60, 160) * size).add(base);
-            this.fire.emit(pos, V, rand(0.6, 1.6), 1.2, 0.3, [6, 4, 1.5], [2, 0.6, 0.1], 1, 0, 1.2, -30);
+            this.fire.emit(pos, V, rand(0.6, 1.6), 1.2, 0.3, [3.5, 2.2, 0.8], [1.6, 0.5, 0.1], 1, 0, 1.2, -30);
         }
         // smoke
         for (let i = 0; i < 18 * size; i++) {
@@ -329,7 +333,7 @@ export class Effects {
             this._tmpP.copy(pos).addScaledVector(V, 0.1);
             this.smoke.emit(this._tmpP, V, rand(3, 6), rand(8, 14) * size, rand(30, 55) * size, [0.12, 0.1, 0.09], [0.35, 0.34, 0.33], 0.85, 0, 1.1, 3);
         }
-        this.flash(pos, 32 * size, 0.18);
+        this.flash(pos, 12 * size, 0.08); // a brief pop, not a screen-filling white-out
         this.light(pos, 40 * size, 0.5);
     }
 
@@ -371,9 +375,9 @@ export class Effects {
         for (let i = 0; i < 5; i++) {
             V.set(rand(-1, 1), rand(-1, 1), rand(-1, 1)).multiplyScalar(40);
             if (vel) V.addScaledVector(vel, 0.3);
-            this.fire.emit(pos, V, rand(0.15, 0.35), 1.6, 0.4, [6, 4.5, 2], [2, 0.8, 0.2], 1, 0, 2, 0);
+            this.fire.emit(pos, V, rand(0.15, 0.35), 1.6, 0.4, [3.5, 2.5, 1.1], [1.6, 0.7, 0.2], 1, 0, 2, 0);
         }
-        this.fire.emit(pos, V.set(0, 0, 0), 0.12, 3, 7, [6, 5, 3], [3, 1, 0.3], 1, 0, 0, 0);
+        this.fire.emit(pos, V.set(0, 0, 0), 0.12, 3, 7, [4, 3, 2], [2, 0.8, 0.3], 1, 0, 0, 0);
         this.smoke.emit(pos, V.set(0, 2, 0), 0.8, 1.5, 6, [0.3, 0.3, 0.3], [0.5, 0.5, 0.5], 0.5, 0, 1, 0);
     }
 
@@ -398,7 +402,7 @@ export class Effects {
         this.smoke.emit(pos, vel, life, size, size * 4, [dark, dark, dark], [dark + 0.25, dark + 0.25, dark + 0.25], alpha, 0, 1.2, 2);
     }
     puffFire(pos, vel, size, life = 0.35) {
-        this.fire.emit(pos, vel, life, size, size * 0.3, [5, 2.6, 0.8], [1.5, 0.3, 0.05], 0.9, 0, 1.5, 0);
+        this.flame.emit(pos, vel, life, size, size * 0.3, [1.5, 0.6, 0.15], [0.6, 0.15, 0.03], 0.85, 0, 1.5, 0);
     }
 
     // ── Tracers ──
@@ -435,8 +439,14 @@ export class Effects {
     update(dt, camera, fog, groundHeight) {
         this.now += dt;
         this.smoke.update(dt, fog);
+        this.flame.update(dt, fog);
         this.fire.update(dt, fog);
-        for (const m of this.trailMats.values()) { m.uniforms.fogColor.value.copy(fog.color); m.uniforms.fogDensity.value = fog.density; }
+        // vapour trails are lit by the sky: bright by day, dim grey-blue at night (additive glows keep their colour)
+        const shade = clamp((fog.color.r * 0.3 + fog.color.g * 0.59 + fog.color.b * 0.11) * 2.2, 0.12, 1);
+        for (const m of this.trailMats.values()) {
+            m.uniforms.fogColor.value.copy(fog.color); m.uniforms.fogDensity.value = fog.density;
+            if (!m.userData.additive) m.uniforms.color.value.copy(m.userData.base).multiplyScalar(shade);
+        }
         for (let i = this.trails.length - 1; i >= 0; i--) {
             const t = this.trails[i];
             t.update(this.now, camera.position);
@@ -481,7 +491,7 @@ export class Effects {
     }
 
     clear() {
-        this.smoke.clear(); this.fire.clear();
+        this.smoke.clear(); this.fire.clear(); this.flame.clear();
         this.trails.forEach(t => t.dispose()); this.trails = [];
         this.debris.forEach(d => this.scene.remove(d.mesh)); this.debris = [];
         this.flashes.forEach(s => this.scene.remove(s)); this.flashes = [];

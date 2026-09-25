@@ -36,13 +36,13 @@ export class Traffic {
         if (!this.buggyParts.length) this.buggyCount = 0;
         // lights: 2 points per car (head + tail)
         const lp = new Float32Array(this.count * 6), lc = new Float32Array(this.count * 6);
-        for (let i = 0; i < this.count; i++) lc.set([1.6, 1.5, 1.2, 1.4, 0.1, 0.05], i * 6);
+        for (let i = 0; i < this.count; i++) { lc.set([1.6, 1.5, 1.2, 1.4, 0.1, 0.05], i * 6); lp[i * 6 + 1] = lp[i * 6 + 4] = -999; } // hidden until placed
         const lg = new THREE.BufferGeometry();
         lg.setAttribute('position', new THREE.BufferAttribute(lp, 3));
         lg.setAttribute('color', new THREE.BufferAttribute(lc, 3));
         this.lights = new THREE.Points(lg, new THREE.PointsMaterial({
             map: makeRadialTexture(32, [[0, 'rgba(255,255,255,1)'], [0.35, 'rgba(255,255,255,0.5)'], [1, 'rgba(255,255,255,0)']]),
-            vertexColors: true, size: 9, sizeAttenuation: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: true,
+            vertexColors: true, size: 4.5, sizeAttenuation: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: true,
         }));
         this.lights.frustumCulled = false;
         this.lights.visible = false;
@@ -54,7 +54,10 @@ export class Traffic {
         this.reset();
     }
 
-    setNight(on) { this.lights.visible = on; }
+    setNight(on) {
+        this.lights.visible = on;
+        if (on) this.lights.geometry.attributes.position.needsUpdate = true;
+    }
 
     reset() {
         for (const c of this.cars) this.place(c);
@@ -190,7 +193,11 @@ export class Traffic {
         this.frame = (this.frame || 0) + 1;
         const FAR2 = 5000 * 5000;
         for (const c of this.cars) {
-            if (c.stolen) { _m.makeScale(0, 0, 0); this.carSet.setMatrix(c.i, _m); continue; } // taken by the player
+            if (c.stolen) { // taken by the player: its lights go with it
+                _m.makeScale(0, 0, 0); this.carSet.setMatrix(c.i, _m);
+                lp.setXYZ(c.i * 2, 0, -999, 0); lp.setXYZ(c.i * 2 + 1, 0, -999, 0);
+                continue;
+            }
             // far from the camera: simulate every 4th frame (with the saved-up time) — nobody can see them
             if (cam && c.pos && dt > 0 && !c.fall && (c.pos.x - cam.x) ** 2 + (c.pos.z - cam.z) ** 2 > FAR2 && (this.frame + c.i) % 4) { c.acc = (c.acc || 0) + dt; continue; }
             const cdt = dt + (c.acc || 0); c.acc = 0;
@@ -203,7 +210,7 @@ export class Traffic {
             if (c.fall === 0 && c.yOff < -60) _s.set(0.0001, 0.0001, 0.0001);
             _m.compose(_p, _q, _s);
             this.carSet.setMatrix(c.i, _m);
-            if (this.lights.visible) {
+            { // always kept current (cheap), so switching to night shows them in the right place
                 if (c.dead) { lp.setXYZ(c.i * 2, 0, -999, 0); lp.setXYZ(c.i * 2 + 1, 0, -999, 0); }
                 else {
                     lp.setXYZ(c.i * 2, _p.x + _t.x * 2.4 * _s.z, _p.y + 0.9, _p.z + _t.z * 2.4 * _s.z);

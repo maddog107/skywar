@@ -198,6 +198,19 @@ export function buildRoads(group, nodes) {
     }
     // finish paths: heights, cross-slope, arc length, bridge ranges
     for (const p of paths) {
+        // long straight runs (round a base's fence corners) get samples every STEP too, so the road follows the ground
+        const dense = [], at = [];
+        for (let k = 0; k < p.raw.length; k++) {
+            const r = p.raw[k], q = p.raw[k - 1];
+            if (q && !r.deck && !q.deck) {
+                const d = Math.hypot(r.x - q.x, r.z - q.z), n = Math.ceil(d / STEP);
+                for (let m = 1; m < n && d > STEP * 1.5; m++) dense.push({ x: q.x + (r.x - q.x) * m / n, z: q.z + (r.z - q.z) * m / n });
+            }
+            at[k] = dense.length;
+            dense.push(r);
+        }
+        for (const br of p.bridgeRaw) br.at = at[br.at];
+        p.raw = dense;
         let s = 0;
         p.pts = p.raw.map((r, idx) => {
             if (idx) s += Math.hypot(r.x - p.raw[idx - 1].x, r.z - p.raw[idx - 1].z);
