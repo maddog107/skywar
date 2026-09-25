@@ -533,8 +533,12 @@ export class Airbases {
             im.castShadow = true; im.receiveShadow = true;
             im.computeBoundingSphere();
             g.add(im);
+            this.heavy(b).push(im);
         }
     }
+
+    // big instanced groups (flight lines, airliners, base buildings) are only drawn when you're near that base
+    heavy(b) { this._heavy = this._heavy || new Map(); if (!this._heavy.has(b)) this._heavy.set(b, []); return this._heavy.get(b); }
 
     pave(g, x, z, w, d, color = 0x7d8083, y = 0.08, rot = 0) {
         const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshStandardMaterial({ color, roughness: 0.95, polygonOffset: true, polygonOffsetFactor: -1 }));
@@ -570,7 +574,7 @@ export class Airbases {
             im.setColorAt(i, c.setHex(col));
             roof.setMatrixAt(i, m.compose(p.set(x, y + h, z), q, s.set(w + 0.6, 0.5, d + 0.6)));
         });
-        for (const o of [im, roof]) { o.castShadow = true; o.receiveShadow = true; o.computeBoundingSphere(); g.add(o); }
+        for (const o of [im, roof]) { o.castShadow = true; o.receiveShadow = true; o.computeBoundingSphere(); g.add(o); this.heavy(b).push(o); }
     }
 
     signBoard(g, text, x, y, z, rotY, w = 22, h = 3, bg = '#1d2b1a') {
@@ -717,9 +721,13 @@ export class Airbases {
         for (const i of this.bases) if (i.cabLight) i.cabLight.material.emissive.setHex(on ? 0x3a5a44 : 0x000000);
     }
 
-    update(dt, traffic, wind) {
+    update(dt, traffic, wind, cam) {
         this.time += dt;
         const t = this.time;
+        if (cam && this._heavy) for (const [b, list] of this._heavy) {
+            const near = (cam.x - b.x) ** 2 + (cam.z - b.z) ** 2 < 11000 * 11000;
+            if (list.near !== near) { list.near = near; for (const o of list) o.visible = near; }
+        }
         for (const h of this.helis) h.update(dt);
         const blink = Math.floor(t * 1.2) % 2 === 0;
         for (const b of this.beacons) { b.visible = !!this.night; b.material.color.setHex(blink ? 0x6dff8a : 0xffffff); }

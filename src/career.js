@@ -127,7 +127,7 @@ export class Career {
             if (r.missionId === 'deadstick') this.award('deadstick');
         }
         if (r.victory && r.mode === 'rings' && r.seconds < 180) this.award('rings_fast');
-        const allIds = ['clean_sweep', 'five_on_one', 'ace_duel', 'sam_alley', 'escort', 'scramble', 'carrier_killer', 'deadstick', 'trap', 'bridge_out'];
+        const allIds = ['clean_sweep', 'five_on_one', 'ace_duel', 'sam_alley', 'escort', 'scramble', 'carrier_killer', 'deadstick', 'trap', 'bridge_out', 'heist'];
         if (allIds.every(id => d.missionsWon[id])) this.award('all_missions');
         this.changed();
         const after = this.rankIndex;

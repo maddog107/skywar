@@ -9,21 +9,25 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 
 const HEIGHT = 1.8;
-let source = null;          // { scene, clips, scale, offsetY }
+const sources = {};         // kind → { scene, clips, scale, offsetY }
+const FILES = { pilot: 'models/pilot.glb', civilian: 'models/civilian.glb' };
 const live = new Set();     // characters whose animations tick every frame
 
 export async function preloadCharacter() {
-    try {
-        const gltf = await new GLTFLoader().loadAsync('models/pilot.glb');
-        const scene = gltf.scene;
-        scene.updateMatrixWorld(true);
-        const box = new THREE.Box3().setFromObject(scene);
-        const size = box.getSize(new THREE.Vector3());
-        source = { scene, clips: gltf.animations, scale: HEIGHT / size.y, offsetY: -box.min.y };
-        scene.traverse(o => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
-    } catch (e) {
-        console.warn('[character] failed to load pilot model', e);
-    }
+    const loader = new GLTFLoader();
+    await Promise.all(Object.entries(FILES).map(async ([kind, file]) => {
+        try {
+            const gltf = await loader.loadAsync(file);
+            const scene = gltf.scene;
+            scene.updateMatrixWorld(true);
+            const box = new THREE.Box3().setFromObject(scene);
+            const size = box.getSize(new THREE.Vector3());
+            sources[kind] = { scene, clips: gltf.animations, scale: HEIGHT / size.y, offsetY: -box.min.y };
+            scene.traverse(o => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+        } catch (e) {
+            console.warn('[character] failed to load', file, e);
+        }
+    }));
 }
 
 // Fallback: a figure made of rounded parts (never boxes)
@@ -38,10 +42,11 @@ function fallbackFigure() {
 }
 
 export class Character {
-    constructor() {
+    constructor(kind = 'pilot') {
         this.root = new THREE.Group();
         this.current = null;
         this.actions = {};
+        const source = sources[kind] || sources.pilot;
         if (source) {
             const clone = SkeletonUtils.clone(source.scene);
             // Quaternius characters face +Z; the game's "forward" is -Z
@@ -53,7 +58,7 @@ export class Character {
             this.root.add(holder);
             this.mixer = new THREE.AnimationMixer(clone);
             for (const clip of source.clips) {
-                const name = clip.name.split('|').pop();
+                const name = clip.name.split('|').pop().replace(/^Man_/, '');
                 this.actions[name] = this.mixer.clipAction(clip);
             }
             live.add(this);

@@ -30,7 +30,8 @@ You need a local server because the game uses ES modules and loads `.glb` models
   jink when under fire, extend when hurt, and avoid terrain. Skill scales with difficulty.
   Every fourth wave brings a named ace.
 - **Missions**: Clean Sweep, Five on One, Ace Duel, SAM Alley, Escort, Scramble, Carrier Killer,
-  Deadstick, Trap and Bridge Out (bomb a river bridge ahead of an armoured convoy, then destroy the stranded column), plus a Daily Mission picked from the date (the mission, jet and time of day change every day).
+  Deadstick, Trap, Grand Theft Aero (start as a civilian, carjack a car, ram the Miramar gate, steal a jet with the
+  military police on your tail, then outrun the interceptors) and Bridge Out (bomb a river bridge ahead of an armoured convoy, then destroy the stranded column), plus a Daily Mission picked from the date (the mission, jet and time of day change every day).
 - **Modes**: Dogfight waves, Strike (destroy an airbase), Naval Strike (sink a carrier group),
   Survival, Target Practice (timed range), Sandbox (unlimited everything, invincible, bombs, N spawns
   bandits), Ring Race (timed canyon course) and Free Flight (with an unarmed carrier group offshore to shoot at).
@@ -61,6 +62,11 @@ You need a local server because the game uses ES modules and loads `.glb` models
   has painted designators worked out from its real compass heading. Both airports have scheduled
   traffic: arrivals fly the glide path, land, roll out and taxi in; departures hold short, line up and
   take off. The autopilot lands at the nearest friendly airfield.
+- **Roads that make sense**: roads follow the ground closely and never flicker or pop, stray fragments are removed,
+  and wherever a road genuinely has to stop there's a roadblock: barriers, cones and a ROAD CLOSED / ROAD WORK
+  AHEAD / END OF ROAD sign.
+- **Performance**: cars, parked cars and pedestrians are only drawn near the camera, airport flight lines only
+  near their base, and far-away traffic is simulated at a lower rate (about 20× fewer triangles per frame).
 - **Real vehicles**: traffic and the cars in driveways are real car models (sedans, hatchbacks, SUVs,
   sports cars, taxis, police cars); convoys use a modern tank, M939 trucks and Humvees. Houses have
   front yards and driveways with one or two cars, and people walk the sidewalks.

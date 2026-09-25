@@ -35,6 +35,7 @@ All models are binary glTF 2.0 (`.glb`). CC BY models require the attribution be
 | `car_sedan.glb`, `car_hatch.glb`, `car_suv.glb`, `car_sports.glb`, `car_sports2.glb`, `car_taxi.glb`, `car_police.glb` | Cars ("Car", "Car", "SUV", "Sports Car" ×2, "Taxi", "Police Car") | Quaternius | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | https://poly.pizza/bundle/Cars-Bundle-FE5IWe6OMk (models 1mkmFkAz5v, BwwnUrWGmV, Cz6yDaUcM9, OyqKvX9xNh, unqqkULtRU, x43lOScTpN, xsMtZhBkxL) |
 | `tank.glb` | Main battle tank ("Tank") | Zsky | [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) | https://poly.pizza/m/7GG1xDtc8l |
 | `pilot.glb` | The pilot on foot / under the canopy ("SWAT", rigged + animated) | Quaternius | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | https://poly.pizza/m/Btfn3G5Xv4 |
+| `civilian.glb` | Civilian ("Man", rigged + animated) | Quaternius | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | https://poly.pizza/m/HMnuH5geEG |
 | `m939.glb` | M939 military truck | J-Toastie | [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) | https://poly.pizza/m/y8lBpvMlim |
 
 ## Attribution lines (CC BY / MIT)

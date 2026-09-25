@@ -15,10 +15,11 @@ import { refSpeeds } from './aircraft.js';
 import { MISSIONS } from './missions.js';
 import { RingCourse } from './rings.js';
 import { GroundStart } from './groundstart.js';
+import { HEIST_JET } from './heist.js';
 import { updateCharacters } from './character.js';
 import { readStick } from './input.js';
 import { clamp, damp, lerp, rand, pick, formatTime, G } from './util.js';
-import { BASES, RUNWAY, terrainHeight, isOnRunway } from './world.js';
+import { BASES, RUNWAY, terrainHeight, isOnRunway, baseToWorld } from './world.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
 const _q = new THREE.Quaternion(), _m = new THREE.Matrix4();
@@ -234,6 +235,15 @@ export class Game {
             this.addFeed('FULL POWER (9 OR 0) ON DECK TO LAUNCH', '#5dffa0');
         } else if (where === 'runway') {
             p.spawnRunway(home);
+        } else if (where === 'heist') {
+            // the jet you'll steal: cold on the Miramar flight line
+            const mb = BASES.find(x => x.id === 'miramar');
+            p.spawnRunway(mb);
+            const w = baseToWorld(mb, HEIST_JET.lx, HEIST_JET.lz), ahead = baseToWorld(mb, HEIST_JET.lx - 10, HEIST_JET.lz);
+            p.pos.set(w.x, mb.h + p.gearOffset, w.z);
+            p.qv.setFromAxisAngle(_v.set(0, 1, 0), Math.atan2(-(ahead.x - w.x), -(ahead.z - w.z)));
+            p.flaps = 0; p.throttle = p.controls.throttle = 0;
+            p.syncBody();
         } else if (where === 'apron' || where === 'barracks') {
             // parked by the hangars: taxi out to the runway
             p.spawnRunway(home);
@@ -443,6 +453,7 @@ export class Game {
 
     completeHijack(a, pm) {
         if (!a || !a.alive || a.exploded) return;
+        this.prevE = true; // don't let the boarding E press climb straight back out
         if (a.pilotDead) {
             spawnFallingBody(this, a);
             this.addFeed('SHOVED THE PILOT OUT', '#ffc23f');
@@ -508,6 +519,7 @@ export class Game {
     }
 
     cleanup() {
+        if (this.mstate && this.mstate.op && this.mstate.op.dispose) this.mstate.op.dispose();
         if (this.pilotMode) this.pilotMode.dispose();
         if (this.groundStartObj) { this.groundStartObj.dispose(); this.groundStartObj = null; }
         this.groundStart = null;
@@ -1195,8 +1207,8 @@ export class Game {
         this.wreckage.update(dt);
         this.ground.update(dt);
         this.naval.update(dt);
-        if (this.world.towns) { this.world.towns.update(dt); this.world.towns.traffic.update(dt, this); }
-        if (this.world.airbases) this.world.airbases.update(dt, this.world.towns && this.world.towns.traffic, this.wind);
+        if (this.world.towns) { this.world.towns.update(dt, this.camera.position); this.world.towns.traffic.update(dt, this); }
+        if (this.world.airbases) this.world.airbases.update(dt, this.world.towns && this.world.towns.traffic, this.wind, this.camera.position);
         if (this.world.airTraffic) this.world.airTraffic.update(dt);
         updateCharacters(dt);
         // the home carrier holds its course while someone is on approach with the gear down
@@ -1250,7 +1262,8 @@ export class Game {
 
     updateMode(dt) {
         if (this.state !== 'playing') return;
-        if (this.groundStart) return; // still on the ground in the Ready Room: the sortie hasn't started
+        // still on the ground in the Ready Room: the sortie hasn't started (missions that play out on foot still tick)
+        if (this.groundStart && !(this.mission && this.mission.onFoot)) return;
         const p = this.pilotMode ? { pos: this.pilotMode.pos, vel: this.pilotMode.seat.vel } : this.player;
         const enemiesAlive = this.aircraft.filter(a => a.team === 'red' && a.alive && !a.pilotDead).length;
         if (this.mode === 'dogfight') {
@@ -1354,7 +1367,7 @@ export class Game {
             this.mission.update && this.mission.update(this);
             if (this.mission.objective) this.objective = this.mission.objective(this, this.objective);
             let r = this.mission.check ? this.mission.check(this) : null;
-            if (!r && this.lives <= 0 && this.pilotMode) r = 'lose'; // one-life missions end when you bail out
+            if (!r && this.lives <= 0 && this.pilotMode && !this.pilotMode.seat.walkedOut) r = 'lose'; // one-life missions end when you bail out
             if (r && this.state === 'playing') {
                 this.gameOver(r === 'win');
                 return;

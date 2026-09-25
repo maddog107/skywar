@@ -1,0 +1,311 @@
+// ═══════════════════════════════════════════════════════════════
+// "Grand Theft Aero": start as a civilian in town, carjack a car, smash
+// through the Miramar gate, and steal a jet off the flight line while the
+// military police chase you — then outrun the interceptors they scramble.
+//   walk → E by a car on the road: carjack → drive → ram the gate (or talk
+//   your way up to the sentry and get rumbled) → INTRUDER ALERT → MP Humvees
+//   chase you (touching you = BUSTED) → jump out by the jet → climb in (E) →
+//   taxi & take off under fire → interceptors → escape 22 km or shoot them down
+// ═══════════════════════════════════════════════════════════════
+import * as THREE from 'three';
+import { BASES, baseToWorld, worldToBase, terrainHeight } from './world.js';
+import { GroundStart } from './groundstart.js';
+import { propInstance } from './props.js';
+import { Character } from './character.js';
+import { samplePath } from './roads.js';
+import { clamp, rand } from './util.js';
+
+const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _e = new THREE.Euler(0, 0, 0, 'YXZ');
+
+// Miramar, base-local: where the jet to steal is parked (clear of the flight line rows), and what's solid
+export const HEIST_JET = { lx: 380, lz: -1450, yaw: Math.PI / 2 }; // nose toward the runways (-x)
+const MIRAMAR_OBSTACLES = (() => {
+    const o = [];
+    for (let k = 0; k < 9; k++) { const z = -1350 + k * 280; o.push([668, 732, z - 37, z + 37]); } // hangars
+    o.push([800, 1360, -2150, -334], [800, 1360, -266, 2150]);  // the base buildings, either side of the main road
+    o.push([40, 560, -1370, 1030]);                              // the flight line rows
+    o.push([612, 668, -1660, -1640]);                            // tower
+    return o;
+})();
+
+class HeistGround extends GroundStart {
+    constructor(op, jet, start) {
+        super(op.game, jet, { base: op.base, obstacles: MIRAMAR_OBSTACLES, onFoot: start, character: 'civilian', noIntro: true });
+        this.op = op;
+    }
+
+    // walking: carjack the nearest car on the road
+    walkHook(dt, e) {
+        const traffic = this.game.world.towns && this.game.world.towns.traffic;
+        if (!traffic) return false;
+        let best = null, bd = 7;
+        for (const c of traffic.cars) {
+            if (c.dead || c.stolen || !c.pos) continue;
+            const d = c.pos.distanceTo(this.walker.pos);
+            if (d < bd) { bd = d; best = c; }
+        }
+        if (!best) return false;
+        this.hint = best.speed > 3 ? 'E — CARJACK (it\'s moving!)' : 'E — CARJACK';
+        if (e) { this.carjack(best, traffic); return true; }
+        return false;
+    }
+
+    carjack(c, traffic) {
+        const g = this.game;
+        const type = traffic.carSet.slots[c.i].type;
+        c.stolen = true; c.speed = 0;
+        samplePath(c.path, c.s, _v, _v2);
+        if (c.dir < 0) _v2.negate();
+        const yaw = Math.atan2(-_v2.x, -_v2.z);
+        const mesh = propInstance(type.id) || new THREE.Mesh(new THREE.BoxGeometry(2, 1.4, 4.5), new THREE.MeshStandardMaterial({ color: c.color }));
+        const fast = type.id.startsWith('car_sports') ? 44 : type.id === 'car_police' ? 42 : 36;
+        this.setCar(mesh, c.pos.clone(), yaw, fast, type.id === 'car_police' ? 'POLICE CAR' : 'CAR');
+        // the driver bails out and runs off
+        const driver = new Character('civilian');
+        const side = _v.set(Math.cos(yaw), 0, -Math.sin(yaw));
+        driver.root.position.copy(c.pos).addScaledVector(side, 2.5);
+        driver.root.rotation.y = yaw + Math.PI / 2;
+        driver.play('Run');
+        g.scene.add(driver.root);
+        this.op.fleeing.push({ ch: driver, t: 7, dir: side.clone() });
+        this.walker.mesh.visible = false;
+        this.state = 'drive';
+        this.camYaw = 0;
+        g.addFeed('CARJACKED A ' + (type.id === 'car_police' ? 'POLICE CAR (bold move)' : type.id.replace('car_', '').toUpperCase()), '#ffc23f');
+        g.audio.say(type.id === 'car_police' ? 'Hey! That\'s my cruiser!' : 'Hey! My car!', true);
+        g.audio.tick(160, 0.2, 0.3);
+        this.op.onCarjack();
+    }
+
+    // at the booth without being on the list: the sentry sounds the alarm
+    driveHook(dt) {
+        const c = this.car;
+        if (!this.op.alarm) {
+            const d = c.pos.distanceTo(this.checkPos);
+            if (d < 30 && Math.abs(c.v) < 1) {
+                this.stopT += dt;
+                this.hint = 'SENTRY: "ID, PLEASE…"';
+                if (this.stopT > 2.5) this.op.raiseAlarm('SENTRY: "You\'re not on the list — STEP OUT OF THE VEHICLE!"');
+            } else if (d < 60 && Math.abs(c.v) > 12) this.hint = 'FLOOR IT — RAM THE BARRIER!';
+        }
+        if (c.pos.distanceTo(this.jet.pos) < 60) this.hint = Math.abs(c.v) < 2.5 ? 'E — GET OUT AND STEAL THE JET' : 'SLOW DOWN — THE JET IS HERE';
+        return true; // skip the Ready Room's checkpoint logic
+    }
+
+    // ramming the boom barrier at speed smashes through
+    onBarrier(c) {
+        if (this.cleared) return true;
+        if (Math.abs(c.v) < 12) return false;
+        this.cleared = true;
+        this.op.smashGate(c);
+        return true;
+    }
+
+    board() {
+        super.board();
+        this.op.onBoard();
+    }
+}
+
+export class HeistOp {
+    constructor(game) {
+        this.game = game;
+        this.base = BASES.find(b => b.id === 'miramar');
+        this.alarm = false;
+        this.pursuers = [];
+        this.fleeing = [];
+        this.stage = 'town';
+        this.result = null;
+        this.waves = 0;
+        this.tookOffT = -1;
+        const jet = game.player;
+        // start on the pavement in the town nearest the base, by a road with traffic
+        const start = this.startSpot();
+        this.ground = new HeistGround(this, jet, start);
+        game.groundStart = game.groundStartObj = this.ground;
+        const gw = baseToWorld(this.base, this.base.gate.lx + 30, this.base.gate.lz);
+        this.gateTarget = new THREE.Vector3(gw.x, this.base.h, gw.z);
+        game.navTarget = { pos: start.carHint || this.gateTarget, label: 'GRAB A CAR' };
+        game.objective = 'CARJACK A CAR (walk up to one on the road, E)';
+        this.sirenT = 0;
+    }
+
+    startSpot() {
+        const b = this.base, gw = baseToWorld(b, b.gate.lx + 70, b.gate.lz);
+        const traffic = this.game.world.towns && this.game.world.towns.traffic;
+        // a spot next to a road, 1.5–5 km from the gate, with a car nearby
+        let best = null, bd = Infinity;
+        if (traffic) for (const c of traffic.cars) {
+            if (!c.pos || c.dead || c.path.street === undefined) continue;
+            const d = Math.hypot(c.pos.x - gw.x, c.pos.z - gw.z);
+            if (d < 1500 || d > 6000) continue;
+            if (d < bd) { bd = d; best = c; }
+        }
+        if (!best && traffic) best = traffic.cars.find(c => c.pos && !c.dead);
+        if (!best) return { pos: new THREE.Vector3(gw.x + 1500, 0, gw.z), yaw: 0 };
+        const p = best.pos.clone();
+        samplePath(best.path, best.s, _v, _v2);
+        const side = _v.set(-_v2.z, 0, _v2.x).normalize();
+        const pos = p.clone().addScaledVector(side, 9);
+        const yaw = Math.atan2(side.x, side.z); // facing the road
+        return { pos, yaw, carHint: p };
+    }
+
+    onCarjack() {
+        if (this.stage !== 'town') return;
+        this.stage = 'driving';
+        this.game.navTarget = { pos: this.gateTarget, label: 'MIRAMAR MAIN GATE' };
+        this.game.objective = 'DRIVE TO MCAS MIRAMAR — RAM THE GATE (FAST!)';
+        this.game.showBanner('GRAND THEFT AERO', 'Get to Miramar and crash through the main gate. Faster than 45 km/h or the barrier stops you.', 6, '#ffc23f');
+    }
+
+    smashGate(c) {
+        const g = this.game;
+        g.shake = 1.2;
+        g.audio.boom(10, 0.6);
+        g.effects.debrisBurst(c.pos, _v.set(0, 6, 0), 5, 0.6);
+        const info = g.world.airbases && g.world.airbases.bases.find(i => i.base === this.base);
+        if (info) for (const a of info.arms) { a.pivot.visible = false; }
+        c.v *= 0.75;
+        g.addFeed('SMASHED THROUGH THE GATE!', '#ff4a3d');
+        this.raiseAlarm(null);
+    }
+
+    raiseAlarm(msg) {
+        if (this.alarm) return;
+        const g = this.game, b = this.base;
+        this.alarm = true;
+        this.stage = 'alarm';
+        if (msg) g.addFeed(msg, '#ff9f5a');
+        g.showBanner('INTRUDER ALERT', 'Military police are after you — get to the jet! If they catch you, you\'re BUSTED.', 5, '#ff4a3d');
+        g.audio.say('Intruder alert! Intruder alert! Lock down the flight line!', true);
+        this.ground.cleared = true;
+        g.navTarget = { pos: this.game.player.pos, label: 'STEAL THIS JET' };
+        g.objective = 'GET TO THE JET — MPs IN PURSUIT';
+        // MP Humvees from inside the base and a police car from the gate
+        const spots = [[760, -380, 'humvee', 25], [760, -220, 'humvee', 25], [620, -900, 'humvee', 24], [b.gate.lx + 120, b.gate.lz + 20, 'car_police', 33]];
+        for (const [lx, lz, id, vmax] of spots) {
+            const w = baseToWorld(b, lx, lz);
+            const mesh = propInstance(id) || new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.8, 4.6), new THREE.MeshStandardMaterial({ color: 0x5b6443 }));
+            g.scene.add(mesh);
+            // a flashing light bar
+            const bar = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.2, 0.3), new THREE.MeshBasicMaterial({ color: 0xff2020, toneMapped: false }));
+            bar.position.y = id === 'humvee' ? 2.1 : 1.6;
+            mesh.add(bar);
+            this.pursuers.push({ mesh, bar, pos: new THREE.Vector3(w.x, b.h, w.z), yaw: 0, v: 0, vmax, fireT: rand(1, 3), id });
+        }
+    }
+
+    onBoard() {
+        this.stage = 'jet';
+        const g = this.game;
+        g.objective = 'TAXI AND TAKE OFF — THEY\'RE SHOOTING AT YOU!';
+        g.showBanner('YOU\'RE IN!', 'Throttle up and go — taxi to the runway (or just floor it across the grass) and take off!', 5, '#5dffa0');
+        if (!this.alarm) this.raiseAlarm(null);
+    }
+
+    target() {
+        const gs = this.game.groundStart;
+        if (gs) return { pos: gs.focus, r: gs.state === 'drive' ? 4.5 : 2.2 };
+        const p = this.game.player;
+        return { pos: p.pos, r: p.onGround ? 6 : -1 };
+    }
+
+    update() {
+        const g = this.game;
+        const dt = Math.min(0.1, Math.max(0, g.time - (this.lastT ?? g.time)));
+        this.lastT = g.time;
+        // carjacked drivers running away
+        for (let i = this.fleeing.length - 1; i >= 0; i--) {
+            const f = this.fleeing[i];
+            f.t -= dt;
+            f.ch.root.position.addScaledVector(f.dir, 6 * dt);
+            f.ch.root.position.y = Math.max(terrainHeight(f.ch.root.position.x, f.ch.root.position.z), 0);
+            if (f.t <= 0) { f.ch.dispose(); this.fleeing.splice(i, 1); }
+        }
+        // entering the base any other way also trips the alarm
+        if (!this.alarm && g.groundStart) {
+            const l = worldToBase(this.base, g.groundStart.focus.x, g.groundStart.focus.z);
+            const F = this.base.fence;
+            if (l.lx > F.x0 && l.lx < F.x1 && l.lz > F.z0 && l.lz < F.z1) this.raiseAlarm(null);
+        }
+        if (this.alarm) this.updatePursuers(dt);
+        // after takeoff: interceptors
+        const p = g.player;
+        if (this.stage === 'jet' && p && p.alive && !p.onGround) {
+            const agl = p.pos.y - Math.max(terrainHeight(p.pos.x, p.pos.z), 0);
+            if (agl > 40) {
+                this.stage = 'air'; this.tookOffT = g.time;
+                g.showBanner('AIRBORNE — NOW RUN!', 'Miramar is scrambling interceptors. Get 22 km away, or shoot them all down.', 6, '#ffc23f');
+                g.audio.say('Unauthorised departure! Scramble the alert fighters!', true);
+                this.scramble(['fa18', 'fa18']);
+            }
+        }
+        if (this.stage === 'air') {
+            const d = Math.hypot(p.pos.x - this.base.x, p.pos.z - this.base.z);
+            const reds = g.aircraft.filter(a => a.team === 'red' && a.alive && !a.pilotDead);
+            if (this.waves < 2 && g.time - this.tookOffT > 50) this.scramble(['f35', 'fa18']);
+            g.objective = 'ESCAPE: ' + (d / 1000).toFixed(1) + ' / 22 KM FROM MIRAMAR · INTERCEPTORS: ' + reds.length;
+            g.navTarget = null;
+            if (d > 22000 || (this.waves >= 2 && reds.length === 0)) this.result = 'win';
+        }
+        if (p && !p.alive && this.stage !== 'town') this.result = this.result || 'lose';
+        // sirens
+        if (this.alarm && this.stage !== 'air') {
+            this.sirenT -= dt;
+            if (this.sirenT <= 0) { this.sirenT = 0.5; this.sirenHi = !this.sirenHi; g.audio.tick(this.sirenHi ? 760 : 560, 0.45, 0.05); }
+        }
+    }
+
+    scramble(types) {
+        const g = this.game, b = this.base;
+        this.waves++;
+        const e = g.spawnEnemies(types.length, { x: b.x, z: b.z }, types);
+        for (const a of e) { a.callsign = 'MIRAMAR ALERT'; if (a.pilot) { a.pilot.home = new THREE.Vector3(b.x, 0, b.z); a.pilot.leash = 30000; } }
+        g.addFeed('INTERCEPTORS SCRAMBLED FROM MIRAMAR (' + types.length + ')', '#ff4a3d');
+    }
+
+    updatePursuers(dt) {
+        const g = this.game;
+        const tgt = this.target();
+        for (const u of this.pursuers) {
+            // drive straight at you, cutting across the grass
+            const dx = tgt.pos.x - u.pos.x, dz = tgt.pos.z - u.pos.z, d = Math.hypot(dx, dz);
+            const want = Math.atan2(-dx, -dz);
+            let dy = want - u.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+            u.yaw += clamp(dy, -1.3 * dt, 1.3 * dt);
+            const vt = d < 12 ? Math.max(6, d) : u.vmax * (Math.abs(dy) > 1 ? 0.5 : 1);
+            u.v += clamp(vt - u.v, -10 * dt, 5 * dt);
+            u.pos.x += -Math.sin(u.yaw) * u.v * dt;
+            u.pos.z += -Math.cos(u.yaw) * u.v * dt;
+            u.pos.y = Math.max(terrainHeight(u.pos.x, u.pos.z), 0);
+            u.mesh.position.copy(u.pos);
+            _e.set(0, u.yaw, 0);
+            u.mesh.quaternion.setFromEuler(_e);
+            u.bar.material.color.setHex(Math.floor(g.time * 6) % 2 ? 0xff2020 : 0x2040ff);
+            // caught you?
+            if (tgt.r > 0 && d < tgt.r + 2 && !this.result) {
+                this.result = 'lose';
+                g.showBanner('BUSTED!', 'The MPs got you. Nice try.', 5, '#ff4a3d');
+                g.audio.say('Hands where I can see them!', true);
+            }
+            // shooting at the jet as it taxis and rolls
+            if (this.stage === 'jet' && g.player.onGround && d < 160) {
+                u.fireT -= dt;
+                if (u.fireT <= 0) {
+                    u.fireT = rand(0.8, 1.6);
+                    const from = _v.copy(u.pos).setY(u.pos.y + 2.2);
+                    const dir = _v2.subVectors(g.player.pos, from).normalize();
+                    g.weapons.bullets.push({ pos: from.clone(), vel: dir.multiplyScalar(700), owner: null, team: 'red', damage: 0, life: 0.6, tracer: true, color: [3.4, 1.0, 0.5] });
+                    if (Math.random() < 0.35) g.player.damage(3, null, 'gun');
+                }
+            }
+        }
+    }
+
+    dispose() {
+        for (const u of this.pursuers) this.game.scene.remove(u.mesh);
+        for (const f of this.fleeing) f.ch.dispose();
+        this.pursuers = []; this.fleeing = [];
+    }
+}

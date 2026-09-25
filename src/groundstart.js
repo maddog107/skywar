@@ -5,7 +5,7 @@
 // Then the normal game takes over: start up, taxi, take off.
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
-import { BASES, FENCE, GATE, baseToWorld, worldToBase, terrainHeight } from './world.js';
+import { BASES, fenceOf, gateOf, baseToWorld, worldToBase, terrainHeight } from './world.js';
 import { propInstance } from './props.js';
 import { clamp, damp } from './util.js';
 import { Character } from './character.js';
@@ -48,37 +48,51 @@ export function makeSoldier() {
 }
 
 export class GroundStart {
-    constructor(game, jet) {
+    constructor(game, jet, opts = {}) {
         this.game = game;
         this.jet = jet;
-        this.base = BASES.find(b => b.friendly);
+        this.base = opts.base || BASES.find(b => b.friendly);
+        this.fence = fenceOf(this.base); this.gate = gateOf(this.base);
+        this.obstacles = opts.obstacles || OBSTACLES;
         this.state = 'drive';
         this.cleared = false;
         this.stopT = 0;
         this.camYaw = 0; this.camPitch = 0.18;
         this.prevE = false;
         this.hint = '';
-        const b = this.base;
-        // the Humvee, parked by the barracks facing the road to the gate
-        const start = baseToWorld(b, BARRACKS.lx + 4, BARRACKS.lz - 48);
-        const toGate = baseToWorld(b, GATE.lx + 40, GATE.lz);
-        this.car = {
-            mesh: propInstance('humvee') || new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.8, 4.6), new THREE.MeshStandardMaterial({ color: 0x5b6443 })),
-            pos: new THREE.Vector3(start.x, 0, start.z),
-            yaw: Math.atan2(-(toGate.x - start.x), -(toGate.z - start.z)),
-            v: 0, steer: 0,
-        };
-        this.car.pos.y = this.groundY(this.car.pos.x, this.car.pos.z);
-        game.scene.add(this.car.mesh);
-        const ch = new Character();
+        const b = this.base, GATE = this.gate;
+        const ch = new Character(opts.character || 'pilot');
         this.walker = { mesh: ch.root, character: ch, pos: new THREE.Vector3(), yaw: 0, anim: 0, speed: 0 };
         this.walker.mesh.visible = false;
         game.scene.add(this.walker.mesh);
+        if (opts.onFoot) {
+            // start walking (no vehicle yet)
+            this.car = null;
+            this.state = 'walk';
+            this.walker.pos.copy(opts.onFoot.pos);
+            this.walker.pos.y = this.groundY(this.walker.pos.x, this.walker.pos.z);
+            this.walker.yaw = opts.onFoot.yaw || 0;
+            this.walker.mesh.visible = true;
+        } else {
+            // the Humvee, parked by the barracks facing the road to the gate
+            const start = baseToWorld(b, BARRACKS.lx + 4, BARRACKS.lz - 48);
+            const toGate = baseToWorld(b, GATE.lx + 40, GATE.lz);
+            this.setCar(propInstance('humvee') || new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.8, 4.6), new THREE.MeshStandardMaterial({ color: 0x5b6443 })),
+                new THREE.Vector3(start.x, 0, start.z), Math.atan2(-(toGate.x - start.x), -(toGate.z - start.z)), 30, 'HUMVEE');
+        }
         const gw = baseToWorld(b, GATE.lx, GATE.lz);
         this.gatePos = new THREE.Vector3(gw.x, b.h, gw.z);
         const out = baseToWorld(b, GATE.lx + 22, GATE.lz);
         this.checkPos = new THREE.Vector3(out.x, b.h, out.z);
-        this.introPending = true; // shown on the first frame, after the mode's own banner
+        this.introPending = !opts.noIntro; // shown on the first frame, after the mode's own banner
+        if (this.car) this.placeCar();
+    }
+
+    setCar(mesh, pos, yaw, maxV = 30, name = 'CAR') {
+        if (this.car && this.car.mesh !== mesh) this.game.scene.remove(this.car.mesh);
+        this.car = { mesh, pos: pos.clone(), yaw, v: 0, steer: 0, maxV, name };
+        this.car.pos.y = this.groundY(pos.x, pos.z);
+        this.game.scene.add(mesh);
         this.placeCar();
     }
 
@@ -90,8 +104,8 @@ export class GroundStart {
     }
 
     local(p) { return worldToBase(this.base, p.x, p.z); }
-    insideFence(l) { return l.lx > FENCE.x0 && l.lx < FENCE.x1 && l.lz > FENCE.z0 && l.lz < FENCE.z1; }
-    blockedAt(l, r = 2) { return OBSTACLES.some(([x0, x1, z0, z1]) => l.lx > x0 - r && l.lx < x1 + r && l.lz > z0 - r && l.lz < z1 + r); }
+    insideFence(l) { const F = this.fence; return l.lx > F.x0 && l.lx < F.x1 && l.lz > F.z0 && l.lz < F.z1; }
+    blockedAt(l, r = 2) { return this.obstacles.some(([x0, x1, z0, z1]) => l.lx > x0 - r && l.lx < x1 + r && l.lz > z0 - r && l.lz < z1 + r); }
 
     // can we move from a to b (world)? fence only opens at the gate, and only once cleared
     canMove(a, b, r) {
@@ -99,7 +113,7 @@ export class GroundStart {
         if (this.blockedAt(lb, r)) return 'obstacle';
         const ia = this.insideFence(la), ib = this.insideFence(lb);
         if (ia === ib) return 'ok';
-        const atGate = Math.abs(lb.lz - GATE.lz) < 11 && Math.abs(lb.lx - FENCE.x1) < 6;
+        const atGate = Math.abs(lb.lz - this.gate.lz) < 11 && Math.abs(lb.lx - this.fence.x1) < 6;
         if (!atGate) return 'fence';
         if (ib && !this.cleared) return 'barrier'; // driving in needs the sentry's OK
         return 'ok';
@@ -138,7 +152,7 @@ export class GroundStart {
         if (thr > 0) c.v += (c.v < 0 ? 14 : 5.5) * dt;
         else if (thr < 0) c.v -= (c.v > 0.5 ? 14 : 3.5) * dt;
         else c.v -= Math.sign(c.v) * Math.min(Math.abs(c.v), (1 + Math.abs(c.v) * 0.12) * dt);
-        c.v = clamp(c.v, -7, 30);
+        c.v = clamp(c.v, -7, c.maxV);
         c.steer = damp(c.steer, steerIn, 6, dt);
         c.yaw += c.v / 3.3 * Math.tan(c.steer * 0.55) * dt;
         const fwd = _v.set(-Math.sin(c.yaw), 0, -Math.cos(c.yaw));
@@ -147,12 +161,16 @@ export class GroundStart {
         if (res === 'ok') { c.pos.x = next.x; c.pos.z = next.z; }
         else {
             if (Math.abs(c.v) > 4) { g.shake = Math.min(1.2, g.shake + Math.abs(c.v) * 0.04); g.audio.tick(90, 0.25, 0.3); }
-            c.v = -c.v * 0.15;
-            if (res === 'barrier') g.addFeed('SENTRY: "HALT! Stop at the checkpoint."', '#ff9f5a');
-            if (res === 'fence') this.hint = 'THE FENCE — USE THE MAIN GATE';
+            if (res === 'barrier' && this.onBarrier(c)) { c.pos.x = next.x; c.pos.z = next.z; }
+            else {
+                c.v = -c.v * 0.15;
+                if (res === 'barrier') g.addFeed('SENTRY: "HALT! Stop at the checkpoint."', '#ff9f5a');
+                if (res === 'fence') this.hint = 'THE FENCE — USE THE MAIN GATE';
+            }
         }
         c.pos.y = this.groundY(c.pos.x, c.pos.z);
         this.placeCar();
+        if (this.driveHook && this.driveHook(dt, e)) return;
         // checkpoint: stop by the booth and the sentry waves you through
         if (!this.cleared) {
             const d = c.pos.distanceTo(this.checkPos);
@@ -231,12 +249,14 @@ export class GroundStart {
         // board the jet or get back in the Humvee
         const jet = this.jet;
         const dJet = w.pos.distanceTo(_v.copy(jet.pos).setY(w.pos.y));
-        const dCar = w.pos.distanceTo(this.car.pos);
+        const dCar = this.car ? w.pos.distanceTo(this.car.pos) : Infinity;
         if (dJet < jet.spec.length * 0.6 + 3) {
             this.hint = 'E — CLIMB INTO THE ' + jet.spec.name.toUpperCase();
             if (e) { this.board(); return; }
-        } else if (dCar < 4) {
-            this.hint = 'E — GET IN THE HUMVEE';
+        } else if (this.walkHook && this.walkHook(dt, e)) {
+            return;
+        } else if (this.car && dCar < 4) {
+            this.hint = 'E — GET IN THE ' + this.car.name;
             if (e) { w.mesh.visible = false; this.state = 'drive'; this.camYaw = 0; return; }
         }
     }
@@ -246,6 +266,7 @@ export class GroundStart {
         this.walker.mesh.visible = false;
         this.done = true;
         g.groundStart = null;
+        g.prevE = true; // the E that got you in mustn't also climb you straight back out
         g.navTarget = null;
         g.aimDir.copy(jet.getForward(_v)).normalize();
         g.cameraMode = g.settings.defaultCockpit ? 'cockpit' : 'chase';
@@ -279,8 +300,11 @@ export class GroundStart {
         cam.updateProjectionMatrix();
     }
 
+    onBarrier() { return false; } // ramming the boom: subclasses may let you through
+
     dispose() {
-        this.game.scene.remove(this.car.mesh);
+        if (this.car) this.game.scene.remove(this.car.mesh);
+        this.walker.character.dispose();
         this.game.scene.remove(this.walker.mesh);
         if (this.game.world.airbases) this.game.world.airbases.gateOpen = false;
     }

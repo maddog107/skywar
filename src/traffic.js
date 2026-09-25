@@ -72,7 +72,7 @@ export class Traffic {
         c.cruise = path.street ? rand(10, 14) : rand(16, 27);
         c.speed = c.cruise;
         c.wait = 0; c.stopDone = null; c.stopT = 0;
-        c.dead = false; c.fall = 0; c.vy = 0; c.yOff = 0; c.smoke = 0;
+        c.dead = false; c.fall = 0; c.vy = 0; c.yOff = 0; c.smoke = 0; c.stolen = false;
         c.color = PAINTS[Math.floor(Math.random() * PAINTS.length)];
         this.carSet.restore(c.i, c.color);
     }
@@ -187,8 +187,14 @@ export class Traffic {
     update(dt, game) {
         const lp = this.lights.geometry.attributes.position;
         const cam = game && game.camera ? game.camera.position : null;
+        this.frame = (this.frame || 0) + 1;
+        const FAR2 = 5000 * 5000;
         for (const c of this.cars) {
-            if (!c.dead) this.move(c, dt);
+            if (c.stolen) { _m.makeScale(0, 0, 0); this.carSet.setMatrix(c.i, _m); continue; } // taken by the player
+            // far from the camera: simulate every 4th frame (with the saved-up time) — nobody can see them
+            if (cam && c.pos && dt > 0 && !c.fall && (c.pos.x - cam.x) ** 2 + (c.pos.z - cam.z) ** 2 > FAR2 && (this.frame + c.i) % 4) { c.acc = (c.acc || 0) + dt; continue; }
+            const cdt = dt + (c.acc || 0); c.acc = 0;
+            if (!c.dead) this.move(c, cdt);
             this.fallUpdate(c, dt, game);
             this.pose(c, c.path.street ? 2.4 : LANE);
             _e.set(Math.asin(Math.max(-1, Math.min(1, _t.y))), Math.atan2(-_t.x, -_t.z), c.dead && !c.fall ? 0.15 : 0);
@@ -229,7 +235,8 @@ export class Traffic {
                 }
             }
         }
-        this.carSet.flush();
+        // only the cars near the camera go to the GPU
+        this.carSet.commit(cam || { x: 0, z: 0 }, cam ? 3500 : 1e9);
         for (const im of this.buggyParts) im.instanceMatrix.needsUpdate = true;
         if (this.lights.visible) lp.needsUpdate = true;
     }

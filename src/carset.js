@@ -42,6 +42,12 @@ export class CarSet {
             this.slots.push({ type: t, i: k });
         }
         this.meshes = new Map(); // type → [{ im, paint }]
+        // every slot's transform and colour live here; only the cars near the camera are uploaded (see commit)
+        this.mats = new Float32Array(n * 16);
+        this.paints = new Float32Array(n * 3).fill(1);
+        this.wrecked = new Uint8Array(n);
+        this.byType = new Map();
+        this.slots.forEach((sl, i) => { if (!this.byType.has(sl.type)) this.byType.set(sl.type, []); this.byType.get(sl.type).push(i); });
         for (const [t, count] of counts) {
             const parts = propParts(t.id) || boxParts();
             const list = [];
@@ -63,40 +69,40 @@ export class CarSet {
         this._c = new THREE.Color();
     }
 
-    setMatrix(slot, m) {
-        const s = this.slots[slot];
-        for (const p of this.meshes.get(s.type)) p.im.setMatrixAt(s.i, m);
-    }
+    setMatrix(slot, m) { m.toArray(this.mats, slot * 16); }
 
-    setPaint(slot, hex) {
-        const s = this.slots[slot];
-        for (const p of this.meshes.get(s.type)) if (p.paint) p.im.setColorAt(s.i, this._c.setHex(hex));
-        this.colorsDirty = true;
-    }
+    setPaint(slot, hex) { this._c.setHex(hex).toArray(this.paints, slot * 3); this.wrecked[slot] = 0; }
 
     // burnt-out wreck: everything goes dark
-    wreck(slot) {
-        const s = this.slots[slot];
-        for (const p of this.meshes.get(s.type)) p.im.setColorAt(s.i, this._c.setRGB(0.08, 0.075, 0.07));
-        this.colorsDirty = true;
-    }
+    wreck(slot) { this.wrecked[slot] = 1; }
 
-    restore(slot, hex) {
-        const s = this.slots[slot];
-        for (const p of this.meshes.get(s.type)) p.im.setColorAt(s.i, this._c.setHex(p.paint ? hex : 0xffffff));
-        this.colorsDirty = true;
-    }
+    restore(slot, hex) { this.setPaint(slot, hex); }
 
-    flush(matrices = true) {
-        for (const list of this.meshes.values()) for (const p of list) {
-            if (matrices) p.im.instanceMatrix.needsUpdate = true;
-            if (this.colorsDirty && p.im.instanceColor) p.im.instanceColor.needsUpdate = true;
+    // Upload only the cars within `radius` of `center` (compacting each type's instances).
+    // Far cars cost nothing on the GPU.
+    commit(center, radius) {
+        const r2 = radius * radius, M = this.mats, P = this.paints;
+        const dark = [0.08, 0.075, 0.07];
+        for (const [t, list] of this.meshes) {
+            const slots = this.byType.get(t);
+            let k = 0;
+            for (const i of slots) {
+                const o = i * 16, dx = M[o + 12] - center.x, dz = M[o + 14] - center.z;
+                if (dx * dx + dz * dz > r2 || M[o] === 0 && M[o + 5] === 0) continue; // far away, or hidden (zero scale)
+                for (const p of list) {
+                    p.im.instanceMatrix.array.set(M.subarray(o, o + 16), k * 16);
+                    const ca = p.im.instanceColor.array, co = k * 3;
+                    if (this.wrecked[i]) { ca[co] = dark[0]; ca[co + 1] = dark[1]; ca[co + 2] = dark[2]; }
+                    else if (p.paint) { ca[co] = P[i * 3]; ca[co + 1] = P[i * 3 + 1]; ca[co + 2] = P[i * 3 + 2]; }
+                    else { ca[co] = ca[co + 1] = ca[co + 2] = 1; }
+                }
+                k++;
+            }
+            for (const p of list) {
+                p.im.count = k;
+                p.im.instanceMatrix.needsUpdate = true;
+                p.im.instanceColor.needsUpdate = true;
+            }
         }
-        this.colorsDirty = false;
-    }
-
-    finalizeStatic() {
-        this.flush(true);
-        for (const list of this.meshes.values()) for (const p of list) { p.im.frustumCulled = true; p.im.computeBoundingSphere(); }
     }
 }

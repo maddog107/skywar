@@ -10,6 +10,7 @@ import { BASES, isOnRunway } from './world.js';
 import { mulberry32 } from './util.js';
 import { AIRCRAFT } from './config.js';
 import { ConvoyOp, pickConvoyBridge } from './convoy.js';
+import { HeistOp } from './heist.js';
 
 const home = () => BASES.find(b => b.friendly);
 const redsAlive = (g) => g.aircraft.filter(a => a.team === 'red' && a.alive && !a.pilotDead);
@@ -153,6 +154,15 @@ export const MISSIONS = {
         update: (g) => g.mstate.op && g.mstate.op.update(),
         check: (g) => (g.mstate.op ? g.mstate.op.result : 'lose'),
         objective: (g) => (g.mstate.op ? g.mstate.op.objective() : 'NO BRIDGE FOUND'),
+    },
+    heist: {
+        title: 'GRAND THEFT AERO', tag: 'CRIME',
+        desc: 'You\'re a civilian with a plan. Carjack a car, smash through the Miramar gate, steal a jet off the flight line with the MPs on your tail, then outrun the interceptors.',
+        base: 'custom', start: 'heist', lives: 0, onFoot: true,
+        setup: (g) => { g.mstate = { op: new HeistOp(g) }; },
+        update: (g) => g.mstate.op.update(),
+        check: (g) => g.mstate.op.result,
+        objective: (g, base) => base,
     },
     trap: {
         title: 'TRAP', tag: 'SKILL',

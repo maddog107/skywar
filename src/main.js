@@ -537,6 +537,7 @@ function buildCredits() {
         ['Cars Bundle (sedan, hatchback, SUV, sports cars, taxi, police car)', 'Quaternius', 'CC0', 'https://poly.pizza/bundle/Cars-Bundle-FE5IWe6OMk'],
         ['Tank', 'Zsky', 'CC BY 3.0', 'https://poly.pizza/m/7GG1xDtc8l'],
         ['SWAT (the pilot on foot and under the parachute)', 'Quaternius', 'CC0', 'https://poly.pizza/m/Btfn3G5Xv4'],
+        ['Man (the civilian in Grand Theft Aero)', 'Quaternius', 'CC0', 'https://poly.pizza/m/HMnuH5geEG'],
         ['M939 Truck', 'J-Toastie', 'CC BY 3.0', 'https://poly.pizza/m/y8lBpvMlim'],
     ];
     const body = $('creditsBody');

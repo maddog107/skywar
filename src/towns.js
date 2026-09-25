@@ -12,7 +12,7 @@
 import * as THREE from 'three';
 import { terrainHeight, BASES, gateOf, baseToWorld } from './world.js';
 import { fbm, mulberry32, makeRadialTexture } from './util.js';
-import { buildRoads, roadMaterial, outsideBases, samplePath } from './roads.js';
+import { buildRoads, roadMaterial, outsideBases, samplePath, liftWithDistance } from './roads.js';
 import { mergeGeometries as mergeGeos } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Traffic } from './traffic.js';
 import { CarSet, PAINTS } from './carset.js';
@@ -103,7 +103,8 @@ export class Towns {
         this.planStreets();
         // intercity roads join town centres and the airbase gates
         const gates = BASES.map(b => { const G = gateOf(b); const w = baseToWorld(b, G.lx + 70, G.lz); return { x: w.x, z: w.z }; });
-        const { paths, bridges } = buildRoads(this.group, [...this.towns.map(t => ({ x: t.x, z: t.z })), ...gates]);
+        const { paths, bridges, deadEnds } = buildRoads(this.group, [...this.towns.map(t => ({ x: t.x, z: t.z })), ...gates]);
+        this.deadEnds = deadEnds;
         this.paths = paths;
         this.bridges = bridges;
         for (const p of paths) this.markPath(p.pts, 10);
@@ -113,6 +114,7 @@ export class Towns {
         this.buildBuildings();
         this.buildLamps();
         this.buildPeople();
+        this.buildRoadblocks(this.deadEnds);
         this.traffic = new Traffic(this.group, [...paths, ...this.streetPaths], this.dirtPaths, this);
         this.time = 0;
         if (world) {
@@ -193,15 +195,30 @@ export class Towns {
         const STEP = 12;
         for (const sd of this.streetDefs) {
             const { t, axis, off, half } = sd;
-            let cur = null;
-            const flush = () => { if (cur && cur.length > 2) paths.push(this.makeStreetPath(cur, sd)); cur = null; };
+            let cur = null, cut = false;
+            // streets cut short by water or a steep bank get a roadblock at the cut
+            const flush = (why) => {
+                if (cur && cur.length > 2) {
+                    const pth = this.makeStreetPath(cur, sd);
+                    const P = pth.pts;
+                    // waterfront streets just end at the water; only longer streets cut by a bank get a barrier
+                    if (why === 'water') why = null;
+                    if (cur.cutStart === 'water') cur.cutStart = null;
+                    if (pth.len < 60) { cur.cutStart = null; why = null; }
+                    if (cur.cutStart) this.deadEnds.push({ x: P[0].x, z: P[0].z, dx: P[0].x - P[1].x, dz: P[0].z - P[1].z, reason: cur.cutStart, w: STREET_HALF });
+                    if (why) { const a = P[P.length - 1], b = P[P.length - 2]; this.deadEnds.push({ x: a.x, z: a.z, dx: a.x - b.x, dz: a.z - b.z, reason: why, w: STREET_HALF }); }
+                    paths.push(pth);
+                }
+                cur = null;
+            };
             for (let d = -half; d <= half + 0.01; d += STEP) {
                 const w = axis === 'a' ? this.tw(t, off, d) : this.tw(t, d, off);
                 const h = terrainHeight(w.x, w.z);
-                if (h < 2 || slopeAt(w.x, w.z) > 0.22 || outsideBases(w.x, w.z)) { flush(); continue; }
-                (cur = cur || []).push({ x: w.x, z: w.z, d });
+                if (h < 2 || slopeAt(w.x, w.z) > 0.34 || outsideBases(w.x, w.z)) { cut = h < 2 ? 'water' : 'closed'; flush(cut); continue; }
+                if (!cur) { cur = []; cur.cutStart = d > -half + 0.01 ? cut || 'closed' : null; }
+                cur.push({ x: w.x, z: w.z, d });
             }
-            flush();
+            flush(null);
         }
         for (const p of paths) {
             this.markPath(p.pts, 6.5);
@@ -511,7 +528,7 @@ export class Towns {
             if (o.cars === 1) cars.push({ ...o, off: 0 });
             else if (o.cars === 2) { cars.push({ ...o, off: -2.7 }); cars.push({ ...o, off: 2.7, hue: o.hue2, flip: !o.flip }); }
         }
-        const set = new CarSet(this.group, Math.max(1, cars.length), mulberry32(5150), { castShadow: true, allowSpecial: false });
+        const set = new CarSet(this.group, Math.max(1, cars.length), mulberry32(5150), { castShadow: false, allowSpecial: false });
         cars.forEach((o, i) => {
             q.setFromAxisAngle(up, o.yaw + (o.flip ? Math.PI : 0));
             const ox = o.x - Math.sin(o.yaw) * o.off, oz = o.z - Math.cos(o.yaw) * o.off;
@@ -519,7 +536,7 @@ export class Towns {
             set.setMatrix(i, m);
             set.setPaint(i, PAINTS[Math.floor(o.hue * PAINTS.length)]);
         });
-        set.finalizeStatic();
+        this.parkedSet = set; // uploaded near the camera only (see update)
         this.parkedCars = cars.length;
     }
 
@@ -545,20 +562,28 @@ export class Towns {
         for (let i = 0; i < n; i++) {
             let x = r() * total, path = streets[0];
             for (const p of streets) { x -= p.len; if (x <= 0) { path = p; break; } }
-            this.walkers.push({ path, s: r() * path.len, dir: r() < 0.5 ? 1 : -1, side: r() < 0.5 ? 1 : -1, speed: 1.1 + r() * 0.6, ph: r() * 6.28, h: 0.9 + r() * 0.2 });
-            this.people.setColorAt(i, c.setHex(SHIRTS[Math.floor(r() * SHIRTS.length)]));
+            this.walkers.push({ path, s: r() * path.len, dir: r() < 0.5 ? 1 : -1, side: r() < 0.5 ? 1 : -1, speed: 1.1 + r() * 0.6, ph: r() * 6.28, h: 0.9 + r() * 0.2, shirt: SHIRTS[Math.floor(r() * SHIRTS.length)] });
+            this.people.setColorAt(i, c.setHex(this.walkers[i].shirt));
         }
         this.people.count = this.peopleRest.count = n;
         this.group.add(this.people, this.peopleRest);
     }
 
-    updatePeople(dt) {
+    _shirt(w) { return (this._sc || (this._sc = new THREE.Color())).setHex(w.shirt); }
+
+    updatePeople(dt, cam) {
         if (!this.people) return;
         const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3(), t = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
-        this.walkers.forEach((w, i) => {
+        const R2 = 1800 * 1800;
+        let k = 0;
+        this.walkers.forEach((w) => {
             w.s += w.dir * w.speed * dt;
             if (w.s < 1 || w.s > w.path.len - 1) { w.dir = -w.dir; w.s = Math.max(1, Math.min(w.path.len - 1, w.s)); }
+            // too far away to see: just keep walking, don't draw
+            if (cam && w.x !== undefined && (w.x - cam.x) ** 2 + (w.z - cam.z) ** 2 > R2) return;
             samplePath(w.path, w.s, p, t);
+            w.x = p.x; w.z = p.z;
+            const i = k++;
             // sidewalk on one side of the street
             p.x += -t.z * (STREET_HALF + 1.4) * w.side; p.z += t.x * (STREET_HALF + 1.4) * w.side;
             w.ph += dt * w.speed * 5.5;
@@ -567,7 +592,10 @@ export class Towns {
             m.compose(p, q, s.set(1, w.h, 1));
             this.people.setMatrixAt(i, m);
             this.peopleRest.setMatrixAt(i, m);
+            this.people.setColorAt(i, this._shirt(w));
         });
+        this.people.count = this.peopleRest.count = k;
+        if (this.people.instanceColor) this.people.instanceColor.needsUpdate = true;
         this.people.instanceMatrix.needsUpdate = this.peopleRest.instanceMatrix.needsUpdate = true;
     }
 
@@ -585,6 +613,57 @@ export class Towns {
         g.position.set(sp.x, sp.y, sp.z);
         g.rotation.y = sp.yaw;
         return g;
+    }
+
+    // Road closed / road works / bridge out: barriers, cones and a sign wherever a road stops short
+    buildRoadblocks(list) {
+        const r = mulberry32(31337);
+        const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), s = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0), one = new THREE.Vector3(1, 1, 1);
+        const stripe = canvasTex(256, 32, (ctx, w, h) => { for (let i = 0; i < 8; i++) { ctx.fillStyle = i % 2 ? '#f4f4f0' : '#d0201a'; ctx.beginPath(); ctx.moveTo(i * 32, h); ctx.lineTo(i * 32 + 16, 0); ctx.lineTo(i * 32 + 48, 0); ctx.lineTo(i * 32 + 32, h); ctx.fill(); } }, false);
+        const signTex = (text, bg, fg) => canvasTex(256, 160, (ctx, w, h) => {
+            ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h); ctx.strokeStyle = fg; ctx.lineWidth = 10; ctx.strokeRect(8, 8, w - 16, h - 16);
+            ctx.fillStyle = fg; ctx.font = 'bold 44px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            const lines = text.split('\n'); lines.forEach((l, i) => ctx.fillText(l, w / 2, h / 2 + (i - (lines.length - 1) / 2) * 50));
+        }, false);
+        const SIGNS = { closed: signTex('ROAD\nCLOSED', '#f4f4ee', '#c4161c'), works: signTex('ROAD WORK\nAHEAD', '#ff8a1c', '#141414'), water: signTex('END OF\nROAD', '#f4f4ee', '#c4161c') };
+        const plankGeo = new THREE.BoxGeometry(1, 0.45, 0.12); plankGeo.translate(0, 0, 0);
+        const postGeo = new THREE.BoxGeometry(0.12, 1.2, 0.12); postGeo.translate(0, 0.6, 0);
+        const coneGeo = new THREE.ConeGeometry(0.28, 0.75, 10); coneGeo.translate(0, 0.37, 0);
+        const signGeo = new THREE.PlaneGeometry(2.2, 1.4); signGeo.translate(0, 2.2, 0);
+        const planks = [], posts = [], cones = [], signs = { closed: [], works: [], water: [] };
+        for (const d of list) {
+            const L = Math.hypot(d.dx, d.dz) || 1, fx = d.dx / L, fz = d.dz / L; // outward (the way the road would have gone)
+            const rx = -fz, rz = fx;
+            const yaw = Math.atan2(-fx, -fz);
+            const kind = d.reason === 'water' ? 'water' : r() < 0.5 ? 'works' : 'closed';
+            const bx = d.x - fx * 3, bz = d.z - fz * 3;
+            const y = terrainHeight(bx, bz);
+            // barrier across the whole road
+            const W = d.w * 2 + 1;
+            planks.push([bx, y + 1.0, bz, yaw, W], [bx, y + 0.45, bz, yaw, W]);
+            for (const o of [-d.w, 0, d.w]) posts.push([bx + rx * o, y, bz + rz * o, yaw]);
+            // sign on the barrier, facing the traffic that arrives here
+            signs[kind].push([bx - fx * 0.3, y, bz - fz * 0.3, yaw + Math.PI]);
+            // a line of cones in front for road works (and a few anyway)
+            const nc = kind === 'works' ? 6 : 3;
+            for (let k = 0; k < nc; k++) {
+                const t = (k / (nc - 1) - 0.5) * d.w * 1.6, back = 6 + (k % 2) * 2;
+                const cx = bx - fx * back + rx * t, cz = bz - fz * back + rz * t;
+                cones.push([cx, terrainHeight(cx, cz) + 0.3, cz, 0]);
+            }
+        }
+        const add = (geo, mat, list, scaleW) => {
+            if (!list.length) return;
+            const im = new THREE.InstancedMesh(geo, mat, list.length);
+            list.forEach(([x, y, z, yaw, w], i) => im.setMatrixAt(i, m.compose(p.set(x, y, z), q.setFromAxisAngle(up, yaw), scaleW ? s.set(w, 1, 1) : one)));
+            im.castShadow = true; im.computeBoundingSphere();
+            this.group.add(im);
+        };
+        add(plankGeo, new THREE.MeshStandardMaterial({ map: stripe, roughness: 0.6 }), planks, true);
+        add(postGeo, new THREE.MeshStandardMaterial({ color: 0x555a5e, roughness: 0.6 }), posts);
+        add(coneGeo, new THREE.MeshStandardMaterial({ color: 0xff6a10, roughness: 0.6 }), cones);
+        for (const k of Object.keys(signs)) add(signGeo, new THREE.MeshStandardMaterial({ map: SIGNS[k], roughness: 0.6, side: THREE.DoubleSide }), signs[k]);
+        this.roadblockCount = list.length;
     }
 
     // Street lamps along town streets (glow at night)
@@ -677,7 +756,7 @@ export class Towns {
         g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
         g.setIndex(idx);
         g.computeVertexNormals();
-        const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ map: tex, roughness: 1, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, side: THREE.DoubleSide }));
+        const mesh = new THREE.Mesh(g, liftWithDistance(new THREE.MeshStandardMaterial({ map: tex, roughness: 1, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4, side: THREE.DoubleSide }), 2.6));
         mesh.receiveShadow = true;
         mesh.frustumCulled = false;
         this.group.add(mesh);
@@ -690,9 +769,14 @@ export class Towns {
         return null;
     }
 
-    update(dt) {
+    update(dt, cam) {
         this.time += dt;
-        this.updatePeople(dt);
+        // parked cars: re-pick the ones near the camera when it has moved a fair way
+        if (this.parkedSet && cam && (!this._parkAt || this._parkAt.distanceToSquared(cam) > 150 * 150)) {
+            this._parkAt = (this._parkAt || new THREE.Vector3()).copy(cam);
+            this.parkedSet.commit(cam, 2200);
+        }
+        this.updatePeople(dt, cam);
         if (!this.lamps) return;
         let dirty = false;
         for (const it of this.intersections) {

@@ -10,7 +10,7 @@ import { Bridge } from './bridges.js';
 
 export const ROAD_HALF = 7;      // 14 m wide: two 7 m lanes
 export const LANE = 3.3;          // lane centre offset from the middle
-const STEP = 30;
+const STEP = 15; // dense enough that the ribbon follows the ground between samples
 const MAX_BRIDGE = 1400, MIN_BRIDGE = 50;
 
 // Keep roads outside airbase fences (they go round, not across the runway)
@@ -63,9 +63,28 @@ function roadTexture() {
 }
 
 let _roadMat = null;
+// Distant terrain is drawn with coarser tiles, which can poke through a road that hugs the true ground.
+// Lift road surfaces a little with distance from the camera so they never flicker or pop in and out.
+export function liftWithDistance(mat, perKm = 3.5) {
+    mat.onBeforeCompile = (sh) => {
+        sh.vertexShader = sh.vertexShader.replace('#include <project_vertex>', `
+            vec4 wpLift = modelMatrix * vec4(transformed, 1.0);
+            float dLift = distance(wpLift.xyz, cameraPosition);
+            transformed.y += max(0.0, dLift - 250.0) * ${(perKm / 1000).toFixed(5)};
+            #include <project_vertex>`);
+    };
+    mat.customProgramCacheKey = () => 'lift' + perKm;
+    return mat;
+}
 export function roadMaterial() {
-    if (!_roadMat) _roadMat = new THREE.MeshStandardMaterial({ map: roadTexture(), roughness: 0.92, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+    if (!_roadMat) _roadMat = liftWithDistance(new THREE.MeshStandardMaterial({ map: roadTexture(), roughness: 0.92, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }), 2.6);
     return _roadMat;
+}
+// bridges carry their own deck geometry, so their road surface must not be lifted
+let _plainRoad = null;
+export function plainRoadMaterial() {
+    if (!_plainRoad) _plainRoad = new THREE.MeshStandardMaterial({ map: roadMaterial().map, roughness: 0.92, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+    return _plainRoad;
 }
 export const ROAD_V = 24; // metres per texture repeat (one dash + gap)
 
@@ -94,7 +113,7 @@ export function buildRoads(group, nodes) {
         const near = nodes.map((b, j) => ({ j, d: Math.hypot(a.x - b.x, a.z - b.z) })).filter(o => o.j !== i && o.d < 9500).sort((p, q) => p.d - q.d).slice(0, 2);
         near.forEach(o => edges.add(Math.min(i, o.j) + ',' + Math.max(i, o.j)));
     });
-    Bridge.roadMaterial = roadMaterial();
+    Bridge.roadMaterial = plainRoadMaterial();
     const paths = [], bridges = [];
     for (const e of edges) {
         const [i, j] = e.split(',').map(Number);
@@ -131,18 +150,22 @@ export function buildRoads(group, nodes) {
             }
             prevOut = out;
             const h = terrainHeight(x, z);
-            samples.push({ x, z, h, kind: h < 1 ? 'water' : slopeAt(x, z) > 0.45 ? 'cliff' : 'land' });
+            samples.push({ x, z, h, kind: h < 1 ? 'water' : slopeAt(x, z) > 0.85 ? 'cliff' : 'land' });
         }
-        let cur = null;
-        const flush = () => { if (cur && cur.raw.length >= 2) paths.push(cur); cur = null; };
+        let cur = null, cutReason = null;
+        // a road that has to stop (cliff, open water) ends in a roadblock; one that reaches a town/gate doesn't
+        const flush = (reason = null) => {
+            if (cur && cur.raw.length >= 2) { cur.endCut = reason; paths.push(cur); }
+            cur = null; cutReason = reason;
+        };
         for (let k = 0; k < samples.length; k++) {
             const sm = samples[k];
             if (sm.kind === 'land') {
-                if (!cur) cur = { raw: [], bridgeRaw: [] };
+                if (!cur) { cur = { raw: [], bridgeRaw: [], startCut: k === 0 ? null : cutReason || 'closed' }; }
                 cur.raw.push({ x: sm.x, z: sm.z });
                 continue;
             }
-            if (sm.kind === 'cliff') { flush(); continue; }
+            if (sm.kind === 'cliff') { flush('closed'); continue; }
             // water: look for the far shore
             let m = k;
             while (m < samples.length && samples[m].kind === 'water') m++;
@@ -158,11 +181,19 @@ export function buildRoads(group, nodes) {
                 for (let q = 1; q < br.n; q++) cur.raw.push({ x: A.x + (B.x - A.x) * q / br.n, z: A.z + (B.z - A.z) * q / br.n, deck: true });
                 k = m - 1;
             } else {
-                flush();
+                flush('water');
                 k = m - 1;
             }
         }
-        flush();
+        flush(null);
+    }
+    // drop stray fragments that start and stop in the middle of nowhere
+    for (let i = paths.length - 1; i >= 0; i--) {
+        const p = paths[i];
+        let len = 0;
+        for (let k = 1; k < p.raw.length; k++) len += Math.hypot(p.raw[k].x - p.raw[k - 1].x, p.raw[k].z - p.raw[k - 1].z);
+        const cuts = (p.startCut ? 1 : 0) + (p.endCut ? 1 : 0);
+        if (!p.bridgeRaw.length && ((cuts === 2 && len < 600) || (cuts === 1 && len < 150))) paths.splice(i, 1);
     }
     // finish paths: heights, cross-slope, arc length, bridge ranges
     for (const p of paths) {
@@ -198,7 +229,14 @@ export function buildRoads(group, nodes) {
         delete p.raw; delete p.bridgeRaw;
     }
     group.add(buildRoadMesh(paths));
-    return { paths, bridges };
+    // where the kept roads stop short: roadblocks go there
+    const deadEnds = [];
+    for (const p of paths) {
+        const P = p.pts;
+        if (p.startCut) deadEnds.push({ x: P[0].x, z: P[0].z, dx: P[0].x - P[1].x, dz: P[0].z - P[1].z, reason: p.startCut, w: ROAD_HALF });
+        if (p.endCut) { const a = P[P.length - 1], b = P[P.length - 2]; deadEnds.push({ x: a.x, z: a.z, dx: a.x - b.x, dz: a.z - b.z, reason: p.endCut, w: ROAD_HALF }); }
+    }
+    return { paths, bridges, deadEnds };
 }
 
 // Road ribbons (land sections only — bridges carry their own deck)
