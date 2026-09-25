@@ -2,7 +2,9 @@
 
 Each `*.webp` is a 3×3 atlas (512 px frames) baked in Blender by `tools/bake_impostors.py` from a
 photoscanned tree model; `*.json` holds its real height, crown radius and frame layout
-(frames 0–7: seen from azimuth k·45° around the tree; frame 8: from above).
+(frames 0–7: seen from azimuth k·45° around the tree; frame 8: from above) and `sideCrop` / `topCrop`,
+the drawn part of the side and top frames (the game trims its cards to them). In the game they are the
+forest, park and street trees and the grass / fern undergrowth (`src/vegetation.js`).
 
 | Atlas | Source model | Author | License |
 |---|---|---|---|

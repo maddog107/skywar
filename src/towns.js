@@ -394,7 +394,9 @@ export class Towns {
         // nothing in a town moves as an object (cars and people are instances) except collapsing bridges
         freezeStatic(this.group, this.bridges.map(b => b.group));
         if (world) {
-            world.blockTree = (x, z) => this.blocked(x, z) || this.towns.some(t => Math.hypot(x - t.x, z - t.z) < t.radius * 0.9);
+            // (called for every candidate tree, tens of thousands per forest tile: squared distances, no Math.hypot)
+            const inner = this.towns.map(t => [t.x, t.z, (t.radius * 0.9) ** 2]);
+            world.blockTree = (x, z) => this.blocked(x, z) || inner.some(([tx, tz, r2]) => (x - tx) * (x - tx) + (z - tz) * (z - tz) < r2);
             world.refreshTrees();
             world.setGroundConform(this.ground);
         }
