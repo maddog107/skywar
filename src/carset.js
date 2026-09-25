@@ -201,7 +201,8 @@ export class CarSet {
                 const o = i * 16, dx = M[o + 12] - center.x, dz = M[o + 14] - center.z;
                 if (dx * dx + dz * dz > r2 || M[o] === 0 && M[o + 5] === 0) continue; // far away, or hidden (zero scale)
                 for (const p of list) {
-                    p.im.instanceMatrix.array.set(M.subarray(o, o + 16), k * 16);
+                    const A = p.im.instanceMatrix.array, d = k * 16;
+                    for (let c = 0; c < 16; c++) A[d + c] = M[o + c];
                     const ca = p.im.instanceColor.array, co = k * 3;
                     // (a merged vehicle reads a negative colour as "burnt out": every part darkens, see vehicleMaterial)
                     if (this.wrecked[i]) { const sg = p.merged ? -1 : 1; ca[co] = dark[0] * sg; ca[co + 1] = dark[1] * sg; ca[co + 2] = dark[2] * sg; }
@@ -262,7 +263,8 @@ export class NearInstances {
         for (let i = 0; i < this.n; i++) {
             const o = i * 16, dx = M[o + 12] - center.x, dz = M[o + 14] - center.z;
             if (dx * dx + dz * dz > r2) continue;
-            A.set(M.subarray(o, o + 16), k * 16);
+            const d = k * 16;
+            for (let c = 0; c < 16; c++) A[d + c] = M[o + c];
             this.slots[k++] = i;
         }
         const was = this.k;

@@ -1014,6 +1014,11 @@ export class World {
 
     updateTerrain(focus, force = false) {
         if (!this.workers) this.initTerrainWorkers();
+        // nothing to do last time and the focus has hardly moved: skip the scan (it re-checks every 30 frames anyway)
+        const S = this.terrainScan || (this.terrainScan = { x: 1e9, z: 1e9, idle: false, n: 0 });
+        if (!force && S.idle && ++S.n % 30 && !this.pendingJob && !this.readyTiles.length && !this.inflight.size
+            && Math.abs(focus.x - S.x) < 16 && Math.abs(focus.z - S.z) < 16 && S.R === this.VIEW_TILES) return;
+        S.x = focus.x; S.z = focus.z; S.R = this.VIEW_TILES;
         const T = this.TILE;
         const ctx = Math.floor(focus.x / T), ctz = Math.floor(focus.z / T);
         const R = this.VIEW_TILES;
@@ -1044,6 +1049,7 @@ export class World {
         }
         // missing tiles first, then nearest
         jobs.sort((a, b) => (a.has - b.has) || (a.dist - b.dist));
+        S.idle = !jobs.length;
         // a job part-way through carries on only if it's still wanted (the old mesh stays up meanwhile)
         const P = this.pendingJob;
         if (P && !jobs.some(j => j.kind === P.job.kind && j.key === P.job.key && j.seg === P.job.seg)) this.pendingJob = null;

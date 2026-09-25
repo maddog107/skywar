@@ -1684,15 +1684,21 @@ export class Towns {
         if (this.buildings) this.buildings.update(dt, cam);
         // parked cars: re-pick the ones near the camera when it has moved a fair way
         // (and the street furniture, and which towns' rooftop clutter / trees are close enough to draw)
+        // The sets are re-picked one per frame (crossing into a town used to redo them all in one frame: a 10-30 ms
+        // hitch at speed); after a jump of more than a kilometre (respawn, quick position) all at once.
         if (cam && (!this._parkAt || this._parkAt.distanceToSquared(cam) > 150 * 150)) {
+            const jump = !this._parkAt || this._parkAt.distanceToSquared(cam) > 1000 * 1000;
             this._parkAt = (this._parkAt || new THREE.Vector3()).copy(cam);
-            if (this.parkedSet) this.parkedSet.commit(cam, 2200);
-            for (const set of this.nearSets || []) set.commit(cam, 2000);
+            const q = this._refresh || (this._refresh = []);
+            q.length = 0;
+            if (this.parkedSet) q.push(this.parkedSet);
+            q.push(...(this.nearSets || []));
+            if (jump) while (q.length) this.recommit(q.pop(), cam);
             for (const im of this.townMeshes || []) {
                 const sp = im.boundingSphere, far = im.userData.far;
                 if (far < Infinity) im.visible = Math.hypot(sp.center.x - cam.x, sp.center.z - cam.z) - sp.radius < far;
             }
-        }
+        } else if (cam && this._refresh && this._refresh.length) this.recommit(this._refresh.pop(), cam);
         this.updatePeople(dt, cam);
         if (!this.lamps) return;
         let dirty = false;
@@ -1705,6 +1711,9 @@ export class Towns {
         }
         if (dirty) this.lamps.refreshColors();
     }
+
+    // re-pick the parked cars / a street-furniture set around the camera
+    recommit(set, cam) { set.commit(cam, set === this.parkedSet ? 2200 : 2000); }
 
     setNight(on) {
         if (this.lampGlow) this.lampGlow.visible = on;
