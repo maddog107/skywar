@@ -4,7 +4,8 @@
 // military police chase you — then outrun the interceptors they scramble.
 //   walk → E by a car on the road: carjack → drive → ram the gate (or talk
 //   your way up to the sentry and get rumbled) → INTRUDER ALERT → MP Humvees
-//   chase you (touching you = BUSTED) → jump out by the jet → climb in (E) →
+//   chase you: they ram your car (it takes damage, and can roll) and tackle
+//   you on foot (BUSTED when you're down) → jump out by the jet → climb in (E) →
 //   taxi & take off under fire → interceptors → escape 22 km or shoot them down
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
@@ -36,10 +37,77 @@ class HeistGround extends GroundStart {
     constructor(op, jet, start) {
         super(op.game, jet, { base: op.base, obstacles: MIRAMAR_OBSTACLES, onFoot: start, character: 'civilian', noIntro: true });
         this.op = op;
+        this.hp = 100; // you, on foot: MP tackles and shots wear this down
+    }
+
+    drive(dt, input, e) {
+        if (this.car.flip) { this.flipStep(dt); return; }
+        super.drive(dt, input, e);
+    }
+
+    // an MP vehicle hit the car at relative speed `rel` (m/s): dents, a shove, and maybe a roll
+    rammed(u, rel) {
+        const c = this.car, g = this.game;
+        if (c.flip || c.wrecked) return;
+        c.hp -= 4 + rel * 0.7; // a full-speed ram costs about a fifth of the car
+        const dx = c.pos.x - u.pos.x, dz = c.pos.z - u.pos.z, L = Math.hypot(dx, dz) || 1, nx = dx / L, nz = dz / L;
+        const push = _v.set(c.pos.x + nx * 1.8, c.pos.y, c.pos.z + nz * 1.8);
+        if (this.canMove(c.pos, push, 2.5) === 'ok') { c.pos.x = push.x; c.pos.z = push.z; }
+        c.v *= 0.45;
+        c.yaw += (Math.random() - 0.5) * 0.6;
+        g.shake = Math.min(1.6, g.shake + 0.5 + rel * 0.03);
+        g.audio.tick(70, 0.35, 0.5); g.audio.tick(150, 0.15, 0.3);
+        g.effects.impact(_v2.copy(c.pos).addScaledVector(_v.set(nx, 0, nz), -1.2).setY(c.pos.y + 0.8), null);
+        // which way it rolls: away from the hit, about the car's long axis
+        const side = Math.sign(nx * Math.cos(c.yaw) - nz * Math.sin(c.yaw)) || 1;
+        if (c.hp <= 0 || (c.hp < 40 && rel > 28 && Math.random() < 0.3)) this.flipCar(side, nx, nz); // wrecked, or a big hit on a battered car
+        else g.addFeed('RAMMED BY THE MPs! CAR ' + Math.max(0, Math.round(c.hp)) + '%', '#ff9f5a');
+    }
+
+    flipCar(side, nx, nz) {
+        const c = this.car, g = this.game;
+        const box = new THREE.Box3().setFromObject(c.mesh);
+        c.flip = { t: 0, side, nx, nz, h: box.max.y - box.min.y };
+        c.v = 0;
+        g.addFeed('THE CAR ROLLED!', '#ff4a3d');
+        g.audio.tick(60, 0.6, 0.6);
+    }
+
+    // the roll: up, over onto the roof, sliding away from the hit; then you crawl out
+    flipStep(dt) {
+        const c = this.car, f = c.flip, g = this.game;
+        f.t = Math.min(1, f.t + dt / 1.2);
+        const k = f.t * f.t * (3 - 2 * f.t);
+        const nx = c.pos.x + f.nx * 5 * (1 - f.t) * dt, nz = c.pos.z + f.nz * 5 * (1 - f.t) * dt;
+        if (this.canMove(c.pos, _v.set(nx, c.pos.y, nz), 2.5) === 'ok') { c.pos.x = nx; c.pos.z = nz; }
+        c.pos.y = this.groundY(c.pos.x, c.pos.z);
+        _e.set(0, c.yaw, f.side * Math.PI * k);
+        c.mesh.quaternion.setFromEuler(_e);
+        c.mesh.position.set(c.pos.x, c.pos.y + Math.sin(Math.PI * f.t) * 2.2 + k * f.h, c.pos.z);
+        if (f.t < 1) return;
+        c.flip = null; c.wrecked = true;
+        this.exitCar();
+        this.hp -= 15;
+        g.shake = Math.min(1.6, g.shake + 0.8);
+        g.showBanner('WRECKED!', 'You crawl out of the wreck — run for the jet!', 3.5, '#ff9f5a');
+    }
+
+    // an MP caught you on foot: knocked down a peg (true = that was the last straw)
+    tackled(u) {
+        const w = this.walker, g = this.game;
+        this.hp -= 25;
+        const dx = w.pos.x - u.pos.x, dz = w.pos.z - u.pos.z, L = Math.hypot(dx, dz) || 1;
+        const push = _v.set(w.pos.x + dx / L * 3, w.pos.y, w.pos.z + dz / L * 3);
+        if (this.canMove(w.pos, push, 0.6) !== 'fence') { w.pos.x = push.x; w.pos.z = push.z; }
+        g.shake = Math.min(1.6, g.shake + 0.7);
+        g.audio.tick(90, 0.25, 0.4);
+        if (this.hp > 0) g.addFeed('KNOCKED DOWN! GET UP AND RUN — HEALTH ' + Math.round(this.hp) + '%', '#ff9f5a');
+        return this.hp <= 0;
     }
 
     // walking: carjack the nearest car on the road
     walkHook(dt, e) {
+        if (this.car && this.car.wrecked && this.walker.pos.distanceTo(this.car.pos) < 4) { this.hint = 'THE CAR IS A WRECK — RUN FOR THE JET'; return true; }
         const traffic = this.game.world.towns && this.game.world.towns.traffic;
         if (!traffic) return false;
         let best = null, bd = 7;
@@ -64,6 +132,7 @@ class HeistGround extends GroundStart {
         const mesh = propInstance(type.id) || ownMesh(new THREE.BoxGeometry(2, 1.4, 4.5), new THREE.MeshStandardMaterial({ color: c.color }));
         const fast = type.id.startsWith('car_sports') ? 44 : type.id === 'car_police' ? 42 : 36;
         this.setCar(mesh, c.pos.clone(), yaw, fast, type.id === 'car_police' ? 'POLICE CAR' : 'CAR');
+        this.car.hp = 100;
         // the driver bails out and runs off
         const driver = new Character('civilian');
         const side = _v.set(Math.cos(yaw), 0, -Math.sin(yaw));
@@ -190,7 +259,7 @@ export class HeistOp {
         this.alarm = true;
         if (this.stage === 'town' || this.stage === 'driving') this.stage = 'alarm'; // never regress from 'jet'/'air'
         if (msg) g.addFeed(msg, '#ff9f5a');
-        g.showBanner('INTRUDER ALERT', 'Military police are after you — get to the jet! If they catch you, you\'re BUSTED.', 5, '#ff4a3d');
+        g.showBanner('INTRUDER ALERT', 'Military police are after you — they\'ll ram your car and tackle you. Get to the jet!', 5, '#ff4a3d');
         g.audio.say('Intruder alert! Intruder alert! Lock down the flight line!', true);
         this.ground.cleared = true;
         g.navTarget = { pos: this.game.player.pos, label: 'STEAL THIS JET' };
@@ -205,7 +274,7 @@ export class HeistOp {
             const bar = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.2, 0.3), new THREE.MeshBasicMaterial({ color: 0xff2020, toneMapped: false }));
             bar.position.y = id === 'humvee' ? 2.1 : 1.6;
             mesh.add(bar);
-            this.pursuers.push({ mesh, bar, pos: new THREE.Vector3(w.x, b.h, w.z), yaw: 0, v: 0, vmax, fireT: rand(1, 3), id });
+            this.pursuers.push({ mesh, bar, pos: new THREE.Vector3(w.x, b.h, w.z), yaw: 0, v: 0, vmax, fireT: rand(1, 3), id, hitT: 0 });
         }
     }
 
@@ -243,6 +312,15 @@ export class HeistOp {
             if (l.lx > F.x0 && l.lx < F.x1 && l.lz > F.z0 && l.lz < F.z1) this.raiseAlarm(null);
         }
         if (this.alarm) this.updatePursuers(dt);
+        const gs = g.groundStart;
+        if (gs && gs.car && gs.car.wrecked) {
+            this.smokeT = (this.smokeT || 0) - dt;
+            if (this.smokeT <= 0) { this.smokeT = 0.15; g.effects.puffSmoke(_v.copy(gs.car.pos).setY(gs.car.pos.y + 1), _v2.set(0, 2, 0), 1.2, 0.18, 2.2, 0.5); }
+        }
+        if (this.alarm && gs && this.stage !== 'jet' && this.stage !== 'air') {
+            const status = (gs.state === 'drive' && gs.car.hp != null ? 'CAR ' + Math.max(0, Math.round(gs.car.hp)) + '% · ' : '') + 'YOU ' + Math.max(0, Math.round(gs.hp)) + '%';
+            g.objective = (gs.state === 'drive' ? 'GET TO THE JET — MPs IN PURSUIT' : 'RUN TO THE JET — E TO CLIMB IN') + ' · ' + status;
+        }
         // after takeoff: interceptors
         const p = g.player;
         if (this.stage === 'jet' && p && p.alive && !p.onGround) {
@@ -287,7 +365,8 @@ export class HeistOp {
             const want = Math.atan2(-dx, -dz);
             let dy = want - u.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
             u.yaw += clamp(dy, -1.3 * dt, 1.3 * dt);
-            const vt = d < 12 ? Math.max(6, d) : u.vmax * (Math.abs(dy) > 1 ? 0.5 : 1);
+            u.hitT = Math.max(0, u.hitT - dt);
+            const vt = u.hitT > 0.6 ? -5 : d < 12 ? Math.max(6, d) : u.vmax * (Math.abs(dy) > 1 ? 0.5 : 1); // reverse off after a hit
             u.v += clamp(vt - u.v, -10 * dt, 5 * dt);
             u.pos.x += -Math.sin(u.yaw) * u.v * dt;
             u.pos.z += -Math.cos(u.yaw) * u.v * dt;
@@ -296,11 +375,27 @@ export class HeistOp {
             _e.set(0, u.yaw, 0);
             u.mesh.quaternion.setFromEuler(_e);
             u.bar.material.color.setHex(Math.floor(g.time * 6) % 2 ? 0xff2020 : 0x2040ff);
-            // caught you?
-            if (tgt.r > 0 && d < tgt.r + 2 && !this.result) {
-                this.result = 'lose';
-                g.showBanner('BUSTED!', 'The MPs got you. Nice try.', 5, '#ff4a3d');
-                g.audio.say('Hands where I can see them!', true);
+            // contact: ram the car, tackle you on foot, or bash the jet
+            const gs = g.groundStart;
+            if (tgt.r > 0 && d < tgt.r + 2 && u.hitT <= 0 && !this.result) {
+                u.hitT = 1.8;
+                const rel = Math.abs(u.v) + (gs && gs.state === 'drive' ? Math.abs(gs.car.v) * 0.5 : 0);
+                u.v = -3;
+                if (gs && gs.state === 'drive' && gs.rammed) gs.rammed(u, rel);
+                else if (gs && gs.tackled) { u.hitT = 3; if (gs.tackled(u)) this.busted(); } // on foot: each MP needs a moment to come back at you
+                else if (g.player && g.player.onGround) { g.player.damage(8 + rel * 0.8, null, 'crash'); g.shake = Math.min(1.6, g.shake + 0.6); g.addFeed('AN MP HUMVEE RAMMED THE JET!', '#ff4a3d'); }
+            }
+            // on foot: they shoot at you too (not much of a marksman at a run)
+            if (gs && gs.state === 'walk' && gs.hp > 0 && d < 70 && d > 5 && !this.result) {
+                u.fireT -= dt;
+                if (u.fireT <= 0) {
+                    u.fireT = rand(1.2, 2.4);
+                    const from = _v.copy(u.pos).setY(u.pos.y + 2.2);
+                    const dir = _v2.subVectors(gs.walker.pos, from).setY(gs.walker.pos.y + 1.2 - from.y).normalize();
+                    dir.x += rand(-0.03, 0.03); dir.z += rand(-0.03, 0.03);
+                    g.weapons.bullets.push({ pos: from.clone(), vel: dir.multiplyScalar(700), owner: null, team: 'red', damage: 0, life: 0.5, tracer: true, color: [3.4, 1.0, 0.5] });
+                    if (Math.random() < 0.3) { gs.hp -= 7; g.shake = Math.min(1.6, g.shake + 0.25); if (gs.hp <= 0) this.busted(); }
+                }
             }
             // shooting at the jet as it taxis and rolls
             if (this.stage === 'jet' && g.player.onGround && d < 160) {
@@ -314,6 +409,14 @@ export class HeistOp {
                 }
             }
         }
+    }
+
+    busted() {
+        if (this.result) return;
+        const g = this.game;
+        this.result = 'lose';
+        g.showBanner('BUSTED!', 'The MPs got you. Nice try.', 5, '#ff4a3d');
+        g.audio.say('Hands where I can see them!', true);
     }
 
     dispose() {

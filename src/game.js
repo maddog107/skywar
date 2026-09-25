@@ -1248,7 +1248,8 @@ export class Game {
             }
         }
         this.updateCamera(rawDt, mouse);
-        this.world.update(dt, this.camera, pm ? pm.pos : p ? p.pos : this.camera.position, this.wind);
+        // terrain detail follows you: on foot / in the Ready Room car too, not the parked jet
+        this.world.update(dt, this.camera, pm ? pm.pos : this.groundStart ? this.groundStart.focus : p ? p.pos : this.camera.position, this.wind);
         this.world.updateWeather(rawDt, this.camera, this);
         this.effects.update(dt, this.camera, this.scene.fog, (x, z) => Math.max(terrainHeight(x, z), 0));
         if (this.cockpit && this.cockpit.enabled && pm) this.cockpit.updateRifle(rawDt, this, this.camera, this.world, pm);
