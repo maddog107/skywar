@@ -141,42 +141,117 @@ export function makeDetailNoise(N = DETAIL_RES) {
     return out;
 }
 
-// Weather map, RGBA: R = cumulus potential (blobs of many sizes), G = how tall the cloud there grows,
-// B = deck cover noise, A = cloud base altitude variation
+// Weather map, RGBA: R = cumulus potential, G = how tall the cloud there grows (1 = the weather's usual tops,
+// up to ~2.6 for a towering cumulus), B = deck cover noise, A = cloud base altitude variation.
+// Cumulus are elliptical blobs in four size octaves, placed like a real cumulus field rather than sprinkled
+// evenly: large regions of the tile are cloudier or clearer than others, the small clouds gather around the
+// big ones (satellite puffs), in some regions the clouds line up in streets along the prevailing wind, in
+// others stratocumulus spreads into broad, broken, flat sheets, and here and there a big cloud towers up.
+export const STREET_DIR = [0.83, -0.55];   // cloud streets run along this (x, z): the game's usual wind
 export function makeWeatherMap(N = WEATHER_RES) {
     const S = WEATHER_SIZE;
+    const regime = perlin2(4, 61), regime2 = perlin2(2, 62), streetR = perlin2(3, 63), sheetR = perlin2(3, 64), streetW = perlin2(5, 67);
+    const warpX = perlin2(10, 51), warpZ = perlin2(10, 52), lumps = perlin2(48, 54), lumps2 = perlin2(112, 59);
+    const fineX = perlin2(40, 65), fineZ = perlin2(40, 66), sheetN = perlin2(24, 68);
+    const ss = (a, b, x) => { const t = sat((x - a) / (b - a)); return t * t * (3 - 2 * t); };
+    // how cloudy the area around (u, v) is (0 clear .. 1 crowded), and how much it organises into streets
+    const cloudiness = (u, v) => ss(-0.55, 0.45, regime(u, v) * 0.75 + regime2(u, v) * 0.5);
+    const streets = (u, v) => ss(0.08, 0.38, streetR(u, v));
+    // stripes along STREET_DIR, ~2.3 km apart (a wave vector of whole cycles per tile, so it tiles)
+    const stripe = (u, v) => 0.5 + 0.5 * Math.cos(2 * Math.PI * (8 * u + 12 * v) + streetW(u, v) * 2.0);
+    const streetAng = Math.atan2(STREET_DIR[1], STREET_DIR[0]);
+    // octaves, largest first: cell (m), radius range (fraction of the cell), amplitude, height range, chance
+    // of a towering cloud, and how strongly the small ones cluster around the bigger clouds already placed
     const octaves = [
-        { cell: 2048, rMin: 0.3, rMax: 0.62, amp: 1, seed: 41 },
-        { cell: 1024, rMin: 0.3, rMax: 0.6, amp: 0.85, seed: 42 },
-        { cell: 512, rMin: 0.32, rMax: 0.55, amp: 0.45, seed: 43 },
-    ].map(o => {
-        // per cell: x, z, 1/R², amplitude, height, cos/sx, sin/sx, cos, sin
-        const P = S / o.cell, pts = new Float32Array(P * P * 9);
+        { cell: 4096, rMin: 0.15, rMax: 0.3, amp: 1.05, hMin: 0.9, hMax: 1.2, tower: 0.3, cluster: 0, keep: 0.5, seed: 40 },
+        { cell: 2048, rMin: 0.25, rMax: 0.5, amp: 1.0, hMin: 0.65, hMax: 1.0, tower: 0.08, cluster: 0.3, keep: 0.8, seed: 41 },
+        { cell: 1024, rMin: 0.28, rMax: 0.55, amp: 0.85, hMin: 0.45, hMax: 0.85, tower: 0, cluster: 0.8, keep: 0.9, seed: 42 },
+        { cell: 512, rMin: 0.3, rMax: 0.52, amp: 0.5, hMin: 0.35, hMax: 0.6, tower: 0, cluster: 1.4, keep: 0.95, seed: 43 },
+    ];
+    // blob potential of the octaves placed so far at a point (for clustering the smaller ones)
+    const potAt = (px, pz, upto) => {
+        let pot = 0;
+        for (let oi = 0; oi < upto; oi++) {
+            const o = octaves[oi], cx = Math.floor(px / o.cell), cz = Math.floor(pz / o.cell), P = o.P, pts = o.pts;
+            for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+                const i = cx + dx, j = cz + dz, wi = ((i % P) + P) % P, wj = ((j % P) + P) % P, k = (wj * P + wi) * 9;
+                if (!pts[k + 3]) continue;
+                const ex = px - (pts[k] + (i - wi) * o.cell), ez = pz - (pts[k + 1] + (j - wj) * o.cell);
+                const lx = ex * pts[k + 5] + ez * pts[k + 6], lz = -ex * pts[k + 8] + ez * pts[k + 7];
+                const r2 = (lx * lx + lz * lz) * pts[k + 2];
+                if (r2 < 1) pot = Math.max(pot, pts[k + 3] * (1 - r2));
+            }
+        }
+        return pot;
+    };
+    octaves.forEach((o, oi) => {
+        // per cell: x, z, 1/R², amplitude (0: no cloud), height, cos/sx, sin/sx, cos, sin
+        const P = o.P = S / o.cell, pts = o.pts = new Float32Array(P * P * 9);
         for (let j = 0; j < P; j++) for (let i = 0; i < P; i++) {
-            const size = hash(i, j, 7, o.seed), R = o.cell * (o.rMin + (o.rMax - o.rMin) * size);
-            const sx = 1 + 0.5 * hash(i, j, 5, o.seed), ang = hash(i, j, 6, o.seed) * Math.PI;
             const k = (j * P + i) * 9;
-            pts[k] = (i + 0.15 + 0.7 * hash(i, j, 1, o.seed)) * o.cell; pts[k + 1] = (j + 0.15 + 0.7 * hash(i, j, 2, o.seed)) * o.cell;
+            let x = (i + 0.1 + 0.8 * hash(i, j, 1, o.seed)) * o.cell, z = (j + 0.1 + 0.8 * hash(i, j, 2, o.seed)) * o.cell;
+            const u = x / S, v = z / S, st = streets(u, v);
+            // in a street region, pull the cloud across onto the nearest stripe crest
+            if (st > 0) {
+                const nx = 8 / S, nz = 12 / S, len2 = nx * nx + nz * nz; // stripe wave vector (cycles per metre)
+                const ph = 8 * u + 12 * v + streetW(u, v) * 2.0 / (2 * Math.PI);
+                const off = (ph - Math.round(ph)) * 0.6 * st;       // cycles to the crest, part of the way
+                x -= off * nx / len2; z -= off * nz / len2;
+            }
+            const cl = cloudiness(x / S, z / S);
+            const near = oi ? potAt(x, z, oi) : 0;
+            // does a cloud stand here: crowded areas, street crests, and (small ones) next to big clouds
+            let p = o.keep * cl * (1 - o.cluster * 0.35 + o.cluster * Math.min(near, 1) * 1.1);
+            if (st > 0) p *= 1 - st + st * (0.25 + 1.1 * stripe(x / S, z / S));
+            if (hash(i, j, 9, o.seed) > p) continue;
+            const size = hash(i, j, 7, o.seed);
+            // a power law of sizes: mostly small, a few big
+            const R = o.cell * (o.rMin + (o.rMax - o.rMin) * Math.pow(size, 1.5));
+            const tower = hash(i, j, 8, o.seed) < o.tower;
+            let sx = 1 + 0.6 * hash(i, j, 5, o.seed), ang = hash(i, j, 6, o.seed) * Math.PI;
+            if (st > 0.3) { sx = 1.15 + 0.4 * st; ang = streetAng + (hash(i, j, 6, o.seed) - 0.5) * 0.6; } // a little strung out along the street
+            pts[k] = x; pts[k + 1] = z;
             pts[k + 2] = 1 / (R * R);
-            pts[k + 3] = o.amp * (0.55 + 0.45 * hash(i, j, 3, o.seed));
-            pts[k + 4] = (0.4 + 0.6 * size) * (0.72 + 0.28 * hash(i, j, 4, o.seed));
+            pts[k + 3] = o.amp * (0.6 + 0.4 * hash(i, j, 3, o.seed)) * (0.88 + 0.4 * cl);
+            // the bigger, the taller; a towering cumulus much taller
+            pts[k + 4] = tower ? 1.9 + 0.7 * hash(i, j, 4, o.seed) : (o.hMin + (o.hMax - o.hMin) * size) * (0.75 + 0.3 * hash(i, j, 4, o.seed));
             pts[k + 5] = Math.cos(ang) / sx; pts[k + 6] = Math.sin(ang) / sx; pts[k + 7] = Math.cos(ang); pts[k + 8] = Math.sin(ang);
         }
-        return { ...o, P, pts };
     });
-    const warpX = perlin2(10, 51), warpZ = perlin2(10, 52), region = perlin2(3, 53), lumps = perlin2(48, 54), lumps2 = perlin2(112, 59);
+    // stratocumulus: broad sheets of flat cells with gaps (a 2D Worley pattern) in their own regions
+    const sheetCells = 40, sheetPts = new Float32Array(sheetCells * sheetCells * 2);
+    for (let j = 0; j < sheetCells; j++) for (let i = 0; i < sheetCells; i++) {
+        sheetPts[(j * sheetCells + i) * 2] = i + 0.15 + 0.7 * hash(i, j, 1, 70);
+        sheetPts[(j * sheetCells + i) * 2 + 1] = j + 0.15 + 0.7 * hash(i, j, 2, 70);
+    }
+    const sheetCell = (u, v) => {
+        const x = u * sheetCells, z = v * sheetCells, cx = Math.floor(x), cz = Math.floor(z);
+        let f1 = 9, f2 = 9;
+        for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+            const i = cx + dx, j = cz + dz, wi = ((i % sheetCells) + sheetCells) % sheetCells, wj = ((j % sheetCells) + sheetCells) % sheetCells;
+            const ex = x - (sheetPts[(wj * sheetCells + wi) * 2] + i - wi), ez = z - (sheetPts[(wj * sheetCells + wi) * 2 + 1] + j - wj);
+            const d = Math.sqrt(ex * ex + ez * ez);
+            if (d < f1) { f2 = f1; f1 = d; } else if (d < f2) f2 = d;
+        }
+        return f2 - f1; // 0 on the cell borders (the gaps), growing toward the cell centres
+    };
+    const sheetRand = (u, v) => { // per cell: how thick (0..1)
+        const x = Math.floor(u * sheetCells), z = Math.floor(v * sheetCells);
+        return hash(((x % sheetCells) + sheetCells) % sheetCells, ((z % sheetCells) + sheetCells) % sheetCells, 3, 70);
+    };
     const d4 = perlin2(4, 55), d12 = perlin2(12, 56), d32 = perlin2(32, 57), baseN = perlin2(3, 58);
     const out = new Float32Array(N * N * 4);
     for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
         const u = (x + 0.5) / N, v = (y + 0.5) / N;
-        // warped domain: irregular outlines instead of circles
-        const px = u * S + warpX(u, v) * 300, pz = v * S + warpZ(u + 0.37, v + 0.13) * 300;
+        // warped domain: irregular outlines instead of ellipses
+        const px = u * S + warpX(u, v) * 320 + fineX(u, v) * 90, pz = v * S + warpZ(u + 0.37, v + 0.13) * 320 + fineZ(u, v) * 90;
         let pot = 0, hw = 0, hs = 0;
         for (const o of octaves) {
             const cx = Math.floor(px / o.cell), cz = Math.floor(pz / o.cell), P = o.P, pts = o.pts;
             for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
                 const i = cx + dx, j = cz + dz;
                 const wi = ((i % P) + P) % P, wj = ((j % P) + P) % P, k = (wj * P + wi) * 9;
+                if (!pts[k + 3]) continue;
                 // elliptical footprint with a paraboloid potential: rounded outlines once the threshold cuts it
                 const ex = px - (pts[k] + (i - wi) * o.cell), ez = pz - (pts[k + 1] + (j - wj) * o.cell);
                 const lx = ex * pts[k + 5] + ez * pts[k + 6], lz = -ex * pts[k + 8] + ez * pts[k + 7];
@@ -188,12 +263,17 @@ export function makeWeatherMap(N = WEATHER_RES) {
                 hw += wgt; hs += wgt * pts[k + 4];
             }
         }
-        // regional variation: fields of cloud and clearer areas, and lumpy outlines
-        pot *= 0.82 + 0.3 * region(u, v);
-        pot += lumps(u, v) * 0.07 + lumps2(u, v) * 0.04;
+        pot += lumps(u, v) * 0.07 + lumps2(u, v) * 0.04; // lumpy outlines
+        let h = hw > 0 ? hs / hw : 0.5;
+        // stratocumulus sheets: flat (low tops), a notch below the usual cumulus threshold of cloudy weather
+        const su = u + warpX(u, v) * 0.006 + fineX(u, v) * 0.002, sv = v + warpZ(u, v) * 0.006 + fineZ(u, v) * 0.002;
+        const gap = 0.04 + 0.22 * ss(-0.4, 0.5, sheetN(u, v)); // gaps between the cells: narrow here, wide there
+        const sh = ss(0.12, 0.42, sheetR(u, v)) * ss(gap * 0.3, gap, sheetCell(su, sv));
+        const sheet = sh * (0.38 + 0.16 * sheetRand(su, sv) + lumps(u, v) * 0.06);
+        if (sheet > pot) { h = h * (1 - sh) + 0.32 * sh; pot = sheet + pot * pot * 0.2; }
         const k = (y * N + x) * 4;
         out[k] = sat(pot);
-        out[k + 1] = sat(hw > 0 ? hs / hw : 0.5);
+        out[k + 1] = Math.max(0.2, h);
         const deck = d4(u, v) * 0.5 + d12(u, v) * 0.32 + d32(u, v) * 0.18;
         out[k + 2] = sat(deck * 0.8 + 0.5);
         out[k + 3] = sat(baseN(u, v) * 0.7 + 0.5);
