@@ -1,0 +1,13 @@
+<!doctype html>
+<title>SKYWAR perf controller</title>
+<style>body { font: 14px sans-serif; background: #111; color: #ddd; margin: 0; } button { width: 320px; height: 200px; font-size: 28px; }</style>
+<button id="open">OPEN GAME POPUP</button>
+<div id="log"></div>
+<script>
+// Dev-only: drives the game in a popup window (a popup keeps its own visibility, so timing isn't throttled
+// when other tabs are in front). Everything else is scripted from the console of this page.
+document.getElementById('open').onclick = () => {
+    window.pop = window.open('/?perf=pop', 'perfpop', 'popup,width=1710,height=900,left=0,top=0');
+    document.getElementById('open').textContent = window.pop ? 'OPENED' : 'BLOCKED';
+};
+</script>
