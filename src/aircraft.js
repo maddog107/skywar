@@ -13,6 +13,7 @@ import { AIRCRAFT } from './config.js';
 import { createAircraftModel } from './models.js';
 import { clamp, damp, lerp, rand, G, DEG, makeRadialTexture } from './util.js';
 import { groundHeight, terrainHeight, isOnRunway } from './world.js';
+import { createEngineFlame } from './afterburner.js';
 
 const LIFT_K = 0.0016;
 const CL_MAX = 1.65;
@@ -24,43 +25,6 @@ const _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
 const _acc = new THREE.Vector3(), _vOld = new THREE.Vector3();
 const AX = new THREE.Vector3(1, 0, 0), AY = new THREE.Vector3(0, 1, 0), AZ = new THREE.Vector3(0, 0, 1);
 
-// Shared flame material template (additive, HDR so bloom picks it up)
-const flameGeo = (() => {
-    const g = new THREE.ConeGeometry(1, 1, 16, 8, true);
-    g.translate(0, -0.5, 0);
-    g.rotateX(-Math.PI / 2); // tip points +Z (backwards)
-    return g;
-})();
-function makeFlameMaterial() {
-    return new THREE.ShaderMaterial({
-        transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, fog: false,
-        uniforms: { power: { value: 0 }, ab: { value: 0 }, time: { value: 0 } },
-        vertexShader: /* glsl */`
-            varying float vT; varying vec3 vN; varying vec3 vV;
-            void main() {
-                vT = position.z; // 0 at nozzle, 1 at tip
-                vec4 mv = modelViewMatrix * vec4(position, 1.0);
-                vN = normalize(normalMatrix * normal);
-                vV = normalize(-mv.xyz);
-                gl_Position = projectionMatrix * mv;
-            }`,
-        fragmentShader: /* glsl */`
-            uniform float power, ab, time; varying float vT; varying vec3 vN; varying vec3 vV;
-            void main() {
-                float rim = pow(abs(dot(vN, vV)), 2.2);
-                float t = clamp(vT, 0.0, 1.0);
-                // shock diamonds when the afterburner is lit
-                float diamonds = ab * 0.35 * pow(0.5 + 0.5 * cos(t * 22.0 - time * 3.0), 8.0) * (1.0 - t);
-                // military power: orange flame · afterburner: hot red with shock diamonds
-                vec3 core = mix(vec3(1.6, 0.62, 0.12), vec3(1.9, 0.35, 0.1), ab);
-                vec3 tip = mix(vec3(0.8, 0.18, 0.02), vec3(1.1, 0.06, 0.02), ab);
-                vec3 col = mix(core, tip, t) * (1.0 - t * t) * rim;
-                col += vec3(1.8, 0.9, 0.4) * diamonds;
-                float flick = 0.85 + 0.15 * sin(time * 60.0 + t * 12.0);
-                gl_FragColor = vec4(col * power * flick, 1.0);
-            }`,
-    });
-}
 const navTex = makeRadialTexture(64, [[0, 'rgba(255,255,255,1)'], [0.2, 'rgba(255,255,255,0.8)'], [1, 'rgba(255,255,255,0)']]);
 
 // ── Thrust, drag and compressibility ──
@@ -229,15 +193,8 @@ export class Aircraft {
 
     initFX() {
         const rig = this.rig;
-        this.flames = [];
-        for (const n of rig.nozzles) {
-            const m = new THREE.Mesh(flameGeo, makeFlameMaterial());
-            m.position.copy(n);
-            m.renderOrder = 9;
-            m.frustumCulled = false;
-            this.model.add(m);
-            this.flames.push(m);
-        }
+        // exhaust plume per nozzle (afterburner.js): military power → full afterburner with shock diamonds
+        this.flames = rig.nozzles.map(n => { const f = createEngineFlame(rig.nozzleR); f.position.copy(n); this.model.add(f); return f; });
         // nav lights
         const mk = (color, pos, scale) => {
             const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: navTex, color, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
@@ -247,8 +204,8 @@ export class Aircraft {
             return s;
         };
         const [lt, rt] = rig.wingtips;
-        this.navL = mk(new THREE.Color(1.4, 0.05, 0.05), lt, 0.9);
-        this.navR = mk(new THREE.Color(0.05, 1.4, 0.2), rt, 0.9);
+        this.navL = mk(new THREE.Color(1.4, 0.05, 0.05), lt, 0.55);
+        this.navR = mk(new THREE.Color(0.05, 1.4, 0.2), rt, 0.55);
         this.strobe = mk(new THREE.Color(1.5, 1.5, 1.5), new THREE.Vector3(0, rig.height ? rig.height * 0.35 : 2, this.spec.length * 0.42), 0.8);
         this.vortex = [null, null];
         this.contrails = [];
@@ -1034,7 +991,7 @@ export class Aircraft {
         this.wire = null;
         this.game.scene.remove(this.root);
         // free per-instance GPU resources (shared geometries/materials are kept)
-        for (const m of this.flames) m.material.dispose();
+        for (const f of this.flames) f.dispose();
         for (const s of [this.navL, this.navR, this.strobe]) s && s.material.dispose();
         this.model.traverse(o => { if (o.isMesh && o.userData.origMat && o.material !== o.userData.origMat) o.material.dispose(); });
         for (const l of this.gearLegs || []) l.traverse(o => { if (o.isMesh) o.geometry.dispose(); });
@@ -1081,16 +1038,7 @@ export class Aircraft {
         // flame from throttle step 5 (45%) up; stronger toward step 9, afterburner on 0
         const power = this.alive && !this.flameout && !this.bellied ? clamp((this.throttle - 0.42) / 0.48, 0, 1) : 0;
         const ab = this.afterburner && this.alive && !this.flameout ? 1 : 0;
-        const R = this.rig.nozzleR;
-        for (const m of this.flames) {
-            const u = m.material.uniforms;
-            u.time.value = now + this.id;
-            u.power.value = damp(u.power.value, power > 0 ? 0.35 + power * 0.55 + ab * 0.9 : 0, 10, dt);
-            u.ab.value = damp(u.ab.value, ab, 6, dt);
-            const len = R * (1.5 + power * 4.5 + ab * (8 + Math.random() * 1.5));
-            m.scale.set(R * (0.85 + ab * 0.15), R * (0.85 + ab * 0.15), len);
-            m.visible = u.power.value > 0.02;
-        }
+        for (const f of this.flames) f.update(power, ab, this.mach || 0, dt, now + this.id, this.game.camera);
         // Props
         if (this.rig.props) for (const p of this.rig.props) p.rotation.z += dt * (8 + this.throttle * 60);
         // Nav lights
