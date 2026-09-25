@@ -9,5 +9,7 @@
  "elevationDeg": 8.0,
  "sideExtent": 5.599,
  "topExtent": 5.599,
- "note": "frames 0-7: viewed from azimuth k*45deg around the tree (0 = from -Y in Blender = +Z in three.js), frame 8: from above; sRGB, straight alpha"
+ "note": "frames 0-7: viewed from azimuth k*45deg around the tree (0 = from -Y in Blender = +Z in three.js), frame 8: from above; sRGB, straight alpha",
+ "sideCrop": [0.0391, 0.9609, 0.0371, 0.9766],
+ "topCrop": [0.0723, 0.9277, 0.0645, 0.9355]
 }

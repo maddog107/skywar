@@ -114,6 +114,17 @@ opaque = alpha > 0.5
 if opaque.any(): rgb[~filled] = rgb[opaque].mean(axis=0)  # the rest: the tree's average colour (deep mips)
 a[..., :3] = rgb
 atlas.pixels = a.ravel().tolist()
+# tight crop of the drawn part (alpha > 0.1, 2 px margin) in frame fractions [x0, x1, y0, y1] (y from the
+# bottom): the game trims its cards to it, so it doesn't shade kilometres of transparent texels
+def crop(ks):
+    m = np.zeros((FRAME, FRAME), bool)
+    for k in ks:
+        col, row = k % 3, 2 - k // 3
+        m |= alpha[row * FRAME:(row + 1) * FRAME, col * FRAME:(col + 1) * FRAME] > 0.1
+    ys, xs = np.where(m)
+    if not len(xs): return [0, 1, 0, 1]
+    f = lambda v: round(float(v) / FRAME, 4)
+    return [f(max(xs.min() - 2, 0)), f(min(xs.max() + 3, FRAME)), f(max(ys.min() - 2, 0)), f(min(ys.max() + 3, FRAME))]
 atlas.filepath_raw = f'{out}.png'
 atlas.file_format = 'PNG'
 atlas.save()
@@ -122,6 +133,7 @@ meta = {
     'frame': FRAME, 'grid': 3, 'sideFrames': 8, 'topFrame': 8, 'elevationDeg': math.degrees(ELEV),
     'sideExtent': round(side_extent, 3), 'topExtent': round(2 * radius * 1.04, 3),
     'note': 'frames 0-7: viewed from azimuth k*45deg around the tree (0 = from -Y in Blender = +Z in three.js), frame 8: from above; sRGB, straight alpha',
+    'sideCrop': crop(range(8)), 'topCrop': crop([8]),
 }
 json.dump(meta, open(f'{out}.json', 'w'), indent=1)
 print('WROTE', f'{out}.png', meta)
