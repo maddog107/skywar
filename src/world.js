@@ -296,7 +296,7 @@ export function makeTreeGeometries() {
     const broadleaf = bake([
         { geo: trunk(6.5, 0.5), color: 0x4f3a28 },
         { geo: crown(4.6, 1, 0, 8.8, 0, 0.82, 1.3), color: 0x3a5f2a, ao: [5.2, 12.5], radial: [0, 8.8, 0] },
-        { geo: crown(2.6, 1, 1.9, 11.2, 0.6, 0.85, 4.1), color: 0x44692e, ao: [8.5, 13.5], radial: [1.9, 11.2, 0.6] },
+        { geo: crown(2.8, 0, 1.9, 11.2, 0.6, 0.85, 4.1), color: 0x44692e, ao: [8.5, 13.5], radial: [1.9, 11.2, 0.6] },
     ]);
     const bush = bake([
         { geo: crown(1.9, 0, 0, 1.3, 0, 0.62, 2.7), color: 0x465f2c, ao: [0.2, 2.6], radial: [0, 0.9, 0] },
@@ -545,7 +545,8 @@ export class World {
         cu.shadowColor.value.copy(P.cloudShadow);
         cu.sunDir.value.copy(this.sunDir);
         cu.sunColor.value.copy(P.sun).multiplyScalar(night ? 0.3 : 1);
-        cu.coverage.value = P.coverage ?? 0.5;
+        this.cloudCoverBase = P.coverage ?? 0.5;
+        cu.coverage.value = this.cloudCoverBase * (this.quality === 'low' ? 0.7 : 1); // fewer clouds on 'low'
         cu.grow.value = P.grow ?? 1;
         // rain and storms: a grey overcast deck; the high clouds above it are hidden and sun shadows go soft
         this.overcast = P.overcast || 0;
@@ -644,6 +645,9 @@ export class World {
             if (this.sunFar.shadow.map) { this.sunFar.shadow.map.dispose(); this.sunFar.shadow.map = null; }
         }
         this.treeShadows = !low;
+        // 'low' plants one kind of tree (one draw call per tile, as before); rebuild the tree tiles on a switch
+        if (this.lowTrees !== low) { this.lowTrees = low; this.refreshTrees(); }
+        if (this.cloudCoverBase !== undefined) this.cloudCoverage = this.cloudMat.uniforms.coverage.value = this.cloudCoverBase * (low ? 0.7 : 1);
         for (const t of this.tiles.values()) if (t.trees) for (const m of t.trees.children) m.castShadow = this.treeShadows && m.geometry !== this.treeGeos.bush;
         this.terrainDetail.value = low ? 0 : 1;
         // 'low' compiles the terrain without close-up detail, bump, rock strata and surf
@@ -837,20 +841,24 @@ export class World {
             shader.vertexShader = shader.vertexShader
                 .replace('#include <common>', `#include <common>
                     attribute vec4 morph; // previous LOD: height, normal x, normal z, start time
+                    attribute float hTrue; // terrain height without the drawn waterline step
                     uniform float uTime;
-                    varying vec3 vWPos, vWN;`)
+                    varying vec3 vWPos, vWN;
+                    varying float vTrueH;`)
                 .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
                     float mk = clamp((uTime - morph.w) * 0.7, 0.0, 1.0);
                     mk = mk * mk * (3.0 - 2.0 * mk);
                     vec3 prevN = vec3(morph.y, sqrt(max(1.0 - morph.y * morph.y - morph.z * morph.z, 0.0)), morph.z);
                     objectNormal = normalize(mix(prevN, objectNormal, mk));
-                    vWN = objectNormal;`)
+                    vWN = objectNormal;
+                    vTrueH = hTrue;`)
                 .replace('#include <begin_vertex>', `#include <begin_vertex>
                     transformed.y = mix(morph.x, transformed.y, mk);
                     vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`);
             shader.fragmentShader = shader.fragmentShader
                 .replace('#include <common>', `#include <common>
                     varying vec3 vWPos, vWN;
+                    varying float vTrueH;
                     uniform sampler2D detailMap, groundMap;
                     uniform float uDesat, uTime, uDetail;
                     // the sea bed doesn't get shadows (a ship's shadow would show through the water)
@@ -893,12 +901,16 @@ export class World {
                     #endif
                     // beach: a narrow sand band above the waterline, wet at the water's edge
                     float edgeN = (gm.a - 0.5) * 2.0;
-                    float sandW = (1.0 - smoothstep(1.7, 3.3, tH + edgeN * 1.3)) * smoothstep(-5.0, -1.6, tH) * (1.0 - smoothstep(0.035, 0.1, tSlope));
-                    vec3 sandC = vec3(0.55, 0.47, 0.29) * mix(1.0, 0.6, 1.0 - smoothstep(0.7, 1.5, tH + edgeN * 0.3));
+                    float sH = vTrueH;
+                    // lake and sea bed below the true waterline
+                    vec3 bedC = mix(vec3(0.62, 0.58, 0.42), vec3(0.2, 0.36, 0.38), smoothstep(-2.0, -60.0, sH));
+                    diffuseColor.rgb = mix(diffuseColor.rgb, bedC * bedC * mix(0.9, 1.1, d2), smoothstep(-0.3, -2.5, sH));
+                    float sandW = (1.0 - smoothstep(1.3, 2.9, sH + edgeN * 1.2)) * smoothstep(-4.5, -1.2, sH) * (1.0 - smoothstep(0.035, 0.1, tSlope));
+                    vec3 sandC = vec3(0.55, 0.47, 0.29) * mix(1.0, 0.6, 1.0 - smoothstep(0.25, 1.0, sH + edgeN * 0.3));
                     diffuseColor.rgb = mix(diffuseColor.rgb, sandC * mix(0.92, 1.08, d2), sandW);
                     grassW *= 1.0 - sandW;
                     // surf on the waterline (the drawn shore steps from -1.5 m to +0.6 m there)
-                    float foamBand = smoothstep(-1.4, -0.6, tH) * (1.0 - smoothstep(0.25, 0.9, tH)) * (1.0 - smoothstep(1500.0, 5000.0, tDist));
+                    float foamBand = smoothstep(-0.9, -0.25, sH) * (1.0 - smoothstep(0.1, 0.55, sH)) * (1.0 - smoothstep(1500.0, 5000.0, tDist));
                     #ifndef TERRAIN_LOW
                     if (foamBand > 0.0) {
                         vec2 fuv = wxz / 21.0 + vec2(uTime * 0.011, uTime * 0.007);
@@ -995,7 +1007,7 @@ export class World {
         }
         const V = seg + 1;
         const vCount = V * V + V * 4;
-        const pos = new Float32Array(vCount * 3), nor = new Float32Array(vCount * 3), col = new Float32Array(vCount * 3);
+        const pos = new Float32Array(vCount * 3), nor = new Float32Array(vCount * 3), col = new Float32Array(vCount * 3), ht = new Float32Array(vCount);
         const skirt = 30 + step * 1.5;
         const cN = new THREE.Vector3();
         // Drawn height only (physics keeps the true terrain): open a ~2 m step at the waterline —
@@ -1004,6 +1016,7 @@ export class World {
         const shore = (h) => h < 0 ? h - 1.5 * Math.max(0, 1 + h / 6) : h + 0.6 * Math.max(0, 1 - h);
         const setVert = (k, i, j, drop) => {
             const h = shore(H[(j + 1) * N + (i + 1)]);
+            ht[k] = H[(j + 1) * N + (i + 1)];
             pos[k * 3] = x0 + i * step; pos[k * 3 + 1] = h - drop; pos[k * 3 + 2] = z0 + j * step;
             const hl = H[(j + 1) * N + i], hr = H[(j + 1) * N + i + 2], hd = H[j * N + i + 1], hu = H[(j + 2) * N + i + 1];
             cN.set(hl - hr, 2 * step, hd - hu).normalize();
@@ -1051,6 +1064,7 @@ export class World {
         const mo = new Float32Array(vCount * 4);
         for (let q = 0; q < vCount; q++) { mo[q * 4] = pos[q * 3 + 1]; mo[q * 4 + 1] = nor[q * 3]; mo[q * 4 + 2] = nor[q * 3 + 2]; mo[q * 4 + 3] = -1e4; }
         geo.setAttribute('morph', new THREE.BufferAttribute(mo, 4));
+        geo.setAttribute('hTrue', new THREE.BufferAttribute(ht, 1));
         geo.setIndex(new THREE.BufferAttribute(idx, 1));
         geo.computeBoundingSphere();
         geo.userData = { V, step, x0, z0 };
@@ -1062,10 +1076,7 @@ export class World {
         const forest = smoothstep(0.02, 0.2, fbm(x * 0.0006 + 40, z * 0.0006 - 12, 3));
         const slope = 1 - ny;
         let r, g, b;
-        if (h < -2) {
-            const t = smoothstep(-2, -60, h);
-            r = lerp(0.62, 0.2, t); g = lerp(0.58, 0.36, t); b = lerp(0.42, 0.38, t);
-        } else {
+        {
             // lowland grass -> forest
             r = lerp(0.33, 0.44, n); g = lerp(0.44, 0.49, n); b = lerp(0.2, 0.25, n);
             r = lerp(r, 0.17, forest * 0.8); g = lerp(g, 0.26, forest * 0.8); b = lerp(b, 0.13, forest * 0.8);
@@ -1209,6 +1220,11 @@ export class World {
             if (k >= V * V) { // skirt vertex: keep its drop below the edge
                 const i = Math.round((x - n.x0) / n.step), jj = Math.round((z - n.z0) / n.step);
                 y -= np[(jj * V + i) * 3 + 1] - np[k * 3 + 1];
+            } else {
+                // stay on the same side of the water plane as the target, clear of it (see shore() in the tile
+                // builder): a morph must never lay ground flat on the waterline, where it would flicker
+                const yn = np[k * 3 + 1];
+                y = yn < 0 ? Math.min(y, Math.max(yn, -1.5)) : Math.max(y, Math.min(yn, 0.6));
             }
             mo[k * 4] = y;
             mo[k * 4 + 1] = on[k00] * w00 + on[k10] * w10 + on[k01] * w01 + on[k11] * w11;
@@ -1228,6 +1244,7 @@ export class World {
         this.treeGeo = this.treeGeos.broadleaf;
         this.treeMat = this.makeTreeMaterial(9000, 11500);
         this.treeShadows = true;
+        this.lowTrees = false; // set by setQuality()
     }
 
     makeTreeMaterial(fadeNear, fadeFar) {
@@ -1304,7 +1321,7 @@ export class World {
             const pineP = 0.4 + 0.55 * smoothstep(120, 520, h);
             const bushP = forest < 0.12 ? 0.4 : 0.12;
             const u = r();
-            const kind = u < bushP ? 2 : u < bushP + (1 - bushP) * pineP ? 0 : 1;
+            const kind = this.lowTrees ? 0 : u < bushP ? 2 : u < bushP + (1 - bushP) * pineP ? 0 : 1;
             const sc = kind === 2 ? 0.6 + r() * 0.8 : 0.7 + r() * 0.8;
             q.setFromAxisAngle(up, r() * 6.28);
             s.set(sc, sc * (0.85 + r() * 0.4), sc);
@@ -1637,11 +1654,18 @@ export class World {
                     // hidden by the weather, or so close the camera is inside it: collapse the quad
                     // hidden by the weather (high ones are above the overcast deck), or so close the camera is inside it
                     if (puffB.w > coverage || (hideHigh > 0.5 && puffB.z > 7.5) || dist < size * 0.12) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
-                    vRight = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
-                    vUp = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
+                    // face the camera but stay upright in the world (so a rolled camera doesn't tip the puffs over);
+                    // looking straight up or down, fall back to the camera's own up
+                    vToCam = normalize(camPos - o);
+                    vec3 camUp = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
+                    vec3 upP = vec3(0.0, 1.0, 0.0) - vToCam * vToCam.y;
+                    float ul = length(upP);
+                    upP /= max(ul, 1e-3);
+                    if (dot(camUp, upP) < 0.0) camUp = -camUp;
+                    vUp = normalize(mix(camUp, upP, smoothstep(0.08, 0.35, ul)) + vec3(0.0, 1e-4, 0.0));
+                    vRight = normalize(cross(vUp, vToCam));
                     vec2 q = position.xy * vec2(1.25, 1.0) * size;
                     vec3 wp = o + vRight * q.x + vUp * q.y;
-                    vToCam = normalize(camPos - o);
                     vRay = wp - camPos;
                     // atlas: 4 shapes, each also mirrored
                     float cellId = mod(puffB.z, 8.0), cell = mod(cellId, 4.0);
@@ -1671,7 +1695,7 @@ export class World {
                     float hgt = clamp(vHgt, 0.0, 1.0);
                     // wrapped diffuse (clouds scatter light all round), self-shadowed toward the flat grey base
                     float lit = clamp(ndl * 0.5 + 0.55, 0.0, 1.0) * mix(0.3, 1.0, smoothstep(0.0, 0.8, hgt)) * mix(1.0, 0.85, t.b);
-                    vec3 col = mix(shadowColor, litColor * 1.15, lit);
+                    vec3 col = mix(shadowColor, litColor * 1.05, lit);
                     // sky light on the tops
                     col += shadowColor * 0.12 * max(N.y, 0.0);
                     // light through thin edges when looking toward the sun (silver lining)
@@ -1994,7 +2018,12 @@ export class World {
         this.uWind.value.set(ws > 0.1 ? wind.x / ws : 1, 0.35 + ws * 0.06 + storm * 0.9, ws > 0.1 ? wind.z / ws : 0);
         // sun shadows: the sharp near map follows the focus object; the wide far map covers the ground ahead
         this.aimShadow(this.sun, focus, 70, 600);
-        if (this.sunFar.visible && this.sunFar.castShadow) {
+        // the far map is coarse and mostly static scenery: re-render it every other frame (every third on medium)
+        const fs = this.sunFar.shadow;
+        fs.autoUpdate = false;
+        this.farShadowFrame = (this.farShadowFrame + 1) % (this.quality === 'medium' ? 3 : 2);
+        if (this.sunFar.visible && this.sunFar.castShadow && (this.farShadowFrame === 0 || !fs.map)) {
+            fs.needsUpdate = true;
             camera.getWorldDirection(_v1);
             const hl = Math.hypot(_v1.x, _v1.z);
             const agl = cam.y - Math.max(terrainHeight(cam.x, cam.z), 0);
