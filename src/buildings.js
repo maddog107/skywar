@@ -43,6 +43,7 @@ const COLLAPSE = 2.6; // seconds
 const _m = new THREE.Matrix4(), _m2 = new THREE.Matrix4(), _m3 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _axis = new THREE.Vector3(), _c = new THREE.Color();
 const HIDDEN = new THREE.Matrix4().makeScale(0, 0, 0);
+const DUST = new THREE.Color(0.45, 0.42, 0.38);
 
 // the town and the airbases share one set, so every structure in the world is found by the same queries
 export const WORLD_BUILDINGS = { current: null };
@@ -342,7 +343,7 @@ export class Buildings {
     // the standing stub of a wall instance: the bottom storey or so, burnt
     stub(b, pt) {
         const h = b.top - b.y;
-        const k = Math.min(1, Math.min(4.5, 1.5 + h * 0.12) / Math.max(h, 1));
+        const k = Math.min(1, Math.min(3.2, 1 + h * 0.08) / Math.max(h, 1)); // lower than the heap piled inside it
         if (pt.im.instanceColor) { if (!pt.col) { pt.im.getColorAt(pt.i, _c); pt.col = _c.clone(); } pt.im.setColorAt(pt.i, _c.copy(pt.col).multiplyScalar(0.28)); pt.im.instanceColor.needsUpdate = true; }
         return _m.copy(pt.base).multiply(_m3.makeScale(1, k, 1));
     }
@@ -359,7 +360,7 @@ export class Buildings {
                 const fl = 0.8 + Math.sin(f.flick * 9.1) * 0.08 + Math.sin(f.flick * 23.7) * 0.06;
                 s.position.set(b.x, b.y + 3 + size * 0.12, b.z);
                 s.scale.setScalar(size * fl);
-                s.material.opacity = (this.night ? 0.8 : 0.3) * Math.min(1, f.fire / 4) * fl;
+                s.material.opacity = (this.night ? 0.8 : 0.12) * Math.min(1, f.fire / 4) * fl;
                 s.visible = true;
             }
         }
@@ -373,7 +374,7 @@ export class Buildings {
         if (r.count >= r.instanceMatrix.count) return;
         const h = b.top - b.y;
         _q.setFromAxisAngle(_v.set(0, 1, 0), b.yaw + rand(-0.2, 0.2));
-        const hh = vehicle ? 1.2 : Math.min(1.4 + h * 0.13, 9);
+        const hh = vehicle ? 1.2 : Math.min(2.4 + h * 0.16, 11);
         r.setMatrixAt(r.count, _m.compose(_p.set(b.x, b.y + 0.3, b.z), _q, _s.set(b.w * (vehicle ? 0.8 : 1.12), hh, b.d * (vehicle ? 0.8 : 1.12))));
         // tinted by what it was built from (walls), darkened: soot and dust
         const wall = b.parts.find(pt => pt.col || (pt.im && pt.im.instanceColor));
@@ -382,7 +383,7 @@ export class Buildings {
         if (wall && wall.im) { wall.im.getColorAt(wall.i, _c); if (wall.col) _c.copy(wall.col); }
         else if (mat) _c.copy(mat.color);
         else _c.setRGB(0.5, 0.48, 0.45);
-        _c.lerp(_v2.set(0.45, 0.42, 0.38), 0.5).multiplyScalar(0.85);
+        _c.lerp(DUST, 0.5).multiplyScalar(0.85);
         if (vehicle) _c.setRGB(0.16, 0.15, 0.14);
         r.setColorAt(r.count, _c);
         r.count++;

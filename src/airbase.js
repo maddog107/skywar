@@ -848,7 +848,7 @@ export class Airbases {
         const roofs = [];
         for (const [x, z, w, d, h] of termItems.slice(0, 2)) {
             const roof = new THREE.Mesh(new THREE.CylinderGeometry(w * 0.75, w * 0.75, d, 24, 1, false, -0.7, 1.4), MAT.white);
-            roof.rotation.x = Math.PI / 2; roof.position.set(x, h - w * 0.75 * Math.cos(0.7) + 1, z);
+            roof.rotation.x = -Math.PI / 2; roof.position.set(x, h - w * 0.75 * Math.cos(0.7) + 1, z); // arc up (it used to hang under the ground)
             roof.castShadow = true;
             g.add(roof);
             roofs.push(roof);
@@ -862,20 +862,24 @@ export class Airbases {
             this.solid(b, i === 3 ? 'garage' : 'terminal', [{ im: tm, i, role: 'wall' }, roofs[i]], boxes, { name: names[i] });
         });
         // jet bridges and airliners at the gates (T1 along the front, T2 around its pier)
+        // the airliners park nose-in, their noses a couple of metres from a jet bridge that runs out from the
+        // terminal face (x = 485); no stands where the Terminal 2 pier is
+        const FACE = 485, BR = 28;
         const gatesT1 = [], gatesT2 = [];
-        for (let z = -1070; z <= -460; z += 68) gatesT1.push([400, z, -Math.PI / 2]);
-        for (let z = 60; z <= 600; z += 70) gatesT2.push([400, z, -Math.PI / 2]);
+        for (let z = -1070; z <= -460; z += 68) gatesT1.push([FACE - BR - 2, z, -Math.PI / 2]);
+        for (let z = 60; z <= 600; z += 70) if (Math.abs(z - 440) > 50) gatesT2.push([FACE - BR - 2, z, -Math.PI / 2]);
         const all = [...gatesT1, ...gatesT2];
-        const bridgeGeo = new THREE.BoxGeometry(28, 3, 3.4); bridgeGeo.translate(0, 5.5, 0);
+        const bridgeGeo = new THREE.BoxGeometry(BR, 3, 3.4); bridgeGeo.translate(0, 5.5, 0);
         const bim = new THREE.InstancedMesh(bridgeGeo, MAT.concrete, all.length);
-        all.forEach(([x, z], i) => bim.setMatrixAt(i, m.compose(p.set(x + 58, this.hAt(b, x, z), z - 8), q.identity(), sc.set(1, 1, 1))));
+        all.forEach(([x, z], i) => bim.setMatrixAt(i, m.compose(p.set(FACE - BR / 2, this.hAt(b, x, z), z - 8), q.identity(), sc.set(1, 1, 1))));
         bim.castShadow = true; bim.computeBoundingSphere();
         g.add(bim);
         this.near(b, bim);
-        all.forEach(([x, z], i) => { const y = this.hAt(b, x, z); this.solid(b, 'jetbridge', [{ im: bim, i }], [{ lx: x + 58, lz: z - 8, y0: y + 4, y1: y + 7, w: 28, d: 3.4 }]); });
+        all.forEach(([x, z], i) => { const y = this.hAt(b, x, z); this.solid(b, 'jetbridge', [{ im: bim, i }], [{ lx: FACE - BR / 2, lz: z - 8, y0: y + 4, y1: y + 7, w: BR, d: 3.4 }]); });
         const big = all.filter((_, i) => i % 5 === 2), small = all.filter((_, i) => i % 5 !== 2);
-        this.fleet(b, g, 'b737', small);
-        this.fleet(b, g, 'b747', big.map(([x, z, y]) => [x - 12, z, y]));
+        const nose = (id) => AIRCRAFT[id].length / 2;
+        this.fleet(b, g, 'b737', small.map(([x, z, y]) => [x - nose('b737'), z, y]));
+        this.fleet(b, g, 'b747', big.map(([x, z, y]) => [x - nose('b747'), z, y]));
         // general aviation corner and cargo
         const ga = []; for (let z = 900; z <= 1300; z += 26) ga.push([300, z, Math.PI / 2]);
         this.fleet(b, g, 'cessna', ga);

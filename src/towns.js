@@ -1156,9 +1156,11 @@ export class Towns {
                     if (Math.max(...hs) - Math.min(...hs) > 3) continue;
                     const y = Math.max(...hs) + 0.15;
                     for (const q of pts) this.mark(q.x, q.z, 4);
-                    ground.push({ t, kind: 'forecourt', x: cx, z: cz, y, yaw, w: 26, d: 34, col: [0.42, 0.42, 0.43] });
                     const brand = [0xd8261e, 0x1f5fb8, 0x1f8a3c, 0xf2b01e][Math.floor(r() * 4)];
                     const rs = side > 0 ? 1 : -1; // the road is on the station's local +x (rs = 1) or -x side
+                    // the forecourt runs right up to the road's edge
+                    const fc = at(2.8 * rs, 0);
+                    ground.push({ t, kind: 'forecourt', x: fc.x, z: fc.z, y, yaw, w: 31.6, d: 34, col: [0.42, 0.42, 0.43] });
                     // the shop at the back, its front to the road; the canopy over the pumps nearer the road
                     const sp = at(-9 * rs, 0);
                     const shop = { t, kind: 'station', x: sp.x, z: sp.z, y: y - 0.3, w: 16, d: 8, ht: 4.4, yaw: yaw + Math.PI / 2, style: FACADE.townhouse, flags: 1 | (rs > 0 ? 2 : 4), accent: 0.02, col: 0xe8e6df, roof: 'flat', front: rs, floors: 1, shop: 1, plinth: 0 };
