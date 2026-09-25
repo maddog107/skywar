@@ -313,8 +313,8 @@ const FIELD_GLSL = /* glsl */`
         // stand on a wide brim
         float cov = (wm.r - cu.x) / (1.0 - cu.x);
         s -= (1.0 - billow) * (mix(0.1, 0.5, smoothstep(0.0, 0.5, hc)) * (0.65 + 0.7 * n.g) + 0.12 * (1.0 - smoothstep(0.0, 0.3, cov)));
-        // deck: a ragged base and a lumpy top
-        sd -= (1.0 - billow) * 0.38;
+        // deck: a broad, gently undulating layer (slow noise) with softer lumps than the cumulus
+        sd -= (1.0 - billow) * 0.16 + (1.0 - n.g) * 0.3;
         if (sd > s) { s = sd; amb = hd; }
         float e = edge * ${EDGE_SCALE};
         #if DETAIL
@@ -872,7 +872,7 @@ export class Clouds {
         const nb = sat((this.baseAt(p.x, p.y, p.z, _n) - 0.1) / 0.8), billow = nb * nb * (3 - 2 * nb);
         const k = sat(hc / 0.5), kc = sat(cov / 0.3);
         s -= (1 - billow) * ((0.1 + 0.4 * k * k * (3 - 2 * k)) * (0.65 + 0.7 * _n[1]) + 0.12 * (1 - kc * kc * (3 - 2 * kc)));
-        sd -= (1 - billow) * 0.38;
+        sd -= (1 - billow) * 0.16 + (1 - _n[1]) * 0.3;
         return sat(Math.max(s, sd) / (EDGE * EDGE_SCALE));
     }
 
