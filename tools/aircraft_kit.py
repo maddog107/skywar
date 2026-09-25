@@ -125,8 +125,8 @@ def begin(name, length, paint='#8a939b', paint2=None, radome=None, glass='#2c3a4
     STATE.update(name=name, L=length, mats={}, nozzles=[], cockpit=None, nozzleR=None, objects=[], sections={}, factors={})
     _PANEL_IMG.clear()
     pn = {'key': 'panel'} if panel is True else panel if panel else None
-    material('Paint', paint, 0.25, 0.5, panel=pn)
-    material('Paint2', paint2 or paint, 0.25, 0.5, panel=pn)
+    material('Paint', paint, 0.12, 0.55, panel=pn)
+    material('Paint2', paint2 or paint, 0.12, 0.55, panel=pn)
     material('Radome', radome or paint, 0.1, 0.55, panel=None)
     material('Dark', dark, 0.3, 0.6)
     material('Intake', '#060708', 0.0, 0.9)
@@ -136,7 +136,7 @@ def begin(name, length, paint='#8a939b', paint2=None, radome=None, glass='#2c3a4
         material('Canopy_Glass', '#9a7a36', 0.9, 0.08, alpha=0.62)
     else:
         material('Canopy_Glass', glass, 0.1, 0.05, alpha=glass_alpha)
-    material('Frame', paint, 0.25, 0.5, panel=pn)
+    material('Frame', paint, 0.12, 0.55, panel=pn)
     material('Seat', '#26282b', 0.1, 0.8)
     material('Helmet', '#b8b8aa', 0.1, 0.5)
     material('Missile', '#d9d9d2', 0.1, 0.5)
