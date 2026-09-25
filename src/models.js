@@ -15,7 +15,7 @@ export const MODEL_FILES = {
     f16: { file: 'f16.glb', rot: [0, 0, 0], cockpit: [0.07, -0.26] },
     f2: { file: 'f2.glb', rot: [0, Q, 0], cockpit: [0.07, -0.26] },
     f14: { file: 'f14.glb', rot: [0, Q, 0], nozzles: [[-0.065, 0.0, 0.49], [0.065, 0.0, 0.49]] },
-    f15: { file: 'f15.glb', rot: [0, Q, 0] },
+    f15: { file: 'f15.glb', rot: [0, Q, 0], nozzles: [[-0.038, -0.069, 0.42], [0.038, -0.069, 0.42]], nozzleR: 0.022 }, // (tools/nozzles.mjs: the auto-detect found the tail booms)
     f4: { file: 'f4.glb', rot: [0, Q, 0] },
     typhoon: { file: 'eurofighter.glb', rot: [0, Q, 0] },
     rafale: { file: 'rafale.glb', rot: [0, Q, 0] },
