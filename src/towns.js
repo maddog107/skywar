@@ -138,7 +138,140 @@ function closestOnPath(p, x, z) {
     return best;
 }
 
+// ── Town building geometry: unit sized, base at y = 0, outward-facing (single-sided) ──
+function triGeo(tris) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(tris.flat(2), 3));
+    g.computeVertexNormals();
+    return g;
+}
+// Gable roof: a prism with its ridge along z
+function gableGeometry() {
+    const A = [-0.5, 0, -0.5], B = [0.5, 0, -0.5], C = [0.5, 0, 0.5], D = [-0.5, 0, 0.5], T = [0, 1, -0.5], T2 = [0, 1, 0.5];
+    return triGeo([[B, A, T], [D, C, T2], [A, D, T2], [A, T2, T], [C, B, T], [C, T, T2]]);
+}
+// Hip roof: a shorter ridge along z, the ends sloping too
+function hipGeometry() {
+    const A = [-0.5, 0, -0.5], B = [0.5, 0, -0.5], C = [0.5, 0, 0.5], D = [-0.5, 0, 0.5], R0 = [0, 1, -0.22], R1 = [0, 1, 0.22];
+    return triGeo([[D, C, R1], [B, A, R0], [A, D, R1], [A, R1, R0], [C, B, R0], [C, R0, R1]]);
+}
+function unitBox() { const g = new THREE.BoxGeometry(1, 1, 1); g.translate(0, 0.5, 0); return g; }
+const flat = (g) => { const n = g.index ? g.toNonIndexed() : g; for (const k of Object.keys(n.attributes)) if (k !== 'position' && k !== 'normal') n.deleteAttribute(k); return n; };
+// Dormer window: a little box with its own gable, window side facing +z
+function dormerGeometry() {
+    const box = flat(new THREE.BoxGeometry(1, 0.65, 1)); box.translate(0, 0.325, 0);
+    const cap = gableGeometry(); cap.scale(1.15, 0.4, 1.1); cap.translate(0, 0.65, 0);
+    return mergeGeos([box, cap]);
+}
+// Water tank on legs (rooftops; much bigger, on its own tall legs, a village water tower)
+function tankGeometry() {
+    const drum = flat(new THREE.CylinderGeometry(0.5, 0.5, 0.55, 12)); drum.translate(0, 0.725, 0);
+    const lid = flat(new THREE.ConeGeometry(0.53, 0.2, 12)); lid.translate(0, 1.1, 0);
+    const parts = [drum, lid];
+    for (const [x, z] of [[-0.3, -0.3], [0.3, -0.3], [-0.3, 0.3], [0.3, 0.3]]) { const l = flat(new THREE.BoxGeometry(0.06, 0.45, 0.06)); l.translate(x, 0.225, z); parts.push(l); }
+    return mergeGeos(parts);
+}
+function spireGeometry() { const g = flat(new THREE.ConeGeometry(0.5, 1, 4)); g.rotateY(Math.PI / 4); g.translate(0, 0.5, 0); return g; }
+
+// Facade styles (aStyle.x): the window pattern drawn by the shader
+export const FACADE = { house: 0, townhouse: 1, apartment: 2, office: 3, glass: 4, church: 5, shed: 6 };
+
 // ── Building material with shader-drawn windows (per-instance, in metres) ──
+// Town buildings carry an instanced aStyle = (style, flags, accent hue, seed); flags: 1 = shop front on the ground
+// floor, 2 / 4 = the street side is local +z / -z (doors and entrances go there)
+export function makeFacadeMaterial() {
+    const mat = new THREE.MeshStandardMaterial({ roughness: 0.88, metalness: 0.04 });
+    mat.userData.night = { value: 0 };
+    mat.onBeforeCompile = (sh) => {
+        sh.uniforms.uNight = mat.userData.night;
+        sh.vertexShader = sh.vertexShader
+            .replace('#include <common>', '#include <common>\nattribute vec4 aStyle; varying vec3 vLp; varying vec3 vLn; varying vec3 vScale; varying vec4 vStyle; varying float vInst;')
+            .replace('#include <begin_vertex>', `#include <begin_vertex>
+                vec3 sc = vec3(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz), length(instanceMatrix[2].xyz));
+                vScale = sc; vLp = position * sc; vLn = normal; vStyle = aStyle; vInst = float(gl_InstanceID);`);
+        sh.fragmentShader = sh.fragmentShader
+            .replace('#include <common>', `#include <common>
+                uniform float uNight; varying vec3 vLp; varying vec3 vLn; varying vec3 vScale; varying vec4 vStyle; varying float vInst;
+                float hash12(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+                // box-filtered repeating pulse (1 inside [a, b] of each unit period): far-away facades average out
+                float pulseI(float x, float a, float b) { return floor(x) * (b - a) + clamp(fract(x), a, b) - a; }
+                float pulseAA(float x, float a, float b) { float w = max(fwidth(x), 1e-4); return (pulseI(x + 0.5 * w, a, b) - pulseI(x - 0.5 * w, a, b)) / w; }
+                float boxAA(float x, float a, float b) { float w = max(fwidth(x), 1e-4); return clamp((min(x + 0.5 * w, b) - max(x - 0.5 * w, a)) / w, 0.0, 1.0); }
+                vec3 hue(float h) { return clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0); }
+                // glass (0..1), which window cell, and whether it's a shop / door / fascia
+                float wGlass; vec2 wCell; float wShop; float wFascia; float wDoor;
+                void facade() {
+                    wGlass = 0.0; wCell = vec2(0.0); wShop = 0.0; wFascia = 0.0; wDoor = 0.0;
+                    if (abs(vLn.y) > 0.5) return;
+                    bool xFace = abs(vLn.x) > 0.5;
+                    float u = xFace ? vLp.z : vLp.x, y = vLp.y;
+                    float halfW = (xFace ? vScale.z : vScale.x) * 0.5;
+                    float st = floor(vStyle.x + 0.5), fl = floor(vStyle.y + 0.5);
+                    float shop = mod(fl, 2.0);
+                    float front = (!xFace && ((mod(floor(fl / 2.0), 2.0) > 0.5 && vLn.z > 0.5) || (mod(floor(fl / 4.0), 2.0) > 0.5 && vLn.z < -0.5))) ? 1.0 : 0.0;
+                    float fw = 3.2, fh = 3.0, x0 = 0.3, x1 = 0.7, y0 = 0.35, y1 = 0.78, base = 0.0;
+                    if (st > 0.5 && st < 1.5) { fw = 2.8; fh = 3.3; x0 = 0.24; x1 = 0.76; y0 = 0.3; y1 = 0.82; }
+                    else if (st > 1.5 && st < 2.5) { fw = 3.0; fh = 2.9; x0 = 0.18; x1 = 0.82; y0 = 0.32; y1 = 0.8; }
+                    else if (st > 2.5 && st < 3.5) { fw = 3.0; fh = 3.7; x0 = 0.03; x1 = 0.97; y0 = 0.3; y1 = 0.86; }
+                    else if (st > 3.5 && st < 4.5) { fw = 1.6; fh = 3.8; x0 = 0.06; x1 = 0.94; y0 = 0.1; y1 = 0.95; }
+                    else if (st > 4.5 && st < 5.5) { fw = 4.5; fh = 20.0; x0 = 0.4; x1 = 0.6; y0 = 0.12; y1 = 0.62; }
+                    else if (st > 5.5) { fw = 7.0; fh = 4.5; x0 = 0.1; x1 = 0.9; y0 = 0.6; y1 = 0.85; }
+                    // a shop front fills the ground floor (4.2 m): big windows, a coloured fascia over them
+                    if (shop > 0.5 && y < 4.2) {
+                        float sw = 4.0;
+                        wShop = pulseAA(u / sw + 0.5, 0.06, 0.94) * boxAA(y, 0.25, 3.2) * step(abs(u), halfW - 0.5);
+                        wFascia = boxAA(y, 3.35, 4.05) * step(abs(u), halfW - 0.2);
+                        wCell = vec2(floor(u / sw) + (vLn.x + vLn.z) * 57.0, -1.0);
+                        wGlass = wShop;
+                        return;
+                    }
+                    if (shop > 0.5) base = 4.2 - fh; // the floors above start over the shop
+                    float yy = y - base;
+                    wCell = vec2(floor(u / fw) + (vLn.x + vLn.z) * 57.0, floor(yy / fh));
+                    float inX = pulseAA(u / fw + 0.5, x0, x1);
+                    float inY = pulseAA(yy / fh, y0, y1);
+                    float edge = step(0.9, y) * step(y, vScale.y - 0.7) * step(abs(u), halfW - 0.6);
+                    if (st < 4.5 && shop < 0.5) edge *= step(0.6, yy); // no windows in the plinth
+                    wGlass = inX * inY * edge;
+                    // the front door (houses) or a glazed entrance (blocks, towers)
+                    if (front > 0.5 && shop < 0.5 && st < 4.5) {
+                        float dw = st < 0.5 ? 0.55 : 1.4, dh = st < 0.5 ? 2.1 : 2.9;
+                        float d = boxAA(u, -dw, dw) * boxAA(y, 0.05, dh);
+                        wDoor = d;
+                        wGlass = max(wGlass * (1.0 - boxAA(y, 0.0, dh + 0.4) * boxAA(u, -dw - 0.8, dw + 0.8)), st < 0.5 ? 0.0 : d);
+                    }
+                }`)
+            .replace('#include <color_fragment>', `#include <color_fragment>
+                facade();
+                float hw = hash12(wCell + vInst * 1.37 + vStyle.w * 13.1);
+                float st2 = floor(vStyle.x + 0.5);
+                // lit at night: about a quarter of homes, more of the offices, most shops
+                float litP = wShop > 0.0 ? 0.75 : st2 > 2.5 && st2 < 4.5 ? 0.38 : 0.26;
+                float lit = step(1.0 - litP, hw);
+                vec3 glass = st2 > 3.5 && st2 < 4.5 ? mix(vec3(0.16, 0.24, 0.32), vec3(0.3, 0.42, 0.5), vLp.y / max(vScale.y, 1.0)) : vec3(0.1, 0.12, 0.15);
+                if (wShop > 0.0) glass = vec3(0.14, 0.17, 0.2);
+                vec3 wallC = diffuseColor.rgb;
+                // a darker plinth, a cornice line at the top
+                if (abs(vLn.y) < 0.5) wallC *= mix(1.0, 0.78, step(vLp.y, 0.6)) * mix(1.0, 0.85, step(vScale.y - 0.5, vLp.y));
+                vec3 accent = mix(hue(vStyle.z), vec3(0.95), 0.12);
+                diffuseColor.rgb = mix(wallC, accent, wFascia);
+                diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.28, 0.2, 0.14), wDoor * step(st2, 0.5));
+                diffuseColor.rgb = mix(diffuseColor.rgb, glass, wGlass);`)
+            .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+                roughnessFactor = mix(roughnessFactor, 0.18, wGlass);`)
+            .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
+                metalnessFactor = mix(metalnessFactor, 0.35, wGlass);`)
+            .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+                // just under the bloom threshold: lit windows read as bright, not as a glowing haze
+                vec3 warm = mix(vec3(1.0, 0.72, 0.4), vec3(0.75, 0.85, 1.0), step(0.93, hw));
+                totalEmissiveRadiance += wGlass * lit * uNight * warm * (wShop > 0.0 ? 1.0 : 0.8);
+                totalEmissiveRadiance += wFascia * uNight * accent * 0.45;`);
+    };
+    mat.customProgramCacheKey = () => 'facade1';
+    return mat;
+}
+
+// ── Building material with shader-drawn windows (plain instanced boxes, no style: airbases) ──
 export function makeBuildingMaterial(kind) {
     const mat = new THREE.MeshStandardMaterial({ roughness: kind === 'tower' ? 0.35 : 0.85, metalness: kind === 'tower' ? 0.35 : 0.05 });
     mat.userData.night = { value: 0 };
@@ -183,20 +316,6 @@ export function makeBuildingMaterial(kind) {
     };
     mat.customProgramCacheKey = () => 'bld_' + kind;
     return mat;
-}
-
-// Gable roof: a prism along z (unit size, base at y = 0)
-function gableGeometry() {
-    const g = new THREE.BufferGeometry();
-    const v = [
-        -0.5, 0, -0.5, 0.5, 0, -0.5, 0, 1, -0.5,
-        0.5, 0, 0.5, -0.5, 0, 0.5, 0, 1, 0.5,
-        -0.5, 0, 0.5, -0.5, 0, -0.5, 0, 1, -0.5, -0.5, 0, 0.5, 0, 1, -0.5, 0, 1, 0.5,
-        0.5, 0, -0.5, 0.5, 0, 0.5, 0, 1, 0.5, 0.5, 0, -0.5, 0, 1, 0.5, 0, 1, -0.5,
-    ];
-    g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
-    g.computeVertexNormals();
-    return g;
 }
 
 function canvasTex(w, h, draw, rep = true) {
@@ -256,7 +375,7 @@ export class Towns {
         const surfaces = this.buildSurfaces();
         for (const p of paths) this.markPath(p.pts, ROAD_HALF + 3);
         for (const p of this.streetPaths) this.markPath(p.pts, WALK + 0.3);
-        for (const J of this.junctions) for (const [x, z] of J.ring || J.poly) this.mark(x, z, 1.5);
+        for (const J of this.junctions) if (!J.streets) for (const [x, z] of J.poly) this.mark(x, z, 1.5); // street corners are covered by the streets' own marks
         this.dirtPaths = this.buildDirtTrails();
         surfaces.push(this.dirtGeo);
         this.buildSignals();
@@ -285,7 +404,16 @@ export class Towns {
         const l = this.townCell.get(Math.floor(x / 1000) * 100003 + Math.floor(z / 1000));
         if (l) for (const t of l) {
             const s = t.surf.sample(x, z);
-            if (s) return h + (s[0] - h) * s[1];
+            if (s) { h += (s[0] - h) * s[1]; break; }
+        }
+        // levelled platforms (a stadium): flat inside the ellipse, easing back to the ground around it
+        if (this.pads) for (const pd of this.pads) {
+            const dx = x - pd.x, dz = z - pd.z;
+            if (dx * dx + dz * dz > (pd.a + pd.blend) ** 2) continue;
+            const c = Math.cos(pd.yaw), s = Math.sin(pd.yaw), lx = dx * c - dz * s, lz = dx * s + dz * c;
+            const e = Math.hypot(lx / pd.a, lz / pd.b); // 1 on the rim
+            const w = e <= 1 ? 1 : 1 - smooth01((e - 1) * Math.min(pd.a, pd.b) / pd.blend);
+            if (w > 0) h += (pd.y - h) * w;
         }
         return h;
     }
@@ -671,12 +799,15 @@ export class Towns {
 
     // One InstancedMesh per town for a kind of building part, each with its own tight bounding sphere,
     // so towns out of view (or out of the small shadow frustum) cost nothing. `far`: not drawn beyond this.
-    perTown(geo, mat, list, write, { shadow = true, far = Infinity } = {}) {
+    // attrs(n): per-instance attributes (the geometry is cloned per town to carry them)
+    perTown(geo, mat, list, write, { shadow = true, far = Infinity, attrs = null } = {}) {
         const byTown = new Map();
         for (const o of list) { if (!byTown.has(o.t)) byTown.set(o.t, []); byTown.get(o.t).push(o); }
         const out = [];
         for (const items of byTown.values()) {
-            const im = new THREE.InstancedMesh(geo, mat, items.length);
+            let g = geo;
+            if (attrs) { g = geo.clone(); for (const [k, a] of Object.entries(attrs(items.length))) g.setAttribute(k, a); }
+            const im = new THREE.InstancedMesh(g, mat, items.length);
             items.forEach((o, i) => write(im, i, o));
             im.castShadow = shadow; im.receiveShadow = true;
             im.computeBoundingSphere();
@@ -755,180 +886,523 @@ export class Towns {
     }
 
     // ── Buildings on lots along the streets ──
+    // Each town picks a palette. Cities: glass and stone towers downtown (the tallest with a crown and spire),
+    // apartment blocks with balconies and shops underneath, rows of townhouses, then houses with gardens; towns:
+    // a centre of townhouses and shops round a market square; villages: houses, a church, a water tower.
+    // A city gets a stadium on its edge, towns and cities a filling station on a road out.
+    // Everything is a handful of instanced meshes per town, and every building is a record in buildings.js
+    // (its walls, roof and details are its parts, so they fall with it).
     buildBuildings() {
         const r = mulberry32(99);
-        const items = { house: [], town: [], apt: [], tower: [] };
-        const roofs = [], flatRoofs = [], acUnits = [], trees = [], parks = [], specials = [], driveways = [];
-        const tryPlace = (t, u, v, w, d, rot, kind, ht) => {
-            // the whole footprint must be on dry, fairly flat land and clear of every road and street
+        const pick = (a) => a[Math.floor(r() * a.length) % a.length];
+        const walls = [], gables = [], hips = [], flats = [], bits = [], tanks = [], dormers = [], spires = [], trees = [], parks = [], driveways = [], ground = [];
+        const B = this.buildings = new Buildings(this.group);
+        const up = new THREE.Vector3(0, 1, 0);
+        // tryPlace: the whole footprint must be on dry land, clear of every road and street, and not too steep
+        // (a building on a slope stands on a plinth down to its lowest corner). gap: space kept to its neighbours
+        const tryPlace = (t, u, v, w, d, rot, o, gap = 1) => {
             const c = this.tw(t, u, v);
             const ca = Math.cos(rot), sa = Math.sin(rot);
-            const corners = [[-w / 2, -d / 2], [w / 2, -d / 2], [w / 2, d / 2], [-w / 2, d / 2], [0, 0], [0, -d / 2], [0, d / 2]].map(([a, b]) => this.tw(t, u + a * ca - b * sa, v + a * sa + b * ca));
+            const corners = [[-w / 2, -d / 2], [w / 2, -d / 2], [w / 2, d / 2], [-w / 2, d / 2], [0, 0], [0, -d / 2], [0, d / 2], [-w / 2, 0], [w / 2, 0]].map(([a, b]) => this.tw(t, u + a * ca - b * sa, v + a * sa + b * ca));
             let hmin = Infinity, hmax = -Infinity;
             for (const q of corners) {
-                if (this.blocked(q.x, q.z)) return false;
-                if (terrainHeight(q.x, q.z) < 2) return false;
+                if (this.blocked(q.x, q.z)) return null;
+                if (terrainHeight(q.x, q.z) < 2) return null;
                 const h = this.groundAt(q.x, q.z); // the town's graded ground
                 hmin = Math.min(hmin, h); hmax = Math.max(hmax, h);
             }
-            if (hmax - hmin > Math.max(3, w * 0.25)) return false;
-            // lots are axis-aligned in the town grid: keep a 2 m gap to every footprint already placed
-            const sw = Math.abs(Math.sin(rot)) > 0.5, hu = (sw ? d : w) / 2 + 1, hv = (sw ? w : d) / 2 + 1;
+            if (hmax - hmin > Math.min(9, Math.max(3.5, Math.min(w, d) * 0.45))) return null;
+            // lots are axis-aligned in the town grid: keep a gap to every footprint already placed
+            const sw = Math.abs(Math.sin(rot)) > 0.5, hu = (sw ? d : w) / 2 + gap, hv = (sw ? w : d) / 2 + gap;
             const fp = t.footprints || (t.footprints = []);
-            if (fp.some(f => Math.abs(f.u - u) < f.hu + hu && Math.abs(f.v - v) < f.hv + hv)) return false;
-            fp.push({ u, v, hu, hv });
-            for (const q of corners) this.mark(q.x, q.z, 2);
-            items[kind].push({ x: c.x, z: c.z, y: hmin - 0.6, w, d, ht: ht + (hmax - hmin), yaw: t.theta + rot, hue: r(), t });
-            return true;
+            if (fp.some(f => Math.abs(f.u - u) < f.hu + hu - gap + Math.max(gap, f.gap) && Math.abs(f.v - v) < f.hv + hv - gap + Math.max(gap, f.gap))) return null;
+            fp.push({ u, v, hu: hu - gap, hv: hv - gap, gap });
+            for (const q of corners) this.mark(q.x, q.z, 1);
+            const b = { t, x: c.x, z: c.z, y: hmin - 0.5, w, d, yaw: t.theta + rot, plinth: hmax - hmin, ...o };
+            b.ht = o.ht + b.plinth + 0.5;
+            walls.push(b);
+            return b;
         };
+        const PAL = [
+            { walls: [0xe9dcc3, 0xe3c9a0, 0xd9b48c, 0xf0e2c8, 0xcf9f7a, 0xe8d3b0, 0xd6c2a0], roofs: [0xa4492f, 0x8f3b26, 0xb85a36, 0x7a3a2a, 0x9c5a3a] },       // warm: stucco and terracotta
+            { walls: [0xd8d8d2, 0xc3c6c8, 0xaab3b8, 0xe6e4de, 0xb8bcb0, 0x9ea7ad, 0xcfc9bd], roofs: [0x4d545c, 0x5a5f66, 0x3f454c, 0x6a6f74, 0x57504a] },       // cool: render and slate
+            { walls: [0x9b4a35, 0x8a3f2e, 0xb0624a, 0x7d4636, 0xc9b79c, 0xa25a44, 0xb98a6a], roofs: [0x3f3a38, 0x4a4f55, 0x5b3a2e, 0x6b4a3a] },                 // brick
+            { walls: [0xf2d6c9, 0xd6e6d3, 0xcfe0ea, 0xf3e7b6, 0xe8cfe0, 0xf5f0e6, 0xe2d4c0], roofs: [0x9a4b3a, 0x5a6470, 0x8c5a3c, 0x6d7a5a] },               // pastel
+        ];
+        const APT = [0xb8b0a4, 0xc9bda8, 0x9aa3a8, 0xd2c3ad, 0xa89484, 0xc4a896, 0xd9d4ca, 0x8f9aa0, 0xbfae8e];
+        const STONE = [0xc9c2b4, 0xb7ad9c, 0xa6a39c, 0xd8d2c4, 0x8e8a84];
+        const GLASS = [0x5d7389, 0x6f8fa8, 0x4f6a5e, 0x8a9096, 0x3f4f63, 0x9c8b72, 0x7a8f99];
+        const ACCENT = () => r(); // shop fascia hue
         for (const t of this.towns) {
+            t.pal = PAL[Math.floor(r() * PAL.length)];
             const S = t.S, inner = S - WALK * 2 - 4; // lots start 2 m behind the pavement
             const n = t.size === 'village' ? 1 : t.n;
-            let church = false;
+            const blocks = [];
             for (let i = -n; i < n; i++) for (let j = -n; j < n; j++) {
-                const cu = (i + 0.5) * S, cv = (j + 0.5) * S;
-                const dist = Math.hypot(cu, cv);
+                const cu = (i + 0.5) * S, cv = (j + 0.5) * S, dist = Math.hypot(cu, cv);
                 if (dist > t.radius - S * 0.3) continue;
-                const rel = dist / t.radius;
-                const zone = t.size === 'city' ? (rel < 0.3 ? 'tower' : rel < 0.55 ? 'apt' : rel < 0.75 ? 'town' : 'house')
-                    : t.size === 'town' ? (rel < 0.32 ? 'town' : 'house') : 'house';
-                if (t.size !== 'village' && !church && rel < 0.55 && r() < 0.3) {
-                    const c = this.tw(t, cu, cv);
-                    if (!this.blocked(c.x, c.z) && terrainHeight(c.x, c.z) > 2 && slopeAt(c.x, c.z) < 0.1) {
-                        church = true;
-                        (t.footprints || (t.footprints = [])).push({ u: cu, v: cv, hu: 16, hv: 20 });
-                        specials.push({ x: c.x, z: c.z, y: this.groundAt(c.x, c.z) - 0.8, yaw: t.theta });
-                        this.mark(c.x, c.z, 18);
-                        continue;
-                    }
+                blocks.push({ i, j, cu, cv, rel: dist / t.radius });
+            }
+            blocks.sort((a, b) => a.rel - b.rel);
+            // the specials first, on the blocks nearest the centre that suit them
+            let church = t.size === 'village' ? r() < 0.8 : true, market = t.size !== 'village';
+            for (const bk of blocks) {
+                const { cu, cv, rel } = bk;
+                const c = this.tw(t, cu, cv);
+                if (market && rel < 0.45 && (t.size === 'town' || rel > 0.2) && this.market(t, bk, inner, walls, bits, ground, r)) { market = false; bk.used = true; continue; }
+                if (church && rel < 0.6 && rel > (t.size === 'city' ? 0.25 : 0.05) && !this.blocked(c.x, c.z) && terrainHeight(c.x, c.z) > 2) {
+                    const ch = this.church(t, cu, cv, walls, gables, spires, bits, r);
+                    if (ch) { church = false; bk.used = true; continue; }
                 }
-                if (r() < (t.size === 'city' ? 0.08 : 0.05)) { parks.push({ t, cu, cv, size: inner }); continue; }
-                if (zone === 'tower') {
-                    const two = r() < 0.5;
-                    const w = two ? inner * 0.44 : inner * (0.6 + r() * 0.3), d = inner * (0.55 + r() * 0.35);
-                    const hgt = 28 + Math.pow(Math.max(0, 1 - rel / 0.3), 1.2) * 95 * (0.6 + r() * 0.6);
-                    // if the big footprint doesn't fit (a road cuts the block), try smaller buildings in the corners
-                    let placed = two
-                        ? tryPlace(t, cu - inner * 0.26, cv, w, d, 0, 'tower', hgt) + tryPlace(t, cu + inner * 0.26, cv, w, d, 0, 'tower', hgt * (0.55 + r() * 0.5))
-                        : tryPlace(t, cu, cv, w, d, 0, 'tower', hgt) ? 1 : 0;
-                    if (!placed) for (const [a, b2] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
-                        tryPlace(t, cu + a * inner * 0.27, cv + b2 * inner * 0.27, inner * 0.4, inner * 0.4, 0, r() < 0.6 ? 'tower' : 'apt', hgt * (0.4 + r() * 0.4));
-                    }
-                    continue;
-                }
-                const lotW = zone === 'apt' ? 22 : zone === 'town' ? 12 : 13;
-                const depth = zone === 'apt' ? 16 : zone === 'town' ? 12 : 10;
+            }
+            for (const bk of blocks) {
+                if (bk.used) continue;
+                const { cu, cv, rel } = bk;
+                const zone = t.size === 'city' ? (rel < 0.28 ? 'core' : rel < 0.5 ? 'apt' : rel < 0.72 ? 'town' : 'house')
+                    : t.size === 'town' ? (rel < 0.34 ? 'town' : 'house') : (rel < 0.15 && r() < 0.5 ? 'town' : 'house');
+                if (r() < (t.size === 'city' ? 0.07 : 0.05) && zone !== 'core') { parks.push({ t, cu, cv, size: inner }); continue; }
+                if (zone === 'core') { this.downtown(t, bk, inner, tryPlace, r, { GLASS, STONE, APT, ACCENT }); continue; }
+                const before = walls.length;
+                // perimeter lots facing the four streets
+                const lotW = zone === 'apt' ? 20 + r() * 6 : zone === 'town' ? 8 + r() * 4 : 12 + r() * 3;
+                const depth = zone === 'apt' ? 15 + r() * 3 : zone === 'town' ? 11 + r() * 3 : 9 + r() * 2;
                 const edge = inner / 2 - depth / 2 - (zone === 'house' ? 4 : 0); // houses get front yards
+                const mainStreet = Math.abs(bk.i + 0.5) < 1.6 || Math.abs(bk.j + 0.5) < 1.6; // shops along the central streets
                 for (const side of [0, 1, 2, 3]) {
-                    const alongU = side < 2;
-                    for (let o = -inner / 2 + lotW / 2; o <= inner / 2 - lotW / 2 + 0.1; o += lotW + (zone === 'house' ? 5 : 1)) {
-                        if (zone === 'house' && r() < 0.18) continue; // gaps: driveways and gardens
-                        const sgn = side % 2 ? 1 : -1;
-                        const u = alongU ? cu + o : cu + sgn * edge;
-                        const v = alongU ? cv + sgn * edge : cv + o;
+                    const alongU = side < 2, sgn = side % 2 ? 1 : -1;
+                    for (let o0 = -inner / 2; ;) {
+                        const wlot = zone === 'town' ? 7 + r() * 5 : lotW;
+                        if (o0 + wlot > inner / 2 + 0.1) break;
+                        const o = o0 + wlot / 2; // this lot's centre along the street
+                        o0 += wlot + (zone === 'house' ? 5 : zone === 'town' ? 0.3 : 1.5);
+                        if (zone === 'house' && r() < 0.16) continue; // gaps: gardens
+                        const u = alongU ? cu + o : cu + sgn * edge, v = alongU ? cv + sgn * edge : cv + o;
                         const rot = alongU ? 0 : Math.PI / 2;
-                        const w = lotW - (zone === 'house' ? 2 + r() * 3 : 0.5), d = depth - r() * 2;
-                        const ht = zone === 'apt' ? 12 + Math.floor(r() * 5) * 3 : zone === 'town' ? 6 + Math.floor(r() * 3) * 3 : 3.2 + (r() < 0.35 ? 3 : 0);
-                        if (tryPlace(t, u, v, w, d, rot, zone, ht) && zone === 'house') {
-                            // driveway beside the house from the street, usually with a car on it
-                            const streetEdge = S / 2 - WALK, back = edge - d * 0.25;
-                            const len = streetEdge - back, mid = (streetEdge + back) / 2;
-                            const lat = o + (w / 2 + 2);
-                            const du = alongU ? cu + lat : cu + sgn * mid, dv = alongU ? cv + sgn * mid : cv + lat;
-                            const c = this.tw(t, du, dv);
-                            const k = r(); driveways.push({ t, x: c.x, z: c.z, len, yaw: t.theta + rot, cars: k < 0.15 ? 0 : k < 0.6 ? 1 : 2, hue: r(), hue2: r(), flip: r() < 0.5 });
+                        // the street is on this building's local ±z side (front: 2 = +z, 4 = -z)
+                        const front = sgn > 0 ? 2 : 4;
+                        let b = null;
+                        if (zone === 'house') {
+                            const w = wlot - 2 - r() * 3, d = depth - r() * 1.5, storeys = r() < 0.35 ? 2 : 1;
+                            b = tryPlace(t, u, v, w, d, rot, { kind: 'house', ht: storeys * 3 + 0.2, style: FACADE.house, flags: front, col: pick(t.pal.walls), roof: r() < 0.62 ? 'gable' : r() < 0.85 ? 'hip' : 'flat', roofCol: pick(t.pal.roofs), front: sgn, floors: storeys });
+                            if (b) {
+                                // driveway beside the house from the street, usually with a car on it
+                                const streetEdge = S / 2 - WALK, back = edge - d * 0.25;
+                                const len = streetEdge - back, mid = (streetEdge + back) / 2;
+                                const lat = o + (w / 2 + 2);
+                                const du = alongU ? cu + lat : cu + sgn * mid, dv = alongU ? cv + sgn * mid : cv + lat;
+                                const c = this.tw(t, du, dv);
+                                const k = r(); driveways.push({ t, x: c.x, z: c.z, len, yaw: t.theta + rot, cars: k < 0.15 ? 0 : k < 0.6 ? 1 : 2, hue: r(), hue2: r(), flip: r() < 0.5 });
+                            }
+                        } else if (zone === 'town') {
+                            const storeys = 2 + Math.floor(r() * 3), shop = (mainStreet || t.size !== 'city') && r() < 0.7 ? 1 : 0;
+                            b = tryPlace(t, u, v, wlot - 0.3, depth, rot, { kind: 'town', ht: storeys * 3.3 + (shop ? 1 : 0) + 0.3, style: FACADE.townhouse, flags: front | shop, accent: ACCENT(), col: pick(r() < 0.7 ? t.pal.walls : STONE), roof: r() < 0.45 ? 'gable' : 'flat', roofCol: pick(t.pal.roofs), front: sgn, floors: storeys, shop }, 0.15);
+                        } else {
+                            const storeys = 4 + Math.floor(r() * 5), shop = mainStreet && r() < 0.6 ? 1 : 0;
+                            b = tryPlace(t, u, v, wlot - 1, depth, rot, { kind: 'apt', ht: storeys * 2.9 + (shop ? 1.3 : 0) + 0.4, style: FACADE.apartment, flags: front | shop, accent: ACCENT(), col: pick(APT), roof: 'flat', front: sgn, floors: storeys, shop, balconies: r() < 0.75 });
+                        }
+                        void b;
+                    }
+                }
+                // back gardens get a few trees; a block too steep to build on is left wooded
+                const empty = walls.length === before;
+                if (zone === 'house' || zone === 'town' || empty) for (let k = 0; k < (empty ? 12 : 3); k++) {
+                    const sp = empty ? 0.85 : 0.4;
+                    const c = this.tw(t, cu + (r() - 0.5) * inner * sp, cv + (r() - 0.5) * inner * sp);
+                    if (!this.blocked(c.x, c.z)) trees.push({ x: c.x, z: c.z, s: 0.5 + r() * 0.5, t });
+                }
+            }
+            if (t.size === 'village' && r() < 0.85) this.waterTower(t, tryPlace, r);
+            if (t.size === 'city') this.stadium(t, ground, r);
+            if (t.size !== 'village') this.fillingStation(t, walls, bits, ground, r);
+        }
+        this.decorate(walls, gables, hips, flats, bits, tanks, dormers, spires, r);
+        this.draw({ walls, gables, hips, flats, bits, tanks, dormers, spires, trees, parks, ground }, B);
+        B.index();
+        this.buildDriveways(driveways);
+        this.buildingCount = walls.filter(b => b.rec).length;
+    }
+
+    // Downtown block: one or two towers (glass or stone offices), or four smaller blocks if a street cuts it
+    downtown(t, bk, inner, tryPlace, r, { GLASS, STONE, APT, ACCENT }) {
+        const { cu, cv, rel } = bk;
+        const two = r() < 0.45;
+        const tall = (k) => (28 + Math.pow(Math.max(0, 1 - rel / 0.28), 1.2) * 110 * (0.55 + r() * 0.6)) * k;
+        const tower = (u, v, w, d, ht) => {
+            const glass = r() < 0.6;
+            const floors = Math.max(6, Math.round(ht / 3.8));
+            return tryPlace(t, u, v, w, d, 0, { kind: 'tower', ht: floors * 3.8, style: glass ? FACADE.glass : FACADE.office, flags: 2 | (r() < 0.5 ? 1 : 0), accent: ACCENT(), col: glass ? GLASS[Math.floor(r() * GLASS.length)] : STONE[Math.floor(r() * STONE.length)], roof: 'flat', floors, front: 1, tower: true });
+        };
+        let placed = 0;
+        if (two) { placed += !!tower(cu - inner * 0.26, cv, inner * 0.44, inner * (0.55 + r() * 0.35), tall(1)); placed += !!tower(cu + inner * 0.26, cv, inner * 0.44, inner * (0.55 + r() * 0.35), tall(0.55 + r() * 0.5)); }
+        else placed += !!tower(cu, cv, inner * (0.6 + r() * 0.3), inner * (0.55 + r() * 0.35), tall(1));
+        if (!placed) for (const [a, b2] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+            const u = cu + a * inner * 0.27, v = cv + b2 * inner * 0.27;
+            if (r() < 0.6) tower(u, v, inner * 0.4, inner * 0.4, tall(0.4 + r() * 0.4));
+            else { const storeys = 5 + Math.floor(r() * 4); tryPlace(t, u, v, inner * 0.4, inner * 0.4, 0, { kind: 'apt', ht: storeys * 2.9, style: FACADE.apartment, flags: 2, col: APT[Math.floor(r() * APT.length)], roof: 'flat', floors: storeys, front: 1, balconies: r() < 0.5 }); }
+        }
+    }
+
+    // A market square: paved, rows of stalls under striped awnings, a market hall along one side
+    market(t, bk, inner, walls, bits, ground, r) {
+        const c = this.tw(t, bk.cu, bk.cv);
+        const pts = [[-1, -1], [1, -1], [1, 1], [-1, 1], [0, 0]].map(([a, b]) => this.tw(t, bk.cu + a * (inner / 2 - 1), bk.cv + b * (inner / 2 - 1)));
+        if (pts.some(q => this.blocked(q.x, q.z) || terrainHeight(q.x, q.z) < 2)) return false;
+        const hs = pts.map(q => this.groundAt(q.x, q.z));
+        if (Math.max(...hs) - Math.min(...hs) > 7) return false;
+        (t.footprints || (t.footprints = [])).push({ u: bk.cu, v: bk.cv, hu: inner / 2, hv: inner / 2, gap: 1 });
+        for (const q of pts) this.mark(q.x, q.z, 1);
+        ground.push({ t, kind: 'plaza', cu: bk.cu, cv: bk.cv, size: inner, col: [0.62, 0.6, 0.56] });
+        const colors = [0xd23b2f, 0x2f7fd2, 0xe8b72c, 0x3a9b4a, 0xe07b2a, 0xf0f0ea];
+        // the hall on the far side
+        const hall = { t, kind: 'market', ...this.tw(t, bk.cu, bk.cv + inner * 0.36), y: Math.min(...hs) - 0.4, w: inner * 0.85, d: inner * 0.2, ht: 7.5, yaw: t.theta, style: FACADE.shed, flags: 4, col: 0xc9b89a, roof: 'gable', roofCol: 0x6d7a82, front: -1, floors: 1 };
+        walls.push(hall);
+        // stalls: counter + awning
+        for (let a = -2; a <= 2; a++) for (let b = -2; b <= 1; b++) {
+            if (r() < 0.2) continue;
+            const q = this.tw(t, bk.cu + a * inner * 0.17, bk.cv + b * inner * 0.15 - inner * 0.04);
+            const y = this.groundAt(q.x, q.z);
+            bits.push({ t, x: q.x, y: y + 0.3, z: q.z, w: 3, h: 1.0, d: 2, yaw: t.theta, col: 0x8a6a4a });
+            bits.push({ t, x: q.x, y: y + 2.5, z: q.z, w: 3.6, h: 0.18, d: 2.8, yaw: t.theta, col: colors[Math.floor(r() * colors.length)], tilt: 0.12 });
+            for (const [px, pz] of [[-1.6, -1.2], [1.6, -1.2], [-1.6, 1.2], [1.6, 1.2]]) {
+                const pp = this.tw(t, bk.cu + a * inner * 0.17 + px, bk.cv + b * inner * 0.15 - inner * 0.04 + pz);
+                bits.push({ t, x: pp.x, y: y + 0.3, z: pp.z, w: 0.08, h: 2.3, d: 0.08, yaw: t.theta, col: 0x55504a });
+            }
+        }
+        return true;
+    }
+
+    // A church: nave, west tower and spire (instanced parts like any building), solid and destructible
+    church(t, cu, cv, walls, gables, spires, bits, r) {
+        const big = t.size !== 'village';
+        const W = big ? 13 : 9, D = big ? 28 : 18, H = big ? 10 : 7;
+        const c = this.tw(t, cu, cv);
+        const corners = [[-W, -D * 0.7], [W, -D * 0.7], [W, D * 0.6], [-W, D * 0.6]].map(([a, b]) => this.tw(t, cu + a / 2, cv + b));
+        if (corners.some(q => this.blocked(q.x, q.z) || terrainHeight(q.x, q.z) < 2)) return false;
+        const hs = [c, ...corners].map(q => this.groundAt(q.x, q.z));
+        if (Math.max(...hs) - Math.min(...hs) > 5) return false;
+        const y = Math.min(...hs) - 0.6;
+        (t.footprints || (t.footprints = [])).push({ u: cu, v: cv, hu: W / 2 + 4, hv: D * 0.75, gap: 1 });
+        for (const q of corners) this.mark(q.x, q.z, 2);
+        const col = r() < 0.5 ? 0xe9e2d2 : 0xc9b8a0, roofCol = r() < 0.6 ? 0x5a5f66 : 0x7a3a2a;
+        const nave = { t, kind: 'church', x: c.x, z: c.z, y, w: W, d: D, ht: H + (Math.max(...hs) - Math.min(...hs)), yaw: t.theta, style: FACADE.church, flags: 0, col, roof: 'gable', roofCol, ridge: 'z', roofH: W * 0.55, floors: 1 };
+        const tp = this.tw(t, cu, cv - D / 2 - W * 0.22);
+        const TW = W * 0.45, TH = H * 2.3;
+        const tower = { t, kind: 'church', part: nave, x: tp.x, z: tp.z, y, w: TW, d: TW, ht: TH + H * 0.2, yaw: t.theta, style: FACADE.church, flags: 0, col, roof: 'none', floors: 1 };
+        walls.push(nave, tower);
+        spires.push({ t, x: tp.x, y: y + tower.ht, z: tp.z, w: TW * 1.15, h: TH * 0.75, yaw: t.theta, col: roofCol, b: nave });
+        const top = y + tower.ht + TH * 0.75;
+        bits.push({ t, x: tp.x, y: top, z: tp.z, w: 0.3, h: 2.4, d: 0.3, yaw: t.theta, col: 0x3a3d40, b: nave }, { t, x: tp.x, y: top + 1.3, z: tp.z, w: 1.4, h: 0.3, d: 0.3, yaw: t.theta, col: 0x3a3d40, b: nave });
+        nave.boxes = [{ x: c.x, z: c.z, w: W, d: D, y0: y, y1: y + nave.ht + W * 0.55, yaw: t.theta }, { x: tp.x, z: tp.z, w: TW, d: TW, y0: y, y1: top + 2, yaw: t.theta }];
+        return true;
+    }
+
+    // Village water tower: a big tank up on legs
+    waterTower(t, tryPlace, r) {
+        for (let k = 0; k < 8; k++) {
+            const a = r() * Math.PI * 2, d = t.radius * (0.55 + r() * 0.4);
+            const u = Math.cos(a) * d, v = Math.sin(a) * d;
+            const b = tryPlace(t, u, v, 8, 8, 0, { kind: 'watertower', ht: 0.1, style: FACADE.shed, flags: 0, col: 0x9aa0a4, roof: 'none', floors: 0, watertower: true });
+            if (b) return b;
+        }
+        return null;
+    }
+
+    // A stadium just outside a city, where the ground is flat enough
+    stadium(t, ground, r) {
+        const A = 88, Bz = 68, H = 20;
+        for (let k = 0; k < 16; k++) {
+            const a = (k / 16) * Math.PI * 2 + r() * 0.2, d = t.radius + A + 30;
+            const cx = t.x + Math.cos(a) * d, cz = t.z + Math.sin(a) * d, yaw = a + Math.PI / 2;
+            const ca = Math.cos(yaw), sa = Math.sin(yaw);
+            const pts = [];
+            for (let q = 0; q < 12; q++) { const th = q / 12 * Math.PI * 2; const lx = Math.cos(th) * (A + 6), lz = Math.sin(th) * (Bz + 6); pts.push({ x: cx + lx * ca + lz * sa, z: cz - lx * sa + lz * ca }); }
+            pts.push({ x: cx, z: cz });
+            if (pts.some(q => this.blocked(q.x, q.z) || terrainHeight(q.x, q.z) < 3 || outsideBases(q.x, q.z))) continue;
+            const hs = pts.map(q => terrainHeight(q.x, q.z));
+            if (Math.max(...hs) - Math.min(...hs) > 22) continue;
+            // it stands on a levelled platform (the drawn ground is cut and filled to it: see townBase)
+            const y = hs.reduce((a, b) => a + b, 0) / hs.length;
+            (this.pads || (this.pads = [])).push({ x: cx, z: cz, a: A + 14, b: Bz + 14, yaw, y: y + 0.2, blend: 45 });
+            for (const q of pts) this.mark(q.x, q.z, 12);
+            this.mark(cx, cz, 60);
+            this.stadiums = this.stadiums || [];
+            this.stadiums.push({ t, x: cx, z: cz, y, yaw, A, B: Bz, H, top: Math.max(...hs) });
+            return;
+        }
+    }
+
+    // A filling station beside one of the roads out of a town (or city)
+    fillingStation(t, walls, bits, ground, r) {
+        const roads = this.paths.filter(p => (p.startPort && p.startPort.path && p.startPort.path.t === t) || (p.endPort && p.endPort.path && p.endPort.path.t === t));
+        const v = new THREE.Vector3(), tg = new THREE.Vector3();
+        for (const p of roads) {
+            const atStart = p.startPort && p.startPort.path && p.startPort.path.t === t;
+            for (const dist of [110, 170, 240]) {
+                if (dist > p.len - 60) continue;
+                const s = atStart ? dist : p.len - dist;
+                samplePath(p, s, v, tg);
+                for (const side of [1, -1]) {
+                    const rx = -tg.z * side, rz = tg.x * side;
+                    const cx = v.x + rx * 25, cz = v.z + rz * 25, yaw = Math.atan2(tg.x, tg.z);
+                    const ca = Math.cos(yaw), sa = Math.sin(yaw);
+                    const at = (lx, lz) => ({ x: cx + lx * ca + lz * sa, z: cz - lx * sa + lz * ca });
+                    const pts = [[-17, -13], [17, -13], [17, 13], [-17, 13], [0, 0], [0, 13], [0, -13]].map(([a, b]) => at(b, a));
+                    if (pts.some(q => this.blocked(q.x, q.z) || terrainHeight(q.x, q.z) < 2)) continue;
+                    const hs = pts.map(q => this.groundAt(q.x, q.z));
+                    if (Math.max(...hs) - Math.min(...hs) > 3) continue;
+                    const y = Math.max(...hs) + 0.15;
+                    for (const q of pts) this.mark(q.x, q.z, 4);
+                    ground.push({ t, kind: 'forecourt', x: cx, z: cz, y, yaw, w: 26, d: 34, col: [0.42, 0.42, 0.43] });
+                    const brand = [0xd8261e, 0x1f5fb8, 0x1f8a3c, 0xf2b01e][Math.floor(r() * 4)];
+                    const rs = side > 0 ? 1 : -1; // the road is on the station's local +x (rs = 1) or -x side
+                    // the shop at the back, its front to the road; the canopy over the pumps nearer the road
+                    const sp = at(-9 * rs, 0);
+                    const shop = { t, kind: 'station', x: sp.x, z: sp.z, y: y - 0.3, w: 16, d: 8, ht: 4.4, yaw: yaw + Math.PI / 2, style: FACADE.townhouse, flags: 1 | (rs > 0 ? 2 : 4), accent: 0.02, col: 0xe8e6df, roof: 'flat', front: rs, floors: 1, shop: 1, plinth: 0 };
+                    walls.push(shop);
+                    const cp = at(4 * rs, 0);
+                    bits.push({ t, x: cp.x, y: y + 5.2, z: cp.z, w: 11, h: 0.9, d: 22, yaw, col: brand, b: shop });
+                    for (const [a, b] of [[4 * rs - 4.5, -9], [4 * rs + 4.5, -9], [4 * rs - 4.5, 9], [4 * rs + 4.5, 9]]) { const q = at(a, b); bits.push({ t, x: q.x, y, z: q.z, w: 0.45, h: 5.3, d: 0.45, yaw, col: 0xdedcd6, b: shop }); }
+                    for (const b of [-6, 0, 6]) {
+                        const q = at(4 * rs, b);
+                        bits.push({ t, x: q.x, y, z: q.z, w: 1.2, h: 0.25, d: 4.5, yaw, col: 0xbdbab2, b: shop });
+                        bits.push({ t, x: q.x, y: y + 0.25, z: q.z, w: 0.7, h: 1.7, d: 0.9, yaw, col: brand, b: shop });
+                    }
+                    // the price sign on a pole by the road
+                    const ps = at(12.5 * rs, 15);
+                    bits.push({ t, x: ps.x, y, z: ps.z, w: 0.35, h: 6.5, d: 0.35, yaw, col: 0x6b6f72, b: shop }, { t, x: ps.x, y: y + 6.2, z: ps.z, w: 0.4, h: 2.6, d: 2.2, yaw, col: brand, b: shop });
+                    shop.boxes = [{ x: sp.x, z: sp.z, w: 16, d: 8, y0: y - 0.3, y1: y + 4.4, yaw: yaw + Math.PI / 2 }, { x: cp.x, z: cp.z, w: 11, d: 22, y0: y + 5.1, y1: y + 6.2, yaw }];
+                    return;
+                }
+            }
+        }
+    }
+
+    // Roofs, rooftop plant, balconies, awnings, dormers and chimneys for every building placed
+    decorate(walls, gables, hips, flats, bits, tanks, dormers, spires, r) {
+        for (const b of walls) {
+            const t = b.t, top = b.y + b.ht, c = Math.cos(b.yaw), s = Math.sin(b.yaw);
+            // building-local (x across w, z along d) → world
+            const at = (lx, lz) => ({ x: b.x + lx * c + lz * s, z: b.z - lx * s + lz * c });
+            if (b.watertower) {
+                for (const [lx, lz] of [[-3, -3], [3, -3], [-3, 3], [3, 3]]) { const q = at(lx, lz); bits.push({ t, x: q.x, y: b.y, z: q.z, w: 0.5, h: 22, d: 0.5, yaw: b.yaw, col: 0x7d8286, b }); }
+                tanks.push({ t, x: b.x, y: b.y + 18, z: b.z, s: 10, sy: 12, yaw: b.yaw, col: 0xb9bec2, b });
+                b.ht = 30; b.w = 9; b.d = 9;
+                continue;
+            }
+            if (b.roof === 'gable' || b.roof === 'hip') {
+                const alongZ = b.ridge === 'z';
+                const rw = (alongZ ? b.d : b.w) * 1.1, rd = (alongZ ? b.w : b.d) * 1.14;
+                const rh = b.roofH || (1.6 + Math.min(b.w, b.d) * 0.28);
+                (b.roof === 'hip' ? hips : gables).push({ t, x: b.x, y: top, z: b.z, w: rw, d: rd, h: rh, yaw: b.yaw + (alongZ ? 0 : Math.PI / 2), col: b.roofCol, b });
+                b.roofH = rh;
+                if (b.kind === 'house') {
+                    // a chimney, and dormers on the street side of some pitched roofs
+                    if (r() < 0.6) { const q = at((r() - 0.5) * b.w * 0.6, (r() - 0.5) * b.d * 0.3); bits.push({ t, x: q.x, y: top + rh * 0.35, z: q.z, w: 0.7, h: rh * 0.85, d: 0.7, yaw: b.yaw, col: 0x7a4a3a, b }); }
+                    if (b.roof === 'gable' && b.floors === 1 && r() < 0.45) {
+                        for (const lx of b.w > 10 ? [-b.w * 0.2, b.w * 0.2] : [0]) {
+                            const q = at(lx, b.front * b.d * 0.26);
+                            dormers.push({ t, x: q.x, y: top + rh * 0.12, z: q.z, w: 1.9, h: 1.9, d: 2.2, yaw: b.yaw + (b.front > 0 ? 0 : Math.PI), col: b.col, b });
                         }
                     }
+                } else if (b.kind === 'town' && r() < 0.5) {
+                    const q = at(b.w * 0.3, 0); bits.push({ t, x: q.x, y: top + rh * 0.3, z: q.z, w: 0.6, h: rh, d: 0.6, yaw: b.yaw, col: 0x6b4a3a, b });
                 }
-                if (zone === 'house' || zone === 'town') for (let k = 0; k < 2; k++) {
-                    const c = this.tw(t, cu + (r() - 0.5) * inner * 0.35, cv + (r() - 0.5) * inner * 0.35);
-                    if (!this.blocked(c.x, c.z)) trees.push({ x: c.x, z: c.z, s: 0.5 + r() * 0.4, t });
+            } else if (b.roof === 'flat') {
+                flats.push({ t, x: b.x, y: top, z: b.z, w: b.w + 0.4, d: b.d + 0.4, yaw: b.yaw, b });
+                // rooftop plant: AC units, a stair/lift housing, water tanks on the blocks, masts on the tallest
+                const nAc = b.kind === 'house' ? 0 : b.tower ? 3 : 1 + Math.floor(r() * 2);
+                for (let k = 0; k < nAc; k++) { const q = at((r() - 0.5) * b.w * 0.6, (r() - 0.5) * b.d * 0.6); const sz = b.tower ? 2.5 + r() * 2 : 1.4 + r(); bits.push({ t, x: q.x, y: top + 0.1, z: q.z, w: sz * 1.6, h: sz * 0.7, d: sz, yaw: b.yaw, col: 0x9da3a6, b }); }
+                if (b.kind === 'apt' || b.tower) { const q = at(b.w * 0.2, -b.d * 0.15); bits.push({ t, x: q.x, y: top + 0.1, z: q.z, w: 4, h: 3.2, d: 3.5, yaw: b.yaw, col: b.col, b }); }
+                if ((b.kind === 'apt' || b.kind === 'town') && r() < 0.45) { const q = at(-b.w * 0.25, b.d * 0.15); tanks.push({ t, x: q.x, y: top + 0.1, z: q.z, s: 2.6 + r(), yaw: b.yaw, col: r() < 0.5 ? 0x8a6a4a : 0xa9aeb2, b }); }
+                if (b.tower && b.ht > 90) bits.push({ t, x: b.x, y: top, z: b.z, w: 0.5, h: 16 + b.ht * 0.1, d: 0.5, yaw: 0, col: 0xb8bcc0, b });
+            }
+            // downtown: the tallest towers step back near the top; the biggest gets a spire
+            if (b.tower && b.ht > 70 && r() < 0.6) {
+                const k = 0.62 + r() * 0.15, h2 = 8 + r() * 14;
+                const crown = { t, kind: 'tower', part: b, x: b.x, z: b.z, y: top, w: b.w * k, d: b.d * k, ht: h2, yaw: b.yaw, style: b.style, flags: 0, col: b.col };
+                walls.push(crown);
+                flats.push({ t, x: b.x, y: top + h2, z: b.z, w: crown.w + 0.4, d: crown.d + 0.4, yaw: b.yaw, b });
+                if (b.ht > 100) spires.push({ t, x: b.x, y: top + h2, z: b.z, w: Math.min(crown.w, crown.d) * 0.55, h: 18 + b.ht * 0.25, yaw: b.yaw, col: 0xb8bcc0, b });
+                b.crownTop = top + h2;
+            }
+            // balconies on the apartment blocks: a slab and a parapet at every floor, front and back
+            if (b.balconies) {
+                const fh = 2.9, y0 = b.y + b.plinth + 0.5 + (b.shop ? 4.2 : fh);
+                for (let f = 0; y0 + f * fh < top - 2; f++) for (const sd of [1, -1]) {
+                    const q = at(0, sd * (b.d / 2 + 0.6));
+                    bits.push({ t, x: q.x, y: y0 + f * fh - 0.1, z: q.z, w: b.w * 0.72, h: 0.2, d: 1.2, yaw: b.yaw, col: 0xc8c4bc, b });
+                    const q2 = at(0, sd * (b.d / 2 + 1.15));
+                    bits.push({ t, x: q2.x, y: y0 + f * fh + 0.1, z: q2.z, w: b.w * 0.72, h: 0.95, d: 0.1, yaw: b.yaw, col: f % 2 ? 0xe8e6e0 : 0x9fb3bd, b });
                 }
             }
-        }
-        const wallGeo = new THREE.BoxGeometry(1, 1, 1); wallGeo.translate(0, 0.5, 0);
-        const houseMat = makeBuildingMaterial('house'), towerMat = makeBuildingMaterial('tower');
-        this.buildingMats = [houseMat, towerMat];
-        const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0), c = new THREE.Color();
-        const wallCols = [0xe8e0d0, 0xd8cdb8, 0xc9c2b4, 0xf0ece4, 0xbfb6a6, 0xd9c6a5, 0xa9b8c4, 0xc7a58a, 0xe6d3b3, 0xb7c7a8];
-        const aptCols = [0xb8b0a4, 0xc9bda8, 0x9aa3a8, 0xd2c3ad, 0xa89484, 0xc4a896];
-        const towerCols = [0x7d8fa0, 0x8a98a8, 0x5f7488, 0x9aa7b3, 0x6b7c70, 0xb0a898];
-        const roofCols = [0x9a3b2a, 0x7a3326, 0x5a5f66, 0x8a4a2e, 0x4a4f55, 0x6e2f22];
-        const all = [...items.house.map(o => ({ ...o, kind: 'house' })), ...items.town.map(o => ({ ...o, kind: 'town' })), ...items.apt.map(o => ({ ...o, kind: 'apt' }))];
-        for (const o of all) {
-            const top = o.y + o.ht;
-            if (o.kind === 'house') roofs.push({ t: o.t, x: o.x, y: top, z: o.z, w: o.w * 1.12, d: o.d * 1.14, h: 2 + o.d * 0.2, yaw: o.yaw, hue: o.hue, b: o });
-            else {
-                flatRoofs.push({ t: o.t, x: o.x, y: top, z: o.z, w: o.w + 0.4, d: o.d + 0.4, yaw: o.yaw, b: o });
-                if (o.kind === 'apt' || o.hue < 0.4) acUnits.push({ t: o.t, x: o.x + (o.hue - 0.5) * o.w * 0.4, y: top + 0.1, z: o.z, yaw: o.yaw, s: 1.4 + o.hue * 1.4, b: o });
+            // shop awnings and entrance canopies on the street side
+            if (b.shop && b.kind !== 'station') {
+                const q = at(0, b.front * (b.d / 2 + 0.8));
+                bits.push({ t, x: q.x, y: b.y + b.plinth + 0.5 + 3.1, z: q.z, w: b.w * 0.9, h: 0.15, d: 1.6, yaw: b.yaw, col: new THREE.Color().setHSL(b.accent || 0, 0.55, 0.45).getHex(), tilt: -0.15 * b.front, b });
+            } else if ((b.kind === 'apt' || b.tower) && b.front) {
+                const q = at(0, b.front * (b.d / 2 + 1.4));
+                bits.push({ t, x: q.x, y: b.y + b.plinth + 0.5 + 3.2, z: q.z, w: b.tower ? 10 : 4, h: 0.3, d: 2.8, yaw: b.yaw, col: 0x5a5f64, b });
             }
         }
-        // every building is also a solid, destructible record (buildings.js) that knows the instances drawing it
-        const B = this.buildings = new Buildings(this.group);
-        for (const o of [...all, ...items.tower]) o.rec = B.add({ ...o, kind: o.kind || 'tower', roofH: o.kind === 'house' ? 2 + o.d * 0.2 : 0 });
-        const own = (o, im, i, role) => { const b = o.rec || (o.b && o.b.rec); if (b) B.part(b, im, i, role); };
-        this.perTown(wallGeo, houseMat, all, (im, i, o) => {
+    }
+
+    // Every part of every building into its per-town instanced mesh; the records know which instances are theirs
+    draw({ walls, gables, hips, flats, bits, tanks, dormers, spires, trees, parks, ground }, B) {
+        const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0), c = new THREE.Color(), e = new THREE.Euler(0, 0, 0, 'YXZ');
+        const facade = makeFacadeMaterial();
+        this.buildingMats = [facade];
+        // a record per building (a church's tower and a tower's crown belong to their main part)
+        for (const b of walls) {
+            if (b.part) continue;
+            b.rec = B.add({ x: b.x, z: b.z, y: b.y, w: b.w, d: b.d, ht: b.crownTop ? b.crownTop - b.y : b.ht, yaw: b.yaw, kind: b.kind, roofH: b.roofH || 0, boxes: b.boxes || (b.crownTop ? [{ x: b.x, z: b.z, w: b.w, d: b.d, y0: b.y, y1: b.y + b.ht, yaw: b.yaw }, { x: b.x, z: b.z, w: b.w * 0.8, d: b.d * 0.8, y0: b.y + b.ht, y1: b.crownTop, yaw: b.yaw }] : null) });
+        }
+        const recOf = (o) => (o.b ? (o.b.part ? o.b.part.rec : o.b.rec) : o.part ? o.part.rec : o.rec);
+        const own = (o, im, i, role) => { const rec = recOf(o); if (rec) B.part(rec, im, i, role); };
+        const unit = unitBox();
+        // walls: one facade material for every kind, the style per instance
+        this.perTown(unit, facade, walls.filter(b => !b.watertower), (im, i, o) => {
             own(o, im, i, 'wall');
             q.setFromAxisAngle(up, o.yaw);
             im.setMatrixAt(i, m.compose(p.set(o.x, o.y, o.z), q, s.set(o.w, o.ht, o.d)));
-            im.setColorAt(i, c.setHex(o.kind === 'apt' ? aptCols[Math.floor(o.hue * aptCols.length)] : wallCols[Math.floor(o.hue * wallCols.length)]));
-        });
-        for (const o of items.tower) {
-            flatRoofs.push({ t: o.t, x: o.x, y: o.y + o.ht, z: o.z, w: o.w + 0.6, d: o.d + 0.6, yaw: o.yaw, b: o });
-            acUnits.push({ t: o.t, x: o.x, y: o.y + o.ht + 0.1, z: o.z, yaw: o.yaw, s: 3 + o.hue * 3, b: o });
-            if (o.ht > 80) acUnits.push({ t: o.t, x: o.x, y: o.y + o.ht, z: o.z, yaw: 0, s: 0.5, mast: 18, b: o });
-        }
-        this.perTown(wallGeo, towerMat, items.tower, (im, i, o) => {
-            own(o, im, i, 'wall');
-            q.setFromAxisAngle(up, o.yaw);
-            im.setMatrixAt(i, m.compose(p.set(o.x, o.y, o.z), q, s.set(o.w, o.ht, o.d)));
-            im.setColorAt(i, c.setHex(towerCols[Math.floor(o.hue * towerCols.length)]));
-        });
-        // gable roofs: ridge along the building's long side (w), gables at the ends
-        this.perTown(gableGeometry(), new THREE.MeshStandardMaterial({ roughness: 0.8, side: THREE.DoubleSide }), roofs, (im, i, o) => {
+            im.setColorAt(i, c.setHex(o.col));
+            im.geometry.attributes.aStyle.setXYZW(i, o.style, o.flags || 0, o.accent || 0, (o.x * 0.013 + o.z * 0.007) % 1);
+        }, { attrs: (n) => ({ aStyle: new THREE.InstancedBufferAttribute(new Float32Array(n * 4), 4) }) });
+        const roofMat = new THREE.MeshStandardMaterial({ roughness: 0.8 });
+        // the roof prism's ridge runs along its local z: o.yaw points it, o.w is its length, o.d the span
+        const roofWrite = (im, i, o) => {
             own(o, im, i);
-            q.setFromAxisAngle(up, o.yaw + Math.PI / 2);
+            q.setFromAxisAngle(up, o.yaw);
             im.setMatrixAt(i, m.compose(p.set(o.x, o.y, o.z), q, s.set(o.d, o.h, o.w)));
-            im.setColorAt(i, c.setHex(roofCols[Math.floor(o.hue * 7) % roofCols.length]));
-        });
-        this.perTown(wallGeo, new THREE.MeshStandardMaterial({ color: 0x55585c, roughness: 0.9 }), flatRoofs, (im, i, o) => {
+            im.setColorAt(i, c.setHex(o.col));
+        };
+        this.perTown(gableGeometry(), roofMat, gables, roofWrite);
+        this.perTown(hipGeometry(), roofMat, hips, roofWrite);
+        this.perTown(unit, new THREE.MeshStandardMaterial({ color: 0x55585c, roughness: 0.9 }), flats, (im, i, o) => {
             own(o, im, i);
-            q.setFromAxisAngle(up, o.yaw); im.setMatrixAt(i, m.compose(p.set(o.x, o.y - 0.2, o.z), q, s.set(o.w, 0.6, o.d)));
+            q.setFromAxisAngle(up, o.yaw); im.setMatrixAt(i, m.compose(p.set(o.x, o.y - 0.25, o.z), q, s.set(o.w, 0.7, o.d)));
+            im.setColorAt(i, c.setHex(0xffffff));
         });
-        // rooftop clutter is too small to see from far away
-        this.perTown(wallGeo, new THREE.MeshStandardMaterial({ color: 0x9da3a6, roughness: 0.6, metalness: 0.4 }), acUnits, (im, i, o) => {
+        // small things are only worth drawing within a few km
+        const bitMat = new THREE.MeshStandardMaterial({ roughness: 0.75, metalness: 0.1 });
+        this.perTown(unit, bitMat, bits, (im, i, o) => {
             own(o, im, i);
-            q.setFromAxisAngle(up, o.yaw); im.setMatrixAt(i, m.compose(p.set(o.x, o.y, o.z), q, o.mast ? s.set(o.s, o.mast, o.s) : s.set(o.s * 1.6, o.s * 0.7, o.s)));
-        }, { far: 7000 });
-        B.index();
-        for (const sp of specials) this.group.add(this.makeChurch(sp));
-        this.buildDriveways(driveways);
-        // parks: a lawn following the ground, and trees
-        const lawnMat = new THREE.MeshStandardMaterial({ color: 0x4f8a3c, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1 });
+            e.set(o.tilt || 0, o.yaw, 0); q.setFromEuler(e);
+            im.setMatrixAt(i, m.compose(p.set(o.x, o.y, o.z), q, s.set(o.w, o.h, o.d)));
+            im.setColorAt(i, c.setHex(o.col));
+        }, { far: 4000 });
+        this.perTown(tankGeometry(), new THREE.MeshStandardMaterial({ roughness: 0.6, metalness: 0.3 }), tanks, (im, i, o) => {
+            own(o, im, i);
+            q.setFromAxisAngle(up, o.yaw); im.setMatrixAt(i, m.compose(p.set(o.x, o.y, o.z), q, s.set(o.s, o.sy || o.s, o.s)));
+            im.setColorAt(i, c.setHex(o.col));
+        }, { far: 6000 });
+        this.perTown(dormerGeometry(), new THREE.MeshStandardMaterial({ roughness: 0.8 }), dormers, (im, i, o) => {
+            own(o, im, i);
+            q.setFromAxisAngle(up, o.yaw); im.setMatrixAt(i, m.compose(p.set(o.x, o.y, o.z), q, s.set(o.w, o.h, o.d)));
+            im.setColorAt(i, c.setHex(o.col));
+        }, { far: 3000 });
+        this.perTown(spireGeometry(), new THREE.MeshStandardMaterial({ roughness: 0.5, metalness: 0.4 }), spires, (im, i, o) => {
+            own(o, im, i);
+            q.setFromAxisAngle(up, o.yaw); im.setMatrixAt(i, m.compose(p.set(o.x, o.y, o.z), q, s.set(o.w, o.h, o.w)));
+            im.setColorAt(i, c.setHex(o.col));
+        });
+        // parks (lawns, trees, sometimes a pond) and plazas / forecourts: one vertex-coloured ground mesh per town
         for (const pk of parks) {
-            const cpt = this.tw(pk.t, pk.cu, pk.cv);
-            const h0 = this.groundAt(cpt.x, cpt.z);
-            const geo = new THREE.PlaneGeometry(pk.size, pk.size, 4, 4);
-            geo.rotateX(-Math.PI / 2);
-            geo.rotateY(pk.t.theta);
-            const la = geo.attributes.position;
-            for (let i = 0; i < la.count; i++) la.setY(i, this.groundAt(cpt.x + la.getX(i), cpt.z + la.getZ(i)) - h0 + 0.3);
-            geo.computeVertexNormals();
-            const lawn = new THREE.Mesh(geo, lawnMat);
-            lawn.position.set(cpt.x, h0, cpt.z);
-            lawn.receiveShadow = true;
-            this.group.add(lawn);
+            ground.push({ t: pk.t, kind: 'lawn', cu: pk.cu, cv: pk.cv, size: pk.size, col: [0.31, 0.54, 0.24] });
+            const pond = this.rand() < 0.35;
+            if (pond) ground.push({ t: pk.t, kind: 'pond', cu: pk.cu + pk.size * 0.12, cv: pk.cv - pk.size * 0.1, size: pk.size * 0.32, col: [0.2, 0.34, 0.42] });
             for (let k = 0; k < 9; k++) {
-                const tp = this.tw(pk.t, pk.cu + (this.rand() - 0.5) * pk.size * 0.85, pk.cv + (this.rand() - 0.5) * pk.size * 0.85);
+                const du = (this.rand() - 0.5) * pk.size * 0.85, dv = (this.rand() - 0.5) * pk.size * 0.85;
+                if (pond && Math.hypot(du - pk.size * 0.12, dv + pk.size * 0.1) < pk.size * 0.22) continue;
+                const tp = this.tw(pk.t, pk.cu + du, pk.cv + dv);
                 trees.push({ x: tp.x, z: tp.z, s: 0.6 + this.rand() * 0.5, t: pk.t });
             }
         }
+        this.drawGround(ground);
         if (this.world && this.world.treeGeo && trees.length) {
             this.perTown(this.world.treeGeo, this.world.treeMat, trees, (im, i, o) => {
                 q.setFromAxisAngle(up, this.rand() * 6.28); im.setMatrixAt(i, m.compose(p.set(o.x, this.groundAt(o.x, o.z) - 0.5, o.z), q, s.set(o.s, o.s, o.s)));
             }, { shadow: false, far: 12000 });
         }
-        this.buildingCount = all.length + items.tower.length;
+        for (const st of this.stadiums || []) this.drawStadium(st, B);
+    }
+
+    // lawns, ponds, plazas and forecourts of a town as one mesh (vertex colours), draped on the graded ground
+    drawGround(list) {
+        const byTown = new Map();
+        for (const o of list) { if (!byTown.has(o.t)) byTown.set(o.t, []); byTown.get(o.t).push(o); }
+        const mat = liftWithDistance(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: offsetUnits(-2) }));
+        for (const [t, items] of byTown) {
+            const pos = [], col = [], idx = [];
+            for (const o of items) {
+                const N = o.kind === 'pond' ? 10 : 5;
+                const base = pos.length / 3;
+                const lift = o.kind === 'pond' ? 0.36 : o.kind === 'lawn' ? 0.3 : 0.33;
+                for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) {
+                    let a = i / N - 0.5, b = j / N - 0.5;
+                    if (o.kind === 'pond') { const ang = Math.atan2(b, a), rr = Math.max(Math.abs(a), Math.abs(b)) * (0.85 + 0.15 * Math.sin(ang * 3)); a = Math.cos(ang) * rr; b = Math.sin(ang) * rr * 0.75; }
+                    let x, z;
+                    if (o.cu !== undefined) { const w = this.tw(t, o.cu + a * o.size, o.cv + b * o.size); x = w.x; z = w.z; }
+                    else { const cy = Math.cos(o.yaw), sy = Math.sin(o.yaw), lx = a * o.w, lz = b * o.d; x = o.x + lx * cy + lz * sy; z = o.z - lx * sy + lz * cy; }
+                    pos.push(x, o.y !== undefined ? o.y : this.groundAt(x, z) + lift, z);
+                    const v = 0.93 + ((i * 7 + j * 13) % 5) * 0.03;
+                    col.push((o.col[0] * v) ** 2.2, (o.col[1] * v) ** 2.2, (o.col[2] * v) ** 2.2); // authored in sRGB
+                }
+                for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { const a = base + j * (N + 1) + i; idx.push(a, a + N + 1, a + 1, a + 1, a + N + 1, a + N + 2); }
+            }
+            const g = new THREE.BufferGeometry();
+            g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+            g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+            g.setIndex(idx);
+            // make every quad face up whatever the grid's handedness
+            const P = g.attributes.position.array, I = g.index.array;
+            for (let k = 0; k < I.length; k += 3) {
+                const a = I[k] * 3, b = I[k + 1] * 3, c2 = I[k + 2] * 3;
+                const ny = (P[b + 2] - P[a + 2]) * (P[c2] - P[a]) - (P[b] - P[a]) * (P[c2 + 2] - P[a + 2]);
+                if (ny < 0) { const tmp = I[k + 1]; I[k + 1] = I[k + 2]; I[k + 2] = tmp; }
+            }
+            g.computeVertexNormals();
+            const mesh = new THREE.Mesh(g, mat);
+            mesh.receiveShadow = true;
+            this.group.add(mesh);
+        }
+    }
+
+    // A stadium: oval bowl of stands under a roof ring, the pitch, four floodlight masts (one merged mesh)
+    drawStadium(st, B) {
+        const { A, B: Bz, H } = st, SEG = 48, parts = [];
+        const colored = (g, hex) => { const n = g.index ? g.toNonIndexed() : g; for (const k of Object.keys(n.attributes)) if (k !== 'position' && k !== 'normal') n.deleteAttribute(k); const cc = new THREE.Color(hex), a = new Float32Array(n.attributes.position.count * 3); for (let i = 0; i < a.length; i += 3) { a[i] = cc.r; a[i + 1] = cc.g; a[i + 2] = cc.b; } n.setAttribute('color', new THREE.BufferAttribute(a, 3)); return n; };
+        const ring = (a0, b0, y0, a1, b1, y1, hex) => {
+            const pos = [];
+            for (let k = 0; k < SEG; k++) {
+                const t0 = k / SEG * Math.PI * 2, t1 = (k + 1) / SEG * Math.PI * 2;
+                const P = (a, b, y, t) => [Math.cos(t) * a, y, Math.sin(t) * b];
+                const p00 = P(a0, b0, y0, t0), p01 = P(a0, b0, y0, t1), p10 = P(a1, b1, y1, t0), p11 = P(a1, b1, y1, t1);
+                pos.push(...p00, ...p10, ...p01, ...p01, ...p10, ...p11);
+            }
+            const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.computeVertexNormals();
+            return colored(g, hex);
+        };
+        parts.push(ring(A, Bz, 0, A, Bz, H, 0xd2cec4));                    // outer wall (outward)
+        parts.push(ring(A - 1, Bz - 1, H, A - 1, Bz - 1, 0, 0xb8b4aa));    // inner face of the wall
+        parts.push(ring(A * 0.62, Bz * 0.6, 1.5, A - 1, Bz - 1, H - 2, 0x8a3a3a)); // the stands, climbing outward
+        parts.push(ring(A - 16, Bz - 14, H + 1.5, A + 1.5, Bz + 1.5, H + 2.5, 0xeeeeea)); // roof ring
+        parts.push(ring(A + 1.5, Bz + 1.5, H + 2.5, A - 16, Bz - 14, H + 1.5, 0xc8c8c4)); // its underside
+        const pitch = new THREE.PlaneGeometry(A * 1.15, Bz * 1.05, 8, 1); pitch.rotateX(-Math.PI / 2); pitch.translate(0, 1, 0);
+        const pc = colored(pitch, 0x3f8a3a);
+        { const P = pc.attributes.position.array, C = pc.attributes.color.array; for (let i = 0; i < P.length / 3; i++) { if (Math.floor((P[i * 3] / (A * 1.15) + 0.5) * 8) % 2) { C[i * 3] *= 1.12; C[i * 3 + 1] *= 1.12; C[i * 3 + 2] *= 1.12; } } }
+        parts.push(pc);
+        for (const [sx, sz] of [[1, 1], [-1, 1], [1, -1], [-1, -1]]) {
+            const mast = new THREE.BoxGeometry(1.2, H + 22, 1.2); mast.translate(sx * A * 0.72, (H + 22) / 2, sz * Bz * 0.72); parts.push(colored(mast, 0x9a9ea2));
+            const lamp = new THREE.BoxGeometry(6, 3, 1); lamp.translate(sx * A * 0.72, H + 21, sz * Bz * 0.72); parts.push(colored(lamp, 0xf4f2e8));
+        }
+        const g = mergeGeos(parts);
+        const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, side: THREE.DoubleSide }));
+        mesh.position.set(st.x, st.y - 0.4, st.z); mesh.rotation.y = st.yaw;
+        mesh.castShadow = true; mesh.receiveShadow = true;
+        this.group.add(mesh);
+        const rec = B.add({ x: st.x, z: st.z, y: st.y, w: st.A * 2, d: st.B * 1.4, ht: H + 2.5, yaw: st.yaw, kind: 'stadium', boxes: [{ x: st.x, z: st.z, w: st.A * 2, d: st.B * 1.4, y0: st.y, y1: st.y + H + 2.5, yaw: st.yaw }, { x: st.x, z: st.z, w: st.A * 1.4, d: st.B * 2, y0: st.y, y1: st.y + H + 2.5, yaw: st.yaw }] });
+        B.partMesh(rec, mesh);
+        (this.landmarks || (this.landmarks = [])).push(mesh);
     }
 
     buildDriveways(list) {
@@ -937,7 +1411,7 @@ export class Towns {
         this.perTown(slab, new THREE.MeshStandardMaterial({ color: 0x9a978f, roughness: 0.95 }), list, (im, i, o) => {
             q.setFromAxisAngle(up, o.yaw);
             im.setMatrixAt(i, m.compose(p.set(o.x, this.groundAt(o.x, o.z) - 0.3, o.z), q, s.set(3.6, 0.75, o.len)));
-        }, { shadow: false, far: 9000 });
+        }, { shadow: false, far: 3500 });
         // parked cars
         // one or two cars per driveway (two parked nose to tail)
         const cars = [];
@@ -1021,22 +1495,6 @@ export class Towns {
             if (n) attr.addUpdateRange(0, n);
             attr.needsUpdate = n > 0;
         }
-    }
-
-    makeChurch(sp) {
-        const g = new THREE.Group();
-        const wall = new THREE.MeshStandardMaterial({ color: 0xe9e2d2, roughness: 0.85 });
-        const roof = new THREE.MeshStandardMaterial({ color: 0x5a5f66, roughness: 0.7, side: THREE.DoubleSide });
-        const nave = new THREE.Mesh(new THREE.BoxGeometry(12, 9, 26), wall); nave.position.y = 4.5; g.add(nave);
-        const nr = new THREE.Mesh(gableGeometry(), roof); nr.scale.set(13.5, 5, 27); nr.position.y = 9; g.add(nr);
-        const tower = new THREE.Mesh(new THREE.BoxGeometry(6, 20, 6), wall); tower.position.set(0, 10, -14); g.add(tower);
-        const spire = new THREE.Mesh(new THREE.ConeGeometry(4.2, 14, 4), roof); spire.rotation.y = Math.PI / 4; spire.position.set(0, 27, -14); g.add(spire);
-        const cross = new THREE.Mesh(new THREE.BoxGeometry(0.3, 2.4, 0.3), roof); cross.position.set(0, 35, -14); g.add(cross);
-        const arm = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.3, 0.3), roof); arm.position.set(0, 35.4, -14); g.add(arm);
-        g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-        g.position.set(sp.x, sp.y, sp.z);
-        g.rotation.y = sp.yaw;
-        return g;
     }
 
     // Road closed / road works / bridge out: barriers, cones and a sign wherever a road stops short
