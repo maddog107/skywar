@@ -33,6 +33,7 @@ Test files must `import { src } from './helpers/setup.mjs'` first and load game 
 | `convoy.test.mjs` | `pickConvoyBridge`: empty/null lists, missing paths, not enough road, direction choice, picks among the top three. |
 | `world.test.mjs` | `baseToWorld`/`worldToBase` round trip for every base; `runwayNumbers` gives 01-36 designators, reciprocal ends, L/R only on parallels, no duplicates; `terrainHeight` finite and deterministic over a 60 km grid; airfields flattened; `isOnRunway` at runway centres and ends. |
 | `damage.test.mjs` | `segmentModel` bucketing into nose / tail / wingL / wingR / center (tests the private `regionOf` through it), world positions kept. |
+| `postfx.test.mjs` | `DynamicResolution` (adaptive render scale) against a synthetic GPU with 60 Hz vsync: climbs to the top level when there's headroom, settles at the level that fits for heavy scenes without thrashing (failed probes back off), ignores CPU-bound frames, copes with no / over-reading GPU timer. Quality presets sanity. |
 | `smoke.test.mjs` | Every `src/*.js` imports without throwing, each in a fresh process: first with no browser globals, then with the DOM stub. Lists the modules that need the DOM at import time. `main.js` is skipped (it creates a WebGLRenderer). |
 
 Known problems are marked `todo` rather than hidden (they show as `# TODO` and don't fail the run),

@@ -9,16 +9,16 @@ import * as THREE from 'three';
 import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
 import { terrainHeight } from './world.js';
 
 // ── Quality presets ──
 // pr: pixel ratio with adaptive resolution off (today's values); top/floor: adaptive range
 // (top is capped at devicePixelRatio). msaa: scene samples. ssr: 0 off, 1 reduced, 2 full.
+// blur: motion-blur taps (0 = off; ultra only, so HIGH keeps today's look and cost). dof: photo-mode taps.
 export const QUALITY = {
     low: { pr: 1, top: 1, floor: 0.6, msaa: 0, ao: false, ssr: 0, flare: false, blur: 0, dof: 0 },
     medium: { pr: 1.25, top: 1.25, floor: 0.7, msaa: 0, ao: false, ssr: 0, flare: true, blur: 0, dof: 48 },
-    high: { pr: 1.75, top: 2, floor: 0.85, msaa: 0, ao: false, ssr: 0, flare: true, blur: 8, dof: 72 },
+    high: { pr: 1.75, top: 2, floor: 0.85, msaa: 0, ao: false, ssr: 0, flare: true, blur: 0, dof: 72 },
     ultra: { pr: 2, top: 2, floor: 1, msaa: 4, ao: true, ssr: 2, flare: true, blur: 12, dof: 96 },
 };
 const STEPS = [1, 0.875, 0.75, 0.667, 0.6, 0.5]; // adaptive resolution levels, as fractions of `top`
@@ -116,7 +116,10 @@ export class ScenePass extends RenderPass {
         this.output = target;
     }
 
-    dispose() { if (this.target) this.target.dispose(); }
+    // free the (possibly multisampled) target when the quality level never needs it
+    releaseTarget() { if (this.target) { this.target.dispose(); this.target = null; } }
+
+    dispose() { this.releaseTarget(); }
 }
 
 // ═════════════ AO (half resolution) ═════════════
@@ -649,49 +652,109 @@ export class DofPass extends Pass {
 }
 
 // ═════════════ Tone mapping + FXAA in one pass ═════════════
-// Replaces the composer's OutputPass: FXAA (three's FXAAShader) whose texture fetch tone-maps and
-// sRGB-encodes each sample, so the edge search runs on the final LDR values without an extra
-// full-screen pass. Cheaper than SMAA (1 pass instead of 3) and it works at every pixel ratio.
+// Replaces the composer's OutputPass: FXAA (the Catlike Coding variant that three's FXAAShader uses)
+// whose texture fetch tone-maps and sRGB-encodes each sample, so the edge search runs on final LDR
+// values without an extra full-screen pass. The 5-tap contrast test comes first, so flat pixels (most
+// of the frame) cost one pass of 5 fetches; only edges fetch the diagonals and walk the edge.
+// One pass instead of SMAA's three, and it works at every pixel ratio.
+const OUTPUT_AA_FRAG = /* glsl */`
+    #include <tonemapping_pars_fragment>
+    // (colorspace_pars_fragment is already in three's ShaderMaterial prefix)
+    uniform sampler2D tDiffuse;
+    uniform vec2 resolution; // 1 / size
+    uniform float subpixel, aaOn;
+    varying vec2 vUv;
+    vec3 toDisplay(vec3 c) {
+        #ifdef LINEAR_TONE_MAPPING
+        c = LinearToneMapping(c);
+        #elif defined(REINHARD_TONE_MAPPING)
+        c = ReinhardToneMapping(c);
+        #elif defined(CINEON_TONE_MAPPING)
+        c = CineonToneMapping(c);
+        #elif defined(ACES_FILMIC_TONE_MAPPING)
+        c = ACESFilmicToneMapping(c);
+        #elif defined(AGX_TONE_MAPPING)
+        c = AgXToneMapping(c);
+        #elif defined(NEUTRAL_TONE_MAPPING)
+        c = NeutralToneMapping(c);
+        #endif
+        #ifdef SRGB_TRANSFER
+        c = sRGBTransferOETF(vec4(c, 1.0)).rgb;
+        #endif
+        return c;
+    }
+    vec3 tap(vec2 uv) { return toDisplay(texture2D(tDiffuse, uv).rgb); }
+    // edge detection only needs a perceptual luma: tone-map the luminance alone (a scalar curve, not the
+    // full colour transform per tap), then a gamma-ish sqrt
+    float lumaHDR(vec3 c) {
+        float l = dot(c, vec3(0.2126, 0.7152, 0.0722)) * toneMappingExposure;
+        return sqrt(l * (2.51 * l + 0.03) / (l * (2.43 * l + 0.59) + 0.14)); // Narkowicz ACES fit
+    }
+    float lumaAt(vec2 uv) { return lumaHDR(texture2D(tDiffuse, uv).rgb); }
+    const float STEPS[6] = float[6](1.0, 1.5, 2.0, 2.0, 2.0, 4.0);
+    void main() {
+        vec3 hm = texture2D(tDiffuse, vUv).rgb;
+        if (aaOn < 0.5) { gl_FragColor = vec4(toDisplay(hm), 1.0); return; }
+        vec2 px = resolution;
+        float m = lumaHDR(hm);
+        float n = lumaAt(vUv + vec2(0.0, px.y)), s = lumaAt(vUv - vec2(0.0, px.y));
+        float e = lumaAt(vUv + vec2(px.x, 0.0)), w = lumaAt(vUv - vec2(px.x, 0.0));
+        float hi = max(max(max(max(n, e), s), w), m), lo = min(min(min(min(n, e), s), w), m);
+        float contrast = hi - lo;
+        if (contrast < max(0.0312, 0.063 * hi)) { gl_FragColor = vec4(toDisplay(hm), 1.0); return; }
+        float ne = lumaAt(vUv + px), nw = lumaAt(vUv + vec2(-px.x, px.y));
+        float se = lumaAt(vUv + vec2(px.x, -px.y)), sw = lumaAt(vUv - px);
+        // sub-pixel blend factor
+        float f = (2.0 * (n + e + s + w) + ne + nw + se + sw) / 12.0;
+        f = clamp(abs(f - m) / contrast, 0.0, 1.0);
+        f = smoothstep(0.0, 1.0, f);
+        float pixelBlend = f * f * subpixel;
+        // edge orientation and which side the edge is on
+        float horizontal = abs(n + s - 2.0 * m) * 2.0 + abs(ne + se - 2.0 * e) + abs(nw + sw - 2.0 * w);
+        float vertical = abs(e + w - 2.0 * m) * 2.0 + abs(ne + nw - 2.0 * n) + abs(se + sw - 2.0 * s);
+        bool isH = horizontal >= vertical;
+        float pL = isH ? n : e, nL = isH ? s : w;
+        float pG = abs(pL - m), nG = abs(nL - m);
+        float stepLen = isH ? px.y : px.x;
+        float opposite = pL, gradient = pG;
+        if (pG < nG) { stepLen = -stepLen; opposite = nL; gradient = nG; }
+        // walk along the edge both ways until its luminance changes
+        vec2 uvEdge = vUv;
+        vec2 edgeStep;
+        if (isH) { uvEdge.y += stepLen * 0.5; edgeStep = vec2(px.x, 0.0); }
+        else { uvEdge.x += stepLen * 0.5; edgeStep = vec2(0.0, px.y); }
+        float edgeL = (m + opposite) * 0.5, gThresh = gradient * 0.25;
+        vec2 puv = uvEdge + edgeStep * STEPS[0];
+        float pD = lumaAt(puv) - edgeL;
+        bool pEnd = abs(pD) >= gThresh;
+        for (int i = 1; i < 6 && !pEnd; i++) { puv += edgeStep * STEPS[i]; pD = lumaAt(puv) - edgeL; pEnd = abs(pD) >= gThresh; }
+        if (!pEnd) puv += edgeStep * 8.0;
+        vec2 nuv = uvEdge - edgeStep * STEPS[0];
+        float nD = lumaAt(nuv) - edgeL;
+        bool nEnd = abs(nD) >= gThresh;
+        for (int i = 1; i < 6 && !nEnd; i++) { nuv -= edgeStep * STEPS[i]; nD = lumaAt(nuv) - edgeL; nEnd = abs(nD) >= gThresh; }
+        if (!nEnd) nuv -= edgeStep * 8.0;
+        float pDist = isH ? puv.x - vUv.x : puv.y - vUv.y;
+        float nDist = isH ? vUv.x - nuv.x : vUv.y - nuv.y;
+        bool deltaSign = pDist <= nDist ? pD >= 0.0 : nD >= 0.0;
+        float edgeBlend = deltaSign == (m - edgeL >= 0.0) ? 0.0 : 0.5 - min(pDist, nDist) / (pDist + nDist);
+        float blend = max(pixelBlend, edgeBlend);
+        vec2 uv = vUv;
+        if (isH) uv.y += stepLen * blend; else uv.x += stepLen * blend;
+        gl_FragColor = vec4(tap(uv), 1.0);
+    }`;
+
 export class OutputAAPass extends OutputPass {
     constructor() {
         super();
-        const frag = /* glsl */`
-            #include <tonemapping_pars_fragment>
-            // (colorspace_pars_fragment is already in three's ShaderMaterial prefix)
-            vec3 toDisplay(vec3 c) {
-                #ifdef LINEAR_TONE_MAPPING
-                c = LinearToneMapping(c);
-                #elif defined(REINHARD_TONE_MAPPING)
-                c = ReinhardToneMapping(c);
-                #elif defined(CINEON_TONE_MAPPING)
-                c = CineonToneMapping(c);
-                #elif defined(ACES_FILMIC_TONE_MAPPING)
-                c = ACESFilmicToneMapping(c);
-                #elif defined(AGX_TONE_MAPPING)
-                c = AgXToneMapping(c);
-                #elif defined(NEUTRAL_TONE_MAPPING)
-                c = NeutralToneMapping(c);
-                #endif
-                #ifdef SRGB_TRANSFER
-                c = sRGBTransferOETF(vec4(c, 1.0)).rgb;
-                #endif
-                return c;
-            }
-        ` + FXAAShader.fragmentShader
-            .replace('float _SubpixelBlending = 1.0;', 'uniform float _SubpixelBlending;')
-            .replace(/vec4 Sample\( sampler2D {2}tex2D, vec2 uv \) \{\s*return texture\( tex2D, uv \);\s*\}/,
-                'vec4 Sample( sampler2D tex2D, vec2 uv ) { vec4 c = texture( tex2D, uv ); return vec4( toDisplay( c.rgb ), c.a ); }')
-            .replace('gl_FragColor = ApplyFXAA( tDiffuse, resolution.xy, vUv );',
-                'gl_FragColor = aaOn > 0.5 ? ApplyFXAA( tDiffuse, resolution.xy, vUv ) : Sample( tDiffuse, vUv );');
-        if (!frag.includes('toDisplay( c.rgb )')) console.warn('PostFX: FXAA shader layout changed; tone mapping not folded in');
         this.uniforms = {
             tDiffuse: { value: null }, toneMappingExposure: { value: 1 }, resolution: { value: new THREE.Vector2() },
-            _SubpixelBlending: { value: 0.75 }, aaOn: { value: 1 },
+            subpixel: { value: 0.75 }, aaOn: { value: 1 },
         };
         this.material.dispose();
         this.material = new THREE.ShaderMaterial({
-            name: 'OutputFXAA', uniforms: this.uniforms, vertexShader: FXAAShader.vertexShader,
-            fragmentShader: 'uniform float aaOn;\n' + frag, depthTest: false, depthWrite: false, toneMapped: false,
+            name: 'OutputFXAA', uniforms: this.uniforms, vertexShader: VERT, fragmentShader: OUTPUT_AA_FRAG,
+            depthTest: false, depthWrite: false, toneMapped: false,
         });
         this._fsQuad.material = this.material;
     }
@@ -751,7 +814,7 @@ export class DynamicResolution {
         this.budget = 1000 / 60;
         this.gpuEma = -1; this.frameEma = -1;
         this.overT = 0; this.underT = 0;
-        this.sinceChange = 0; this.lastUpAt = -1e9; this.upHold = 3;
+        this.sinceChange = 0; this.lastUpAt = -1e9; this.upHold = 3; this.lastFailAt = -1e9;
         this.t = 0;
         this.frozen = false;
         this.warm = 0;
@@ -763,6 +826,8 @@ export class DynamicResolution {
         this.i = Math.min(startIndex, levels.length - 1);
         this.reset();
         this.warm = 2; // ignore the first seconds: shader compiles and texture uploads
+        this.timerRight = 0; this.blindProbe = false; this.upHold = 3; this.lastFailAt = -1e9;
+        this.history.push({ t: +this.t.toFixed(1), pr: this.levels[this.i], why: 'configure' });
         this.apply(this.levels[this.i]);
     }
     get pixelRatio() { return this.levels[this.i]; }
@@ -771,7 +836,11 @@ export class DynamicResolution {
         i = Math.max(0, Math.min(this.levels.length - 1, i));
         if (i === this.i) return;
         if (i < this.i) this.lastUpAt = this.t;
-        else if (this.t - this.lastUpAt < 5) this.upHold = Math.min(this.upHold * 2, 60); // that up-step didn't hold
+        else if (this.t - this.lastUpAt < 5) { // that up-step didn't hold
+            this.upHold = Math.min(this.upHold * 2, 60);
+            this.lastFailAt = this.t;
+            if (this.blindProbe && this.gpuEma >= 0) this.timerRight++; // the GPU timer had said it wouldn't fit
+        }
         this.history.push({ t: +this.t.toFixed(1), pr: this.levels[i], why });
         if (this.history.length > 20) this.history.shift();
         this.i = i;
@@ -790,15 +859,17 @@ export class DynamicResolution {
         if (gpuMs >= 0) { gpuMs = Math.min(gpuMs, B * 3); this.gpuEma = this.gpuEma < 0 ? gpuMs : this.gpuEma + (gpuMs - this.gpuEma) * 0.1; }
         if (this.sinceChange < 0.8) return; // let the new resolution settle (and the EMAs refill)
         const cur = this.levels[this.i], last = this.levels.length - 1;
+        // (levels run high → low: index up = lower resolution)
         // Down: frames clearly late (under ~54 fps) and the GPU is the likely culprit (busy most of the frame,
         // or no timer to ask) — lowering the resolution doesn't help a CPU-bound frame.
         const late = this.frameEma > B * 1.12;
         const gpuBound = this.gpuEma < 0 || this.gpuEma > B * 0.75;
         if (late && gpuBound) this.overT += dt; else this.overT = Math.max(0, this.overT - dt);
-        if (this.overT > 0.5 && this.i < last) {
-            let j = this.i + 1; // with a GPU time, jump as many levels as the pixel count suggests
-            if (this.gpuEma > 0) while (j < last && this.gpuEma * (this.levels[j] / cur) ** 2 > B * 0.85) j++;
-            this.setLevel(j, 'frame ' + this.frameEma.toFixed(1) + 'ms gpu ' + this.gpuEma.toFixed(1) + 'ms');
+        // (a probe that doesn't hold falls back twice as fast)
+        if (this.overT > (this.t - this.lastUpAt < 5 ? 0.25 : 0.5) && this.i < last) {
+            // one level at a time (two when far behind): the GPU timer can read high under load, so it
+            // doesn't size the jump
+            this.setLevel(Math.min(last, this.i + (this.frameEma > B * 2.2 ? 2 : 1)), 'frame ' + this.frameEma.toFixed(1) + 'ms gpu ' + this.gpuEma.toFixed(1) + 'ms');
             return;
         }
         // Up: holding the frame rate; straight away if the GPU time says the next level fits, otherwise
@@ -806,8 +877,14 @@ export class DynamicResolution {
         const up = this.i > 0 ? this.levels[this.i - 1] : 0;
         if (up && this.frameEma < B * 1.05) this.underT += dt; else this.underT = 0;
         const fits = this.gpuEma >= 0 && this.gpuEma * (up / cur) ** 2 < B * 0.8;
-        if (up && this.underT > (fits ? this.upHold : this.upHold * 3 + 10)) this.setLevel(this.i - 1, fits ? 'headroom ' + this.gpuEma.toFixed(1) + 'ms' : 'probe');
-        if (this.sinceChange > 30) this.upHold = Math.max(3, this.upHold * 0.5), this.sinceChange = 1; // long stable spell: be braver again
+        // (blind probes stop once the timer has twice been proven right)
+        const blindOk = this.gpuEma < 0 || this.timerRight < 2;
+        if (up && (fits || blindOk) && this.underT > (fits ? this.upHold : this.upHold * 3 + 10)) {
+            this.blindProbe = !fits;
+            this.setLevel(this.i - 1, fits ? 'headroom ' + this.gpuEma.toFixed(1) + 'ms' : 'probe');
+        }
+        // five minutes without a failed up-step: be braver again
+        if (this.t - this.lastFailAt > 300 && this.upHold > 3) { this.upHold = Math.max(3, this.upHold * 0.5); this.lastFailAt = this.t; }
     }
 }
 
@@ -871,8 +948,9 @@ export class PostFX {
         this.sceneFX.configure({ ao: q.ao, ssr: q.ssr, flare: q.flare, blur: q.blur });
         this.dof.setTaps(Math.max(16, q.dof));
         this.scenePass.samples = q.msaa;
+        if (!q.msaa && !q.ao && !q.ssr && !q.flare && !q.blur && !q.dof) this.scenePass.releaseTarget();
         // with 4× MSAA the geometry edges are clean: FXAA only softly mops up alpha-tested foliage
-        this.outputAA.uniforms._SubpixelBlending.value = q.msaa ? 0.35 : 0.75;
+        this.outputAA.uniforms.subpixel.value = q.msaa ? 0.35 : 0.75;
         this.dyn.configure(levels, start, dynamic);
         this.hasPrev = false;
     }
