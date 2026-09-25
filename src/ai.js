@@ -673,7 +673,7 @@ export class Pilot {
 
     // Flares: one salvo per missile, timed for the last couple of seconds (rookies often miss the launch
     // altogether). Transports and bombers use them too. With weapons.js's per-flare odds this decoys roughly
-    // 15% (rookie) / 23% (veteran) / 34% (ace) of heat seekers.
+    // 15% (rookie) / 23% (veteran) / 25% (ace) of rear-aspect heat seekers.
     flares() {
         const ac = this.ac, g = this.game, sk = this.skill;
         if (ac.flares <= 0 || !ac.incoming.length) return;
