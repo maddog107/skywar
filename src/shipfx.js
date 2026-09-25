@@ -159,7 +159,7 @@ const WAKE_FS = /* glsl */`
         float n2 = texture2D(foamMap, uv * vec2(2.7, 3.3) + vec2(0.41, 0.13)).r;
         float streak = texture2D(foamMap, vec2(lat * 0.016 + 0.5, s * 0.0014)).b;
         float n = n1 * 0.55 + n2 * 0.45;
-        float cover = clamp(near * 0.8 + mid * 0.42 * (0.3 + streak), 0.0, 1.0);
+        float cover = clamp(near * 0.68 + mid * 0.42 * (0.3 + streak), 0.0, 1.0);
         float foam = smoothstep(1.0 - cover, 1.3 - cover, n);
         // a milky turquoise band (bubbles under the surface) stays long after the white foam has broken up
         float milk = (0.1 + 0.14 * streak) * (0.35 + 0.65 * mid) * (1.0 - 0.5 * x);
@@ -196,7 +196,7 @@ const FOAM_FS = /* glsl */`
         float contact = exp(-dist / 1.4);                              // white water rubbing along the hull
         float crest = exp(-pow((r - 0.7) / 0.15, 2.0)) * bowW;         // the bow wave's breaking crest
         float body = (1.0 - r) * bowW;                                 // foam between the stem and the crest
-        float churn = sternW * (1.0 - smoothstep(0.2, 1.0, r));        // transom churn
+        float churn = 0.75 * sternW * (1.0 - smoothstep(0.2, 1.0, r)); // transom churn
         float I = contact * (0.55 + 0.45 * speedK) + (crest * 1.1 + body * 0.7 + churn) * speedK;
         vec2 p = vWorld.xz;
         float n1 = texture2D(foamMap, p * 0.045 + vec2(time * 0.011, time * 0.007)).r;
@@ -609,6 +609,7 @@ export class ShipFX {
         this.time = 0;
         this.env = { time: 0, light: new THREE.Color(1, 1, 1), fogColor: new THREE.Color(), fogDensity: 0, fade: 1, sunK: 1 };
         this.enabled = true;
+        this.underMats = new Set();
     }
 
     add(ship, layout = null) {
@@ -625,6 +626,12 @@ export class ShipFX {
             geom: shipGeom(ship, layout),
         };
         this.entries.set(ship, e);
+        // undersides (material "Under"): the scene's hemisphere/IBL light them with the land's green ground
+        // colour; over open sea they really get the sea's blue bounce light, added here as a small emissive
+        if (ship.mesh) ship.mesh.traverse(o => {
+            if (!o.isMesh) return;
+            for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (m && m.name === 'Under' && m.emissive) this.underMats.add(m);
+        });
     }
 
     remove(ship) {
@@ -658,6 +665,7 @@ export class ShipFX {
         const fog = game && game.scene && game.scene.fog;
         if (fog) { env.fogColor.copy(fog.color); env.fogDensity = fog.density || 0; }
         const sunDir = (world && world.sunDir) || _v.set(0.3, 0.8, 0.2);
+        for (const m of this.underMats) m.emissive.setRGB(0.032, 0.058, 0.085).multiplyScalar(Math.min(env.light.b, 1.5));
         const fx = game && game.effects;
         for (const [ship, e] of this.entries) {
             const sinking = ship.alive === false ? Math.min(1, (ship.sinkT || 0) / 25) : 0;

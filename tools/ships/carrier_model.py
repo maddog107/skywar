@@ -31,6 +31,11 @@ material('Dark', srgb(0x2c2f32), 0.2, 0.7)
 material('White', srgb(0xdadddd), 0.05, 0.45)
 material('Glass', srgb(0x1a2631), 0.5, 0.12)
 material('Yellow', srgb(0xc9a227), 0.1, 0.6)
+# undersides: lit mostly by light bounced off the sea, so a cooler grey than the sunlit paint
+material('Under', srgb(0x74879a), 0.04, 0.7)
+material('NavRed', srgb(0xff2020), 0.0, 0.5, emit=srgb(0xff2020), emit_strength=5.0)
+material('NavGreen', srgb(0x20ff50), 0.0, 0.5, emit=srgb(0x20ff50), emit_strength=5.0)
+material('NavWhite', srgb(0xffffff), 0.0, 0.5, emit=srgb(0xfff4e0), emit_strength=5.0)
 material('Lamp', srgb(0xffa040), 0.0, 0.5, emit=srgb(0xffa040), emit_strength=6.0)
 material('Datum', srgb(0x50ff80), 0.0, 0.5, emit=srgb(0x50ff80), emit_strength=4.0)
 
@@ -122,7 +127,7 @@ for p in deck_poly:
     if not dp or abs(dp[-1][0] - p[0]) > 1e-3 or abs(dp[-1][1] - p[1]) > 1e-3:
         dp.append(p)
 deck_poly = dp
-S.prism(deck_poly, C.GALLERY_Y, DY, 'Deck', 'Hull', 'Super', uv_top=deck_uv, uv_side=hull_uv)
+S.prism(deck_poly, C.GALLERY_Y, DY, 'Deck', 'Hull', 'Under', uv_top=deck_uv, uv_side=hull_uv)
 
 elev_polys = []
 for (x0, x1, z0, z1) in C.ELEVATORS:
@@ -131,7 +136,7 @@ for (x0, x1, z0, z1) in C.ELEVATORS:
     else:
         poly = [(x0, z0), (x1, z0), (x1, z1), (x0, z1)]
     elev_polys.append(poly)
-    S.prism(poly, DY - 0.75, DY, 'Deck', 'Super', 'Dark', uv_top=deck_uv)
+    S.prism(poly, DY - 0.75, DY, 'Deck', 'Super', 'Under', uv_top=deck_uv)
     # hangar-bay opening in the hull side behind the elevator
     side = 1 if x0 > 0 else -1
     hx = side * 21.06
@@ -142,7 +147,7 @@ for (x0, x1, z0, z1) in C.ELEVATORS:
         S.box('Super', hx - 0.35 if side > 0 else hx - 0.05, hx + 0.05 if side > 0 else hx + 0.35, C.HANGAR_Y - 0.5, DY - 0.75, zz - 0.3, zz + 0.3)
 
 x0, x1, z0, z1 = C.ISLAND_SPONSON
-S.prism([(x0, z0), (x1, z0), (x1, z1), (x0, z1)], C.GALLERY_Y, DY, 'Deck', 'Hull', 'Super', uv_top=deck_uv, uv_side=hull_uv)
+S.prism([(x0, z0), (x1, z0), (x1, z1), (x0, z1)], C.GALLERY_Y, DY, 'Deck', 'Hull', 'Under', uv_top=deck_uv, uv_side=hull_uv)
 S.box('Super', x0, x1 - 0.5, 12.6, C.GALLERY_Y, z0 + 2, z1 - 2)
 
 # fantail opening in the transom, forecastle opening under the bow overhang
@@ -158,7 +163,7 @@ for zz in range(-60, 152, 6):
     ea, eb = min(ea, -21.0), min(eb, -21.0)
     # sloped underside from the hull side (y 11.5) out to the sponson's outer wall (y 13.2)
     pts = [(-20.8, 11.4, za), (ea, 13.2, za), (eb, 13.2, zb), (-20.8, 11.4, zb)]
-    S.g('Super').face(pts, None, (0, -1, 0))
+    S.g('Under').face(pts, None, (0, -1, 0))
     S.g('Super').face([(ea, 13.2, za), (ea, C.GALLERY_Y, za), (eb, C.GALLERY_Y, zb), (eb, 13.2, zb)], None, (-1, 0, 0))
 for zz in range(-40, 152, 12):
     e = C.edge_at(C.PORT_EDGE, zz)
@@ -201,7 +206,7 @@ for i, (typ, mx, mz) in enumerate(C.MOUNTS):
     xin = inner
     S.g('Super').face([(xin, C.GALLERY_Y - 0.7, mz - 4.2), (outer, C.GALLERY_Y - 0.7, mz - 4.2), (xin, C.GALLERY_Y - 5.5, mz - 2.0)], None, (0, 0, -1))
     S.g('Super').face([(xin, C.GALLERY_Y - 0.7, mz + 4.2), (outer, C.GALLERY_Y - 0.7, mz + 4.2), (xin, C.GALLERY_Y - 5.5, mz + 2.0)], None, (0, 0, 1))
-    S.g('Super').face([(outer, C.GALLERY_Y - 0.7, mz - 4.2), (outer, C.GALLERY_Y - 0.7, mz + 4.2), (xin, C.GALLERY_Y - 5.5, mz + 2.0), (xin, C.GALLERY_Y - 5.5, mz - 2.0)], None, (side, -1, 0))
+    S.g('Under').face([(outer, C.GALLERY_Y - 0.7, mz - 4.2), (outer, C.GALLERY_Y - 0.7, mz + 4.2), (xin, C.GALLERY_Y - 5.5, mz + 2.0), (xin, C.GALLERY_Y - 5.5, mz - 2.0)], None, (side, -1, 0))
     # railing round the platform
     for (pa, pb) in (((outer, mz - 4.2), (outer, mz + 4.2)), ((inner, mz - 4.2), (outer, mz - 4.2)), ((inner, mz + 4.2), (outer, mz + 4.2))):
         S.beam('Dark', (pa[0], C.GALLERY_Y + 1.0, pa[1]), (pb[0], C.GALLERY_Y + 1.0, pb[1]), 0.07)
@@ -365,6 +370,11 @@ for k in range(6):
     S.box('Lamp', C.LA_STERN_X - 0.18, C.LA_STERN_X + 0.18, y - 0.18, y + 0.18, 160.0, 160.1)
 S.box('Dark', -7.0, 7.0, 16.2, 17.2, 159.98, 160.02)
 S.beam('Super', (C.LA_STERN_X, 12.4, 159.8), (C.LA_STERN_X, C.GALLERY_Y, 159.8), 0.3)
+
+# navigation lights: sidelights on the bridge wings, masthead light on the mast
+S.box('NavRed', 11.25, 11.6, 31.4, 31.8, 13.0, 13.5)
+S.box('NavGreen', 26.4, 26.75, 31.4, 31.8, 13.0, 13.5)
+S.box('NavWhite', MX - 0.2, MX + 0.2, 57.2, 57.6, MZ - 1.3, MZ - 0.9)
 
 # ═════════════ Deck gear ═════════════
 # raised jet blast deflector behind cat 1 (three hinged panels leaning aft)

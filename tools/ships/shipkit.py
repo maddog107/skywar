@@ -40,6 +40,7 @@ MATS = {}
 def material(name, color, metal=0.1, rough=0.6, image=None, emit=None, emit_strength=1.0):
     m = bpy.data.materials.new(name)
     m.use_nodes = True
+    m.use_backface_culling = True   # glTF doubleSided = false: single-sided faces, no self-shadowing decks
     nt = m.node_tree
     b = nt.nodes['Principled BSDF']
     b.inputs['Base Color'].default_value = (*color, 1)

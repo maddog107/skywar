@@ -293,6 +293,6 @@ layout constants (deck outline, elevators, wires, cats, mounts, parked aircraft)
 `tools/ships/carrier_layout.py`; the Blender script writes them into the GLB's root `extras.skywar`, which
 naval.js and shipfx.js read, so the game follows any change to the layout without code edits.
 
-Model stats: carrier ≈ 19.5k triangles (static 18.7k + radars + 5 turrets), 1.6 MB (1024×4096 deck
-texture); destroyer ≈ 13.5k triangles, 0.75 MB. After `mergeStatic` a carrier is ~36 draw calls including
+Model stats: carrier 20.2k triangles (static 18.4k + 2 radars + 5 turrets), 1.6 MB (1024×4096 deck
+texture); destroyer 13.9k triangles, 0.75 MB. After `mergeStatic` a carrier is ~36 draw calls including
 the six parked jets.

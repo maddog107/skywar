@@ -26,6 +26,10 @@ material('Dark', srgb(0x2c2f32), 0.2, 0.7)
 material('White', srgb(0xdadddd), 0.05, 0.45)
 material('Glass', srgb(0x1a2631), 0.5, 0.12)
 material('Array', srgb(0x5d646b), 0.1, 0.55)
+material('Under', srgb(0x74879a), 0.04, 0.7)
+material('NavRed', srgb(0xff2020), 0.0, 0.5, emit=srgb(0xff2020), emit_strength=5.0)
+material('NavGreen', srgb(0x20ff50), 0.0, 0.5, emit=srgb(0x20ff50), emit_strength=5.0)
+material('NavWhite', srgb(0xffffff), 0.0, 0.5, emit=srgb(0xfff4e0), emit_strength=5.0)
 
 L = 155.0
 BOW, STERN = -77.5, 77.5
@@ -209,6 +213,10 @@ for k in range(1, 8):
     x = -5.3 + k * 10.6 / 8
     S.box('Super', x - 0.06, x + 0.06, 18.6, 20.1, -24.12, -24.02)
 tilted_block(4.2, 3.9, 20.6, 22.4, -20.0, -8.0)
+# navigation lights on the bridge wings and the mast
+S.box('NavRed', -9.55, -9.2, 17.85, 18.2, -21.0, -20.5)
+S.box('NavGreen', 9.2, 9.55, 17.85, 18.2, -21.0, -20.5)
+S.box('NavWhite', -0.18, 0.18, 38.6, 38.95, -9.95, -9.6)
 
 # ── mast: raked tripod with yards, the SPS-67 surface radar ("radar") and a pole top ──
 MT = (0.0, 36.0, -9.5)
