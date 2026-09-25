@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Browser flight combat simulator built with three.js",
   "scripts": {
-    "start": "node server.mjs"
+    "start": "node server.mjs",
+    "test": "node --test tests/"
   }
 }

@@ -6,8 +6,9 @@
   uncommitted.
 - Work on the `skywar-2` branch. After committing, push it (`git push origin skywar-2`), then
   fast-forward `main` to it and push `main` too.
-- Before committing, check every source file parses (`for f in src/*.js; do node --check $f; done`)
-  and that the game starts in the browser without console errors.
+- Before committing, check every source file parses (`for f in src/*.js; do node --check $f; done`),
+  the test suite passes (`node --test tests/`, see tests/README.md) and the game starts in the browser
+  without console errors.
 - Write a short, descriptive commit message listing what changed.
 
 ## Engine
