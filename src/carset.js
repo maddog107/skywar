@@ -8,16 +8,61 @@
 import * as THREE from 'three';
 import { propParts } from './props.js';
 import { liftWithDistance } from './roads.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 export const CAR_TYPES = [
-    { id: 'car_sedan', weight: 5, paint: 'Blue' },
-    { id: 'car_hatch', weight: 4, paint: 'LightBlue' },
-    { id: 'car_suv', weight: 4, paint: 'White' },
-    { id: 'car_sports', weight: 1.2, paint: 'White' },
-    { id: 'car_sports2', weight: 0.6, paint: null },
-    { id: 'car_taxi', weight: 0.9, paint: null },
-    { id: 'car_police', weight: 0.4, paint: null },
+    { id: 'car_sedan', weight: 5, paint: 'Blue', len: 4.7 },
+    { id: 'car_hatch', weight: 4, paint: 'LightBlue', len: 4.1 },
+    { id: 'car_suv', weight: 4, paint: 'White', len: 4.9 },
+    { id: 'car_sports', weight: 1.2, paint: 'White', len: 4.5 },
+    { id: 'car_sports2', weight: 0.6, paint: null, len: 4.4 },
+    { id: 'car_taxi', weight: 0.9, paint: null, len: 4.8 },
+    { id: 'car_police', weight: 0.4, paint: null, len: 4.8 },
+    // built here (no model): town buses and box lorries, only in the traffic
+    { id: 'bus', weight: 0.35, paint: 'Paint', len: 11.8, make: () => busParts(), big: true },
+    { id: 'truck', weight: 0.6, paint: 'Paint', len: 9.6, make: () => truckParts(), big: true },
 ];
+export const PAINTS_BUS = [0xc8302a, 0x2a62b8, 0xe8b72c, 0xf0f0ea, 0x2f8a4a];
+
+// Procedural big vehicles, facing -Z, wheels on y = 0. Parts by material: the paint (instance colour), dark glass,
+// black (tyres, bumpers), light grey trim.
+const _mats = {};
+const vmat = (name, color, rough = 0.6, metal = 0.2) => _mats[name] || (_mats[name] = new THREE.MeshStandardMaterial({ name, color, roughness: rough, metalness: metal }));
+function vparts(spec) {
+    const by = new Map();
+    for (const [mat, w, h, d, x, y, z, cyl] of spec) {
+        const g = cyl ? new THREE.CylinderGeometry(w, w, h, 10) : new THREE.BoxGeometry(w, h, d);
+        if (cyl) g.rotateZ(Math.PI / 2);
+        g.translate(x, y, z);
+        const ng = g.toNonIndexed();
+        if (!by.has(mat)) by.set(mat, []);
+        by.get(mat).push(ng);
+    }
+    return [...by].map(([mat, geos]) => ({ geometry: mergeGeometries(geos), material: mat }));
+}
+function wheels(xs, zs, r = 0.5) { const out = []; for (const x of xs) for (const z of zs) out.push([vmat('Black', 0x1c1c1e, 0.9, 0), r, 0.4, 0, x, r, z, true]); return out; }
+function busParts() {
+    const paint = vmat('Paint', 0xffffff, 0.45, 0.3), glass = vmat('Glass', 0x1d2630, 0.15, 0.6), trim = vmat('Trim', 0xcfd2d4, 0.5, 0.4);
+    return vparts([
+        [paint, 2.5, 2.4, 11.6, 0, 1.75, 0],          // body
+        [glass, 2.54, 0.95, 10.4, 0, 2.2, 0.3],       // side windows
+        [glass, 2.3, 1.2, 0.1, 0, 2.0, -5.82],        // windscreen
+        [trim, 2.4, 0.25, 11.2, 0, 3.05, 0],          // roof
+        [trim, 1.6, 0.3, 3, 0, 3.3, 2.5],             // roof pod
+        [vmat('Black', 0x1c1c1e, 0.9, 0), 2.52, 0.3, 11.7, 0, 0.62, 0],
+        ...wheels([-1.15, 1.15], [-3.9, 3.6]),
+    ]);
+}
+function truckParts() {
+    const paint = vmat('Paint', 0xffffff, 0.45, 0.3), glass = vmat('Glass', 0x1d2630, 0.15, 0.6), box = vmat('Box', 0xe4e4e0, 0.7, 0.1);
+    return vparts([
+        [paint, 2.4, 2.1, 2.3, 0, 1.75, -3.55],       // cab
+        [glass, 2.2, 0.8, 0.1, 0, 2.3, -4.72],        // windscreen
+        [box, 2.5, 2.9, 6.9, 0, 2.35, 1.2],           // cargo box
+        [vmat('Black', 0x1c1c1e, 0.9, 0), 2.2, 0.35, 9.2, 0, 0.75, -0.1], // chassis
+        ...wheels([-1.1, 1.1], [-3.4, 2.2, 3.6]),
+    ]);
+}
 export const PAINTS = [0xd8d8d8, 0x1d3f8a, 0xb01e1e, 0x202225, 0xe0b43a, 0x2e6b3a, 0x7a7f86, 0xf0f0ea, 0x5a2d82, 0xc85a1e, 0x2a8fbd, 0x8a2433, 0x9aa3a8, 0x3b3b3b];
 
 // fallback when the models aren't available: the old box car
@@ -29,9 +74,9 @@ function boxParts() {
 }
 
 export class CarSet {
-    constructor(parent, n, rng = Math.random, { castShadow = false, allowSpecial = true, onRoad = false } = {}) {
+    constructor(parent, n, rng = Math.random, { castShadow = false, allowSpecial = true, onRoad = false, big = false } = {}) {
         this.n = n;
-        const types = CAR_TYPES.filter(t => allowSpecial || t.paint);
+        const types = CAR_TYPES.filter(t => (allowSpecial || t.paint) && (big || !t.big));
         const total = types.reduce((a, t) => a + t.weight, 0);
         this.slots = [];
         const counts = new Map();
@@ -50,7 +95,7 @@ export class CarSet {
         this.byType = new Map();
         this.slots.forEach((sl, i) => { if (!this.byType.has(sl.type)) this.byType.set(sl.type, []); this.byType.get(sl.type).push(i); });
         for (const [t, count] of counts) {
-            const parts = propParts(t.id) || boxParts();
+            const parts = (t.make ? t.make() : propParts(t.id)) || boxParts();
             const list = [];
             for (const pt of parts) {
                 const isPaint = t.paint ? pt.material.name === t.paint : false;

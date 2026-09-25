@@ -1,9 +1,11 @@
 // ═══════════════════════════════════════════════════════════════
 // Scheduled air traffic at Miramar and Harbor International.
-// Arrivals fly a 3° glide path to the touchdown zone, flare, roll out, turn off
-// and taxi to a parking spot; departures wait at the hold line (giving way to
-// landing traffic), line up, roll, rotate and climb out. Purely scripted
-// (kinematic) so dozens of movements cost almost nothing.
+// Arrivals fly a 3° glide path to the touchdown zone (spaced at least 6 km
+// apart), flare, roll out, turn off and taxi to a free stand; after a
+// turnaround there they taxi out again as a departure: along the taxiway to
+// the hold line, wait for landing traffic, line up, roll, rotate and climb
+// out. Taxiing aircraft stop for one another. Purely scripted (kinematic) so
+// dozens of movements cost almost nothing.
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
 import { BASES, runwayInfo, runwayNumbers, baseToWorld, worldToBase, terrainHeight } from './world.js';
@@ -44,16 +46,11 @@ class Flight {
     constructor(sys, ap, type, kind, rwIdx) {
         this.sys = sys; this.ap = ap; this.type = type; this.kind = kind;
         this.b = ap.base;
-        this.rw = this.b.runways[rwIdx];
         this.perf = PERF[type];
         this.mesh = makeParkedModel(type);
         this.gear = this.mesh.children[1];
         sys.scene.add(this.mesh);
-        const R = runwayInfo(this.b, this.rw), dir = ap.dir;
-        this.fwd = new THREE.Vector3(R.dirX * dir, 0, R.dirZ * dir);
-        this.thr = new THREE.Vector3(R.x, this.b.h, R.z).addScaledVector(this.fwd, -R.half);
-        this.end = new THREE.Vector3(R.x, this.b.h, R.z).addScaledVector(this.fwd, R.half);
-        this.touch = this.thr.clone().addScaledVector(this.fwd, 380);
+        this.setRunway(rwIdx);
         this.pos = new THREE.Vector3();
         this.yaw = Math.atan2(-this.fwd.x, -this.fwd.z);
         this.pitch = 0; this.bank = 0; this.speed = 0;
@@ -68,23 +65,80 @@ class Flight {
         this.name = AIRCRAFT[type].name;
         registerAirTarget(this);
         if (kind === 'arrival') {
-            const d = rand(9000, 14000);
+            // behind whoever is already on the approach, 6 km at least
+            let d = rand(9000, 14000);
+            for (const f of sys.flights) if (f.ap === ap && f.rw === this.rw && f.state === 'approach') d = Math.max(d, f.distToTouch() + 6000);
             this.pos.copy(this.touch).addScaledVector(this.fwd, -d);
             this.pos.y = this.b.h + d * Math.tan(GS);
             this.speed = this.perf.vapp;
             this.state = 'approach';
             this.gear.visible = true;
         } else {
-            // at the hold line beside the departure threshold, on the taxiway side
-            const side = this.sideVector();
-            const hold = this.thr.clone().addScaledVector(this.fwd, 60).addScaledVector(side, this.rw.w / 2 + 70);
-            this.pos.copy(hold);
-            this.yaw = Math.atan2(side.x, side.z); // facing the runway
-            this.state = 'hold';
-            this.holdT = rand(4, 10);
+            // a departure starts on a stand and taxis out
+            const st = ap.freeStand();
+            if (st) {
+                st.by = this; this.stand = st;
+                const q = baseToWorld(this.b, st.lx, st.lz);
+                this.pos.set(q.x, this.b.h, q.z);
+                this.yaw = Math.PI / 2 - this.b.heading; // nose toward the taxiway (-x local)
+                this.taxiOut();
+            } else {
+                const hold = this.holdPoint();
+                this.pos.copy(hold);
+                this.yaw = Math.atan2(this.side.x, this.side.z); // facing the runway
+                this.state = 'hold';
+                this.holdT = rand(4, 10);
+            }
             this.gear.visible = true;
         }
         this.place();
+    }
+
+    // the runway in use (landing and departing the same way, into the wind the airport picked)
+    setRunway(rwIdx) {
+        this.rw = this.b.runways[rwIdx];
+        const R = runwayInfo(this.b, this.rw), dir = this.ap.dir;
+        this.fwd = new THREE.Vector3(R.dirX * dir, 0, R.dirZ * dir);
+        this.thr = new THREE.Vector3(R.x, this.b.h, R.z).addScaledVector(this.fwd, -R.half);
+        this.end = new THREE.Vector3(R.x, this.b.h, R.z).addScaledVector(this.fwd, R.half);
+        this.touch = this.thr.clone().addScaledVector(this.fwd, 380);
+        this.side = this.sideVector();
+    }
+
+    // too close behind another arrival: power up, climb away and leave the pattern
+    goAround() {
+        this.state = 'climb'; this.climbT = 25; this.kind = 'departure';
+        this.pitch = 0.1;
+        this.sys.goArounds = (this.sys.goArounds || 0) + 1;
+    }
+
+    // the hold line beside the departure threshold, on the taxiway side
+    holdPoint() { return this.thr.clone().addScaledVector(this.fwd, 60).addScaledVector(this.side, this.rw.w / 2 + 70); }
+
+    // from the stand: out onto the parallel taxiway, along it to the hold line
+    taxiOut() {
+        const b = this.b, w = (lx, lz) => { const q = baseToWorld(b, lx, lz); return new THREE.Vector3(q.x, b.h, q.z); };
+        const hold = this.holdPoint(), hl = worldToBase(b, hold.x, hold.z), here = worldToBase(b, this.pos.x, this.pos.z);
+        // outbound traffic keeps to its own lane along the apron edge, so it never meets an arrival head-on on the
+        // taxiway; it crosses over to the hold line at the end
+        const lane = this.ap.outX;
+        this.route = [w(here.lx - 40, here.lz), w(lane, here.lz + Math.sign(hl.lz - here.lz) * 30), w(lane, hl.lz - Math.sign(hl.lz - here.lz) * 40), hold];
+        this.state = 'taxiout';
+        this.kind = 'departure';
+        this.speed = 0;
+    }
+
+    // someone taxiing, holding or lining up just ahead of us: stop and wait. Returns 'queue' behind a holding
+    // aircraft (wait as long as it takes), 'traffic' for a moving one, or null
+    blocked() {
+        const fx = -Math.sin(this.yaw), fz = -Math.cos(this.yaw);
+        for (const f of this.sys.flights) {
+            if (f === this || f.ap !== this.ap || !f.alive || !(f.state === 'taxi' || f.state === 'taxiout' || f.state === 'hold' || f.state === 'lineup')) continue;
+            const dx = f.pos.x - this.pos.x, dz = f.pos.z - this.pos.z, d = Math.hypot(dx, dz);
+            const room = (this.radius + f.radius) * 1.2 + 15;
+            if (d < room && (dx * fx + dz * fz) > d * 0.5) return f.state === 'hold' || f.state === 'lineup' ? 'queue' : 'traffic';
+        }
+        return null;
     }
 
     // unit vector from the runway toward the apron side (+x of the base)
@@ -138,6 +192,15 @@ class Flight {
         switch (this.state) {
             case 'approach': {
                 const d = this.distToTouch();
+                // spacing: a faster jet closing on a slower one ahead slows to its speed (never below its own stall margin)
+                let want = P.vapp;
+                for (const f of this.sys.flights) {
+                    if (f === this || f.ap !== this.ap || f.rw !== this.rw || f.state !== 'approach' || !f.alive) continue;
+                    const gap = d - f.distToTouch();
+                    if (gap > 0 && gap < 4500) want = Math.max(P.vapp * 0.82, Math.min(want, f.speed));
+                    if (gap > 0 && gap < 1500 && this.speed > f.speed + 2 && d > 800) { this.goAround(); return; }
+                }
+                this.speed += clamp(want - this.speed, -1.5 * dt, 1.5 * dt);
                 this.pos.addScaledVector(this.fwd, this.speed * dt);
                 const glide = b.h + Math.max(0, d) * Math.tan(GS);
                 this.pos.y = d > 60 ? glide : lerp(b.h, glide, clamp(d / 60, 0, 1));
@@ -154,7 +217,9 @@ class Flight {
                 if (this.speed <= 11.5 || along > this.rw.len - 350) {
                     // turn off toward the apron and taxi to a parking spot
                     // runway → the parallel taxiway → along it → into the parking spot
-                    const here = worldToBase(b, this.pos.x, this.pos.z), spot = this.ap.spotLocal();
+                    const st = this.ap.freeStand();
+                    if (st) { st.by = this; this.stand = st; }
+                    const here = worldToBase(b, this.pos.x, this.pos.z), spot = st ? { lx: st.lx, lz: st.lz } : this.ap.spotLocal();
                     const tx = this.ap.taxiX;
                     const w = (lx, lz) => { const q = baseToWorld(b, lx, lz); return new THREE.Vector3(q.x, b.h, q.z); };
                     this.route = [w(tx, here.lz + Math.sign(spot.lz - here.lz) * 40), w(tx, spot.lz), w(spot.lx - 40, spot.lz), w(spot.lx, spot.lz)];
@@ -162,14 +227,34 @@ class Flight {
                 }
                 break;
             }
-            case 'taxi': {
+            case 'taxi': case 'taxiout': {
                 const tgt = this.route[0];
-                const d = this.steerTo(tgt, dt, this.route.length === 1 ? Math.min(8, tgt.distanceTo(this.pos) * 0.4) : 10);
-                if (d < 8) { this.route.shift(); if (!this.route.length) { this.state = 'parked'; this.parkT = rand(30, 70); this.speed = 0; } }
+                // wait for traffic ahead (but not for ever: nose to nose, someone has to go)
+                const why = this.blocked();
+                const stop = why === 'queue' || (why && (this.blockT = (this.blockT || 0) + dt) < 25);
+                if (!stop) this.blockT = 0;
+                const want = stop ? 0 : this.route.length === 1 ? Math.min(8, tgt.distanceTo(this.pos) * 0.4 + 1) : 10;
+                const d = this.steerTo(tgt, dt, want);
+                if (d < 8) {
+                    this.route.shift();
+                    if (this.route.length === 3 && this.state === 'taxiout' && this.stand) { this.stand.by = null; this.stand = null; } // off the stand
+                    if (!this.route.length) {
+                        if (this.state === 'taxi') { this.state = 'parked'; this.parkT = rand(40, 90); this.speed = 0; }
+                        else { this.state = 'hold'; this.holdT = rand(3, 8); this.speed = 0; this.yaw = Math.atan2(this.side.x, this.side.z); }
+                    }
+                }
                 this.pos.y = b.h;
                 break;
             }
-            case 'parked': this.parkT -= dt; if (this.parkT <= 0) this.done = true; break;
+            case 'parked': {
+                // turnaround done: taxi out and depart (or make way if the airport's busy)
+                this.parkT -= dt;
+                if (this.parkT <= 0) {
+                    if (this.sys.flights.filter(f => f.ap === this.ap && f.kind === 'departure' && f.alive).length < 2) { this.setRunway(this.ap.depRw); this.taxiOut(); }
+                    else this.parkT = rand(10, 20);
+                }
+                break;
+            }
             case 'hold': {
                 this.holdT -= dt;
                 if (this.holdT <= 0 && !this.sys.runwayBusy(this)) {
@@ -218,6 +303,7 @@ class Flight {
     }
 
     remove() {
+        if (this.stand && this.stand.by === this) this.stand.by = null;
         unregisterAirTarget(this);
         this.sys.scene.remove(this.mesh);
         // the model's geometry and materials are shared; only the light sprites' materials are this flight's own
@@ -242,9 +328,15 @@ class Airport {
         for (const [id, w] of this.types) { r -= w; if (r <= 0) return id; }
         return this.types[0][0];
     }
-    // the parallel taxiway, and a parking spot on the apron (base-local)
+    // the parallel taxiway, and the stands for visiting aircraft on the apron (base-local, clear of the parked rows)
     get taxiX() { return this.base.layout === 'civil' ? 180 : -60; }
+    get outX() { return this.base.layout === 'civil' ? 250 : 20; }
     spotLocal() { return this.base.layout === 'civil' ? { lx: 330, lz: rand(-1260, -1150) } : { lx: 470, lz: rand(1060, 1160) }; }
+    freeStand() {
+        if (!this.stands) this.stands = this.base.layout === 'civil' ? [-1130, -1200, -1270].map(lz => ({ lx: 330, lz, by: null })) : [1050, 1100, 1150, 1200].map(lz => ({ lx: 470, lz, by: null }));
+        const free = this.stands.filter(s => !s.by || !s.by.alive || s.by.done);
+        return free.length ? free[Math.floor(Math.random() * free.length)] : null;
+    }
 }
 
 export class AirTraffic {
@@ -275,11 +367,22 @@ export class AirTraffic {
         };
     }
 
-    spawn(ap, kind) {
+    spawn(ap, kind, type = ap.pickType()) {
         const rwIdx = kind === 'arrival' ? ap.arrRw : ap.depRw;
-        const f = new Flight(this, ap, ap.pickType(), kind, rwIdx);
+        const f = new Flight(this, ap, type, kind, rwIdx);
         this.flights.push(f);
         return f;
+    }
+
+    // would an arrival of this type catch up with someone slower already on the approach? (then it waits)
+    tooClose(ap, type) {
+        const v = PERF[type].vapp;
+        for (const f of this.flights) {
+            if (f.ap !== ap || f.state !== 'approach' || !f.alive || f.speed >= v) continue;
+            const d = f.distToTouch(), t = d / f.speed; // the slow one lands in t seconds
+            if (d + 6000 + t * (v - f.speed) > 15000) return true;
+        }
+        return false;
     }
 
     // departures wait while someone is landing on (or rolling out along) the same runway
@@ -297,10 +400,12 @@ export class AirTraffic {
             ap.nextT -= dt;
             const mine = this.flights.filter(f => f.ap === ap && !f.done);
             if (ap.nextT <= 0 && mine.length < 5) {
-                const kind = ap.lastKind === 'arrival' ? 'departure' : 'arrival';
-                ap.lastKind = kind;
-                this.spawn(ap, kind);
-                ap.nextT = rand(35, 70);
+                // mostly arrivals (they turn round and leave again); a departure now and then if the stands are empty
+                const deps = mine.filter(f => f.kind === 'departure').length;
+                const kind = deps === 0 && Math.random() < 0.4 ? 'departure' : 'arrival', type = ap.pickType();
+                if (kind === 'arrival' && this.tooClose(ap, type)) { ap.nextT = 10; continue; } // sequencing: try again shortly
+                this.spawn(ap, kind, type);
+                ap.nextT = rand(40, 75);
             }
         }
         for (let i = this.flights.length - 1; i >= 0; i--) {
