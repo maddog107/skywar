@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { fbm, ridged, smoothstep, lerp, clamp, mulberry32, DEG, makeRadialTexture, freezeStatic } from './util.js';
 import { TIMES } from './config.js';
 import { Clouds } from './clouds.js';
+import { Vegetation, SP, GROUND_GLSL } from './vegetation.js';
 
 // ═══════════════════════════════════════════════════════════════
 // Global shader patches (applied once at import, before anything compiles)
@@ -240,72 +241,10 @@ const FAR_SHADOW = 1500; // half-size of the far shadow cascade (m)
 const GRASS = { layers: [{ cell: 0.5, n: 72, scale: 1 }, { cell: 1.5, n: 100, scale: 1.25 }], tex: 48, texel: 5, recentre: 20 };
 const _sx = new THREE.Vector3(), _sy = new THREE.Vector3(), _sc = new THREE.Vector3(), _fc = new THREE.Vector3(), _v1 = new THREE.Vector3();
 
-// ── Tree models ──
-// Every tree shape is built here, in one place, so they can be swapped for loaded models later. Contract:
-// non-indexed BufferGeometry with position / normal / color, trunk base at y = 0, roughly life size
-// (pine ~18 m, broadleaf ~12 m, bush ~2.5 m) before the per-instance scale of 0.6-1.5.
-export function makeTreeGeometries() {
-    const col = new THREE.Color();
-    // parts: { geo, color, ao: [y0, y1] (darker toward y0), radial: centre (soft blob normals) }
-    const bake = (parts) => {
-        const P = [], N = [], C = [];
-        for (const pt of parts) {
-            const g = pt.geo.index ? pt.geo.toNonIndexed() : pt.geo;
-            const p = g.attributes.position.array, n = g.attributes.normal.array;
-            col.set(pt.color);
-            for (let i = 0; i < p.length; i += 3) {
-                const x = p[i], y = p[i + 1], z = p[i + 2];
-                let nx = n[i], ny = n[i + 1], nz = n[i + 2];
-                if (pt.radial) {
-                    nx = x - pt.radial[0]; ny = (y - pt.radial[1]) * 1.4; nz = z - pt.radial[2];
-                    const l = Math.hypot(nx, ny, nz) || 1; nx /= l; ny /= l; nz /= l;
-                }
-                const ao = pt.ao ? lerp(0.5, 1.12, smoothstep(pt.ao[0], pt.ao[1], y)) : 1;
-                P.push(x, y, z); N.push(nx, ny, nz); C.push(col.r * ao, col.g * ao, col.b * ao);
-            }
-        }
-        const out = new THREE.BufferGeometry();
-        out.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
-        out.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3));
-        out.setAttribute('color', new THREE.Float32BufferAttribute(C, 3));
-        out.computeBoundingSphere();
-        return out;
-    };
-    const trunk = (h, r0) => { const g = new THREE.CylinderGeometry(r0 * 0.6, r0, h, 6, 1, true); g.translate(0, h / 2, 0); return g; };
-    // a lumpy crown: a displaced icosphere (identical positions move alike, so it stays closed)
-    const crown = (rad, detail, cx, cy, cz, sy, seed) => {
-        const g = new THREE.IcosahedronGeometry(rad, detail);
-        const p = g.attributes.position;
-        for (let i = 0; i < p.count; i++) {
-            const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
-            const k = 1 + 0.16 * Math.sin(x * 1.3 + y * 0.8 + seed) * Math.sin(z * 1.1 - y * 0.9 + seed * 2.0) + 0.08 * Math.sin(x * 2.9 - z * 2.3 + seed);
-            p.setXYZ(i, cx + x * k, cy + y * k * sy, cz + z * k);
-        }
-        return g;
-    };
-    const tiers = [[4.8, 8, 7.5], [3.9, 7, 11.5], [2.8, 6, 15.2], [1.6, 4, 18]];
-    const pine = bake([
-        { geo: trunk(6, 0.55), color: 0x4a3525 },
-        ...tiers.map(([r, h, y], i) => {
-            const c = new THREE.ConeGeometry(r, h, 8, 1, true);
-            c.translate(0, y, 0);
-            return { geo: c, color: i > 1 ? 0x2d5a34 : 0x234a2b, ao: [y - h / 2, y + h / 2] };
-        }),
-    ]);
-    const broadleaf = bake([
-        { geo: trunk(6.5, 0.5), color: 0x4f3a28 },
-        { geo: crown(4.6, 1, 0, 8.8, 0, 0.82, 1.3), color: 0x3a5f2a, ao: [5.2, 12.5], radial: [0, 8.8, 0] },
-        { geo: crown(2.8, 0, 1.9, 11.2, 0.6, 0.85, 4.1), color: 0x44692e, ao: [8.5, 13.5], radial: [1.9, 11.2, 0.6] },
-    ]);
-    const bush = bake([
-        { geo: crown(1.9, 0, 0, 1.3, 0, 0.62, 2.7), color: 0x465f2c, ao: [0.2, 2.6], radial: [0, 0.9, 0] },
-        { geo: crown(1.3, 0, 1.2, 1.0, 0.5, 0.7, 5.3), color: 0x557631, ao: [0.2, 2.2], radial: [1.2, 0.8, 0.5] },
-    ]);
-    return { pine, broadleaf, bush };
-}
-
+// a tile's trees: one impostor mesh (vegetation.js); older builds used a group of InstancedMeshes
 function disposeTrees(g) {
     if (!g) return;
+    if (g.isMesh && !g.isInstancedMesh) { g.geometry.dispose(); return; }
     for (const m of g.isInstancedMesh ? [g] : g.children) m.dispose();
 }
 
@@ -499,6 +438,7 @@ export class World {
         }
         this.applyWeather(P);
         this.palette = P;
+        this.veg.uniforms.vegSun.value.copy(this.sunDir); // impostor trees look their shadows up toward the sun
         this.fogColor.copy(P.horizon);
         this.scene.fog.color.copy(P.horizon);
         this.scene.fog.density = P.fogDensity;
@@ -629,17 +569,25 @@ export class World {
             if (this.sunFar.shadow.map) { this.sunFar.shadow.map.dispose(); this.sunFar.shadow.map = null; }
         }
         this.treeShadows = !low;
-        // 'low' plants one kind of tree (one draw call per tile, as before); rebuild the tree tiles on a switch
+        // 'low' plants fewer trees; rebuild the tree tiles on a switch
         if (this.lowTrees !== low) { this.lowTrees = low; this.refreshTrees(); }
         this.clouds.setQuality(q); // cheaper cloud march on lower settings
-        for (const t of this.tiles.values()) if (t.trees) for (const m of t.trees.children) m.castShadow = this.treeShadows && m.geometry !== this.treeGeos.bush;
+        for (const t of this.tiles.values()) if (t.trees) t.trees.castShadow = this.treeShadows;
+        // alpha-to-coverage where the scene is multisampled (ultra, see postfx QUALITY), dithered alpha test otherwise
+        for (const m of [this.forestMat, this.treeMat, this.grassMat]) if (m) this.veg.setA2C(m, q === 'ultra');
+        if (!low) this.veg.loadGround(); // photo ground detail
         this.terrainDetail.value = low ? 0 : 1;
         // 'low' compiles the terrain without close-up detail, bump, rock strata and surf
         if (('TERRAIN_LOW' in this.terrainMat.defines) !== low) {
             if (low) this.terrainMat.defines.TERRAIN_LOW = ''; else delete this.terrainMat.defines.TERRAIN_LOW;
             this.terrainMat.needsUpdate = true;
         }
-        this.grassOn = q === 'high';
+        // 'medium': photo ground detail without its normal maps
+        if (('GROUND_LITE' in this.terrainMat.defines) !== (q === 'medium')) {
+            if (q === 'medium') this.terrainMat.defines.GROUND_LITE = ''; else delete this.terrainMat.defines.GROUND_LITE;
+            this.terrainMat.needsUpdate = true;
+        }
+        this.grassOn = q === 'high' || q === 'ultra';
         this.setFogEdge();
     }
 
@@ -822,6 +770,7 @@ export class World {
             shader.uniforms.uDesat = this.terrainDesat;
             shader.uniforms.uTime = this.uTime;
             shader.uniforms.uDetail = this.terrainDetail;
+            Object.assign(shader.uniforms, this.veg.groundU); // photo ground textures (vegetation.js)
             shader.vertexShader = shader.vertexShader
                 .replace('#include <common>', `#include <common>
                     attribute vec4 morph; // previous LOD: height, normal x, normal z, start time
@@ -848,13 +797,7 @@ export class World {
                     // the sea bed doesn't get shadows (a ship's shadow would show through the water)
                     float seaFade(float s) { return mix(s, 1.0, smoothstep(-0.5, -4.0, vWPos.y)); }
                     #define SHADOW_FADE( s ) seaFade( s )
-                    // bump from a height (m) that varies per pixel (Mikkelsen's surface gradient, unnormalised)
-                    vec3 terrBump(vec3 pos, vec3 n, vec2 dH) {
-                        vec3 dpx = dFdx(pos), dpy = dFdy(pos);
-                        vec3 r1 = cross(dpy, n), r2 = cross(n, dpx);
-                        float det = dot(dpx, r1);
-                        return normalize(abs(det) * n - sign(det) * (dH.x * r1 + dH.y * r2));
-                    }`)
+                    ${GROUND_GLSL}`)
                 .replace('#include <color_fragment>', `#include <color_fragment>
                     vec3 tN = normalize(vWN);
                     float tSlope = 1.0 - tN.y, tH = vWPos.y;
@@ -903,30 +846,46 @@ export class World {
                         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.82, 0.85, 0.86), foamBand * smoothstep(0.35, 0.75, fn + swash * 0.22) * 0.85);
                     }
                     #endif
-                    // close-up detail
-                    float nearF = uDetail * (1.0 - smoothstep(350.0, 800.0, tDist));
-                    float tBump = 0.0;
+                    // close-up detail: photo ground textures (meadow, dry grass, dirt, rock, sand, snow), each at two
+                    // scales mixed so neither repeat shows, as a ratio around the ground's own colour, with normal maps
+                    float nearF = uDetail * gReady * (1.0 - smoothstep(420.0, 1100.0, tDist));
+                    vec2 gNrm = vec2(0.0);
                     #ifndef TERRAIN_LOW
                     if (nearF > 0.0) {
-                        vec4 g1 = textureGrad(groundMap, wxz / 9.0, pdx.xz / 9.0, pdy.xz / 9.0);
-                        vec4 g2 = textureGrad(groundMap, wxz / 37.0, pdx.xz / 37.0, pdy.xz / 37.0);
-                        float rk = mix(textureGrad(groundMap, vWPos.xy / 11.0, pdx.xy / 11.0, pdy.xy / 11.0).g,
-                                       textureGrad(groundMap, vWPos.zy / 11.0, pdx.zy / 11.0, pdy.zy / 11.0).g, sideX);
-                        float gr = g1.r * 0.65 + g2.r * 0.35;
                         float wr = rockW, ws = sandW, wn = snowW * (1.0 - sandW), wg = max(1.0 - wr - ws - wn, 0.0);
-                        float det = (gr * wg + rk * wr + g1.b * ws + g2.b * wn) / max(wg + wr + ws + wn, 1e-3);
-                        float amp = 0.36 * wg + 0.42 * wr + 0.18 * ws + 0.1 * wn;
-                        diffuseColor.rgb *= mix(1.0, 1.0 + (det - 0.5) * 2.0 * amp, nearF);
-                        // bump only where a texel is no bigger than a pixel: magnified, its slope steps texel by texel
-                        float magF = smoothstep(0.006, 0.02, length(pdx) + length(pdy));
-                        tBump = (det - 0.5) * nearF * magF * (0.09 * wg + 0.35 * wr + 0.03 * ws + 0.05 * wn);
+                        float dryK = clamp((1.0 - smoothstep(0.3, 0.7, dm)) * 0.8 + smoothstep(320.0, 700.0, tH), 0.0, 1.0);
+                        float dirtK = smoothstep(0.64, 0.8, texture2D(groundMap, wxz / 230.0 + 0.61).a) * 0.85;
+                        float gw[6];
+                        gw[0] = wg * (1.0 - dryK) * (1.0 - dirtK); gw[1] = wg * dryK * (1.0 - dirtK); gw[2] = wg * dirtK;
+                        gw[3] = wr; gw[4] = ws; gw[5] = wn;
+                        float mixK = 0.3 + 0.4 * smoothstep(0.25, 0.75, texture2D(groundMap, wxz / 61.0 + 0.23).a);
+                        float nearN = nearF * (1.0 - smoothstep(150.0, 480.0, tDist));
+                        vec3 gc = vec3(0.0); float gs = 0.0;
+                        for (int i = 0; i < 6; i++) {
+                            if (gw[i] < 0.03) continue;
+                            vec3 c = vec3(1.0);
+                            // rock on steep faces is projected from the side (by the face's main direction), not stretched from above
+                            float sideW = i == 3 ? smoothstep(0.3, 0.5, tSlope) : 0.0;
+                            if (sideW < 1.0) c = groundLayer(i, wxz, pdx.xz, pdy.xz, mixK, nearN * (1.0 - sideW), gw[i] * (1.0 - sideW), gNrm);
+                            if (sideW > 0.0) {
+                                vec2 dummy = vec2(0.0);
+                                vec3 cs = sideX > 0.5 ? groundLayer(i, vWPos.zy, pdx.zy, pdy.zy, mixK, 0.0, 0.0, dummy)
+                                                      : groundLayer(i, vWPos.xy, pdx.xy, pdy.xy, mixK, 0.0, 0.0, dummy);
+                                c = mix(c, cs, sideW);
+                            }
+                            gc += c * gw[i];
+                            gs += gw[i];
+                        }
+                        gc /= max(gs, 1e-3);
+                        gNrm *= nearN / max(gs, 1e-3);
+                        diffuseColor.rgb *= mix(vec3(1.0), clamp(gc, 0.0, 3.0), nearF * 0.9);
                     }
                     #endif
-                    vec2 tdH = vec2(dFdx(tBump), dFdy(tBump));
                     diffuseColor.rgb = mix(diffuseColor.rgb, vec3(dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11))), uDesat);`)
                 .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
                     #ifndef TERRAIN_LOW
-                    normal = terrBump(-vViewPosition, normal, tdH);
+                    // the photo textures' normal maps (tangent u = +x, v = -z)
+                    normal = normalize(normal + (viewMatrix * vec4(gNrm.x, 0.0, -gNrm.y, 0.0)).xyz);
                     #endif`);
         };
         this.TILE = 2048;
@@ -1219,50 +1178,20 @@ export class World {
     }
 
     // ── Trees ──
-    // Shapes come from makeTreeGeometries() (module level). Forest tiles mix pines, broadleaf trees and bushes,
-    // each tinted per instance; they sway in the wind and dither out with distance instead of popping.
+    // Photoscanned impostors (vegetation.js): each forest tile is one instanced mesh of camera-facing cards,
+    // every species in it (conifers up high and on slopes, broadleaf trees in the valleys, saplings and shrubs
+    // at the edges, the odd tree in the open); they sway in the wind, fade in when a tile first gets them and
+    // dither out with distance instead of popping.
     initTreeAssets() {
-        this.treeGeos = makeTreeGeometries();
-        this.forestMat = this.makeTreeMaterial(3100, 4200);
-        // towns.js plants park and street trees with treeGeo / treeMat (their meshes are culled at 12 km)
-        this.treeGeo = this.treeGeos.broadleaf;
-        this.treeMat = this.makeTreeMaterial(9000, 11500);
+        this.veg = new Vegetation(this.renderer, { uTime: this.uTime, uWind: this.uWind });
+        const forest = this.veg.makeMaterial(3100, 4300, 'forest');
+        this.forestMat = forest.mat;
+        this.forestDepth = forest.depth;
+        // towns.js plants park and street trees with treeGeo / treeMat (an InstancedMesh per town, culled at 12 km)
+        this.treeGeo = this.veg.townGeometry();
+        this.treeMat = this.veg.makeMaterial(9000, 11500, 'town').mat;
         this.treeShadows = true;
         this.lowTrees = false; // set by setQuality()
-    }
-
-    makeTreeMaterial(fadeNear, fadeFar) {
-        const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 });
-        m.onBeforeCompile = (sh) => {
-            sh.uniforms.uTime = this.uTime;
-            sh.uniforms.uWind = this.uWind;
-            sh.uniforms.uFade = { value: new THREE.Vector2(fadeNear, fadeFar) };
-            sh.vertexShader = sh.vertexShader
-                .replace('#include <common>', '#include <common>\nuniform float uTime; uniform vec3 uWind;')
-                .replace('#include <begin_vertex>', `#include <begin_vertex>
-                    #ifdef USE_INSTANCING
-                    {   // sway: bends more toward the top, gusts roll across the forest, each tree in its own phase
-                        vec3 tp = instanceMatrix[3].xyz;
-                        float ph = dot(tp.xz, vec2(0.071, 0.053));
-                        float gust = 0.55 + 0.45 * sin(uTime * 0.37 - dot(tp.xz, vec2(0.004, 0.003)));
-                        float bend = uWind.y * 0.0016 * position.y * position.y;
-                        vec3 wd = vec3(uWind.x, 0.0, uWind.z);
-                        vec3 disp = wd * bend * (0.55 * gust + 0.25 * sin(uTime * 1.7 + ph)) + vec3(-wd.z, 0.0, wd.x) * bend * 0.18 * sin(uTime * 2.9 + ph * 1.9);
-                        mat3 im = mat3(instanceMatrix);
-                        transformed += transpose(im) * disp / max(dot(im[0], im[0]), 1e-4);
-                    }
-                    #endif`);
-            sh.fragmentShader = sh.fragmentShader
-                .replace('#include <common>', '#include <common>\nuniform vec2 uFade;')
-                .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
-                    {   // dithered fade with distance, so trees never pop in or out with the terrain tiles
-                        float fadeF = 1.0 - smoothstep(uFade.x, uFade.y, length(vViewPosition));
-                        float dn = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
-                        if (dn > fadeF) discard;
-                    }`);
-        };
-        m.customProgramCacheKey = () => 'tree:' + fadeNear + ':' + fadeFar;
-        return m;
     }
 
     // Rebuild tree tiles (after towns/roads exist, so no trees grow on them): the old trees stay up until
@@ -1281,75 +1210,105 @@ export class World {
     buildTrees(tx, tz) { return runJob(this.treesJob(tx, tz)); }
 
     *treesJob(tx, tz) {
-        const T = this.TILE;
+        const T = this.TILE, low = this.lowTrees;
         const r = mulberry32((tx * 73856093) ^ (tz * 19349663));
-        const lists = [[], [], []]; // pine, broadleaf, bush: { m: Matrix4, c: Color }
-        let total = 0;
-        const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3();
-        const up = new THREE.Vector3(0, 1, 0);
-        for (let i = 0; i < 1400 && total < 650; i++) {
-            if ((i & 63) === 63) yield;
-            const x = (tx + r()) * T, z = (tz + r()) * T;
-            const forest = fbm(x * 0.0006 + 40, z * 0.0006 - 12, 3);
-            if (forest < 0.05 + r() * 0.15) continue;
-            const h = terrainHeight(x, z);
-            if (h < 10 || h > 900) continue;
-            if (this.blockTree && this.blockTree(x, z)) continue; // roads, streets and buildings
-            let near = false;
-            for (const b of BASES) if (Math.hypot(x - b.x, z - b.z) < b.r * 1.15) near = true;
-            if (near) continue;
-            const e = 8;
-            const slope = Math.abs(terrainHeight(x + e, z) - h) + Math.abs(terrainHeight(x, z + e) - h);
-            if (slope > 7) continue;
-            // pines take over higher up, bushes fill the thin edges of the forest
-            const pineP = 0.4 + 0.55 * smoothstep(120, 520, h);
-            const bushP = forest < 0.12 ? 0.4 : 0.12;
-            const u = r();
-            const kind = this.lowTrees ? 0 : u < bushP ? 2 : u < bushP + (1 - bushP) * pineP ? 0 : 1;
-            const sc = kind === 2 ? 0.6 + r() * 0.8 : 0.7 + r() * 0.8;
-            q.setFromAxisAngle(up, r() * 6.28);
-            s.set(sc, sc * (0.85 + r() * 0.4), sc);
-            p.set(x, h - (kind === 2 ? 0.4 : 1), z);
-            // per-tree tint: brightness and a little yellowing
-            const v = 0.78 + r() * 0.42, yl = r() * (kind === 0 ? 0.12 : 0.3);
-            lists[kind].push({ m: m.compose(p, q, s).clone(), c: new THREE.Color(v * (1 + yl * 0.7), v * (1 + yl * 0.3), v * (1 - yl * 0.5)) });
-            total++;
+        // the forest noise (as the ground is painted, see colorAt) on a coarse grid, interpolated per tree
+        const FG = 32, fs = T / FG, FV = new Float32Array((FG + 1) * (FG + 1));
+        for (let j = 0; j <= FG; j++) for (let i = 0; i <= FG; i++) FV[j * (FG + 1) + i] = fbm((tx * T + i * fs) * 0.0006 + 40, (tz * T + j * fs) * 0.0006 - 12, 3);
+        yield;
+        // candidates on a jittered grid, at most one tree per cell
+        const N = low ? 96 : 150, cell = T / N;
+        const P = [], D = [];
+        const ds = { h: 0, ny: 1 };
+        let minY = Infinity, maxY = -Infinity, maxH = 0;
+        for (let j = 0; j < N; j++) {
+            if ((j & 3) === 3) yield;
+            for (let i = 0; i < N; i++) {
+                const x = (tx * N + i + r()) * cell, z = (tz * N + j + r()) * cell, u = r();
+                // closed forest where the ground is painted as forest, thinning out at its edges; the odd tree in the open
+                const gx = (x - tx * T) / fs, gz = (z - tz * T) / fs, gi = Math.min(Math.floor(gx), FG - 1), gj = Math.min(Math.floor(gz), FG - 1);
+                const a = gx - gi, b = gz - gj, k = gj * (FG + 1) + gi;
+                const fv = (FV[k] * (1 - a) + FV[k + 1] * a) * (1 - b) + (FV[k + FG + 1] * (1 - a) + FV[k + FG + 2] * a) * b;
+                const dens = smoothstep(0.03, 0.22, fv);
+                if (u > Math.max(dens * 0.95, 0.009)) continue;
+                const h = terrainHeight(x, z);
+                if (h < 6 || h > 1020) continue;
+                if (this.blockTree && this.blockTree(x, z)) continue; // roads, streets and buildings
+                let near = false;
+                for (const b of BASES) if (Math.abs(x - b.x) < b.r * 1.15 && Math.abs(z - b.z) < b.r * 1.15 && Math.hypot(x - b.x, z - b.z) < b.r * 1.15) near = true;
+                if (near) continue;
+                this.drawnSample(x, z, ds); // the ground as drawn: its slope, and the trees stand on it
+                const grad = Math.sqrt(Math.max(1 - ds.ny * ds.ny, 0)) / Math.max(ds.ny, 0.1);
+                if (grad > 0.78 || (grad > 0.45 && r() < (grad - 0.45) * 3)) continue; // not on rock faces
+                // conifers take over with height and on slopes, in patches; broadleaf trees fill the valleys
+                const patch = fbm(x * 0.0021 + 7.3, z * 0.0021 - 3.1, 2);
+                const pc = h > 760 ? 1 : clamp(0.1 + smoothstep(140, 540, h) * 0.9 + patch * 0.7 + (grad - 0.25) * 0.7, 0, 1);
+                const edge = dens < 0.55, v = r(), w = r();
+                let sp, H;
+                if (dens <= 0) { // lone trees in the open
+                    sp = w < 0.45 ? SP.OAK : w < 0.8 ? SP.BIRCH : w < 0.92 ? SP.SHRUB : SP.FIR_A;
+                } else if (edge && v < 0.45) { // saplings, shrubs and young trees at the edges
+                    sp = r() < pc ? SP.SAPLING : w < 0.6 ? SP.SHRUB : SP.BIRCH;
+                } else if (r() < pc) {
+                    sp = w < 0.4 ? SP.FIR_A : w < 0.7 ? SP.FIR_B : w < 0.94 ? SP.FIR_C : SP.SAPLING;
+                } else {
+                    sp = w < 0.5 ? SP.OAK : w < 0.9 ? SP.BIRCH : SP.SHRUB;
+                }
+                const g = r();
+                switch (sp) {
+                    case SP.FIR_A: H = 18 + g * 11; break;
+                    case SP.FIR_B: case SP.FIR_C: H = 14 + g * 10; break;
+                    case SP.SAPLING: H = 1.8 + g * 3.5; break;
+                    case SP.OAK: H = 10 + g * 7; break;
+                    case SP.BIRCH: H = (edge ? 6 : 9) + g * 8; break;
+                    default: H = 2.6 + g * 3.4; // shrub
+                }
+                if (edge && sp !== SP.SAPLING && sp !== SP.SHRUB) H *= 0.8;
+                H *= lerp(1, 0.5, smoothstep(780, 1020, h)); // stunted toward the tree line
+                // stand on the ground as drawn (or a little into it), never above it
+                const y = Math.min(h, ds.h) - 0.3;
+                P.push(x, y, z, H);
+                D.push(r() * 6.2832, sp, 0.82 + r() * 0.36, 0);
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+                if (H > maxH) maxH = H;
+            }
         }
-        if (!total) return null;
-        const g = new THREE.Group();
-        const geos = [this.treeGeos.pine, this.treeGeos.broadleaf, this.treeGeos.bush];
-        lists.forEach((list, k) => {
-            if (!list.length) return;
-            const inst = new THREE.InstancedMesh(geos[k], this.forestMat, list.length);
-            list.forEach((o, i) => { inst.setMatrixAt(i, o.m); inst.setColorAt(i, o.c); });
-            inst.castShadow = !!this.treeShadows && k !== 2;
-            inst.receiveShadow = true;
-            inst.computeBoundingSphere();
-            inst.matrixAutoUpdate = false;
-            g.add(inst);
-        });
-        g.matrixAutoUpdate = false;
-        return g;
+        const n = P.length / 4;
+        if (!n) return null;
+        // a tile that had no trees yet fades them in; a rebuilt one swaps them at once
+        const t = this.tiles.get(this.tileKey(tx, tz));
+        const born = t && t.trees ? -1e4 : this.time;
+        for (let k = 3; k < D.length; k += 4) D[k] = born;
+        const geo = this.veg.cardGeometry(true);
+        geo.setAttribute('iPos', new THREE.InstancedBufferAttribute(new Float32Array(P), 4));
+        geo.setAttribute('iData', new THREE.InstancedBufferAttribute(new Float32Array(D), 4));
+        geo.instanceCount = n;
+        const cy = (minY + maxY + maxH) / 2;
+        geo.boundingSphere = new THREE.Sphere(new THREE.Vector3((tx + 0.5) * T, cy, (tz + 0.5) * T), Math.hypot(T * 0.72, (maxY + maxH - minY) / 2 + 10));
+        const mesh = new THREE.Mesh(geo, this.forestMat);
+        mesh.customDepthMaterial = this.forestDepth;
+        mesh.castShadow = !!this.treeShadows;
+        mesh.receiveShadow = true;
+        mesh.matrixAutoUpdate = false;
+        mesh.matrixWorldAutoUpdate = false;
+        return mesh;
     }
 
-    // ── Grass: clumps of blades in a ring around the camera when it is low (on foot, taxiing, low passes) ──
+    // ── Grass: photoscanned grass tussocks and ferns in a ring around the camera when it is low (on foot,
+    // taxiing, low passes) ──
     // Two toroidal grids of instances follow the camera (a dense one close in, a coarser one out to ~90 m);
-    // the vertex shader places each clump on its world cell, so blades stay put as the camera moves. Ground
-    // height (the drawn terrain), a grass mask (no grass on water, sand, rock, snow, roads, buildings or
-    // airfields) and the ground colour come from small textures around the camera, refreshed as it moves.
+    // the vertex shader places each plant on its world cell, so it stays put as the camera moves. Each is a
+    // camera-facing card with one of the baked views of the grass or fern impostor atlas (vegetation.js); ferns
+    // grow in and near the forests. Ground height (the drawn terrain), a grass mask (no grass on water, sand,
+    // rock, snow, roads, buildings or airfields), a forest mask and the ground colour come from small textures
+    // around the camera, refreshed as it moves; the plants take the ground's colour, so they match the terrain.
     initGrass() {
         const G = GRASS;
-        const blades = [];
-        const r = mulberry32(51);
-        for (let b = 0; b < 7; b++) {
-            const a = r() * Math.PI * 2, d = Math.sqrt(r()) * 0.4, h = 0.3 + r() * 0.4, w = 0.022 + r() * 0.02, lean = (r() - 0.5) * 0.6, rot = r() * Math.PI;
-            const cx = Math.cos(a) * d, cz = Math.sin(a) * d, ux = Math.cos(rot) * w, uz = Math.sin(rot) * w;
-            const tx = cx + Math.cos(rot + 1.57) * lean * h, tz = cz + Math.sin(rot + 1.57) * lean * h;
-            blades.push(cx - ux, 0, cz - uz, cx + ux, 0, cz + uz, tx, h, tz);
-        }
         const geo = new THREE.InstancedBufferGeometry();
-        geo.setAttribute('position', new THREE.Float32BufferAttribute(blades, 3));
-        geo.setAttribute('normal', new THREE.Float32BufferAttribute(new Array(blades.length).fill(0).map((v, i) => (i % 3 === 1 ? 1 : 0)), 3));
+        geo.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0], 3));
+        geo.setAttribute('normal', new THREE.Float32BufferAttribute([0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0], 3));
+        geo.setIndex([0, 1, 2, 1, 3, 2]);
         const cells = [];
         G.layers.forEach((L, li) => { for (let j = 0; j < L.n; j++) for (let i = 0; i < L.n; i++) cells.push(i, j, li); });
         geo.setAttribute('gi', new THREE.InstancedBufferAttribute(new Float32Array(cells), 3));
@@ -1361,9 +1320,10 @@ export class World {
             grassH: { value: this.grassH }, grassC: { value: this.grassC }, grassO: { value: new THREE.Vector3(1e9, 0, 1e9) },
             grassFade: { value: 0 }, detailMap: { value: this.detailTex },
         };
-        const mat = new THREE.MeshStandardMaterial({ roughness: 0.95, side: THREE.DoubleSide });
+        const mat = new THREE.MeshStandardMaterial({ roughness: 0.95 });
         mat.onBeforeCompile = (sh) => {
-            Object.assign(sh.uniforms, this.grassU, { uTime: this.uTime, uWind: this.uWind });
+            const VU = this.veg.uniforms;
+            Object.assign(sh.uniforms, this.grassU, { uTime: this.uTime, uWind: this.uWind, vegAtlas: VU.vegAtlas, vegA: VU.vegA, vegB: VU.vegB, vegMip: VU.vegMip });
             sh.vertexShader = sh.vertexShader
                 .replace('#include <common>', `#include <common>
                     attribute vec3 gi;
@@ -1371,7 +1331,8 @@ export class World {
                     uniform vec3 grassO; // texture origin x, z and texel size (m)
                     uniform float grassFade, uTime;
                     uniform vec3 uWind;
-                    varying vec3 vGrassCol; varying float vGrassY;
+                    uniform vec4 vegA[${SP.FERN + 1}], vegB[${SP.FERN + 1}];
+                    varying vec3 vGrassCol, vGUv; varying float vGrassY;
                     float gHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
                     vec4 gTex(sampler2D t, vec2 xz) { // manual bilinear (float textures)
                         vec2 f = (xz - grassO.xz) / grassO.y - 0.5;
@@ -1395,28 +1356,59 @@ export class World {
                         float s = hm.g * grassFade * (1.0 - smoothstep(outer * 0.6, outer * 0.95, dist));
                         if (L.w > 0.5) s *= smoothstep(${(G.layers[0].cell * G.layers[0].n * 0.3).toFixed(1)}, ${(G.layers[0].cell * G.layers[0].n * 0.45).toFixed(1)}, dist);
                         s *= L.z * (0.7 + 0.6 * gHash(wc + 3.7));
-                        float ang = gHash(wc + 9.1) * 6.2832;
-                        vec2 cs = vec2(cos(ang), sin(ang));
-                        vec3 p = vec3(position.x * cs.x - position.z * cs.y, position.y, position.x * cs.y + position.z * cs.x) * s;
+                        // ferns in and near the forests, grass tussocks elsewhere
+                        bool fern = gHash(wc + 11.3) < 0.015 + 0.2 * hm.b;
+                        int sp = fern ? ${SP.FERN} : ${SP.GRASS};
+                        vec4 A = vegA[sp], B = vegB[sp];
+                        float H = (fern ? 0.36 : 0.62) * s;
+                        // a card facing the camera, showing the baked view nearest to the direction it's seen from
+                        vec2 toC = cameraPosition.xz - xz;
+                        float hl = length(toC);
+                        vec2 dh = hl > 1e-4 ? toC / hl : vec2(0.0, 1.0);
+                        float yaw = gHash(wc + 9.1) * 6.2832, cy = cos(yaw), sy = sin(yaw);
+                        vec2 loc = vec2(dh.x * cy - dh.y * sy, dh.x * sy + dh.y * cy);
+                        float k = floor(mod(atan(loc.x, loc.y) * 1.2732395 + 8.5, 8.0));
+                        float fx = mix(B.x, B.y, position.x), fy = mix(B.z, B.w, position.y);
+                        float x = (fx - 0.5) * A.x * H, y = (fy - A.z) * A.x * H;
+                        vec3 p = vec3(dh.y, 0.0, -dh.x) * x + vec3(0.0, max(y, 0.0), 0.0);
                         // wind: tips bend with the gusts
-                        float bend = p.y * p.y * (0.25 + 0.2 * uWind.y) * (0.6 + 0.4 * sin(uTime * 2.3 + dot(xz, vec2(0.21, 0.17))));
+                        float bend = p.y * p.y * (0.25 + 0.2 * uWind.y) * (0.6 + 0.4 * sin(uTime * 2.3 + dot(xz, vec2(0.21, 0.17)))) / max(H, 0.05);
                         p.xz += vec2(uWind.x, uWind.z) * bend;
-                        transformed = vec3(xz.x, hm.r - 0.05, xz.y) + p;
-                        vGrassY = position.y / 0.7;
-                        // the ground's own colour and broad variation, so the grass matches the terrain under it
+                        transformed = vec3(xz.x, hm.r - 0.06, xz.y) + p;
+                        if (s < 0.02) transformed = vec3(0.0, -1e5, 0.0); // no plant here: off screen
+                        vGUv = vec3((mod(k, 3.0) + fx) / 3.0, (2.0 - floor(k / 3.0) + fy) / 3.0, float(sp));
+                        vGrassY = clamp(y / max(H, 1e-3), 0.0, 1.0);
+                        // the ground's own colour and broad variation, so the plants match the terrain under them
                         vec3 gc = gTex(grassC, xz).rgb;
                         gc *= mix(0.84, 1.14, texture2D(detailMap, xz / 460.0).r) * mix(0.86, 1.1, texture2D(detailMap, xz / 3100.0).r);
                         gc *= mix(vec3(1.12, 1.05, 0.74), vec3(0.86, 1.0, 1.05), smoothstep(0.3, 0.7, texture2D(detailMap, xz / 1300.0 + 0.37).r)) * 0.85 + 0.15;
-                        vGrassCol = gc * (0.85 + 0.3 * gHash(wc + 5.3));
+                        // (divided by the atlas' own mean colour: its texture becomes variation around the ground's)
+                        vGrassCol = gc * (0.85 + 0.3 * gHash(wc + 5.3)) / (fern ? vec3(0.116, 0.16, 0.057) : vec3(0.233, 0.222, 0.138));
                     }`);
             sh.fragmentShader = sh.fragmentShader
-                .replace('#include <common>', '#include <common>\nvarying vec3 vGrassCol; varying float vGrassY;')
+                .replace('#include <common>', `#include <common>
+                    uniform highp sampler2DArray vegAtlas;
+                    uniform float vegMip;
+                    varying vec3 vGrassCol, vGUv; varying float vGrassY;`)
+                .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
+                    vec4 gT = texture(vegAtlas, vGUv);
+                    {   // alpha scaled up in the mips so thin blades keep their coverage
+                        vec2 px = dFdx(vGUv.xy) * 1024.0, py = dFdy(vGUv.xy) * 1024.0;
+                        gT.a *= 1.0 + max(0.5 * log2(max(dot(px, px), dot(py, py))), 0.0) * vegMip;
+                    }
+                    #ifdef VEG_A2C
+                        diffuseColor.a = clamp((gT.a - 0.5) / max(fwidth(gT.a), 1e-4) + 0.5, 0.0, 1.0);
+                        if (diffuseColor.a < 0.02) discard;
+                    #else
+                        if (gT.a < 0.5) discard;
+                    #endif`)
                 .replace('#include <color_fragment>', `#include <color_fragment>
-                    diffuseColor.rgb *= vGrassCol * mix(0.6, 1.25, vGrassY);`)
+                    diffuseColor.rgb = pow(gT.rgb, vec3(2.2)) * vGrassCol * mix(0.55, 1.15, vGrassY);`)
                 .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
                     normal = normalize(vNormal);`);
         };
-        mat.customProgramCacheKey = () => 'grass';
+        mat.customProgramCacheKey = () => 'grass' + (mat.alphaToCoverage ? ':a2c' : '');
+        this.grassMat = mat;
         this.grass = new THREE.Mesh(geo, mat);
         this.grass.frustumCulled = false;
         this.grass.receiveShadow = true;
@@ -1482,6 +1474,7 @@ export class World {
                     if (l.lx > f.x0 - 10 && l.lx < f.x1 + 10 && l.lz > f.z0 - 10 && l.lz < f.z1 + 10) m = 0;
                 }
                 H[k] = h; H[k + 1] = m;
+                H[k + 2] = m > 0 ? smoothstep(0.03, 0.22, fbm(x * 0.0006 + 40, z * 0.0006 - 12, 3)) : 0; // forest (ferns)
                 this.colorAt(x, h, z, ny, col, 0);
                 C[k] = col[0]; C[k + 1] = col[1]; C[k + 2] = col[2];
             }
@@ -1710,6 +1703,7 @@ export class World {
         const fog = this.scene.fog;
         const cam = camera.position;
         this.uTime.value = this.time;
+        this.veg.uniforms.vegCam.value.copy(cam); // trees fade with distance from the camera (also in the shadow passes)
         this.starMat.uniforms.time.value = this.time;
         this.starMat.uniforms.pr.value = this.renderer.getPixelRatio();
         const wu = this.waterMat.uniforms;
