@@ -39,6 +39,52 @@ export function outsideBases(x, z, margin = FENCE_MARGIN) {
     return null;
 }
 
+// Does the segment a→b pass through the (grown) fenced area of base b? (Liang–Barsky in base-local coords)
+function crossesBox(la, lb, box) {
+    const [x0, x1, z0, z1] = box;
+    let t0 = 0, t1 = 1;
+    const dx = lb.lx - la.lx, dz = lb.lz - la.lz;
+    for (const [p, q] of [[-dx, la.lx - x0], [dx, x1 - la.lx], [-dz, la.lz - z0], [dz, z1 - la.lz]]) {
+        if (Math.abs(p) < 1e-9) { if (q < 0) return false; continue; }
+        const r = q / p;
+        if (p < 0) { if (r > t1) return false; if (r > t0) t0 = r; }
+        else { if (r < t0) return false; if (r < t1) t1 = r; }
+    }
+    return t1 - t0 > 1e-4;
+}
+// Last line of defence: a road segment that still cuts across a base (and its runways) is sent round the
+// fence via the one or two corners that make the shortest detour.
+function detourAroundBases(samples, margin) {
+    for (let guard = 0, k = 0; k + 1 < samples.length && guard < 400; k++) {
+        const a = samples[k], c = samples[k + 1];
+        if (a.lead || c.lead) continue; // a gate lead-in is meant to meet the fence
+        for (const b of BASES) {
+            const F = fenceOf(b), m = margin - 2;
+            const box = [F.x0 - m, F.x1 + m, F.z0 - m, F.z1 + m];
+            const la = worldToBase(b, a.x, a.z), lc = worldToBase(b, c.x, c.z);
+            if (!crossesBox(la, lc, box)) continue;
+            const g = [F.x0 - margin, F.x1 + margin, F.z0 - margin, F.z1 + margin];
+            const corners = [[g[0], g[2]], [g[1], g[2]], [g[1], g[3]], [g[0], g[3]]].map(([lx, lz]) => ({ lx, lz }));
+            const len = (pts) => pts.reduce((s, q, i) => i ? s + Math.hypot(q.lx - pts[i - 1].lx, q.lz - pts[i - 1].lz) : 0, 0);
+            const ok = (pts) => pts.every((q, i) => !i || !crossesBox(pts[i - 1], q, box));
+            let best = null, bl = Infinity;
+            for (let i = 0; i < 4; i++) {
+                for (const route of [[corners[i]], [corners[i], corners[(i + 1) % 4]], [corners[i], corners[(i + 3) % 4]]]) {
+                    const pts = [la, ...route, lc];
+                    if (!ok(pts)) continue;
+                    const L = len(pts);
+                    if (L < bl) { bl = L; best = route; }
+                }
+            }
+            if (!best) continue;
+            const ins = best.map(q => { const w = baseToWorld(b, q.lx, q.lz), h = terrainHeight(w.x, w.z); return { x: w.x, z: w.z, h, kind: h < 1 ? 'water' : 'land' }; });
+            samples.splice(k + 1, 0, ...ins);
+            guard++;
+            break;
+        }
+    }
+}
+
 function slopeAt(x, z) {
     const e = 20, h = terrainHeight(x, z);
     return (Math.abs(terrainHeight(x + e, z) - h) + Math.abs(terrainHeight(x, z + e) - h)) / (2 * e);
@@ -618,18 +664,24 @@ export function buildRoads(group, nodes, { heightAt = terrainHeight, avoid = [] 
             }
             prevOut = out;
             const h = terrainHeight(x, z);
-            samples.push({ x, z, h, kind: lead ? 'land' : h < 1 ? 'water' : slopeAt(x, z) > 0.6 ? 'cliff' : 'land' });
+            samples.push({ x, z, h, kind: lead ? 'land' : h < 1 ? 'water' : slopeAt(x, z) > 0.6 ? 'cliff' : 'land', lead });
         });
         // drop samples that bunch up (fence corners, bypasses)
         for (let q = samples.length - 2; q > 0; q--) if (Math.hypot(samples[q].x - samples[q - 1].x, samples[q].z - samples[q - 1].z) < 3) samples.splice(q, 1);
         // round off the corners that pushing round fences and towns leaves (not the port lead-ins, not at water)
         // (the last point of a port lead-in may move, so the bend out of it is rounded too)
         const fixedEnd = (k) => (pa && !pa.branch && k < 3) || (pb && !pb.branch && k > samples.length - 4) || k === 0 || k === samples.length - 1;
+        // Smoothing a path that wraps round a fence corner pulls it back across the base (and its runways),
+        // so every smoothed point is pushed back outside the fence again.
+        const margin = FENCE_MARGIN + (ei % 3) * 24;
         for (let it = 0; it < 5; it++) for (let k = 1; k < samples.length - 1; k++) {
             const a = samples[k - 1], q = samples[k], b = samples[k + 1];
             if (fixedEnd(k) || a.kind !== 'land' || q.kind !== 'land' || b.kind !== 'land') continue;
             q.x = 0.25 * a.x + 0.5 * q.x + 0.25 * b.x; q.z = 0.25 * a.z + 0.5 * q.z + 0.25 * b.z;
+            const back = outsideBases(q.x, q.z, margin);
+            if (back) { q.x = back.x; q.z = back.z; }
         }
+        detourAroundBases(samples, margin);
         // the first road out of a shared port is the one later roads branch off
         if (pa0 && pa0.multi && pa === pa0) pa0.hostRaw = samples;
         if (pb0 && pb0.multi && pb === pb0) pb0.hostRaw = [...samples].reverse();
