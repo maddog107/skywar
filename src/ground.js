@@ -21,6 +21,41 @@ const M = {
     red: new THREE.MeshStandardMaterial({ color: 0x8a2a22, roughness: 0.7 }),
     charred: new THREE.MeshStandardMaterial({ color: 0x151412, roughness: 1 }),
 };
+M.whiteDS = M.white.clone(); M.whiteDS.side = THREE.DoubleSide; // radar dish (seen from behind too)
+
+// Geometry shared by every target (keyed by shape + dimensions), like the materials above:
+// targets are rebuilt every sortie, so nothing here is ever disposed or duplicated.
+const GEO = new Map();
+function geo(key, make) {
+    let g = GEO.get(key);
+    if (!g) GEO.set(key, g = make());
+    return g;
+}
+const boxGeo = (w, h, d) => geo(`box ${w} ${h} ${d}`, () => new THREE.BoxGeometry(w, h, d));
+const cylGeo = (r1, r2, h, seg) => geo(`cyl ${r1} ${r2} ${h} ${seg}`, () => new THREE.CylinderGeometry(r1, r2, h, seg));
+const torusGeo = (r, t, rs, ts) => geo(`torus ${r} ${t} ${rs} ${ts}`, () => new THREE.TorusGeometry(r, t, rs, ts));
+
+// Parked jets: one template per type, cloned (clone(true) shares geometry and materials)
+const parkedTemplates = {};
+function parkedModel(id) {
+    return (parkedTemplates[id] || (parkedTemplates[id] = makeParkedModel(id))).clone(true);
+}
+
+// Target-board face: one texture + material for every board
+let boardMat = null;
+function boardMaterial() {
+    if (boardMat) return boardMat;
+    const c = document.createElement('canvas');
+    c.width = c.height = 128;
+    const ctx = c.getContext('2d');
+    for (let r = 6; r >= 1; r--) {
+        ctx.fillStyle = r % 2 ? '#e8e2d0' : '#c8321e';
+        ctx.beginPath(); ctx.arc(64, 64, r * 10.5, 0, 6.28); ctx.fill();
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return (boardMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.8, side: THREE.DoubleSide }));
+}
 
 const TYPES = {
     sam: { name: 'SAM SITE', hp: 110, radius: 14, score: 300, boom: 1.4 },
@@ -41,13 +76,13 @@ const TYPES = {
 };
 
 function box(w, h, d, mat, x = 0, y = 0, z = 0) {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    const m = new THREE.Mesh(boxGeo(w, h, d), mat);
     m.position.set(x, y + h / 2, z);
     m.castShadow = true; m.receiveShadow = true;
     return m;
 }
 function cyl(r1, r2, h, mat, x = 0, y = 0, z = 0, seg = 12) {
-    const m = new THREE.Mesh(new THREE.CylinderGeometry(r1, r2, h, seg), mat);
+    const m = new THREE.Mesh(cylGeo(r1, r2, h, seg), mat);
     m.position.set(x, y + h / 2, z);
     m.castShadow = true; m.receiveShadow = true;
     return m;
@@ -58,7 +93,7 @@ function buildMesh(type, opts = {}) {
     const parts = {};
     switch (type) {
         case 'parked': {
-            const m = makeParkedModel(opts.model || 'mig29');
+            const m = parkedModel(opts.model || 'mig29');
             m.rotation.y = opts.modelRot || 0;
             g.add(m);
             break;
@@ -68,7 +103,7 @@ function buildMesh(type, opts = {}) {
             g.add(box(3.6, 2, 3, M.olive, 0, 1.2, -4));
             const rack = new THREE.Group();
             for (let i = 0; i < 4; i++) {
-                const t = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 8, 10), M.white);
+                const t = new THREE.Mesh(cylGeo(0.45, 0.45, 8, 10), M.white);
                 t.rotation.x = Math.PI / 2;
                 t.position.set((i % 2 ? 0.55 : -0.55), (i < 2 ? 0 : 1.0), 0);
                 t.castShadow = true;
@@ -79,7 +114,7 @@ function buildMesh(type, opts = {}) {
             g.add(rack);
             parts.rack = rack;
             // sandbag berm
-            const berm = new THREE.Mesh(new THREE.TorusGeometry(11, 1.4, 6, 20), M.sand);
+            const berm = new THREE.Mesh(torusGeo(11, 1.4, 6, 20), M.sand);
             berm.rotation.x = Math.PI / 2; berm.position.y = 0.4; berm.receiveShadow = true;
             g.add(berm);
             break;
@@ -89,14 +124,14 @@ function buildMesh(type, opts = {}) {
             const tur = new THREE.Group();
             tur.add(box(3, 1.6, 3, M.olive, 0, 0, 0));
             for (const s of [-0.6, 0.6]) {
-                const b = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 5, 6), M.dark);
+                const b = new THREE.Mesh(cylGeo(0.15, 0.15, 5, 6), M.dark);
                 b.rotation.x = Math.PI / 2; b.position.set(s, 1.1, -2.5);
                 tur.add(b);
             }
             tur.position.y = 1.2;
             g.add(tur);
             parts.turret = tur;
-            const berm = new THREE.Mesh(new THREE.TorusGeometry(6, 1, 6, 16), M.sand);
+            const berm = new THREE.Mesh(torusGeo(6, 1, 6, 16), M.sand);
             berm.rotation.x = Math.PI / 2; berm.position.y = 0.3;
             g.add(berm);
             break;
@@ -105,8 +140,8 @@ function buildMesh(type, opts = {}) {
             g.add(box(6, 3, 6, M.concrete));
             g.add(cyl(0.8, 1, 10, M.steel, 0, 3, 0, 8));
             const dish = new THREE.Group();
-            const d = new THREE.Mesh(new THREE.SphereGeometry(7, 16, 8, 0, Math.PI * 2, 0, 0.9), M.white);
-            d.rotation.x = -Math.PI / 2 + 0.4; d.material.side = THREE.DoubleSide;
+            const d = new THREE.Mesh(geo('dish', () => new THREE.SphereGeometry(7, 16, 8, 0, Math.PI * 2, 0, 0.9)), M.whiteDS);
+            d.rotation.x = -Math.PI / 2 + 0.4;
             d.castShadow = true;
             dish.add(d);
             dish.position.y = 14;
@@ -115,7 +150,7 @@ function buildMesh(type, opts = {}) {
             break;
         }
         case 'hangar': {
-            const h = new THREE.Mesh(new THREE.CylinderGeometry(20, 20, 50, 16, 1, false, 0, Math.PI), M.concrete);
+            const h = new THREE.Mesh(geo('hangar', () => new THREE.CylinderGeometry(20, 20, 50, 16, 1, false, 0, Math.PI)), M.concrete);
             h.rotation.z = Math.PI / 2; h.rotation.y = Math.PI / 2;
             h.castShadow = true; h.receiveShadow = true;
             g.add(h);
@@ -134,7 +169,7 @@ function buildMesh(type, opts = {}) {
             g.add(box(3.6, 1.4, 7, M.olive, 0, 0.5, 0));
             const tur = new THREE.Group();
             tur.add(box(2.6, 1, 3, M.olive));
-            const b = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 5, 6), M.dark);
+            const b = new THREE.Mesh(cylGeo(0.15, 0.15, 5, 6), M.dark);
             b.rotation.x = Math.PI / 2; b.position.set(0, 0.5, -3.5);
             tur.add(b);
             tur.position.y = 1.9;
@@ -165,7 +200,7 @@ function buildMesh(type, opts = {}) {
                 // truck-mounted SAM: missile rack on the cargo bed
                 g.add(propInstance('m939'));
                 const rack = new THREE.Group();
-                for (let i = 0; i < 4; i++) { const t = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 3.8, 8), M.white); t.rotation.x = Math.PI / 2; t.position.set(-0.9 + i * 0.6, 0, 0); t.castShadow = true; rack.add(t); }
+                for (let i = 0; i < 4; i++) { const t = new THREE.Mesh(cylGeo(0.28, 0.28, 3.8, 8), M.white); t.rotation.x = Math.PI / 2; t.position.set(-0.9 + i * 0.6, 0, 0); t.castShadow = true; rack.add(t); }
                 rack.add(box(2.6, 0.3, 3.9, M.olive, 0, -0.45, 0));
                 const mount = new THREE.Group(); mount.position.set(0, 3.1, 1.8); mount.add(rack); rack.rotation.x = 0.45;
                 g.add(mount);
@@ -177,12 +212,12 @@ function buildMesh(type, opts = {}) {
             const tur = new THREE.Group();
             if (type === 'spaag') {
                 tur.add(box(2.8, 1.3, 3, M.olive));
-                for (const x of [-0.5, 0.5]) { const b = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 4, 6), M.dark); b.rotation.x = Math.PI / 2 - 0.5; b.position.set(x, 1.6, -1.6); tur.add(b); }
+                for (const x of [-0.5, 0.5]) { const b = new THREE.Mesh(cylGeo(0.12, 0.12, 4, 6), M.dark); b.rotation.x = Math.PI / 2 - 0.5; b.position.set(x, 1.6, -1.6); tur.add(b); }
                 const dish = box(1.2, 0.9, 0.2, M.steel, 0, 1.3, 1.3); tur.add(dish);
             } else {
                 tur.add(box(2.4, 0.6, 2.4, M.olive));
                 const rack = new THREE.Group();
-                for (let i = 0; i < 3; i++) { const t = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 4, 8), M.white); t.rotation.x = Math.PI / 2; t.position.set(-0.7 + i * 0.7, 0, 0); rack.add(t); }
+                for (let i = 0; i < 3; i++) { const t = new THREE.Mesh(cylGeo(0.3, 0.3, 4, 8), M.white); t.rotation.x = Math.PI / 2; t.position.set(-0.7 + i * 0.7, 0, 0); rack.add(t); }
                 rack.position.set(0, 1.4, 0); rack.rotation.x = 0.5;
                 tur.add(rack);
                 parts.rack = tur;
@@ -193,16 +228,7 @@ function buildMesh(type, opts = {}) {
             break;
         }
         case 'board': {
-            const c = document.createElement('canvas');
-            c.width = c.height = 128;
-            const ctx = c.getContext('2d');
-            for (let r = 6; r >= 1; r--) {
-                ctx.fillStyle = r % 2 ? '#e8e2d0' : '#c8321e';
-                ctx.beginPath(); ctx.arc(64, 64, r * 10.5, 0, 6.28); ctx.fill();
-            }
-            const tex = new THREE.CanvasTexture(c);
-            tex.colorSpace = THREE.SRGBColorSpace;
-            const face = new THREE.Mesh(new THREE.CircleGeometry(7, 28), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.8, side: THREE.DoubleSide }));
+            const face = new THREE.Mesh(geo('board', () => new THREE.CircleGeometry(7, 28)), boardMaterial());
             face.position.y = 9;
             face.castShadow = true;
             g.add(face);
@@ -299,7 +325,7 @@ class GroundTarget {
         const fx = this.game.effects;
         fx.explosion(this.pos, this.def.boom);
         if (this.type === 'fuel') {
-            setTimeout(() => fx.explosion(_v1.copy(this.pos).add(new THREE.Vector3(10, 5, 5)), 2.5), 250);
+            this.sys.later(() => fx.explosion(_v1.copy(this.pos).add(_v2.set(10, 5, 5)), 2.5), 250);
         }
         fx.debrisBurst(this.pos, _v1.set(0, 30, 0), 6, 1.2);
         this.mesh.traverse(o => { if (o.isMesh) o.material = M.charred; });
@@ -393,6 +419,13 @@ export class GroundForces {
     constructor(game) {
         this.game = game;
         this.targets = [];
+        this.timers = new Set();
+    }
+
+    // setTimeout that's cancelled when the sortie ends (no explosions in the menu scene)
+    later(fn, ms) {
+        const id = setTimeout(() => { this.timers.delete(id); fn(); }, ms);
+        this.timers.add(id);
     }
 
     spawnEnemyBase() {
@@ -406,10 +439,10 @@ export class GroundForces {
         };
         // jets parked on the apron, nose toward the taxiway
         for (const [id, x, z] of [['mig29', 335, 200], ['mig29', 335, 240], ['su35', 335, 285], ['su57', 335, 330], ['j20', 335, 372]]) place('parked', x, z, Math.PI / 2, { model: id });
-        place('bunker', 360, 200);
+        place('bunker', 400, 200);
         place('radar', 420, -350);
         place('radar', -700, 600);
-        for (let i = 0; i < 3; i++) place('hangar', 300, -120 + i * 70, Math.PI / 2);
+        for (let i = 0; i < 3; i++) place('hangar', 300, -50 + i * 70, Math.PI / 2); // clear of the access road spur (ends z=-110)
         place('fuel', 520, 420);
         place('fuel', 480, -700);
         // SAM ring
@@ -444,5 +477,7 @@ export class GroundForces {
     clear() {
         this.targets.forEach(t => { if (!t.isShip) t.remove(); });
         this.targets = [];
+        this.timers.forEach(clearTimeout);
+        this.timers.clear();
     }
 }

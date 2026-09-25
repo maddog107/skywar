@@ -18,6 +18,8 @@ const MAT = {
     steel: new THREE.MeshStandardMaterial({ color: 0x8c3b2e, roughness: 0.55, metalness: 0.4 }),
     cable: new THREE.LineBasicMaterial({ color: 0xdedcd4, transparent: true, opacity: 0.7, fog: true }),
 };
+// cables are unlit lines: dim them by hand at night so they don't glow
+export function setBridgeNight(on) { MAT.cable.color.setHex(on ? 0x3a3d44 : 0xdedcd4); }
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3();
 
@@ -176,6 +178,7 @@ export class Bridge {
 
     reset() {
         this.alive = true;
+        this.name = this.def.name; // missions may relabel it
         this.hp = this.health = this.maxHealth = HP;
         this.objective = false;
         this.gap = null;

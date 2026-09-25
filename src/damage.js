@@ -122,6 +122,32 @@ export class Wreckage {
         this.suitMat = new THREE.MeshStandardMaterial({ color: 0x5b6b4a, roughness: 0.9 });
         this.helmetMat = new THREE.MeshStandardMaterial({ color: 0xe8e8e0, roughness: 0.4 });
         this.lineMat = new THREE.LineBasicMaterial({ color: 0xdddddd, transparent: true, opacity: 0.7 });
+        // seat / canopy / rigging geometry, shared by every ejection
+        this.seatGeo = new THREE.BoxGeometry(0.7, 0.9, 0.6);
+        this.seatBackGeo = new THREE.BoxGeometry(0.7, 0.8, 0.15);
+        this.canopyGeo = new THREE.SphereGeometry(4.2, 16, 6, 0, Math.PI * 2, 0, Math.PI * 0.42);
+        const lp = [];
+        for (let i = 0; i < 12; i++) {
+            const a = (i / 12) * Math.PI * 2;
+            lp.push(0, 1.2, 0, Math.cos(a) * 3.1, 6.5 + 1.1, Math.sin(a) * 3.1);
+        }
+        this.lineGeo = new THREE.BufferGeometry();
+        this.lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(lp, 3));
+    }
+
+    // take a falling section / seat out of the scene, freeing any animated character riding on it
+    removeObj(obj) {
+        if (obj.parent) obj.parent.remove(obj);
+        const chars = [];
+        obj.traverse(o => { if (o.userData.character) chars.push(o.userData.character); });
+        chars.forEach(c => c.dispose()); // (dispose detaches, so not while traversing)
+    }
+
+    removeSeat(s) {
+        this.removeObj(s.root);
+        if (s.character) s.character.dispose();
+        // a landed canopy the pilot walked away from was re-parented onto the scene
+        if (s.chute && s.chute.parent === this.game.scene) this.game.scene.remove(s.chute);
     }
 
     // Detach a region from a live aircraft and send it tumbling
@@ -159,8 +185,8 @@ export class Wreckage {
         const start = ac.rig.cockpit.clone().applyMatrix4(ac.model.matrixWorld).addScaledVector(up, 1.5);
         const root = new THREE.Group();
         const seat = new THREE.Group();
-        const s1 = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.9, 0.6), this.seatMat); s1.position.y = 0.2;
-        const s2 = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.8, 0.15), this.seatMat); s2.position.set(0, 0.8, 0.3);
+        const s1 = new THREE.Mesh(this.seatGeo, this.seatMat); s1.position.y = 0.2;
+        const s2 = new THREE.Mesh(this.seatBackGeo, this.seatMat); s2.position.set(0, 0.8, 0.3);
         seat.add(s1, s2);
         // the pilot: an animated character (the root is scaled up 1.6× so it reads from the chase camera)
         const character = new Character();
@@ -175,20 +201,12 @@ export class Wreckage {
         this.game.scene.add(root);
         // canopy (hidden until deployment)
         const chute = new THREE.Group();
-        const canopyGeo = new THREE.SphereGeometry(4.2, 16, 6, 0, Math.PI * 2, 0, Math.PI * 0.42);
-        const canopy = new THREE.Mesh(canopyGeo, this.chuteMat);
+        const canopy = new THREE.Mesh(this.canopyGeo, this.chuteMat);
         canopy.scale.y = 0.6;
         canopy.position.y = 6.5;
         canopy.castShadow = true;
         chute.add(canopy);
-        const lp = [];
-        for (let i = 0; i < 12; i++) {
-            const a = (i / 12) * Math.PI * 2;
-            lp.push(0, 1.2, 0, Math.cos(a) * 3.1, 6.5 + 1.1, Math.sin(a) * 3.1);
-        }
-        const lg = new THREE.BufferGeometry();
-        lg.setAttribute('position', new THREE.Float32BufferAttribute(lp, 3));
-        chute.add(new THREE.LineSegments(lg, this.lineMat));
+        chute.add(new THREE.LineSegments(this.lineGeo, this.lineMat));
         chute.visible = false;
         chute.scale.setScalar(0.01);
         root.add(chute);
@@ -247,7 +265,7 @@ export class Wreckage {
                         g.audio.boom(g.camera.position.distanceTo(p.obj.position), p.heavy ? 1 : 0.5);
                     }
                 }
-                g.scene.remove(p.obj);
+                this.removeObj(p.obj);
                 this.parts.splice(i, 1);
             }
         }
@@ -310,7 +328,7 @@ export class Wreckage {
                 s.chute.position.x += dt * 2;
             }
             if (!s.player && (s.landT > 8 || s.t > 120)) {
-                g.scene.remove(r);
+                this.removeSeat(s);
                 this.seats.splice(i, 1);
                 if (s.owner) s.owner.ejectSeat = null;
             }
@@ -318,8 +336,8 @@ export class Wreckage {
     }
 
     clear() {
-        this.parts.forEach(p => this.game.scene.remove(p.obj));
-        this.seats.forEach(s => this.game.scene.remove(s.root));
+        this.parts.forEach(p => this.removeObj(p.obj));
+        this.seats.forEach(s => this.removeSeat(s));
         this.parts = []; this.seats = [];
     }
 }

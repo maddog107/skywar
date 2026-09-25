@@ -9,6 +9,7 @@
 // so HUD, targeting and weapons work on them unchanged.
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { terrainHeight } from './world.js';
 import { loft, createAircraftModel } from './models.js';
 import { rand, clamp, lerp, interceptTime } from './util.js';
@@ -100,7 +101,7 @@ function box(w, h, d, mat, x, y, z, parent) {
     return m;
 }
 
-function buildCarrier(team) {
+function buildCarrier() {
     const T = TYPES.carrier, L = T.L, g = new THREE.Group(), parts = {};
     const hull = new THREE.Mesh(loft([
         [-L * 0.5, 2, 6, T.deckY * 0.45, 2.5], [-L * 0.44, 14, 13, T.deckY * 0.4, 3], [-L * 0.3, 20, 14, T.deckY * 0.35, 4],
@@ -127,6 +128,7 @@ function buildCarrier(team) {
     mast.position.set(ix, T.deckY + 38, iz - 4);
     g.add(mast);
     const radar = new THREE.Group();
+    radar.name = 'ship:radar';
     radar.add(new THREE.Mesh(new THREE.BoxGeometry(9, 2.6, 0.5), MAT.white));
     radar.position.set(ix, T.deckY + 44, iz - 4);
     g.add(radar);
@@ -148,7 +150,6 @@ function buildCarrier(team) {
         { type: 'sam', p: new THREE.Vector3(T.B * 0.5 - 4, T.deckY - 2, L * 0.46) },
     ];
     mounts.forEach(m => addMount(g, m));
-    void team;
     return { group: g, parts, mounts };
 }
 
@@ -168,6 +169,7 @@ function buildDestroyer() {
     mast.position.set(0, T.deckY + 24, -4);
     g.add(mast);
     const radar = new THREE.Group();
+    radar.name = 'ship:radar';
     radar.add(new THREE.Mesh(new THREE.BoxGeometry(5, 1.6, 0.4), MAT.white));
     radar.position.set(0, T.deckY + 30, -4);
     g.add(radar);
@@ -207,8 +209,74 @@ function addMount(g, m) {
     turret.traverse(o => { if (o.isMesh) o.castShadow = true; });
     g.add(turret);
     m.turret = turret;
-    m.fireT = rand(0, 2);
-    m.lockT = 0;
+}
+
+// Bake every static mesh of a ship (not the turning radar / turrets) into one mesh per material:
+// a carrier drops from ~84 draw calls to ~15, and the shadow pass likewise.
+function mergeStatic(g) {
+    g.updateMatrixWorld(true);
+    const moving = new Set();
+    g.traverse(o => { if (o.name === 'ship:radar' || o.name.startsWith('ship:mount')) o.traverse(c => moving.add(c)); });
+    const byMat = new Map(), merged = [];
+    g.traverse(o => {
+        if (!o.isMesh || moving.has(o) || o.isSkinnedMesh || o.isInstancedMesh) return;
+        if (o.geometry.morphAttributes && Object.keys(o.geometry.morphAttributes).length) return;
+        let geo = o.geometry.clone().applyMatrix4(o.matrixWorld);
+        for (const k of Object.keys(geo.attributes)) if (!['position', 'normal', 'uv'].includes(k)) geo.deleteAttribute(k);
+        if (!geo.attributes.normal) geo.computeVertexNormals();
+        if (!geo.attributes.uv) geo.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(geo.attributes.position.count * 2), 2));
+        if (geo.index) { const ni = geo.toNonIndexed(); geo.dispose(); geo = ni; }
+        if (o.matrixWorld.determinant() < 0) {
+            // mirrored node: restore the winding
+            for (const a of Object.values(geo.attributes)) {
+                const n = a.itemSize, arr = a.array;
+                for (let t = 0; t < a.count; t += 3) for (let c = 0; c < n; c++) {
+                    const i1 = (t + 1) * n + c, i2 = (t + 2) * n + c, tmp = arr[i1]; arr[i1] = arr[i2]; arr[i2] = tmp;
+                }
+            }
+        }
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        const groups = Array.isArray(o.material) && geo.groups.length ? geo.groups : [{ start: 0, count: geo.attributes.position.count, materialIndex: 0 }];
+        for (const grp of groups) {
+            const mat = mats[grp.materialIndex];
+            if (!mat) continue;
+            const part = new THREE.BufferGeometry();
+            for (const [k, a] of Object.entries(geo.attributes)) {
+                part.setAttribute(k, new THREE.BufferAttribute(a.array.slice(grp.start * a.itemSize, (grp.start + grp.count) * a.itemSize), a.itemSize));
+            }
+            if (!byMat.has(mat)) byMat.set(mat, []);
+            byMat.get(mat).push(part);
+        }
+        geo.dispose();
+        merged.push(o);
+    });
+    const out = [];
+    for (const [mat, geos] of byMat) {
+        const mg = mergeGeometries(geos);
+        geos.forEach(x => x.dispose());
+        if (!mg) return; // incompatible parts: leave the ship unmerged
+        const m = new THREE.Mesh(mg, mat);
+        m.castShadow = true; m.receiveShadow = true;
+        out.push(m);
+    }
+    for (const o of merged) o.parent.remove(o);
+    g.add(...out);
+}
+
+// Ships are built once per type and cloned: clones share geometry and materials, so a sortie that
+// rebuilds the home carrier (or sinks a group) allocates nothing on the GPU.
+const templates = {};
+function makeShip(type) {
+    let t = templates[type];
+    if (!t) {
+        t = templates[type] = type === 'carrier' ? buildCarrier() : buildDestroyer();
+        t.mounts.forEach((m, i) => { m.turret.name = 'ship:mount' + i; });
+        mergeStatic(t.group);
+    }
+    const group = t.group.clone(true);
+    const radar = group.getObjectByName('ship:radar');
+    const mounts = t.mounts.map((m, i) => ({ type: m.type, p: m.p.clone(), turret: group.getObjectByName('ship:mount' + i), fireT: rand(0, 2), lockT: 0 }));
+    return { group, parts: radar ? { radar } : {}, mounts };
 }
 
 export class Ship {
@@ -231,7 +299,7 @@ export class Ship {
         this.hitRadius = 40;
         this.incoming = [];
         this.orbit = { cx: center.x, cz: center.z, R: orbitR, a: angle, w: dir * this.def.speed / orbitR };
-        const built = type === 'carrier' ? buildCarrier(team) : buildDestroyer();
+        const built = makeShip(type);
         this.mesh = built.group;
         this.mesh.rotation.order = 'YXZ'; // heading first, then pitch/roll about the ship's own axes
         this.parts = built.parts;
@@ -342,7 +410,7 @@ export class Ship {
         while (this.fires.length < 12) this.fires.push({ p: new THREE.Vector3(rand(-this.def.B * 0.35, this.def.B * 0.35), this.def.deckY + 1, rand(-this.def.L * 0.45, this.def.L * 0.45)), size: 1, grow: 0.5 });
         const fx = this.game.effects;
         for (let i = 0; i < 6; i++) {
-            setTimeout(() => {
+            this.naval.later(() => {
                 const p = this.toWorld(rand(-15, 15), this.def.deckY, rand(-this.def.L * 0.4, this.def.L * 0.4));
                 fx.explosion(p, 2.5 + Math.random() * 1.5);
                 this.game.audio.boom(this.game.camera.position.distanceTo(p), 1.5);
@@ -475,6 +543,13 @@ export class Naval {
         this.ships = [];
         this.homeCarrier = null;
         this._surf = { h: 0, ship: null, water: false, runway: null, hull: false };
+        this.timers = new Set();
+    }
+
+    // setTimeout that's cancelled when the sortie ends (no explosions in the menu scene)
+    later(fn, ms) {
+        const id = setTimeout(() => { this.timers.delete(id); fn(); }, ms);
+        this.timers.add(id);
     }
 
     spawnHomeCarrier() {
@@ -528,6 +603,8 @@ export class Naval {
     clear() {
         this.ships.forEach(s => s.remove());
         this.ships = [];
+        this.timers.forEach(clearTimeout);
+        this.timers.clear();
         this.homeCarrier = this.enemyCarrier = null;
     }
 }

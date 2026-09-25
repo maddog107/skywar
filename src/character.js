@@ -44,11 +44,21 @@ function fallbackFigure() {
 export class Character {
     constructor(kind = 'pilot') {
         this.root = new THREE.Group();
+        this.root.userData.character = this; // lets containers (wreckage, seats) dispose it
         this.current = null;
         this.actions = {};
         const source = sources[kind] || sources.pilot;
         if (source) {
             const clone = SkeletonUtils.clone(source.scene);
+            // SkeletonUtils gives every skinned part its own Skeleton (and bone texture); the parts all
+            // share one rig, so bind them to a single skeleton: one bone texture and one update per frame
+            this.skeletons = [];
+            clone.traverse(o => {
+                if (!o.isSkinnedMesh) return;
+                const first = this.skeletons[0];
+                if (first && sameRig(o.skeleton, first)) { o.skeleton.dispose(); o.bind(first, o.bindMatrix); }
+                else this.skeletons.push(o.skeleton);
+            });
             // Quaternius characters face +Z; the game's "forward" is -Z
             const holder = new THREE.Group();
             holder.rotation.y = Math.PI;
@@ -57,6 +67,7 @@ export class Character {
             holder.add(clone);
             this.root.add(holder);
             this.mixer = new THREE.AnimationMixer(clone);
+            this.clone = clone;
             for (const clip of source.clips) {
                 const name = clip.name.split('|').pop().replace(/^Man_/, '');
                 this.actions[name] = this.mixer.clipAction(clip);
@@ -72,6 +83,7 @@ export class Character {
     play(name, fade = 0.25, speed = 1) {
         const a = this.actions[name];
         if (!a) return;
+        if (this.mixer) live.add(this); // re-arm if it was dropped while out of the scene
         a.timeScale = speed;
         if (this.current === a) return;
         a.reset().setEffectiveWeight(1).fadeIn(fade).play();
@@ -88,16 +100,33 @@ export class Character {
         else this.play('Idle', 0.3);
     }
 
-    dispose() { live.delete(this); if (this.root.parent) this.root.parent.remove(this.root); }
+    dispose() {
+        live.delete(this);
+        if (this.root.parent) this.root.parent.remove(this.root);
+        if (this.mixer) { this.mixer.stopAllAction(); this.mixer.uncacheRoot(this.clone); this.mixer = null; }
+        if (this.skeletons) this.skeletons.forEach(s => s.dispose());
+        this.skeletons = null;
+        this.actions = {}; this.current = null;
+    }
+}
+
+function sameRig(a, b) {
+    return a.bones.length === b.bones.length && a.bones.every((bone, i) => bone === b.bones[i])
+        && a.boneInverses.every((m, i) => m.equals(b.boneInverses[i]));
 }
 
 function inScene(o) { while (o.parent) o = o.parent; return o.isScene; }
 
-// tick every live character's animation (anything no longer in the scene is dropped)
+// tick every live character's animation. Anything that has left the scene (or never made it there
+// within a few seconds) is dropped; it rejoins when shown again (see play()).
 export function updateCharacters(dt) {
     for (const c of live) {
-        if (!inScene(c.root)) { if (c.seen) live.delete(c); continue; }
-        c.seen = true;
+        if (!inScene(c.root)) {
+            c.idle = (c.idle || 0) + dt;
+            if (c.seen || c.idle > 5) { live.delete(c); c.seen = false; c.idle = 0; }
+            continue;
+        }
+        c.seen = true; c.idle = 0;
         c.mixer.update(dt);
     }
 }

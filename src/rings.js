@@ -104,5 +104,10 @@ export class RingCourse {
         if (r) r.mesh.scale.setScalar(1 + Math.sin(t * 6) * 0.04);
     }
 
-    remove() { this.game.scene.remove(this.group); }
+    remove() {
+        this.game.scene.remove(this.group);
+        // geometry is shared by the rings, each ring has its own material (colour/opacity per state)
+        if (this.rings.length) this.rings[0].mesh.geometry.dispose();
+        this.rings.forEach(r => r.mesh.material.dispose());
+    }
 }

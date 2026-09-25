@@ -8,6 +8,7 @@ import { terrainHeight } from './world.js';
 
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _v4 = new THREE.Vector3();
 const _prev = new THREE.Vector3();
+const GUN_BLUE = [3.2, 2.6, 1.2], GUN_RED = [3.4, 1.0, 0.5], FLAK_COLOR = [3.6, 1.2, 0.5];
 
 const flareTex = makeRadialTexture(64, [[0, 'rgba(255,255,255,1)'], [0.15, 'rgba(255,240,200,0.9)'], [0.4, 'rgba(255,180,80,0.35)'], [1, 'rgba(255,120,40,0)']]);
 
@@ -30,6 +31,9 @@ export class Weapons {
             return g;
         })();
         this.craterTex = makeRadialTexture(128, [[0, 'rgba(20,16,12,0.95)'], [0.45, 'rgba(35,28,20,0.85)'], [0.7, 'rgba(60,50,38,0.4)'], [1, 'rgba(60,50,38,0)']]);
+        this.craterGeo = new THREE.CircleGeometry(1, 20);
+        this.craterMat = new THREE.MeshBasicMaterial({ map: this.craterTex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, fog: true });
+        this.bulletPool = []; // spent round objects, reused by fireGun / fireFlak
         this.missileGeo = (() => {
             const g = new THREE.CylinderGeometry(0.1, 0.1, 3, 8);
             g.rotateX(Math.PI / 2);
@@ -61,12 +65,8 @@ export class Weapons {
         const dir = _v2.copy(fwd).add(_v3.set(rand(-spread, spread), rand(-spread, spread), rand(-spread, spread))).normalize();
         const muzzle = _v3.copy(ac.pos).addScaledVector(fwd, ac.spec.length * 0.5);
         const vel = dir.multiplyScalar(WEAPONS.bulletSpeed).add(ac.vel);
-        const tracer = ac.ammo % 3 !== 0;
-        this.bullets.push({
-            pos: muzzle.clone(), vel: vel.clone(), owner: ac, team: ac.team, damage: gun.damage,
-            life: WEAPONS.bulletLife, tracer,
-            color: ac.team === 'blue' ? [3.2, 2.6, 1.2] : [3.4, 1.0, 0.5],
-        });
+        const b = this.newBullet(muzzle, vel, ac, gun.damage, WEAPONS.bulletLife, ac.ammo % 3 !== 0, ac.team === 'blue' ? GUN_BLUE : GUN_RED);
+        b.flak = false;
         this.game.events.emit('gunfire', ac);
         // muzzle flash
         this.game.effects.fire.emit(muzzle, ac.vel, 0.05, 1.8, 0.6, [6, 5, 3], [3, 1.5, 0.5], 1, 0, 0, 0);
@@ -75,10 +75,18 @@ export class Weapons {
 
     // Flak / AAA rounds from ground units
     fireFlak(pos, dir, owner, damage = 6, speed = 900, fuse = rand(1.2, 2.8)) {
-        this.bullets.push({
-            pos: pos.clone(), vel: dir.clone().multiplyScalar(speed), owner, team: owner.team, damage, life: Math.min(3, isFinite(fuse) ? fuse + 0.1 : 2.2), tracer: true,
-            color: [3.6, 1.2, 0.5], flak: isFinite(fuse), fuse,
-        });
+        const b = this.newBullet(pos, _v4.copy(dir).multiplyScalar(speed), owner, damage, Math.min(3, isFinite(fuse) ? fuse + 0.1 : 2.2), true, FLAK_COLOR);
+        b.flak = isFinite(fuse); b.fuse = fuse;
+    }
+
+    // a round from the pool (or a new one), pushed onto the live list
+    newBullet(pos, vel, owner, damage, life, tracer, color) {
+        const b = this.bulletPool.pop() || { pos: new THREE.Vector3(), vel: new THREE.Vector3(), pooled: true };
+        b.pos.copy(pos); b.vel.copy(vel);
+        b.owner = owner; b.team = owner.team; b.damage = damage; b.life = life; b.tracer = tracer; b.color = color;
+        b.flak = false; b.fuse = 0;
+        this.bullets.push(b);
+        return b;
     }
 
     updateBullets(dt) {
@@ -144,7 +152,10 @@ export class Weapons {
                     dead = true;
                 }
             }
-            if (dead) { list[i] = list[list.length - 1]; list.pop(); }
+            if (dead) {
+                list[i] = list[list.length - 1]; list.pop();
+                if (b.pooled && this.bulletPool.length < 4000) { b.owner = null; this.bulletPool.push(b); }
+            }
         }
         g.effects.drawTracers(list, g.camera.position);
     }
@@ -403,7 +414,7 @@ export class Weapons {
 
     addCrater(p) {
         const g = this.game;
-        const m = new THREE.Mesh(new THREE.CircleGeometry(1, 20), new THREE.MeshBasicMaterial({ map: this.craterTex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, fog: true }));
+        const m = new THREE.Mesh(this.craterGeo, this.craterMat);
         m.rotation.x = -Math.PI / 2;
         m.position.copy(p).y += 0.4;
         m.scale.setScalar(rand(14, 20));
@@ -465,6 +476,7 @@ export class Weapons {
     }
 
     clear() {
+        for (const b of this.bullets) if (b.pooled && this.bulletPool.length < 4000) { b.owner = null; this.bulletPool.push(b); }
         this.bullets.length = 0;
         for (let i = this.missiles.length - 1; i >= 0; i--) this.removeMissile(i);
         this.flares.forEach(f => this.game.scene.remove(f.sprite));
