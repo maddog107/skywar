@@ -497,6 +497,7 @@ export class Effects {
         this.trailMats = new Map();
         this.debris = [];
         this.emitters = [];   // smoke columns and smoking tendrils that emit over time
+        this.landed = [];     // thrown parts lying where they fell
         const bent = new THREE.BoxGeometry(2.2, 0.12, 1.4, 3, 1, 1);
         { const p = bent.attributes.position; for (let i = 0; i < p.count; i++) p.setY(i, p.getY(i) + Math.abs(p.getX(i)) * 0.35); bent.computeVertexNormals(); }
         this.debrisGeo = [new THREE.BoxGeometry(1.2, 0.3, 2), new THREE.TetrahedronGeometry(1), bent, new THREE.CylinderGeometry(0.35, 0.45, 1.8, 6)];
@@ -718,6 +719,16 @@ export class Effects {
         }
     }
 
+    // Throw a piece of an existing object (a tank's turret, a radar dish, a SAM rack): it keeps its world
+    // transform, tumbles and smokes, then comes to rest on the ground as wreckage (cleared with the sortie).
+    throwPart(obj, vel, spin = 3, burning = true) {
+        this.scene.attach(obj);
+        this.debris.push({
+            mesh: obj, vel: vel.clone(), spin: new THREE.Vector3(rand(-1, 1), rand(-1, 1), rand(-1, 1)).multiplyScalar(spin),
+            life: 15, smokeT: 0, burning, big: 1, keep: true,
+        });
+    }
+
     // bullet / shrapnel strike on something hard
     impact(pos, vel) {
         const V = this._tmpV;
@@ -929,7 +940,12 @@ export class Effects {
             const gh = this.heightAt(d.mesh.position.x, d.mesh.position.z);
             if (d.mesh.position.y < gh || d.life <= 0) {
                 if (d.mesh.position.y < gh + 2) this.groundImpact(d.mesh.position);
-                this.scene.remove(d.mesh);
+                if (d.keep && !this.isWater(d.mesh.position.x, d.mesh.position.z)) {
+                    // come to rest, roughly flat, half dug in
+                    d.mesh.position.y = gh + 0.2;
+                    d.mesh.rotation.x = rand(-0.3, 0.3); d.mesh.rotation.z = rand(-0.3, 0.3);
+                    this.landed.push(d.mesh);
+                } else this.scene.remove(d.mesh);
                 this.debris.splice(i, 1);
             }
         }
@@ -939,6 +955,7 @@ export class Effects {
         this.smoke.clear(); this.fire.clear(); this.flame.clear(); this.sparks.clear();
         this.trails.forEach(t => t.dispose()); this.trails = [];
         this.debris.forEach(d => this.scene.remove(d.mesh)); this.debris = [];
+        this.landed.forEach(m => this.scene.remove(m)); this.landed = [];
         this.emitters = [];
         this.sprites.forEach(s => { s.visible = false; s.userData.life = 0; });
         this.lights.forEach(l => { l.userData.life = 0; l.intensity = 0; });
