@@ -1,6 +1,6 @@
 # 3D Model Credits
 
-**Aircraft in `models/aircraft/`** (most of the flyable aircraft since the models upgrade): see `models/aircraft/CREDITS.md` — CC BY 4.0 Sketchfab models (attribution shown in the in-game credits), a NASA public-domain C-130, and aircraft built in Blender by `tools/aircraft_kit.py` (CC0). **Ships in `models/ships/`**: built in Blender by `tools/ships/` (CC0). **Trees, grass and ground textures in `models/vegetation/` and `models/ground/`**: Poly Haven (CC0), see the CREDITS.md in each folder. The table below lists the older models; rows for aircraft now replaced by `models/aircraft/` are kept for the files that remain in the repo.
+**Aircraft in `models/aircraft/`** (most of the flyable aircraft since the models upgrade): see `models/aircraft/CREDITS.md` — CC BY 4.0 Sketchfab models (attribution shown in the in-game credits), a NASA public-domain C-130, and aircraft built in Blender by `tools/aircraft_kit.py` (CC0). **Ships in `models/ships/`**: built in Blender by `tools/ships/` (CC0). **Trees, grass and ground textures in `models/vegetation/` and `models/ground/`**: Poly Haven (CC0), see the CREDITS.md in each folder. The table below lists the other models in `models/`.
 
 All models are binary glTF 2.0 (`.glb`). CC BY models require the attribution below to be shown to players, for example on a credits screen.
 
@@ -8,29 +8,7 @@ All models are binary glTF 2.0 (`.glb`). CC BY models require the attribution be
 |---|---|---|---|---|
 | `f16.glb` | F-16C Fighting Falcon | Carlos.Maciel | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | https://sketchfab.com/3d-models/f16-c-falcon-4bc2ff75dc584af2afd0aa6bd8b79015 (GLB obtained from the redistribution in https://github.com/Void0312Aurora/Echelon-Forge) |
 | `f2.glb` | Mitsubishi F-2 | bohmerang | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | https://sketchfab.com/3d-models/mitsubishi-f-2-fighter-jet-free-d3d7244554974f499b106e6c11fe3aaf (GLB obtained from https://github.com/playcanvas/engine/tree/main/examples/assets/models) |
-| `f14.glb` | F-14 Tomcat | Captain_Ahab_62 | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) | https://opengameart.org/content/fighter-jets |
-| `f15.glb` | F-15 Eagle | Captain_Ahab_62 | CC0 1.0 | https://opengameart.org/content/fighter-jets |
-| `f4.glb` | F-4 Phantom II | Captain_Ahab_62 | CC0 1.0 | https://opengameart.org/content/fighter-jets |
-| `eurofighter.glb` | Eurofighter Typhoon | Captain_Ahab_62 | CC0 1.0 | https://opengameart.org/content/fighter-jets |
-| `rafale.glb` | Dassault Rafale B | Captain_Ahab_62 | CC0 1.0 | https://opengameart.org/content/fighter-jets |
-| `j20.glb` | Chengdu J-20 | Captain_Ahab_62 | CC0 1.0 | https://opengameart.org/content/adversary-aircraft |
-| `mig29.glb` | MiG-29 Fulcrum | Captain_Ahab_62 | CC0 1.0 | https://opengameart.org/content/adversary-aircraft |
-| `su57.glb` | Su-57 | Addmix | [MIT](https://github.com/addmix/godot_aerodynamic_physics/blob/main/LICENSE) (Copyright (c) 2023 Addmix) | https://github.com/addmix/godot_aerodynamic_physics/tree/main/demo/aircraft_examples/su57 |
 | `f35a.glb` | F-35A Lightning II | SKYWAR (built in Blender by `tools/f35a_model.py`, shaped after the public-domain USAF 3-view) | CC0 1.0 | https://commons.wikimedia.org/wiki/File:Lockheed_Martin_F-35A_Lightning_II_3-view_drawing.png |
-| `generic_fighter.glb` | Generic stealth-style fighter ("Jet") | jeremy | [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) | https://poly.pizza/m/6fyLMORhgGK |
-| `airliner.glb` | Generic wide-body airliner ("Jumbo Jet, Wide Body") | NuclearOsmosis | CC0 1.0 | https://opengameart.org/content/jumbo-jetwide-body |
-| `cargo.glb` | Cargo/transport plane ("Airplane 3268") | Remy Tauziac | [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) | https://poly.pizza/m/bjlICuVX1Sg |
-| `mig21.glb` | MiG-21 Fishbed | Captain_Ahab_62 | CC0 1.0 | https://opengameart.org/content/adversary-aircraft |
-| `mig25.glb` | MiG-25 Foxbat | Captain_Ahab_62 | CC0 1.0 | https://opengameart.org/content/adversary-aircraft |
-| `j10.glb` | Chengdu J-10A | Captain_Ahab_62 | CC0 1.0 | https://opengameart.org/content/adversary-aircraft |
-| `j8.glb` | Shenyang J-8II Finback | Captain_Ahab_62 | CC0 1.0 | https://opengameart.org/content/adversary-aircraft |
-| `f5.glb` | F-5 Freedom Fighter | Captain_Ahab_62 | CC0 1.0 | https://opengameart.org/content/fighter-jets |
-| `mirage.glb` | Dassault Mirage III | Captain_Ahab_62 | CC0 1.0 | https://opengameart.org/content/fighter-jets |
-| `jaguar.glb` | SEPECAT Jaguar | Captain_Ahab_62 | CC0 1.0 | https://opengameart.org/content/fighter-jets |
-| `su47.glb` | Su-47 Berkut | Addmix | [MIT](https://github.com/addmix/godot_aerodynamic_physics/blob/main/LICENSE) (Copyright (c) 2023 Addmix) | https://github.com/addmix/godot_aerodynamic_physics/tree/main/demo/aircraft_examples/berkut |
-| `b2.glb` | B-2 Spirit | Addmix | [MIT](https://github.com/addmix/godot_aerodynamic_physics/blob/main/LICENSE) (Copyright (c) 2023 Addmix) | https://github.com/addmix/godot_aerodynamic_physics/tree/main/demo/aircraft_examples/b2 |
-| `air_racer.glb` | Unlimited Air Racer ("Aeroplane") | Gilang Romadhan | [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) | https://poly.pizza/m/9VeIc0cybp4 |
-| `stunt_biplane.glb` | Stunt biplane ("Airplane") | Poly by Google | [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) | https://poly.pizza/m/8VysVKMXN2J |
 | `heli_military.glb` | Military helicopter ("Helicopter") | Zsky | [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) | https://poly.pizza/m/hG2Qr0A3zR |
 | `heli_civil.glb` | Civil helicopter ("Helicopter") | jeremy | [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) | https://poly.pizza/m/eb7b31pjGtQ |
 | `humvee.glb` | Humvee | madtrollstudio | [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) | https://poly.pizza/m/Ebryot9iKM |
