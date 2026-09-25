@@ -17,9 +17,9 @@ import { terrainHeight } from './world.js';
 // blur: motion-blur taps (0 = off; ultra only, so HIGH keeps today's look and cost). dof: photo-mode taps.
 export const QUALITY = {
     low: { pr: 1, top: 1, floor: 0.6, msaa: 0, ao: false, ssr: 0, flare: false, blur: 0, dof: 0 },
-    medium: { pr: 1.25, top: 1.25, floor: 0.7, msaa: 0, ao: false, ssr: 0, flare: true, blur: 0, dof: 48 },
-    high: { pr: 1.75, top: 2, floor: 0.85, msaa: 0, ao: false, ssr: 0, flare: true, blur: 0, dof: 72 },
-    ultra: { pr: 2, top: 2, floor: 1, msaa: 4, ao: true, ssr: 2, flare: true, blur: 12, dof: 96 },
+    medium: { pr: 1.25, top: 1.25, floor: 0.7, msaa: 0, ao: false, ssr: 0, flare: true, blur: 0, dof: 32 },
+    high: { pr: 1.75, top: 2, floor: 0.85, msaa: 0, ao: false, ssr: 0, flare: true, blur: 0, dof: 48 },
+    ultra: { pr: 2, top: 2, floor: 1, msaa: 4, ao: true, ssr: 2, flare: true, blur: 8, dof: 64 },
 };
 const STEPS = [1, 0.875, 0.75, 0.667, 0.6, 0.5]; // adaptive resolution levels, as fractions of `top`
 
@@ -589,15 +589,20 @@ export class SceneFXPass extends Pass {
 }
 
 // ═════════════ Depth of field (photo mode) ═════════════
-// Single-pass gather bokeh (after Dennis Gustafsson): golden-angle spiral, each tap weighted by
-// whether its own circle of confusion reaches this pixel; background taps can't bleed over a
-// sharper foreground.
+// Gather bokeh (after Dennis Gustafsson): golden-angle spiral, each tap weighted by whether its own
+// circle of confusion reaches this pixel; background taps can't bleed over a sharper foreground.
+// Gathered at half resolution (taps in full-res pixels), then blended over the sharp full-res image
+// by each pixel's own CoC, so in-focus detail stays crisp: ~4× cheaper than a full-res gather.
+const DOF_COC_GLSL = /* glsl */`
+    uniform float focus, focusScale, maxBlur;
+    float coc(float z) { return clamp((1.0 / focus - 1.0 / z) * focusScale, -1.0, 1.0) * maxBlur; }
+`;
 const DOF_FRAG = /* glsl */`
     ${DEPTH_GLSL}
+    ${DOF_COC_GLSL}
     uniform sampler2D tColor;
-    uniform float focus, focusScale, maxBlur, radScale;
+    uniform float radScale;
     varying vec2 vUv;
-    float coc(float z) { return clamp((1.0 / focus - 1.0 / z) * focusScale, -1.0, 1.0) * maxBlur; }
     void main() {
         vec2 px = 1.0 / vec2(textureSize(tColor, 0));
         vec4 c0 = texture2D(tColor, vUv);
@@ -618,7 +623,17 @@ const DOF_FRAG = /* glsl */`
             tot += 1.0;
             radius += radScale / radius;
         }
-        gl_FragColor = vec4(col / tot, c0.a);
+        gl_FragColor = vec4(col / tot, 1.0);
+    }`;
+const DOF_COMP_FRAG = /* glsl */`
+    ${DEPTH_GLSL}
+    ${DOF_COC_GLSL}
+    uniform sampler2D tColor, tBlur;
+    varying vec2 vUv;
+    void main() {
+        vec4 sharp = texture2D(tColor, vUv);
+        float cs = abs(coc(linDepth(texture2D(tDepth, vUv).x)));
+        gl_FragColor = vec4(mix(sharp.rgb, texture2D(tBlur, vUv).rgb, smoothstep(0.75, 2.5, cs)), sharp.a);
     }`;
 
 export class DofPass extends Pass {
@@ -626,29 +641,41 @@ export class DofPass extends Pass {
         super();
         this.scenePass = scenePass;
         this.camera = camera;
-        this.mat = fxMaterial(DOF_FRAG, {
-            ...depthUniforms(), tColor: { value: null }, focus: { value: 50 }, focusScale: { value: 25 },
-            maxBlur: { value: 16 }, radScale: { value: 1 },
-        }, { MAX_TAPS: 96 });
+        const coc = () => ({ focus: { value: 50 }, focusScale: { value: 25 }, maxBlur: { value: 16 } });
+        this.mat = fxMaterial(DOF_FRAG, { ...depthUniforms(), ...coc(), tColor: { value: null }, radScale: { value: 1 } }, { MAX_TAPS: 96 });
+        this.compMat = fxMaterial(DOF_COMP_FRAG, { ...depthUniforms(), ...coc(), tColor: { value: null }, tBlur: { value: null } });
+        this.halfRT = halfFloatTarget(1, 1);
         this.quad = new FullScreenQuad(this.mat);
         this.enabled = false;
         this.height = 1;
         this.taps = 96;
     }
     setTaps(n) { this.taps = n; if (this.mat.defines.MAX_TAPS !== n) { this.mat.defines.MAX_TAPS = n; this.mat.needsUpdate = true; } }
-    setSize(w, h) { this.height = h; }
+    setSize(w, h) { this.height = h; this.halfRT.setSize(Math.max(1, Math.ceil(w / 2)), Math.max(1, Math.ceil(h / 2))); }
+    // focus distance (m) and CoC scale, set by PostFX from the photo camera
+    setFocus(focus, focusScale) {
+        for (const u of [this.mat.uniforms, this.compMat.uniforms]) { u.focus.value = focus; u.focusScale.value = focusScale; }
+    }
     render(renderer, writeBuffer, readBuffer) {
-        const u = this.mat.uniforms;
-        u.tColor.value = readBuffer.texture;
-        setDepthUniforms(u, this.camera, this.scenePass.output.depthTexture, this.scenePass.output.samples);
+        const out = this.scenePass.output;
         const maxBlur = Math.max(4, 0.014 * this.height);
-        u.maxBlur.value = maxBlur;
+        for (const m of [this.mat, this.compMat]) {
+            const u = m.uniforms;
+            u.tColor.value = readBuffer.texture;
+            setDepthUniforms(u, this.camera, out.depthTexture, out.samples);
+            u.maxBlur.value = maxBlur;
+        }
         // taps ≈ maxBlur² / (2 · radScale): pick the step so the spiral ends on the tap budget
-        u.radScale.value = Math.max(0.5, (maxBlur * maxBlur) / (2 * this.taps));
+        this.mat.uniforms.radScale.value = Math.max(0.5, (maxBlur * maxBlur) / (2 * this.taps));
+        this.quad.material = this.mat;
+        renderer.setRenderTarget(this.halfRT);
+        this.quad.render(renderer);
+        this.compMat.uniforms.tBlur.value = this.halfRT.texture;
+        this.quad.material = this.compMat;
         renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
         this.quad.render(renderer);
     }
-    dispose() { this.mat.dispose(); }
+    dispose() { this.mat.dispose(); this.compMat.dispose(); this.halfRT.dispose(); }
 }
 
 // ═════════════ Tone mapping + FXAA in one pass ═════════════
@@ -995,9 +1022,8 @@ export class PostFX {
         if (this.dof.enabled) {
             const ph = game.photo;
             const f = Math.max(2, ph.dist || cam.position.distanceTo(ph.target));
-            this.dof.mat.uniforms.focus.value = f;
             // like a real lens, background blur shrinks as the focus distance grows
-            this.dof.mat.uniforms.focusScale.value = f * THREE.MathUtils.clamp(28 / f, 0.12, 1.2);
+            this.dof.setFocus(f, f * THREE.MathUtils.clamp(28 / f, 0.12, 1.2));
         }
 
         // motion blur: in flight, scaled by camera speed; never in photo mode, menus or pause
