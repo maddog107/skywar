@@ -11,6 +11,8 @@ photoscanned tree model; `*.json` holds its real height, crown radius and frame 
 | `island_tree_01` | [Island Tree 01](https://polyhaven.com/a/island_tree_01) | Poly Haven | CC0 |
 | `island_tree_02` | [Island Tree 02](https://polyhaven.com/a/island_tree_02) | Poly Haven | CC0 |
 | `tree_small_02` | [Tree Small 02](https://polyhaven.com/a/tree_small_02) | Poly Haven | CC0 |
+| `grass_medium_02_e` (256 px frames) | [Grass Medium 02](https://polyhaven.com/a/grass_medium_02), clump e | Poly Haven | CC0 |
+| `fern_02_b` (256 px frames) | [Fern 02](https://polyhaven.com/a/fern_02), plant b | Poly Haven | CC0 |
 
 Re-bake: download the model's glTF (1k textures) from Poly Haven, then
 `blender -b -P tools/bake_impostors.py -- <model.gltf> models/vegetation/<name> 512 [object-name filter]`

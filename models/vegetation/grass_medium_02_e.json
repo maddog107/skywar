@@ -1,0 +1,13 @@
+{
+ "source": "grass_medium_02_1k.gltf",
+ "height": 0.403,
+ "radius": 0.237,
+ "frame": 256,
+ "grid": 3,
+ "sideFrames": 8,
+ "topFrame": 8,
+ "elevationDeg": 8.0,
+ "sideExtent": 0.493,
+ "topExtent": 0.493,
+ "note": "frames 0-7: viewed from azimuth k*45deg around the tree (0 = from -Y in Blender = +Z in three.js), frame 8: from above; sRGB, straight alpha"
+}

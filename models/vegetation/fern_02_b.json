@@ -1,0 +1,13 @@
+{
+ "source": "fern_02_1k.gltf",
+ "height": 0.428,
+ "radius": 0.655,
+ "frame": 256,
+ "grid": 3,
+ "sideFrames": 8,
+ "topFrame": 8,
+ "elevationDeg": 8.0,
+ "sideExtent": 1.362,
+ "topExtent": 1.362,
+ "note": "frames 0-7: viewed from azimuth k*45deg around the tree (0 = from -Y in Blender = +Z in three.js), frame 8: from above; sRGB, straight alpha"
+}
