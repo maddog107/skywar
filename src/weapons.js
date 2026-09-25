@@ -56,23 +56,31 @@ export class Weapons {
     }
 
     // ── Cannon ──
+    // Returns the number of rounds fired this call (0 while the gun cycles). A held trigger fires every round
+    // it owes (up to 3 in one long frame), so the rate of fire doesn't drop at low frame rates; a fresh pull fires one.
     fireGun(ac, now) {
         const gun = ac.spec.gun;
-        if (!gun || !ac.alive || ac.ammo <= 0) return false;
-        if (now - ac.lastGun < 1 / gun.rate) return false;
-        ac.lastGun = now;
-        ac.ammo--;
+        if (!gun || !ac.alive || ac.ammo <= 0) return 0;
+        const iv = 1 / gun.rate, since = now - ac.lastGun;
+        if (since < iv) return 0;
+        const held = since < iv * 4;
+        const n = held ? Math.min(3, Math.floor(since / iv), ac.ammo) : 1;
+        ac.lastGun = held ? ac.lastGun + n * iv : now;
         const fwd = ac.getForward(_v1);
         const spread = ac.isPlayer || ac.team === 'blue' && !ac.pilot ? 0.0035 : 0.008 + (1 - (ac.pilot?.skill ?? 1)) * 0.02;
-        const dir = _v2.copy(fwd).add(_v3.set(rand(-spread, spread), rand(-spread, spread), rand(-spread, spread))).normalize();
-        const muzzle = _v3.copy(ac.pos).addScaledVector(fwd, ac.spec.length * 0.5);
-        const vel = dir.multiplyScalar(WEAPONS.bulletSpeed).add(ac.vel);
-        const b = this.newBullet(muzzle, vel, ac, gun.damage, WEAPONS.bulletLife, ac.ammo % 3 !== 0, ac.team === 'blue' ? GUN_BLUE : GUN_RED);
-        b.flak = false;
+        for (let k = 0; k < n; k++) {
+            ac.ammo--;
+            const dir = _v2.copy(fwd).add(_v3.set(rand(-spread, spread), rand(-spread, spread), rand(-spread, spread))).normalize();
+            // a catch-up round left the muzzle a moment ago: start it that much further down range
+            const muzzle = _v3.copy(ac.pos).addScaledVector(fwd, ac.spec.length * 0.5 + (n - 1 - k) * iv * WEAPONS.bulletSpeed);
+            const vel = dir.multiplyScalar(WEAPONS.bulletSpeed).add(ac.vel);
+            const b = this.newBullet(muzzle, vel, ac, gun.damage, WEAPONS.bulletLife, ac.ammo % 3 !== 0, ac.team === 'blue' ? GUN_BLUE : GUN_RED);
+            b.flak = false;
+        }
         this.game.events.emit('gunfire', ac);
         // muzzle flash
-        this.game.effects.fire.emit(muzzle, ac.vel, 0.05, 1.8, 0.6, [6, 5, 3], [3, 1.5, 0.5], 1, 0, 0, 0);
-        return true;
+        this.game.effects.fire.emit(_v3.copy(ac.pos).addScaledVector(fwd, ac.spec.length * 0.5), ac.vel, 0.05, 1.8, 0.6, [6, 5, 3], [3, 1.5, 0.5], 1, 0, 0, 0);
+        return n;
     }
 
     // Flak / AAA rounds from ground units

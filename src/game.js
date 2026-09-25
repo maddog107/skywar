@@ -1297,7 +1297,7 @@ export class Game {
         if (this.mode === 'sandbox') { if (p.spec.gun) p.ammo = p.spec.gun.ammo; p.fuel = 1; p.flameout = false; p.health = p.maxHealth; p.missiles = Math.max(p.missiles, 2); p.lrm = Math.max(p.lrm, 1); p.rockets = Math.max(p.rockets, 8); p.bombs = Math.max(p.bombs, 4); p.flares = Math.max(p.flares, 5); }
         this.firing = s.fire;
         if (s.fire && p.spec.gun && p.ammo > 0) {
-            if (this.weapons.fireGun(p, this.time)) this.shots++;
+            this.shots += this.weapons.fireGun(p, this.time);
             this.shake = Math.max(this.shake, 0.12);
         }
 
