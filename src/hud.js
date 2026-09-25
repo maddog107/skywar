@@ -840,56 +840,84 @@ export class HUD {
 
     // ── Ejected pilot HUD ──
     drawPilotMode(game) {
-        const ctx = this.ctx, W = this.w, H = this.h, pm = game.pilotMode;
-        ctx.font = '600 13px "Share Tech Mono", ui-monospace, monospace';
+        const ctx = this.ctx, W = this.w, H = this.h, pm = game.pilotMode, C = this.compact;
+        const M = C ? 14 : 28;
+        const mono = (w, px) => (ctx.font = w + ' ' + px + 'px "Share Tech Mono", ui-monospace, monospace');
+        mono('600', 13);
         ctx.textBaseline = 'middle';
         this.drawTargets(game);
         this.drawRadar(game);
         this.drawMessages(game);
+        const s = pm.seat, agl = pm.pos.y - Math.max(terrainHeight(pm.pos.x, pm.pos.z), 0);
         // crosshair
         const cx = W / 2, cy = H / 2, gap = 6 + pm.recoil * 300;
-        ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(cx - gap - 10, cy); ctx.lineTo(cx - gap, cy);
-        ctx.moveTo(cx + gap, cy); ctx.lineTo(cx + gap + 10, cy);
-        ctx.moveTo(cx, cy - gap - 10); ctx.lineTo(cx, cy - gap);
-        ctx.moveTo(cx, cy + gap); ctx.lineTo(cx, cy + gap + 10);
-        ctx.stroke();
+        if (pm.alive) {
+            ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(cx - gap - 10, cy); ctx.lineTo(cx - gap, cy);
+            ctx.moveTo(cx + gap, cy); ctx.lineTo(cx + gap + 10, cy);
+            ctx.moveTo(cx, cy - gap - 10); ctx.lineTo(cx, cy - gap);
+            ctx.moveTo(cx, cy + gap); ctx.lineTo(cx, cy + gap + 10);
+            ctx.stroke();
+        }
         if (game.time - game.hitmarkerT < 0.15) {
             ctx.strokeStyle = game.time - game.killmarkerT < 0.4 ? RED : '#fff';
             ctx.beginPath();
             for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { ctx.moveTo(cx + sx * 5, cy + sy * 5); ctx.lineTo(cx + sx * 13, cy + sy * 13); }
             ctx.stroke();
         }
-        // ammo & health
+        // ammo (a 60-round drum: "60 / 540")
         ctx.textAlign = 'right';
-        ctx.font = '700 30px "Share Tech Mono", ui-monospace, monospace';
-        ctx.fillStyle = pm.mag > 5 ? '#fff' : RED;
-        ctx.fillText(pm.reloadT > 0 ? 'RELOADING' : pm.mag + ' / ' + pm.reserve, W - 28, H - 40);
-        ctx.font = '600 12px "Share Tech Mono", ui-monospace, monospace';
+        mono('700', C ? 22 : 30);
+        ctx.fillStyle = pm.mag > 8 ? '#fff' : RED;
+        ctx.fillText(pm.reloadT > 0 ? 'RELOADING' : pm.mag + ' / ' + pm.reserve, W - M, H - (C ? 26 : 40));
+        mono('600', C ? 10 : 12);
         ctx.fillStyle = 'rgba(255,255,255,0.7)';
-        ctx.fillText('AK-47 · 7.62mm', W - 28, H - 70);
+        ctx.fillText('AK-47 · 7.62mm · DRUM', W - M, H - (C ? 48 : 70));
+        // health: number + bar (red and pulsing when low, flashing right after a hit)
+        const hp = clamp(pm.health / 100, 0, 1), hurt = game.time - pm.lastHitT < 0.35;
+        const hc = hurt ? '#fff' : hp > 0.5 ? '#fff' : hp > 0.25 ? AMBER : RED;
         ctx.textAlign = 'left';
-        ctx.fillStyle = pm.health > 50 ? '#fff' : RED;
-        ctx.font = '700 22px "Share Tech Mono", ui-monospace, monospace';
-        ctx.fillText('♥ ' + Math.max(0, Math.round(pm.health)), 28, H - 40);
-        ctx.font = '600 12px "Share Tech Mono", ui-monospace, monospace';
+        mono('700', C ? 18 : 22);
+        ctx.fillStyle = hc;
+        const hy = H - (C ? 26 : 40);
+        ctx.fillText('♥ ' + Math.max(0, Math.round(pm.health)), M, hy);
+        const bx = M + (C ? 62 : 78), bw = C ? 90 : 130;
+        ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fillRect(bx, hy - 4, bw, 8);
+        ctx.fillStyle = hp > 0.5 ? '#e8eef4' : hp > 0.25 ? AMBER : RED; ctx.fillRect(bx, hy - 4, bw * hp, 8);
+        ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 1; ctx.strokeRect(bx, hy - 4, bw, 8);
+        // status: where you are, the canopy's state
+        mono('600', C ? 10 : 12);
+        ctx.fillStyle = 'rgba(255,255,255,0.75)';
+        let status = s.landed ? 'ON THE GROUND' : s.deployed ? (pm.canopyGone ? 'CANOPY SHREDDED' : 'CANOPY ' + Math.round(pm.canopyHp / 1.5) + '%') + ' · SINK ' + Math.round(-s.vel.y * 196.85) + ' FPM' : 'SEAT FIRING';
+        if (!s.landed) status += ' · ' + Math.round(agl * M_TO_FT) + ' FT';
+        if (s.deployed && !s.landed && pm.canopyHp < 150) ctx.fillStyle = pm.canopyHp < 60 ? RED : AMBER;
+        ctx.fillText(status, M, H - (C ? 48 : 70));
         ctx.fillStyle = 'rgba(255,255,255,0.7)';
-        const agl = pm.pos.y - Math.max(terrainHeight(pm.pos.x, pm.pos.z), 0);
-        ctx.fillText((pm.seat.landed ? 'ON THE GROUND' : pm.seat.deployed ? 'CANOPY OPEN · SINK ' + Math.round(-pm.seat.vel.y * 196.85) + ' FPM' : 'SEAT FIRING') + ' · ' + Math.round(agl * M_TO_FT) + ' FT', 28, H - 70);
-        ctx.fillText(pm.walker ? 'WASD WALK · SHIFT RUN · E BOARD A JET · ENTER NEW JET · V VIEW' : pm.seat.deployed ? 'A/D TURN · W DIVE · S BRAKE · SPACE FLARE (LOW) · V VIEW' + (pm.flareUsed ? '' : '') : '', 28, H - 92);
-        if (pm.seat.deployed && !pm.seat.landed && agl < 18 && !pm.flareUsed && Math.floor(game.time * 3) % 2) {
-            ctx.textAlign = 'center'; ctx.font = '700 18px "Share Tech Mono", ui-monospace, monospace'; ctx.fillStyle = GREEN;
+        const keys = pm.walker ? 'WASD WALK · SHIFT RUN · LMB FIRE · R RELOAD · E BOARD A JET · V VIEW'
+            : s.deployed ? 'A/D TURN · W DIVE · S BRAKE · SPACE FLARE (LOW) · LMB FIRE · V VIEW' : '';
+        if (pm.alive) ctx.fillText(keys, M, H - (C ? 66 : 92), W * 0.62);
+        if (pm.alive && s.deployed && !s.landed && agl < 18 && !pm.flareUsed && !pm.canopyGone && Math.floor(game.time * 3) % 2) {
+            ctx.textAlign = 'center'; mono('700', 18); ctx.fillStyle = GREEN;
             ctx.fillText('SPACE — FLARE!', W / 2, H * 0.6);
-            ctx.textAlign = 'left'; ctx.font = '600 12px "Share Tech Mono", ui-monospace, monospace'; ctx.fillStyle = 'rgba(255,255,255,0.7)';
         }
-        ctx.fillText('SCORE ' + Math.floor(game.score) + (game.lives !== Infinity ? '   SPARE JETS ' + game.lives : ''), 28, 34);
+        ctx.textAlign = 'left'; mono('600', C ? 11 : 12); ctx.fillStyle = 'rgba(255,255,255,0.7)';
+        if (game.objective && game.mission) ctx.fillText(game.objective, M, C ? 22 : 34, W * 0.55);
+        ctx.fillText('SCORE ' + Math.floor(game.score) + (game.lives !== Infinity ? '   SPARE JETS ' + game.lives : ''), M, game.objective && game.mission ? (C ? 40 : 52) : (C ? 22 : 34));
+        // a hostile lining up on you: get out of the way (canopy) or behind something solid (on foot)
+        if (pm.alive && pm.strafeT > 0 && (this.t * 4) % 1 < 0.65) {
+            ctx.textAlign = 'center'; mono('700', C ? 15 : 20);
+            const txt = 'BANDIT INBOUND — ' + (s.landed ? 'TAKE COVER!' : s.deployed && !pm.canopyGone ? 'STEER! (A/D)' : 'STRAFING RUN');
+            const tw = ctx.measureText(txt).width + 20, ty = H * 0.3;
+            ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fillRect(W / 2 - tw / 2, ty - 15, tw, 30);
+            ctx.fillStyle = RED; ctx.fillText(txt, W / 2, ty);
+        }
         // hint
-        if (pm.hint) {
+        if (pm.hint && pm.alive) {
             ctx.textAlign = 'center';
-            ctx.font = '700 16px "Share Tech Mono", ui-monospace, monospace';
+            mono('700', C ? 13 : 16);
             ctx.fillStyle = AMBER;
-            ctx.fillText(pm.hint, W / 2, H * 0.66);
+            ctx.fillText(pm.hint, W / 2, H * 0.66, W - 30);
         }
     }
 

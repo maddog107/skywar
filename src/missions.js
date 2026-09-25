@@ -7,7 +7,7 @@
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
 import { BASES, isOnRunway } from './world.js';
-import { mulberry32 } from './util.js';
+import { mulberry32, clamp } from './util.js';
 import { AIRCRAFT } from './config.js';
 import { maxMach } from './aircraft.js';
 import { ConvoyOp, pickConvoyBridge } from './convoy.js';
@@ -95,10 +95,19 @@ export const MISSIONS = {
                 const e = g.spawnHostile('mig25', pos, new THREE.Vector3(b.x, 1800, b.z), 'BOMBER ' + (i + 1));
                 bombers.push(e);
             }
-            const esc = g.spawnEnemies(2, { x: b.x + dir.x * 26000, z: b.z + dir.z * 26000 });
+            // a slow jet (A-10, trainer…) gets older escorts and bombers it can actually catch: they hold a cruise
+            // under ~80% of its top speed (a Mach 2 fighter meets them at their usual 280 m/s)
+            const top = g.player.spec.flight.speed;
+            const slow = top < 350;
+            const esc = g.spawnEnemies(2, { x: b.x + dir.x * 26000, z: b.z + dir.z * 26000 }, slow ? ['mig21', 'f5'] : null);
             esc.forEach(e => { e.pilot.home = bombers[0].pos; e.pilot.leash = 9000; });
-            g.mstate = { bombers };
+            g.mstate = { bombers, cruise: clamp(top * 0.78, 170, 280) };
             g.audio.say('Scramble, scramble! Bombers inbound!', true);
+        },
+        update: (g) => {
+            // speed hold: nudge each bomber's throttle toward the cruise speed
+            const want = g.mstate.cruise;
+            for (const e of g.mstate.bombers) if (e.alive && e.pilot) e.pilot.cruise = clamp((e.pilot.cruise ?? 0.36) + (want - e.speed) * 0.0004, 0.05, 0.95);
         },
         check: (g) => {
             const b = home();

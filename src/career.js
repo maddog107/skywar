@@ -106,6 +106,7 @@ export class Career {
         ev.on('hijack', () => this.award('hijack'));
         ev.on('riflePilot', () => this.award('rifle_pilot'));
         ev.on('killed', (ac) => { if (ac.isPlayer) this.data.deaths++; });
+        ev.on('pilotKilled', () => { this.data.deaths++; }); // killed after ejecting / on foot
     }
 
     startSortie() { this.sortieKills = 0; this.sortieStart = performance.now(); }

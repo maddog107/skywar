@@ -9,7 +9,7 @@ import { Weapons } from './weapons.js';
 import { GroundForces } from './ground.js';
 import { Wreckage } from './damage.js';
 import { Naval } from './naval.js';
-import { PilotOnFoot, spawnFallingBody } from './pilot.js';
+import { PilotOnFoot, spawnFallingBody, isEnemySeat, hitEnemySeat, shredEnemyCanopy, seatCanopyUp, seatCanopyCenter } from './pilot.js';
 import { Autopilot, runwayApproach, GLIDE_SLOPE } from './autopilot.js';
 import { refSpeeds } from './aircraft.js';
 import { MISSIONS } from './missions.js';
@@ -556,11 +556,49 @@ export class Game {
         this.events.emit('hijack', a);
     }
 
-    pilotKilled() {
+    // the ejected / walking player was killed (pilot.js takeHit): the usual death flow takes it from here —
+    // a new jet if there are spares, otherwise the sortie (or the mission) is over
+    pilotKilled(cause) {
         this.addFeed('PILOT KIA', '#ff4a3d');
+        this.showBanner('KILLED IN ACTION', cause || '', 4, '#ff4a3d');
         this.state = 'dead';
         this.deathT = 0;
+        this.missileCam = null;
+        this.events.emit('pilotKilled', this.pilotMode, { cause });
         this.audio.say('Pilot down.', true);
+    }
+
+    // Ejection seats against the world: an enemy pilot slamming into a building or the ground (a shredded canopy,
+    // a low ejection) is killed; a jet flying through a canopy takes the man with it. The player's own landings
+    // are judged in pilot.js.
+    updateSeats() {
+        const bl = this.world.towns && this.world.towns.buildings;
+        const pm = this.pilotMode;
+        for (const s of this.wreckage.seats) {
+            if (s.dead) continue;
+            const r = s.root.position, mine = !!pm && pm.seat === s;
+            if (!s.landed) {
+                s._vy = -s.vel.y;
+                const b = bl && r.y < bl.maxTop + 1 ? bl.at(r.x, r.y + 1, r.z) : null;
+                if (b && s._bld !== b) {
+                    s._bld = b;
+                    const v = s.vel.length();
+                    if (mine) { if (pm.alive) pm.takeHit(v > 15 ? 200 : 35, 'SLAMMED INTO A BUILDING'); }
+                    else if (isEnemySeat(s)) hitEnemySeat(this, s, v > 15 ? 999 : 60, s.doomedBy || null);
+                }
+                if (!mine && isEnemySeat(s)) {
+                    for (const a of this.aircraft) {
+                        if (!a.alive || a.team === 'red') continue;
+                        const who = a === this.player ? this.player : a;
+                        if (a.pos.distanceToSquared(r) < (a.hitRadius * 0.6) ** 2) { hitEnemySeat(this, s, 999, who); break; }
+                        if (seatCanopyUp(s) && a.pos.distanceToSquared(seatCanopyCenter(s, _v3)) < (a.hitRadius * 0.6 + 6) ** 2) shredEnemyCanopy(this, s, 999, who);
+                    }
+                }
+            } else if (s._vy != null) {
+                if (!mine && isEnemySeat(s) && s._vy > 12) hitEnemySeat(this, s, 999, s.doomedBy || null);
+                s._vy = null;
+            }
+        }
     }
 
     // ── Target practice: boards on the hills + drones ──
@@ -723,6 +761,7 @@ export class Game {
             const d = this.camera.position.distanceTo(ac.pos);
             this.audio.boom(d, 1.2);
             if (d < 500) this.shake = Math.min(1.5, this.shake + (500 - d) / 400);
+            this.weapons.blastPeople(ac.pos, 45, 110, null); // a jet going up next to a parachute
         });
         ev.on('groundKilled', (t, { source }) => {
             const d = this.camera.position.distanceTo(t.pos);
@@ -1338,6 +1377,7 @@ export class Game {
         this.worldCollisions();
         this.weapons.update(dt);
         this.wreckage.update(dt);
+        this.updateSeats();
         this.ground.update(dt);
         this.naval.update(dt);
         if (this.world.towns) { this.world.towns.update(dt, this.camera.position); this.world.towns.traffic.update(dt, this); }
