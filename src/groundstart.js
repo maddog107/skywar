@@ -58,7 +58,7 @@ export class GroundStart {
         this.cleared = false;
         this.stopT = 0;
         this.camYaw = 0; this.camPitch = 0.18;
-        this.prevE = false;
+        this.prevE = !!(game.input && (game.input.down('KeyE') || game.input.down('Enter'))); // a key already held (e.g. Enter for a new jet) isn't a press
         this.hint = '';
         const b = this.base, GATE = this.gate;
         const ch = new Character(opts.character || 'pilot');

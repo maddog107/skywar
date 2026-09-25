@@ -225,7 +225,8 @@ export class HUD {
         if (p.hook) ctx.fillText(p.trap ? 'HOOK — TRAPPED' : 'HOOK DN', rx, ly + 80);
         if (game.settings.fuel !== false && game.mode !== 'sandbox') {
             ctx.fillStyle = p.fuel < 0.1 ? RED : p.fuel < 0.2 ? AMBER : GREEN;
-            ctx.fillText('FUEL ' + Math.round(p.fuel * 100) + '%', lx + 80, ly);
+            ctx.textAlign = 'left';
+            ctx.fillText('FUEL ' + Math.round(p.fuel * 100) + '%', lx, ly + 80);
             ctx.fillStyle = GREEN;
         }
         // heading tape

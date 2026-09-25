@@ -121,7 +121,7 @@ export class Audio {
 
     // ── Continuous state ──
     update(dt, p, state) {
-        if (!this.ctx) return;
+        if (!this.ctx || this.ctx.state !== 'running') return; // suspended: automation events would just pile up
         const t = this.ctx.currentTime;
         const set = (param, v, tc = 0.08) => param.setTargetAtTime(v, t, tc);
         if (!p || !p.alive || !state.playing) {

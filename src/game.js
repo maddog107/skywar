@@ -134,7 +134,7 @@ export class Game {
         this.callsign = pick(CALLSIGNS);
         this.slot = 0;
         this._navalWon = false; this.navalWinT = 0; this._practiceDone = false; this.spawnT = 3;
-        this.gloc = 0; this.whiteout = 0; this.missileCam = null; this.pullUp = false;
+        this.gloc = 0; this.whiteout = 0; this.missileCam = null; this.pullUp = false; this.outOfBounds = false;
         this.photo = null; this.hideHud = false;
         if (this.nvg) { this.nvg = false; this.onNvg && this.onNvg(false); }
         if (this.rings) { this.rings.remove(); this.rings = null; }
@@ -454,6 +454,7 @@ export class Game {
     completeHijack(a, pm) {
         if (!a || !a.alive || a.exploded) return;
         this.prevE = true; // don't let the boarding E press climb straight back out
+        const own = !!pm && a === pm.from; // climbing back into your own jet isn't a hijack
         if (a.pilotDead) {
             spawnFallingBody(this, a);
             this.addFeed('SHOVED THE PILOT OUT', '#ffc23f');
@@ -473,8 +474,10 @@ export class Game {
         a.ejected = false; a.ejectT = -1; a.ejectSeat = null;
         a.team = 'blue'; a.isPlayer = true; a.callsign = this.callsign;
         a.lrm = a.lrm ?? 0; a.rockets = a.rockets ?? 0; a.bombs = a.bombs ?? 0;
-        a.fuel = Math.max(a.fuel ?? 1, 0.6); a.flameout = false;
-        if (this.mission && this.mission.loadout) this.mission.loadout(a); // mission weapon rules still apply
+        if (!own) {
+            a.fuel = Math.max(a.fuel ?? 1, 0.6); a.flameout = false;
+            if (this.mission && this.mission.loadout) this.mission.loadout(a); // mission weapon rules still apply
+        }
         this.player = a;
         this.pilotMode = null;
         this.state = 'playing';
@@ -482,6 +485,7 @@ export class Game {
         this.rotateSpeed = refSpeeds(a.spec).takeoff;
         this.camQuat.copy(a.quat);
         this.lockTarget = null;
+        if (own) { this.addFeed('BACK IN THE COCKPIT', '#5dffa0'); return; }
         this.score += 500;
         this.showBanner('HIJACKED!', a.spec.name.toUpperCase() + ' IS YOURS  +500', 3.5, '#ffc23f');
         this.events.emit('hijack', a);
@@ -624,7 +628,7 @@ export class Game {
                 return;
             }
             if (ac.abandoned) return;
-            const byPlayer = source === this.player;
+            const byPlayer = !!source && (source === this.player || source === this.pilotMode); // rifle kills count too
             const name = ac.spec.name;
             if (ac.team === 'red') {
                 if (byPlayer) {
@@ -639,7 +643,7 @@ export class Game {
                     this.killmarkerT = this.time; this.hitmarkerT = this.time;
                     this.addFeed('SPLASH ' + name.toUpperCase() + (kind === 'gun' ? ' [GUNS]' : '') + '  +' + pts, '#5dffa0');
                     this.audio.say(pick(['Splash one!', 'Good kill, good kill!', 'Bandit down!', 'Target destroyed!', 'Splash!']));
-                    if (this.mode === 'survival') { this.player.health = Math.min(this.player.maxHealth, this.player.health + 6); this.player.missiles = Math.min(this.player.spec.missiles, this.player.missiles + 1); }
+                    if (this.mode === 'survival') { this.player.health = Math.min(this.player.maxHealth, this.player.health + 6); const p = this.player; p.missiles = Math.max(p.missiles, Math.min(p.maxMissiles ?? p.spec.missiles, p.missiles + 1)); }
                     this.slowmoT = 0.35;
                 } else {
                     this.addFeed((source && source.callsign ? source.callsign : 'ALLY') + ' SPLASHED ' + name.toUpperCase(), '#5ab8ff');
@@ -669,8 +673,9 @@ export class Game {
                 else if (t.type === 'bunker') this.audio.say('Command bunker destroyed!');
             }
         });
-        ev.on('missileLaunch', (ac, { target }) => {
+        ev.on('missileLaunch', (ac, { target, missile }) => {
             if (ac === this.player) {
+                if (missile && missile.kind === 'rkt') return; // rockets aren't missiles: no count, no "Fox two"
                 this.missilesFired++;
                 this.audio.whoosh(0.5);
                 this.audio.say(pick(['Fox two!', 'Fox two.', 'Missile away!']));
@@ -683,7 +688,7 @@ export class Game {
                 }
             }
         });
-        ev.on('missileHit', (owner, { target }) => { if (owner === this.player && !target.isFlare) this.missileHits++; });
+        ev.on('missileHit', (owner, { target, missile }) => { if (owner === this.player && !target.isFlare && !(missile && missile.kind === 'rkt')) this.missileHits++; });
         ev.on('decoyed', (owner, { victim }) => {
             if (victim === this.player) { this.addFeed('MISSILE DEFEATED', '#5dffa0'); this.audio.say('Missile defeated!'); }
             if (owner === this.player) this.addFeed('MISSILE DECOYED', '#ffc23f');
@@ -699,11 +704,11 @@ export class Game {
             else if (this.player && ac.lastHitBy === this.player) this.addFeed('WING SHOT OFF', '#ffc23f');
         });
         ev.on('flares', (ac) => { if (ac.isPlayer) this.audio.flares(); });
-        ev.on('touchdown', (ac, { vs, onRunway, onDeck, trap }) => {
+        ev.on('touchdown', (ac, { vs, onRunway, onDeck, trap, late }) => {
             if (!ac.isPlayer) return;
             const fpm = Math.round(-vs * 196.85);
             if (onDeck) {
-                this.addFeed((trap ? 'TRAP! ' : 'DECK LANDING — NO WIRE ') + fpm + ' FPM', trap ? '#5dffa0' : '#ffc23f');
+                this.addFeed(late ? 'TRAP! (LATE WIRE)' : (trap ? 'TRAP! ' : 'DECK LANDING — NO WIRE ') + fpm + ' FPM', trap ? '#5dffa0' : '#ffc23f');
                 if (trap) { this.score += 400; this.showBanner('TRAP!', 'Caught the wire +400', 2.5); this.audio.say('Nice trap!'); this.shake = 0.8; }
                 return;
             }
@@ -751,6 +756,7 @@ export class Game {
         if (p.spec.gun) p.ammo = p.spec.gun.ammo;
         p.refuel(1);
         if (this.mission && this.mission.loadout) this.mission.loadout(p);
+        p.maxMissiles = Math.max(p.missiles, p.spec.missiles); // survival's kill reward tops up to this
     }
 
     cycleLoadout() {
@@ -863,7 +869,8 @@ export class Game {
                 this.audio.tick(300, 0.12, 0.3);
                 break;
             case 'eject':
-                if (this.time - (this.lastEjectPress || -9) < 0.6) this.ejectPlayer();
+                if (p.spec.category === 'civil') this.addFeed('NO EJECTION SEAT — LAND IT, STOP, THEN E TO CLIMB OUT', '#ff9f5a');
+                else if (this.time - (this.lastEjectPress || -9) < 0.6) this.ejectPlayer();
                 else { this.lastEjectPress = this.time; this.addFeed('PRESS J AGAIN TO EJECT', '#ff4a3d'); }
                 break;
             case 'spawn':
@@ -1149,10 +1156,10 @@ export class Game {
         if (p.onGround && p.speed < 3 && !p.bellied && this.atFriendlyPad(p)) {
             this.rearmT = (this.rearmT || 0) + dt;
             if (this.rearmT > 1) {
-                p.health = Math.min(p.maxHealth, p.health + 30 * dt);
+                if (this.mode !== 'survival') p.health = Math.min(p.maxHealth, p.health + 30 * dt); // survival: no repairs
                 p.refuel(dt * 0.15);
                 if (this.rearmT > 4 && !this._rearmDone) { this._rearmDone = true; this.rearm(p); this.addFeed('REARMED & REFUELLED — L: CHANGE LOADOUT', '#5ab8ff'); this.audio.say('You are rearmed and refuelled.'); }
-                if (!this._rearmMsg) { this._rearmMsg = true; this.addFeed('REPAIRING, REFUELLING & REARMING…', '#5ab8ff'); }
+                if (!this._rearmMsg) { this._rearmMsg = true; this.addFeed(this.mode === 'survival' ? 'REFUELLING & REARMING (NO REPAIRS)…' : 'REPAIRING, REFUELLING & REARMING…', '#5ab8ff'); }
             }
         } else { this.rearmT = 0; this._rearmMsg = false; this._rearmDone = false; }
         // fuel callouts
@@ -1263,7 +1270,7 @@ export class Game {
     updateMode(dt) {
         if (this.state !== 'playing') return;
         // still on the ground in the Ready Room: the sortie hasn't started (missions that play out on foot still tick)
-        if (this.groundStart && !(this.mission && this.mission.onFoot)) return;
+        if (this.groundStart && !(this.mission && this.mission.onFoot)) { this.outOfBounds = false; return; }
         const p = this.pilotMode ? { pos: this.pilotMode.pos, vel: this.pilotMode.seat.vel } : this.player;
         const enemiesAlive = this.aircraft.filter(a => a.team === 'red' && a.alive && !a.pilotDead).length;
         if (this.mode === 'dogfight') {
@@ -1293,8 +1300,7 @@ export class Game {
                 this.spawnT = 4;
             }
             this.objective = 'SURVIVE — THREAT LEVEL ' + want;
-            this.score += dt * 2;
-            this.score = Math.round(this.score * 10) / 10;
+            this.score += dt * 2; // fractional; the HUD and results round it
         } else if (this.mode === 'strike') {
             const rem = this.ground.remaining;
             this.objective = 'TARGETS REMAINING: ' + rem + ' / ' + this.ground.total;
@@ -1374,7 +1380,8 @@ export class Game {
             }
         }
         // soft combat boundary
-        this.outOfBounds = !['freeflight', 'sandbox', 'naval'].includes(this.mode) && Math.hypot(p.pos.x, p.pos.z - (this.mode === 'strike' ? -8000 : 0)) > 30000;
+        // (the heist's escape target, 22 km from Miramar, is outside the 30 km box on purpose)
+        this.outOfBounds = !['freeflight', 'sandbox', 'naval'].includes(this.mode) && !(this.mission && this.mission.start === 'heist') && Math.hypot(p.pos.x, p.pos.z - (this.mode === 'strike' ? -8000 : 0)) > 30000;
         if (p.pos.y > 14000 && p.vel) p.vel.y -= 10 * dt;
     }
 

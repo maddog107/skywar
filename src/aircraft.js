@@ -289,6 +289,7 @@ export class Aircraft {
     catchWire() {
         if (this.trap || !this.deck) return;
         this.trap = true;
+        this.caughtWire = true;
         const tip = this.hookPoint(_v1);
         const { lz } = this.deck.toLocal(tip.x, tip.z);
         const B = this.deck.def.B;
@@ -529,7 +530,10 @@ export class Aircraft {
         const clS = this.clEff, cl0 = this.flapCl;
         let alphaCmd = ((nCmd * G) / Math.max(q, 1e-3) - cl0) / clS;
         const alphaLim = this.alphaMax;
-        this.stalling = alphaCmd > alphaLim * 0.98 && c.pitch > -0.2 && V < f.speed * 0.45;
+        // stall warning: slow (near the 1-G stall speed at this density & flap setting), or at max AoA while slowish —
+        // not an alpha-limited break turn at corner speed
+        const vStall = Math.sqrt(G / (this.liftK * rho * CL_MAX * (1 + 0.2 * this.flaps)));
+        this.stalling = !this.falling && (V < vStall * 1.1 || (alphaCmd > alphaLim * 0.98 && c.pitch > -0.2 && V < vStall * 1.6));
         alphaCmd = clamp(alphaCmd, -alphaLim * 0.55, alphaLim);
         const pitchRateMax = 1.4 * clamp(V / 120, 0.35, 1.2);
         const dA = clamp(alphaCmd - this.alpha, -pitchRateMax * dt, pitchRateMax * dt);
@@ -591,9 +595,10 @@ export class Aircraft {
         _q1.setFromUnitVectors(oldDir, newDir);
         this.qv.premultiply(_q1).normalize();
 
-        // Stall departure: at very low speed the nose falls through
-        if (V < 45 && !this.falling) {
-            const drop = (45 - V) / 45;
+        // Stall departure: well below the stall speed the nose falls through
+        const vDep = this.departV ?? (this.departV = refSpeeds(this.spec).stall * 0.8);
+        if (V < vDep && !this.falling) {
+            const drop = (vDep - V) / vDep;
             const fwdW = _v2.set(0, 0, -1).applyQuaternion(this.qv);
             const axis = _v3.crossVectors(fwdW, AY);
             if (axis.lengthSq() > 1e-4) {
@@ -649,7 +654,10 @@ export class Aircraft {
             if (V > rotateSpeed * 1.2) this.catapult = 0;
         }
         // hook dropped late while rolling through the wires still catches one
-        if (!this.trap && this.deck && this.hook && this.hookAnim > 0.8 && V > 15 && !this.catapult && this.deck.inWireZone(this.pos.x, this.pos.z)) this.catchWire();
+        if (!this.trap && this.deck && this.hook && this.hookAnim > 0.8 && V > 15 && !this.catapult && this.deck.inWireZone(this.pos.x, this.pos.z)) {
+            this.catchWire();
+            this.game.events.emit('touchdown', this, { vs: 0, onRunway: false, onDeck: true, trap: true, late: true });
+        }
         // arresting wire: stops a landing jet in ~100 m
         if (this.trap) {
             acc = Math.min(acc, -26);
@@ -813,16 +821,41 @@ export class Aircraft {
         if (this.bellyWater && V < 3) this.sinkDepth = Math.min(this.gearOffset + 2.5, (this.sinkDepth || 0) + dt * 0.25);
     }
 
+    get invincible() { return this.isPlayer && this.game.mode === 'sandbox'; }
+
     crash(water = false) {
         if (!this.alive && !this.falling) return;
+        if (this.invincible && this.alive && !this.falling) { this.sandboxBounce(water); return; }
         if (water) this.game.effects.waterSplash(this.pos, 1.4);
         this.health = 0;
         this.explode(true, water);
     }
 
+    // Sandbox: instead of crashing, bounce back up off the ground, levelled out and slowed
+    sandboxBounce(water) {
+        const g = this.game;
+        if (water) g.effects.waterSplash(this.pos, 0.8);
+        else g.effects.debrisBurst(this.pos, _v1.set(0, 4, 0), 3, 0.4);
+        g.shake = Math.min(1.5, (g.shake || 0) + 0.8);
+        const hx = this.vel.x, hz = this.vel.z, hs = Math.hypot(hx, hz);
+        const fwd = this.getForward(_v2);
+        const heading = hs > 1 ? Math.atan2(-hx, -hz) : Math.atan2(-fwd.x, -fwd.z);
+        this.onGround = false; this.deck = null; this._dl = null; this.bellied = false; this.bellyWater = false; this.sinkDepth = 0;
+        this.trap = false; this.catapult = 0;
+        const surf = g.surfaceAt(this.pos.x, this.pos.z, 1e9);
+        this.pos.y = Math.max(surf.h, 0) + this.gearOffset + 4;
+        const v = Math.max(hs * 0.7, 20);
+        this.vel.set(-Math.sin(heading) * v, 6, -Math.cos(heading) * v);
+        this.qv.setFromAxisAngle(AY, heading).multiply(_q1.setFromAxisAngle(AX, 0.08));
+        this.rollRate = 0; this.alpha = 0.05;
+        this.syncBody();
+        if (!(g.time - (this._bounceMsgT ?? -99) < 3)) { this._bounceMsgT = g.time; g.addFeed('SANDBOX — CRASH IGNORED', '#9fb2c4'); }
+    }
+
     // ── Damage ──
     damage(amount, source, kind = 'gun') {
         if (!this.alive) return;
+        if (this.invincible) { this.lastHitBy = source; this.lastHitTime = this.game.time; this.game.events.emit('hit', this, { source, amount: 0, kind }); return; }
         let mult = this.isPlayer ? this.game.difficulty.dmgTaken : 1;
         // AI cannon is tuned down against the player so fights last long enough to be fun
         if (this.isPlayer && kind === 'gun') mult *= 0.45;
@@ -922,6 +955,10 @@ export class Aircraft {
         for (const s of [this.navL, this.navR, this.strobe]) s && s.material.dispose();
         this.model.traverse(o => { if (o.isMesh && o.userData.origMat && o.material !== o.userData.origMat) o.material.dispose(); });
         for (const l of this.gearLegs || []) l.traverse(o => { if (o.isMesh) o.geometry.dispose(); });
+        // hook, flap and spoiler panels own their geometry (materials are shared, except the hook tip's)
+        for (const piv of [this.hookMesh, ...(this.flapPanels || []), ...(this.brakePanels || [])]) piv && piv.traverse(o => { if (o.isMesh) o.geometry.dispose(); });
+        if (this.hookTip) this.hookTip.material.dispose();
+        if (this.wireMeshes) { this.wireMeshes.forEach(m => m.geometry.dispose()); this.wireMeshes[0].material.dispose(); this.wireMeshes = null; }
     }
 
     // ── Per-frame ──
@@ -1013,7 +1050,7 @@ export class Aircraft {
         const vapor = this.alive && !this.onGround && (this.gLoad > 5 || (this.alpha > 0.22 && this.speed > 110));
         for (let i = 0; i < 2; i++) {
             if (vapor) {
-                if (!this.vortex[i]) this.vortex[i] = fx.addTrail({ max: 60, width: 0.35, life: 0.9, color: [1, 1, 1], alpha: 0.5, minDist: 4, widthGrow: 2.5 });
+                if (!this.vortex[i]) this.vortex[i] = fx.addTrail({ max: 60, width: 0.3, life: 0.7, color: [1, 1, 1], alpha: 0.3, minDist: 4, widthGrow: 1.2 });
                 worldPos.copy(this.rig.wingtips[i]).applyMatrix4(this.model.matrixWorld);
                 this.vortex[i].push(worldPos, fx.now);
             } else if (this.vortex[i]) {

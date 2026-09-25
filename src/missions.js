@@ -9,6 +9,7 @@ import * as THREE from 'three';
 import { BASES, isOnRunway } from './world.js';
 import { mulberry32 } from './util.js';
 import { AIRCRAFT } from './config.js';
+import { maxMach } from './aircraft.js';
 import { ConvoyOp, pickConvoyBridge } from './convoy.js';
 import { HeistOp } from './heist.js';
 
@@ -172,9 +173,13 @@ export const MISSIONS = {
         check: (g) => {
             const p = g.player;
             if (!p.alive || p.bellied) return 'lose';
-            return p.onGround && p.deck && p.relSpeed < 2 ? 'win' : null;
+            if (p.onGround && !p.deck) { g.showBanner('WRONG DECK', 'That was dry land — the mission was a carrier trap.', 4, '#ff4a3d'); return 'lose'; }
+            return p.onGround && p.deck && p.caughtWire && p.relSpeed < 2 ? 'win' : null;
         },
-        objective: () => 'LAND ON THE CARRIER — CATCH A WIRE',
+        objective: (g) => {
+            const p = g.player;
+            return p.onGround && p.deck && !p.caughtWire ? 'NO WIRE — FULL THROTTLE TO LAUNCH OFF THE DECK, GO ROUND AND TRY AGAIN' : 'LAND ON THE CARRIER — CATCH A WIRE';
+        },
     },
 };
 
@@ -188,7 +193,9 @@ export function dailyMission(date = new Date()) {
     const r = mulberry32(h);
     const ids = Object.keys(MISSIONS);
     const id = ids[Math.floor(r() * ids.length)];
-    const fighters = Object.keys(AIRCRAFT).filter(k => AIRCRAFT[k].category === 'fighter');
+    // no comparison model (f35n); anything but a strike mission needs a real fighter (Mach 1.4+, so not the A-10)
+    const tag = MISSIONS[id].tag;
+    const fighters = Object.keys(AIRCRAFT).filter(k => AIRCRAFT[k].category === 'fighter' && k !== 'f35n' && (tag === 'STRIKE' || maxMach(k) >= 1.4));
     const aircraft = fighters[Math.floor(r() * fighters.length)];
     const time = ['dawn', 'day', 'day', 'dusk', 'night'][Math.floor(r() * 5)];
     return { key, id, aircraft, time, def: MISSIONS[id] };

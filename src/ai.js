@@ -181,14 +181,22 @@ export class Pilot {
 
         if (this.waypoint) {
             // transports / bombers: fly the route, hold altitude, don't fight
-            const to = _d.subVectors(this.waypoint, ac.pos);
-            to.y = clamp((this.waypoint.y - ac.pos.y) / 1500, -0.25, 0.25) * to.length() * 0.001 + to.y * 0;
-            wantDir = _t.set(to.x, 0, to.z).normalize();
-            wantDir.y = clamp((this.waypoint.y - ac.pos.y) / 2000, -0.2, 0.2);
+            // once there, circle the waypoint (no hard reversals over the field)
+            const wp = this.waypoint, R = 1600;
+            const dx = ac.pos.x - wp.x, dz = ac.pos.z - wp.z, r = Math.hypot(dx, dz);
+            if (r < R * 1.5) {
+                if (!this.orbitDir) this.orbitDir = (ac.vel.x * dz - ac.vel.z * dx) > 0 ? 1 : -1;
+                const k = clamp((r - R) / R, -0.7, 0.7); // pull in when wide, push out when tight
+                wantDir = _t.set(this.orbitDir * -dz / r - k * dx / r, 0, this.orbitDir * dx / r - k * dz / r).normalize();
+            } else wantDir = _t.set(-dx, 0, -dz).normalize();
+            // hold the route altitude, never below 350 m over the terrain
+            const floor = Math.max(wp.y, Math.max(terrainHeight(ac.pos.x, ac.pos.z), 0) + 350);
+            wantDir.y = clamp((floor - ac.pos.y) / 2000, -0.12, 0.2);
             wantDir.normalize();
             steerToward(ac, wantDir, c, 0.6);
             c.throttle = this.cruise ?? 0.75;
-            avoidTerrain(ac, c, 200);
+            if (ac.pos.y < floor - 100) c.throttle = Math.max(c.throttle, 0.95);
+            avoidTerrain(ac, c, 300);
             return;
         }
         const FL = this.formation && this.formation.leader;

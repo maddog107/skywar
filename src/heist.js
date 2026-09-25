@@ -15,6 +15,10 @@ import { Character } from './character.js';
 import { samplePath } from './roads.js';
 import { clamp, rand } from './util.js';
 
+// fallback box meshes (no prop model loaded) own their geometry; prop clones share the cache's
+function ownMesh(geo, mat) { const m = new THREE.Mesh(geo, mat); m.userData.ownGeo = true; return m; }
+function freeOwn(m) { if (m && m.userData.ownGeo) { m.geometry.dispose(); m.material.dispose(); } }
+
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _e = new THREE.Euler(0, 0, 0, 'YXZ');
 
 // Miramar, base-local: where the jet to steal is parked (clear of the flight line rows), and what's solid
@@ -57,7 +61,7 @@ class HeistGround extends GroundStart {
         samplePath(c.path, c.s, _v, _v2);
         if (c.dir < 0) _v2.negate();
         const yaw = Math.atan2(-_v2.x, -_v2.z);
-        const mesh = propInstance(type.id) || new THREE.Mesh(new THREE.BoxGeometry(2, 1.4, 4.5), new THREE.MeshStandardMaterial({ color: c.color }));
+        const mesh = propInstance(type.id) || ownMesh(new THREE.BoxGeometry(2, 1.4, 4.5), new THREE.MeshStandardMaterial({ color: c.color }));
         const fast = type.id.startsWith('car_sports') ? 44 : type.id === 'car_police' ? 42 : 36;
         this.setCar(mesh, c.pos.clone(), yaw, fast, type.id === 'car_police' ? 'POLICE CAR' : 'CAR');
         // the driver bails out and runs off
@@ -78,7 +82,7 @@ class HeistGround extends GroundStart {
     }
 
     // at the booth without being on the list: the sentry sounds the alarm
-    driveHook(dt) {
+    driveHook(dt, e) {
         const c = this.car;
         if (!this.op.alarm) {
             const d = c.pos.distanceTo(this.checkPos);
@@ -89,7 +93,16 @@ class HeistGround extends GroundStart {
             } else if (d < 60 && Math.abs(c.v) > 12) this.hint = 'FLOOR IT — RAM THE BARRIER!';
         }
         if (c.pos.distanceTo(this.jet.pos) < 60) this.hint = Math.abs(c.v) < 2.5 ? 'E — GET OUT AND STEAL THE JET' : 'SLOW DOWN — THE JET IS HERE';
-        return true; // skip the Ready Room's checkpoint logic
+        // the Ready Room's checkpoint logic is skipped, so hop out here
+        if (e && Math.abs(c.v) < 2.5) this.exitCar();
+        else if (e) this.hint = 'STOP FIRST';
+        return true;
+    }
+
+    dispose() {
+        const m = this.car && this.car.mesh;
+        super.dispose();
+        freeOwn(m);
     }
 
     // ramming the boom barrier at speed smashes through
@@ -175,7 +188,7 @@ export class HeistOp {
         if (this.alarm) return;
         const g = this.game, b = this.base;
         this.alarm = true;
-        this.stage = 'alarm';
+        if (this.stage === 'town' || this.stage === 'driving') this.stage = 'alarm'; // never regress from 'jet'/'air'
         if (msg) g.addFeed(msg, '#ff9f5a');
         g.showBanner('INTRUDER ALERT', 'Military police are after you — get to the jet! If they catch you, you\'re BUSTED.', 5, '#ff4a3d');
         g.audio.say('Intruder alert! Intruder alert! Lock down the flight line!', true);
@@ -186,7 +199,7 @@ export class HeistOp {
         const spots = [[760, -380, 'humvee', 25], [760, -220, 'humvee', 25], [620, -900, 'humvee', 24], [b.gate.lx + 120, b.gate.lz + 20, 'car_police', 33]];
         for (const [lx, lz, id, vmax] of spots) {
             const w = baseToWorld(b, lx, lz);
-            const mesh = propInstance(id) || new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.8, 4.6), new THREE.MeshStandardMaterial({ color: 0x5b6443 }));
+            const mesh = propInstance(id) || ownMesh(new THREE.BoxGeometry(2.2, 1.8, 4.6), new THREE.MeshStandardMaterial({ color: 0x5b6443 }));
             g.scene.add(mesh);
             // a flashing light bar
             const bar = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.2, 0.3), new THREE.MeshBasicMaterial({ color: 0xff2020, toneMapped: false }));
@@ -304,8 +317,15 @@ export class HeistOp {
     }
 
     dispose() {
-        for (const u of this.pursuers) this.game.scene.remove(u.mesh);
+        for (const u of this.pursuers) {
+            this.game.scene.remove(u.mesh);
+            u.bar.geometry.dispose(); u.bar.material.dispose();
+            freeOwn(u.mesh);
+        }
         for (const f of this.fleeing) f.ch.dispose();
         this.pursuers = []; this.fleeing = [];
+        // the smashed gate comes back for the next sortie
+        const info = this.game.world.airbases && this.game.world.airbases.bases.find(i => i.base === this.base);
+        if (info) for (const a of info.arms) { a.pivot.visible = true; a.open = 0; a.pivot.rotation.x = 0; }
     }
 }

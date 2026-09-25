@@ -24,8 +24,10 @@ export function runwayApproach(base, rwIndex = 0) {
         let worst = -Infinity, clearDist = 9000;
         for (let d = 100; d <= 9000; d += 100) {
             const x = thr.x - fwd.x * d, z = thr.z - fwd.z * d;
-            const over = terrainHeight(x, z) - (base.h + d * Math.tan(GLIDE));
-            if (over > -35 && clearDist === 9000) clearDist = d - 100;
+            const glideH = d * Math.tan(GLIDE);
+            const over = terrainHeight(x, z) - (base.h + glideH);
+            // margin grows with height: near the threshold the glide path is only metres above the ground
+            if (over > -Math.min(35, glideH * 0.5) && clearDist === 9000) clearDist = d - 100;
             worst = Math.max(worst, over * (d <= 6000 ? 1 : 0.3));
         }
         const score = worst - clearDist * 0.01;
@@ -60,6 +62,7 @@ export class Autopilot {
         this.active = 'takeoff';
         this.phase = 'roll';
         this.heading = p.deck ? null : Math.atan2(-p.getForward(_v).x, -p.getForward(_v).z);
+        this.climbHeading = null;
         this.game.addFeed('AUTOPILOT: TAKEOFF', '#5dffa0');
     }
 
@@ -75,11 +78,12 @@ export class Autopilot {
         if (this.target.kind === 'runway') this.pickRunwayEnd(home);
         this.active = 'land';
         this.phase = 'transit';
+        this.leg = null;
         // already lined up on final? then just keep flying the approach
         const t = this.geometry();
         const rel = _v.subVectors(p.pos, t.touch);
         const along = -rel.dot(t.fwd), lateral = rel.x * t.fwd.z - rel.z * t.fwd.x;
-        if (along > 300 && along < 12000 && Math.abs(lateral) < 500 && _v2.copy(p.vel).normalize().dot(t.fwd) > 0.85) this.phase = 'final';
+        if (along > 300 && along < (t.fixDist || 9000) + 2000 && Math.abs(lateral) < 500 && _v2.copy(p.vel).normalize().dot(t.fwd) > 0.85) this.phase = 'final';
         g.addFeed('AUTOPILOT: LANDING AT ' + (this.target.kind === 'carrier' ? 'CARRIER ' + cv.name : home.name || 'HOME AIRBASE'), '#5dffa0');
     }
 
@@ -88,6 +92,18 @@ export class Autopilot {
         const a = runwayApproach(base);
         this.target.fwd = a.fwd;
         this.target.touch = a.touch;
+        // approach fix as far out as 9 km, but inside any hills that poke up near the glide slope
+        const tan = Math.tan(GLIDE);
+        let D = 4000;
+        for (let d0 = 9000; d0 >= 4000; d0 -= 500) {
+            let ok = true;
+            for (let d = 500; d <= d0 + 1500 && ok; d += 250) {
+                const x = a.touch.x - a.fwd.x * d, z = a.touch.z - a.fwd.z * d;
+                if (terrainHeight(x, z) > a.touch.y + d * tan - 80) ok = false;
+            }
+            if (ok) { D = d0; break; }
+        }
+        this.target.fixDist = D;
     }
 
     // Touchdown point & landing direction (the carrier moves, so recompute each frame)
@@ -99,6 +115,13 @@ export class Autopilot {
             t.touch = s.toWorld(-4, s.deckY, s.def.L * 0.4);
         }
         return t;
+    }
+
+    // highest ground within r of a point (coarse)
+    terrainMax(c, r) {
+        let h = 0;
+        for (let i = -2; i <= 2; i++) for (let j = -2; j <= 2; j++) h = Math.max(h, terrainHeight(c.x + i * r / 2, c.z + j * r / 2));
+        return h;
     }
 
     // ── Per-frame (called from updatePlayer; overrides the stick) ──
@@ -131,11 +154,13 @@ export class Autopilot {
             return;
         }
         const agl = p.pos.y - Math.max(terrainHeight(p.pos.x, p.pos.z), 0);
-        const f = p.getForward(_v);
-        _v2.set(f.x, 0, f.z).normalize();
-        _v2.y = 0.2; _v2.normalize();
+        // climb out on the heading we rolled on (off a deck: the heading at launch), wings level
+        if (this.climbHeading == null) this.climbHeading = this.heading ?? Math.atan2(-p.vel.x, -p.vel.z);
+        // climb gradient from the speed margin, so heavies don't hang on the stall right after liftoff
+        const climb = clamp((p.speed / rs.takeoff - 1) * 0.8, 0.03, 0.2);
+        _v2.set(-Math.sin(this.climbHeading), climb, -Math.cos(this.climbHeading)).normalize();
         steerToward(p, _v2, c, 1, true);
-        c.throttle = 0.9;
+        c.throttle = p.hasAB ? 0.9 : 1;
         if (agl > 40 && p.gear) { p.gear = false; g.addFeed('GEAR UP', '#5dffa0'); }
         if (agl > 250 && p.flaps) p.flaps = 0;
         this.status = 'CLIMBING ' + Math.round(agl * 3.28) + ' FT';
@@ -176,21 +201,37 @@ export class Autopilot {
         }
 
         if (this.phase === 'transit') {
-            // fly to a point 9 km out on the extended centreline
-            const iaf = _v2.copy(touch).addScaledVector(fwd, -9000);
-            iaf.y = Math.max(touch.y + 9000 * Math.tan(GLIDE), terrainHeight(iaf.x, iaf.z) + 300);
-            const to = _v3.subVectors(iaf, p.pos);
-            const d = to.length();
+            // fly to the approach fix 9 km out on the extended centreline — arriving pointed at the runway.
+            // From anywhere outside the 45° cone behind the fix (or heading away), first go to an outer
+            // corner 14 km out and 4 km to our side of the centreline, then turn in to the fix.
+            const inbound = _v3.copy(p.vel).setY(0).normalize().dot(fwd);
+            const D = t.fixDist || 9000;
+            if (!this.leg) this.leg = along > D + 1000 && Math.abs(lateral) < along - D && inbound > 0 ? 'fix' : 'outer';
+            const wp = _v2.copy(touch).addScaledVector(fwd, -(this.leg === 'outer' ? D + 5000 : D));
+            if (this.leg === 'outer') wp.add(_v3.set(fwd.z, 0, -fwd.x).multiplyScalar((lateral < 0 ? -1 : 1) * 4000));
+            wp.y = touch.y + D * Math.tan(GLIDE) + (this.leg === 'outer' ? 250 : 0);
+            wp.y = Math.max(wp.y, this.terrainMax(wp, 1500) + (this.leg === 'outer' ? 400 : 250));
+            const to = _v3.subVectors(wp, p.pos);
+            const d = Math.hypot(to.x, to.z);
+            // shallow climbs and descents only (a dive at the fix leaves no room to turn in)
+            to.y = clamp(to.y, -0.08 * d, 0.15 * d);
             steerToward(p, to.normalize(), c, 0.8, true);
             c.throttle = clamp(0.6 + (app * 1.7 - p.speed) * 0.03, 0.2, 0.9);
+            if (d < 7000 && !p.gear) p.gear = true;
             if (avoidTerrain(p, c, 120)) { this.status = 'TERRAIN — CLIMBING'; return; }
-            this.status = 'TO APPROACH FIX ' + (d / 1000).toFixed(1) + ' KM';
-            if (d < 1800 || (along > 600 && along < 12000 && Math.abs(lateral) < 700 && _v3.copy(p.vel).normalize().dot(fwd) > 0.8)) this.phase = 'final';
+            this.status = (this.leg === 'outer' ? 'TO OUTER FIX ' : 'TO APPROACH FIX ') + (d / 1000).toFixed(1) + ' KM';
+            const aligned = along > 600 && along < D + 2000 && Math.abs(lateral) < 700 && _v.copy(p.vel).normalize().dot(fwd) > 0.8;
+            if (this.leg === 'outer' && d < 2000) this.leg = 'fix';
+            else if (this.leg === 'fix' && d < 1800) {
+                if (inbound > 0.5) this.phase = 'final';
+                else this.leg = 'outer'; // passed the fix pointing the wrong way: go round again
+            }
+            if (aligned) this.phase = 'final';
             return;
         }
 
         // final approach: centreline + glide slope, configured and on speed
-        if (along < 7000 && !p.gear) p.gear = true;
+        if (along < 9000 && !p.gear) p.gear = true;
         if (along < 7000 && t.kind === 'carrier' && !p.hook) p.hook = true;
         if (along < 6000 && p.speed < 175) p.flaps = 2;
         g.input.spoilersOn = false;
@@ -203,21 +244,33 @@ export class Autopilot {
         aim.y = touch.y + Math.max(along - look, 0) * Math.tan(GLIDE) + p.gearOffset;
         // pull back onto the glide slope when low or high
         aim.y += clamp((glideAlt + p.gearOffset - p.pos.y) * 5, -150, 200);
+        // never let the glide-slope chase take us into a hill short of the field
+        if (along > 1500) {
+            let hT = 0;
+            for (const k of [2, 5, 9]) { const x = p.pos.x + p.vel.x * k, z = p.pos.z + p.vel.z * k; hT = Math.max(hT, terrainHeight(x, z)); }
+            aim.y = Math.max(aim.y, hT + 150);
+        }
         let dir = aim.sub(p.pos).normalize();
         // flare in the last few metres: slow the sink rate
-        if (t.kind === 'runway' && hAbove < 15 && along < 900) {
+        if (t.kind === 'runway' && hAbove < 10 && along < 900) {
             this.phase = 'flare';
             dir = _v2.copy(fwd).addScaledVector(shipVel, 1 / Math.max(p.speed, 50));
-            dir.y = -Math.max(1.4, hAbove * 0.25) / Math.max(p.speed, 40);
+            dir.y = -Math.max(1.6, hAbove * 0.3) / Math.max(p.speed, 40);
             dir.normalize();
         }
         steerToward(p, dir, c, 1, true);
+        // don't float nose-high into a tail strike (the touchdown limit is 20°)
+        if (this.phase === 'flare' && p.getForward(_v3).y > Math.sin(14 * DEG)) c.pitch = Math.min(c.pitch, -0.15);
         c.yaw = clamp(c.yaw, -0.4, 0.4);
         if (along > 2500 && avoidTerrain(p, c, 60)) { c.throttle = 0.9; this.status = 'TERRAIN — CLIMBING'; return; }
         const relSpeed = _v3.subVectors(p.vel, shipVel).length();
-        c.throttle = this.phase === 'flare' && t.kind === 'runway' ? 0 : clamp(0.45 + (app - relSpeed) * 0.06, 0, 0.9);
-        this.status = (this.phase === 'flare' ? 'FLARE' : 'FINAL') + ' ' + (along / 1000).toFixed(1) + ' KM · ' + Math.round((p.pos.y - glideAlt - p.gearOffset) * 3.28) + ' FT ' + (p.pos.y - glideAlt > 0 ? 'HIGH' : 'LOW');
+        // in the flare keep a little power (don't let it sink onto its belly) until the wheels are nearly down
+        if (this.phase === 'flare') c.throttle = hAbove < 2 ? 0 : clamp(0.3 + (app - relSpeed) * 0.06, 0.12, 0.7);
+        else c.throttle = clamp(0.45 + (app - relSpeed) * 0.06, 0, 0.9);
+        if (this.phase === 'flare') p.gear = true;
+        const dev = Math.round((p.pos.y - glideAlt - p.gearOffset) * 3.28);
+        this.status = (this.phase === 'flare' ? 'FLARE' : 'FINAL') + ' ' + (along / 1000).toFixed(1) + ' KM · ' + Math.abs(dev) + ' FT ' + (dev >= 0 ? 'HIGH' : 'LOW');
         // went around / overshot badly → try again
-        if (along < -400) { this.phase = 'transit'; g.addFeed('GO AROUND', '#ffc23f'); p.gear = true; }
+        if (along < -400) { this.phase = 'transit'; this.leg = null; g.addFeed('GO AROUND', '#ffc23f'); p.gear = true; }
     }
 }

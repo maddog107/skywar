@@ -108,7 +108,7 @@ export const AIRCRAFT = {
     mig29: jet({
         name: 'MiG-29 Fulcrum', role: 'Light Fighter', country: 'RUS', length: 17.3, span: 11.4,
         desc: 'Agile point-defence fighter. Great off-boresight missiles, short legs.',
-        flight: { speed: 410, accel: 15, gLimit: 9, roll: 4.1, alpha: 28, lift: 1.02 },
+        flight: { speed: 425, accel: 15, gLimit: 9, roll: 4.1, alpha: 28, lift: 1.02 },
         health: 95, missiles: 6, gun: { damage: 12, rate: 13, ammo: 250, name: 'GSh-30-1 30mm' },
         proc: { body: [0.08, 0.07], wing: { rc: 0.36, tc: 0.1, sweep: 42, z: 0.08 }, tail: 'twin', cant: 6, hstab: true, engines: 2, spacing: 0.1, intake: 'under', lerx: true, paint: 0x8c9aa0, accent: 0x6f7f86 },
     }),

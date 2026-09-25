@@ -35,6 +35,7 @@ export class PilotOnFoot {
         this.mag = 30; this.reserve = 120; this.reloadT = 0; this.fireT = 0;
         this.recoil = 0;
         this.hijackT = 0;
+        this.prevE = true; // the E that climbed you out mustn't climb you straight back in
         this.hint = '';
         this.landedT = 0;
         this.isChute = true;
@@ -121,11 +122,13 @@ export class PilotOnFoot {
         }
         this.candidate = best;
         this.hint = '';
+        const eDown = input.down('KeyE'), ePress = eDown && !this.prevE;
+        this.prevE = eDown;
         if (best) {
             const vip = this.game.mstate && this.game.mstate.transport === best;
             const boardable = !vip && (best.pilotDead || best.abandoned || best.team === 'blue');
             this.hint = vip ? 'PROTECT THE VIP — NO BOARDING' : boardable ? (best === this.from ? 'E — CLIMB BACK IN' : best.team === 'blue' && !best.pilotDead ? 'E — BOARD ' : 'E — HIJACK ') + (best === this.from ? '' : best.spec.name.toUpperCase()) + ' (' + Math.round(bd) + ' m)' : 'SHOOT THE PILOT THROUGH THE CANOPY TO HIJACK';
-            if (boardable && input.down('KeyE') && this.hijackT <= 0) this.hijack(best);
+            if (boardable && ePress && this.hijackT <= 0) this.hijack(best);
         }
         // leap animation into the hijacked jet
         if (this.hijackT > 0) {
@@ -134,7 +137,7 @@ export class PilotOnFoot {
         }
         if (s.landed) {
             this.landedT += dt;
-            this.hint = g.lives > 0 ? 'ENTER — REQUEST A NEW JET  (' + (g.lives === Infinity ? '∞' : g.lives) + ' LEFT)' : 'NO AIRFRAMES LEFT';
+            if (!this.hint) this.hint = g.lives > 0 ? 'ENTER — REQUEST A NEW JET  (' + (g.lives === Infinity ? '∞' : g.lives) + ' LEFT)' : 'NO AIRFRAMES LEFT';
             if (input.down('Enter') && this.landedT > 1) g.respawnPlayer();
         } else if (s.deployed) {
             // a long ride down from altitude: allow skipping it (the hijack prompt takes priority)

@@ -81,7 +81,7 @@ export class Career {
         this.game = game;
         const ev = game.events;
         ev.on('killed', (ac, { source, kind }) => {
-            if (!game.player || source !== game.player || ac.team !== 'red' || ac.isPlayer) return;
+            if (!source || (source !== game.player && source !== game.pilotMode) || ac.team !== 'red' || ac.isPlayer) return;
             this.data.kills++;
             this.sortieKills++;
             this.award('first_blood');
@@ -96,9 +96,9 @@ export class Career {
             if (t.isBridge) this.award('bridge');
             if (t.lastKind === 'bomb') this.award('bomber');
         });
-        ev.on('touchdown', (ac, { vs, onRunway, onDeck, trap }) => {
+        ev.on('touchdown', (ac, { vs, onRunway, onDeck, trap, late }) => {
             if (!ac.isPlayer) return;
-            this.data.landings++;
+            if (!late) this.data.landings++; // a late trap (hook down while rolling) is the same landing
             if (trap) { this.data.traps++; this.award('trap'); }
             if (onRunway && !onDeck && -vs * 196.85 < 200) this.award('butter');
         });
