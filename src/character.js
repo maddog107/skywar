@@ -132,6 +132,40 @@ export class Character {
         return this.rifle.children[0].localToWorld(out.set(0, 0.02, -0.64));
     }
 
+    // Hold a pose on top of the current animation ('chute', 'chuteArmed', 'seated', 'limp' or null):
+    // the named limbs are swung to point in fixed directions, blended in and out over ~0.4 s
+    setPose(name) { this.pose = name; }
+
+    applyPose(dt) {
+        const want = this.pose ? 1 : 0;
+        this.poseW = (this.poseW || 0) + Math.sign(want - (this.poseW || 0)) * Math.min(Math.abs(want - (this.poseW || 0)), dt * 2.5);
+        if (this.poseW <= 0.001 || !this.clone) return;
+        const P = POSES[this.pose || this.lastPose];
+        if (!P) return;
+        if (this.pose) this.lastPose = this.pose;
+        this.bones = this.bones || {};
+        this.root.updateWorldMatrix(true, false);
+        this.root.getWorldQuaternion(_rq);
+        for (const [name, dir] of P) {
+            const b = this.bones[name] ?? (this.bones[name] = this.clone.getObjectByName(name) || null);
+            if (!b || !b.parent) continue;
+            const child = b.children.find(c => c.isBone) || b.children[0];
+            if (!child) continue;
+            b.updateWorldMatrix(true, true);
+            b.getWorldPosition(_bp); child.getWorldPosition(_cp);
+            _d.subVectors(_cp, _bp);
+            if (_d.lengthSq() < 1e-8) continue;
+            _t.fromArray(dir).normalize().applyQuaternion(_rq);
+            _q.setFromUnitVectors(_d.normalize(), _t);
+            b.getWorldQuaternion(_bq);
+            b.parent.getWorldQuaternion(_pq);
+            _nq.copy(_q).multiply(_bq);                 // the bone's new world rotation
+            _nq.premultiply(_pq.invert());              // …in its parent's frame
+            b.quaternion.slerp(_nq, this.poseW);
+            b.updateMatrixWorld(true);
+        }
+    }
+
     dispose() {
         live.delete(this);
         if (this.root.parent) this.root.parent.remove(this.root);
@@ -147,6 +181,24 @@ export class Character {
 // straight ahead when aiming)
 Character.RIFLE = { pos: [0, 0, 0], rot: [1.512, -0.202, 1.39], size: 0.8 };
 const _ws = new THREE.Vector3(), _ws2 = new THREE.Vector3();
+const _rq = new THREE.Quaternion(), _q = new THREE.Quaternion(), _bq = new THREE.Quaternion(), _pq = new THREE.Quaternion(), _nq = new THREE.Quaternion();
+const _bp = new THREE.Vector3(), _cp = new THREE.Vector3(), _d = new THREE.Vector3(), _t = new THREE.Vector3();
+
+// Limb directions in the character's own frame (it faces -Z; its left hand is -X). Parents come first.
+const ARMS_UP = [['UpperArmL', [-0.35, 1, 0.12]], ['LowerArmL', [-0.1, 1, 0.05]], ['UpperArmR', [0.35, 1, 0.12]], ['LowerArmR', [0.1, 1, 0.05]]];
+const DANGLE = [['UpperLegL', [-0.08, -1, -0.28]], ['LowerLegL', [-0.04, -1, 0.22]], ['UpperLegR', [0.08, -1, -0.2]], ['LowerLegR', [0.04, -1, 0.3]]];
+const POSES = {
+    // hanging in the harness, hands up on the risers
+    chute: [...ARMS_UP, ...DANGLE],
+    // the player's pilot keeps his rifle hand free
+    chuteArmed: [ARMS_UP[0], ARMS_UP[1], ...DANGLE],
+    // strapped into the seat during the ejection
+    seated: [['UpperLegL', [-0.1, -0.1, -1]], ['LowerLegL', [0, -1, -0.15]], ['UpperLegR', [0.1, -0.1, -1]], ['LowerLegR', [0, -1, -0.15]],
+        ['UpperArmL', [-0.25, -1, -0.2]], ['UpperArmR', [0.25, -1, -0.2]]],
+    // dead weight under a canopy
+    limp: [['UpperArmL', [-0.45, -1, 0.1]], ['LowerArmL', [-0.25, -1, 0.05]], ['UpperArmR', [0.45, -1, 0.1]], ['LowerArmR', [0.25, -1, 0.05]],
+        ['UpperLegL', [-0.1, -1, 0.05]], ['LowerLegL', [-0.05, -1, 0.2]], ['UpperLegR', [0.1, -1, -0.05]], ['LowerLegR', [0.05, -1, 0.1]]],
+};
 
 function sameRig(a, b) {
     return a.bones.length === b.bones.length && a.bones.every((bone, i) => bone === b.bones[i])
@@ -166,5 +218,6 @@ export function updateCharacters(dt) {
         }
         c.seen = true; c.idle = 0;
         c.mixer.update(dt);
+        if (c.pose || c.poseW > 0) c.applyPose(dt);
     }
 }

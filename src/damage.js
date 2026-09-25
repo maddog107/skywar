@@ -97,18 +97,63 @@ export function segmentModel(holder, length) {
     return out;
 }
 
-// ── Parachute texture (striped canopy) ──
+// ── Parachute ──
+// Striped gores with a seam down each suspension line and a darker band at the skirt
 function chuteTexture() {
     const c = document.createElement('canvas');
-    c.width = 256; c.height = 64;
+    c.width = 256; c.height = 128;
     const ctx = c.getContext('2d');
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 2; i++) {
         ctx.fillStyle = i % 2 ? '#f2f2ee' : '#e8631f';
-        ctx.fillRect(i * 32, 0, 32, 64);
+        ctx.fillRect(i * 128, 0, 128, 128);
     }
+    // fabric panels (horizontal seams) and the radial seam tapes
+    ctx.fillStyle = 'rgba(0,0,0,0.12)';
+    for (let y = 16; y < 128; y += 22) ctx.fillRect(0, y, 256, 2);
+    ctx.fillStyle = 'rgba(60,40,20,0.35)';
+    ctx.fillRect(0, 0, 3, 128); ctx.fillRect(126, 0, 4, 128); ctx.fillRect(253, 0, 3, 128);
+    ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.fillRect(0, 118, 256, 10);
     const t = new THREE.CanvasTexture(c);
     t.colorSpace = THREE.SRGBColorSpace;
+    t.wrapS = THREE.RepeatWrapping;
     return t;
+}
+
+// A gored round canopy: each gore bulges out between the suspension lines, the skirt scallops,
+// and there's a vent at the apex. Returns the geometry and the skirt points the lines attach to.
+const GORES = 16;
+function chuteGeometry(R = 4.3, top = 6.9) {
+    const perGore = 4, around = GORES * perGore, rings = 8;
+    const phi0 = 0.12, phi1 = Math.PI * 0.43;
+    const pos = [], uv = [], idx = [];
+    for (let j = 0; j <= rings; j++) {
+        const f = j / rings, phi = phi0 + (phi1 - phi0) * f;
+        for (let i = 0; i <= around; i++) {
+            const th = (i / around) * Math.PI * 2;
+            const g = (i % perGore) / perGore;                 // 0 at a line, 0.5 mid-gore
+            const bulge = Math.sin(g * Math.PI);
+            const r = R * Math.sin(phi) * (1 + 0.07 * bulge);
+            const y = top + R * Math.cos(phi) * 0.62 + (j === rings ? 0.35 * bulge : 0) + 0.12 * bulge * f;
+            pos.push(Math.cos(th) * r, y, Math.sin(th) * r);
+            uv.push((i / perGore) * 0.5, 1 - f);
+        }
+    }
+    const W = around + 1;
+    for (let j = 0; j < rings; j++) for (let i = 0; i < around; i++) {
+        const a = j * W + i, b = a + 1, c = a + W, d = c + 1;
+        idx.push(a, c, b, b, c, d);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+    const skirt = [];
+    for (let k = 0; k < GORES; k++) {
+        const i = k * perGore, o = (rings * W + i) * 3;
+        skirt.push(new THREE.Vector3(pos[o], pos[o + 1], pos[o + 2]));
+    }
+    return { geo, skirt };
 }
 
 export class Wreckage {
@@ -116,6 +161,8 @@ export class Wreckage {
         this.game = game;
         this.parts = [];
         this.seats = [];
+        // smoke and dust drift with the game's wind (the vector is updated in place when the weather changes)
+        if (game.effects && game.wind) game.effects.wind = game.wind;
         const chuteTex = chuteTexture();
         this.chuteMat = new THREE.MeshStandardMaterial({ map: chuteTex, side: THREE.DoubleSide, roughness: 0.9 });
         this.seatMat = new THREE.MeshStandardMaterial({ color: 0x3b4430, roughness: 0.8 });
@@ -125,12 +172,15 @@ export class Wreckage {
         // seat / canopy / rigging geometry, shared by every ejection
         this.seatGeo = new THREE.BoxGeometry(0.7, 0.9, 0.6);
         this.seatBackGeo = new THREE.BoxGeometry(0.7, 0.8, 0.15);
-        this.canopyGeo = new THREE.SphereGeometry(4.2, 16, 6, 0, Math.PI * 2, 0, Math.PI * 0.42);
+        const cg = chuteGeometry();
+        this.canopyGeo = cg.geo;
+        // suspension lines from the skirt down to the two risers at the pilot's shoulders
         const lp = [];
-        for (let i = 0; i < 12; i++) {
-            const a = (i / 12) * Math.PI * 2;
-            lp.push(0, 1.2, 0, Math.cos(a) * 3.1, 6.5 + 1.1, Math.sin(a) * 3.1);
+        for (const k of cg.skirt) {
+            const rx = k.x < 0 ? -0.18 : 0.18;
+            lp.push(rx, 1.55, 0, k.x, k.y, k.z);
         }
+        lp.push(-0.18, 1.55, 0, -0.18, 1.25, 0, 0.18, 1.55, 0, 0.18, 1.25, 0); // risers
         this.lineGeo = new THREE.BufferGeometry();
         this.lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(lp, 3));
     }
@@ -190,6 +240,7 @@ export class Wreckage {
         seat.add(s1, s2);
         // the pilot: an animated character (the root is scaled up 1.6× so it reads from the chase camera)
         const character = new Character();
+        character.setPose('seated');
         const pilot = character.root;
         pilot.scale.setScalar(1 / 1.6 * 1.15);
         pilot.position.y = -0.1;
@@ -202,8 +253,6 @@ export class Wreckage {
         // canopy (hidden until deployment)
         const chute = new THREE.Group();
         const canopy = new THREE.Mesh(this.canopyGeo, this.chuteMat);
-        canopy.scale.y = 0.6;
-        canopy.position.y = 6.5;
         canopy.castShadow = true;
         chute.add(canopy);
         chute.add(new THREE.LineSegments(this.lineGeo, this.lineMat));
@@ -293,12 +342,18 @@ export class Wreckage {
                     g.scene.add(seatDrop);
                     this.parts.push({ obj: seatDrop, vel: s.vel.clone(), spin: new THREE.Vector3(2, 1, 3), life: 20, smokeT: 99, burning: false, heavy: false, radius: 1, inert: true });
                     s.chute.visible = true;
+                    if (s.character) s.character.setPose(s.dead ? 'limp' : s.player ? 'chuteArmed' : 'chute');
                 }
                 if (s.deployed) {
                     const k = clamp((s.t - 1.4) / 0.9, 0, 1);
-                    s.chute.scale.setScalar(0.1 + k * 0.9);
+                    // the canopy snaps open (a little overshoot), then breathes
+                    const open = k < 1 ? 0.1 + k * 1.0 : 1 + 0.08 * Math.exp(-(s.t - 2.3) * 3) * Math.cos((s.t - 2.3) * 9);
+                    s.chute.scale.setScalar(open);
+                    const cm = s.chute.children[0];
+                    if (cm && k >= 1) { const b = Math.sin(s.t * 1.9) * 0.025; cm.scale.set(1 + b, 1 - b * 1.5, 1 + b); }
+                    if (s.dead && s.character && s.character.pose !== 'limp') s.character.setPose('limp');
                     // strong drag toward drift with the wind, gentle sink
-                    const sink = s.dead ? -9 : s.sink != null ? -s.sink : -6.5;
+                    const sink = s.dead ? -(s.sink ?? 9) : s.sink != null ? -s.sink : -6.5; // a shredded canopy (pilot.js raises s.sink) falls fast
                     const target = _v.set(g.wind.x * 1.5 + (s.glide ? s.glide.x : 0), sink, g.wind.z * 1.5 + (s.glide ? s.glide.z : 0));
                     s.vel.lerp(target, 1 - Math.exp(-(s.player ? 1.6 : 2.2) * dt));
                     // upright + gentle sway; a steered canopy banks into its turns
@@ -318,6 +373,7 @@ export class Wreckage {
                 if (r.position.y < gh + 0.3) {
                     r.position.y = gh + 0.3;
                     s.landed = true;
+                    if (s.character && !s.dead) s.character.setPose(null);
                     s.onShip = su.ship || null;
                     if (su.water) g.effects.waterSplash(r.position, 0.25);
                 }

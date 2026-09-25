@@ -15,7 +15,7 @@ export const MODEL_FILES = {
     f16: { file: 'f16.glb', rot: [0, 0, 0], cockpit: [0.07, -0.26] },
     f2: { file: 'f2.glb', rot: [0, Q, 0], cockpit: [0.07, -0.26] },
     f14: { file: 'f14.glb', rot: [0, Q, 0], nozzles: [[-0.065, 0.0, 0.49], [0.065, 0.0, 0.49]] },
-    f15: { file: 'f15.glb', rot: [0, Q, 0] },
+    f15: { file: 'f15.glb', rot: [0, Q, 0], nozzles: [[-0.038, -0.069, 0.42], [0.038, -0.069, 0.42]], nozzleR: 0.022 }, // (tools/nozzles.mjs: the auto-detect found the tail booms)
     f4: { file: 'f4.glb', rot: [0, Q, 0] },
     typhoon: { file: 'eurofighter.glb', rot: [0, Q, 0] },
     rafale: { file: 'rafale.glb', rot: [0, Q, 0] },
@@ -102,12 +102,16 @@ function normaliseGLTF(root, id, info) {
                 if ('roughness' in m) {
                     if (glass) {
                         m.roughness = Math.min(m.roughness ?? 0.1, 0.15);
+                        m.envMapIntensity = 1.3;
                     } else {
                         // painted airframes: GLB metalness 1 turns them into sky mirrors (dark navy)
                         m.roughness = clamp01(m.roughness ?? 0.6, 0.35, 0.7);
                         m.metalness = clamp01(m.metalness ?? 0.2, 0.05, info.metal ?? 0.3);
+                        // the sky light (hemisphere + environment) is strongly blue: grey-blue paint under it
+                        // turns royal blue, so keep military greys close to neutral and the sky fill modest
+                        if (m.color && !m.userData.noPaint && !m.userData.tamed) { m.userData.tamed = true; tamePaint(m.color, !!m.map); }
+                        m.envMapIntensity = 0.7;
                     }
-                    m.envMapIntensity = 1.0;
                 }
                 if (m.transparent && m.opacity < 1) {
                     m.depthWrite = false;
@@ -279,6 +283,56 @@ export function applyLivery(model, key) {
 }
 function clamp01(v, a, b) { return Math.max(a, Math.min(b, v)); }
 
+// Low-saturation paints (greys, grey-blues) are pulled toward neutral; bright liveries are left alone.
+// A textured skin gets a faint warm tint instead (its colour multiplies the texture).
+const _hsl = {};
+function tamePaint(color, textured) {
+    if (textured) { color.multiply(_warm); return color; }
+    color.getHSL(_hsl);
+    if (_hsl.s < 0.4) color.setHSL(_hsl.h, _hsl.s * 0.35, _hsl.l);
+    return color;
+}
+const _warm = new THREE.Color(1.03, 1.0, 0.94);
+
+// Panel lines, rivets and a little grime, tiled at ~2 m (multiplies the paint colour)
+let panelTex = null;
+function panelTexture() {
+    if (panelTex) return panelTex;
+    const S = 256, c = document.createElement('canvas');
+    c.width = c.height = S;
+    const x = c.getContext('2d');
+    x.fillStyle = '#e6e6e6'; x.fillRect(0, 0, S, S);
+    const img = x.getImageData(0, 0, S, S), d = img.data;
+    for (let i = 0; i < d.length; i += 4) { const n = (Math.random() - 0.5) * 12; d[i] += n; d[i + 1] += n; d[i + 2] += n; }
+    x.putImageData(img, 0, 0);
+    // a few big soft grime patches
+    for (let k = 0; k < 10; k++) {
+        const px = Math.random() * S, py = Math.random() * S, r = 20 + Math.random() * 50;
+        const g = x.createRadialGradient(px, py, 0, px, py, r);
+        g.addColorStop(0, 'rgba(90,90,90,0.08)'); g.addColorStop(1, 'rgba(90,90,90,0)');
+        x.fillStyle = g; x.fillRect(0, 0, S, S);
+    }
+    // panel seams (a staggered grid), rivet lines along some of them
+    x.strokeStyle = 'rgba(40,40,40,0.22)'; x.lineWidth = 1.2;
+    const rows = [0, 70, 140, 200];
+    for (let r = 0; r < rows.length; r++) {
+        x.beginPath(); x.moveTo(0, rows[r] + 0.5); x.lineTo(S, rows[r] + 0.5); x.stroke();
+        const y0 = rows[r], y1 = rows[r + 1] ?? S;
+        for (let cx = (r % 2) * 48; cx < S; cx += 96) { x.beginPath(); x.moveTo(cx + 0.5, y0); x.lineTo(cx + 0.5, y1); x.stroke(); }
+    }
+    x.fillStyle = 'rgba(30,30,30,0.16)';
+    for (const y of [4, 74, 144]) for (let px = 3; px < S; px += 8) x.fillRect(px, y, 1.5, 1.5);
+    // a couple of access hatches
+    x.strokeStyle = 'rgba(40,40,40,0.25)'; x.lineWidth = 1;
+    x.strokeRect(20.5, 90.5, 28, 18); x.strokeRect(160.5, 20.5, 22, 30);
+    panelTex = new THREE.CanvasTexture(c);
+    panelTex.colorSpace = THREE.SRGBColorSpace;
+    panelTex.wrapS = panelTex.wrapT = THREE.RepeatWrapping;
+    panelTex.repeat.set(0.3, 0.3); // uvs are in metres: one tile per ~3.3 m
+    panelTex.anisotropy = 4;
+    return panelTex;
+}
+
 // Average brightness of a texture (0..1), sampled on a tiny canvas
 function textureLuminance(tex) {
     try {
@@ -313,18 +367,23 @@ const glassMat = new THREE.MeshPhysicalMaterial({ color: 0x1a2430, metalness: 0.
 const goldGlassMat = new THREE.MeshPhysicalMaterial({ color: 0x5a4a20, metalness: 0.6, roughness: 0.08, clearcoat: 1, envMapIntensity: 1.8 });
 const nozzleMat = new THREE.MeshStandardMaterial({ color: 0x3a3632, metalness: 0.85, roughness: 0.35 });
 const darkMat = new THREE.MeshStandardMaterial({ color: 0x1b1d20, metalness: 0.3, roughness: 0.6 });
+const radomeMat = new THREE.MeshStandardMaterial({ color: 0x4a4f54, metalness: 0.05, roughness: 0.6, envMapIntensity: 0.6 });
+radomeMat.userData.noPaint = true;
 
 // Superellipse loft along z. stations: [z, halfWidth, halfHeight, yOffset, squareness]
 export function loft(stations, radial = 20) {
-    const pos = [], idx = [];
+    const pos = [], idx = [], uv = [];
     for (let s = 0; s < stations.length; s++) {
         const [z, w, h, y, n = 2.2] = stations[s];
+        // uvs in metres: u around the section (approximate arc length), v along the length
+        const perim = Math.PI * (w + h);
         for (let i = 0; i <= radial; i++) {
             const a = (i / radial) * Math.PI * 2;
             const c = Math.cos(a), sn = Math.sin(a);
             const px = w * Math.sign(c) * Math.pow(Math.abs(c), 2 / n);
             const py = h * Math.sign(sn) * Math.pow(Math.abs(sn), 2 / n);
             pos.push(px, py + y, z);
+            uv.push((i / radial) * perim, z);
         }
     }
     const R = radial + 1;
@@ -334,6 +393,7 @@ export function loft(stations, radial = 20) {
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
     g.setIndex(idx);
     g.computeVertexNormals();
     return g;
@@ -365,8 +425,10 @@ function buildProcedural(id) {
     const spec = AIRCRAFT[id];
     const p = spec.proc || {};
     const L = spec.length;
-    const paint = new THREE.MeshStandardMaterial({ color: p.paint ?? 0x7a848e, metalness: 0.35, roughness: 0.5 });
-    const accent = new THREE.MeshStandardMaterial({ color: p.accent ?? 0x5d666f, metalness: 0.35, roughness: 0.55 });
+    // painted, not bare metal: at metalness 0.35 the sky reflection turned every jet blue
+    const paint = new THREE.MeshStandardMaterial({ color: p.paint ?? 0x7a848e, metalness: 0.12, roughness: 0.48, map: panelTexture(), envMapIntensity: 0.7 });
+    const accent = new THREE.MeshStandardMaterial({ color: p.accent ?? 0x5d666f, metalness: 0.12, roughness: 0.52, map: panelTexture(), envMapIntensity: 0.7 });
+    tamePaint(paint.color); tamePaint(accent.color);
     const g = new THREE.Group();
     const add = (geo, mat, x = 0, y = 0, z = 0) => {
         const m = new THREE.Mesh(geo, mat);
@@ -397,6 +459,11 @@ function buildProcedural(id) {
         [0.49 * L, W * 0.74, H * 0.55, -0.004 * L, 2.4],
     ];
     add(loft(st, 24), paint);
+    // darker radome over the nose (a hair proud of the skin so it doesn't z-fight)
+    add(loft([
+        [-0.5 * L, 0.0045 * L, 0.0045 * L, 0.0, 2], [-0.46 * L, 0.0185 * L, 0.0185 * L, 0.0, 2],
+        [-0.41 * L, 0.0305 * L, 0.0285 * L, 0.0015 * L, 2.05],
+    ], 24), radomeMat);
 
     // ── canopy ──
     const canopy = add(new THREE.SphereGeometry(1, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), id === 'f22' || id === 'f35' ? goldGlassMat : glassMat, 0, 0.034 * L, -0.25 * L);
@@ -482,6 +549,8 @@ function buildProcedural(id) {
         for (const s of [-1, 1]) {
             const x = s * 0.1 * L, y = H * 1.5, z = 0.25 * L;
             add(loft([[z - 0.12 * L, 0.04 * L, 0.04 * L, 0, 2], [z, 0.05 * L, 0.05 * L, 0, 2], [z + 0.1 * L, 0.04 * L, 0.04 * L, 0, 2]], 16), paint, x, y, 0);
+            add(new THREE.CircleGeometry(0.038 * L, 16), darkMat, x, y, z - 0.119 * L).rotation.y = Math.PI; // intake face
+            add(new THREE.CircleGeometry(0.036 * L, 16), darkMat, x, y, z + 0.098 * L);                     // exhaust
             add(new THREE.CylinderGeometry(0.02 * L, 0.02 * L, 0.06 * L, 8).rotateZ(Math.PI / 2), darkMat, x - s * 0.03 * L, y - 0.03 * L, z);
             rig.nozzles.push(new THREE.Vector3(x, y, z + 0.1 * L));
         }
@@ -491,6 +560,7 @@ function buildProcedural(id) {
             const noz = add(new THREE.CylinderGeometry(nozR * 0.95, nozR * 1.08, 0.07 * L, 16, 1, true), nozzleMat, x, -0.004 * L, 0.5 * L);
             noz.rotation.x = Math.PI / 2;
             noz.material.side = THREE.DoubleSide;
+            add(new THREE.CircleGeometry(nozR * 0.9, 16), darkMat, x, -0.004 * L, 0.505 * L); // the engine's dark throat
             rig.nozzles.push(new THREE.Vector3(x, -0.004 * L, 0.53 * L));
         }
     }

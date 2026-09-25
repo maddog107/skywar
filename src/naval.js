@@ -501,7 +501,8 @@ export class Ship {
                     m.fireT = lerp(1.6, 0.9, diff.skill);
                     aim.x += rand(-0.03, 0.03); aim.y += rand(-0.02, 0.03); aim.z += rand(-0.03, 0.03);
                     g.weapons.fireFlak(mp, aim.normalize(), this, 10, 900, tt * rand(0.85, 1.1));
-                    g.effects.fire.emit(mp, _v.set(0, 0, 0), 0.1, 6, 3, [6, 4, 2], [2, 1, 0.3], 1, 0, 0, 0);
+                    g.effects.fire.emit(mp, _v.set(0, 0, 0), 0.12, 6, 3, [2.2, 1.6, 0.9], [1.2, 0.5, 0.15], 1, 0, 0, 0);
+                    g.effects.puffSmoke(mp, _v.set(0, 2, 0), 2.5, 0.55, 2.5, 0.45);
                 }
             } else if (m.type === 'sam' && this.ammo.sam > 0) {
                 const tgt = this.nearestEnemyAircraft(mp, WEAPONS.sam.range);

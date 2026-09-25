@@ -20,7 +20,25 @@ const M = {
     dark: new THREE.MeshStandardMaterial({ color: 0x222426, roughness: 0.7 }),
     red: new THREE.MeshStandardMaterial({ color: 0x8a2a22, roughness: 0.7 }),
     charred: new THREE.MeshStandardMaterial({ color: 0x151412, roughness: 1 }),
+    scorched: new THREE.MeshStandardMaterial({ color: 0x2a2622, roughness: 0.95, metalness: 0.2 }),
+    net: new THREE.MeshStandardMaterial({ color: 0x66744c, roughness: 1, side: THREE.DoubleSide }),
+    cap: new THREE.MeshStandardMaterial({ color: 0x3a3f36, roughness: 0.7 }),
 };
+// a camouflage net draped over a site: a flat, ragged, slightly domed disc
+function netGeo(r) {
+    return geo('net ' + r, () => {
+        const g = new THREE.CircleGeometry(r, 14, 0, Math.PI * 2);
+        const p = g.attributes.position;
+        for (let i = 1; i < p.count; i++) {
+            const x = p.getX(i), y = p.getY(i), k = 0.8 + Math.random() * 0.35;
+            p.setXYZ(i, x * k, y * k, 0);
+        }
+        p.setZ(0, r * 0.18);
+        g.rotateX(-Math.PI / 2);
+        g.computeVertexNormals();
+        return g;
+    });
+}
 M.whiteDS = M.white.clone(); M.whiteDS.side = THREE.DoubleSide; // radar dish (seen from behind too)
 
 // Geometry shared by every target (keyed by shape + dimensions), like the materials above:
@@ -101,6 +119,7 @@ function buildMesh(type, opts = {}) {
         case 'sam': {
             g.add(box(4, 1.8, 10, M.olive, 0, 0.6, 0));
             g.add(box(3.6, 2, 3, M.olive, 0, 1.2, -4));
+            for (const z of [-3.5, 0, 3.5]) for (const x of [-1.9, 1.9]) { const w = cyl(0.6, 0.6, 0.5, M.dark, 0, 0, 0, 10); w.rotation.z = Math.PI / 2; w.position.set(x, 0.6, z); g.add(w); }
             const rack = new THREE.Group();
             for (let i = 0; i < 4; i++) {
                 const t = new THREE.Mesh(cylGeo(0.45, 0.45, 8, 10), M.white);
@@ -108,15 +127,23 @@ function buildMesh(type, opts = {}) {
                 t.position.set((i % 2 ? 0.55 : -0.55), (i < 2 ? 0 : 1.0), 0);
                 t.castShadow = true;
                 rack.add(t);
+                const c = new THREE.Mesh(cylGeo(0.47, 0.47, 0.25, 10), M.cap);
+                c.rotation.x = Math.PI / 2;
+                c.position.set(t.position.x, t.position.y, -4);
+                rack.add(c);
             }
             rack.position.set(0, 3.2, 1.5);
             rack.rotation.x = 0.6;
             g.add(rack);
             parts.rack = rack;
-            // sandbag berm
+            // sandbag berm, and a camouflage net over the back of the pit
             const berm = new THREE.Mesh(torusGeo(11, 1.4, 6, 20), M.sand);
             berm.rotation.x = Math.PI / 2; berm.position.y = 0.4; berm.receiveShadow = true;
             g.add(berm);
+            const net = new THREE.Mesh(netGeo(4.5), M.net);
+            net.position.set(-6.5, 2.2, 4.5); net.receiveShadow = true; net.castShadow = true;
+            g.add(box(0.15, 2.2, 0.15, M.dark, -6.5, 0, 4.5));
+            g.add(net);
             break;
         }
         case 'aaa': {
@@ -128,9 +155,13 @@ function buildMesh(type, opts = {}) {
                 b.rotation.x = Math.PI / 2; b.position.set(s, 1.1, -2.5);
                 tur.add(b);
             }
+            const fc = new THREE.Mesh(geo('aaaDish', () => new THREE.CylinderGeometry(0.9, 0.9, 0.2, 12)), M.steel);
+            fc.rotation.x = Math.PI / 2 - 0.3; fc.position.set(0, 2.3, 1.2);
+            tur.add(fc);
             tur.position.y = 1.2;
             g.add(tur);
             parts.turret = tur;
+            for (const [x, z] of [[4.5, 1], [4.6, -0.6], [-4.4, 2]]) g.add(box(1.2, 0.6, 0.8, M.olive, x, 0, z));
             const berm = new THREE.Mesh(torusGeo(6, 1, 6, 16), M.sand);
             berm.rotation.x = Math.PI / 2; berm.position.y = 0.3;
             g.add(berm);
@@ -329,9 +360,29 @@ class GroundTarget {
             this.sys.later(() => fx.explosion(_v1.copy(this.pos).add(_v2.set(10, 5, 5)), 2.5), 250);
         }
         fx.debrisBurst(this.pos, _v1.set(0, 30, 0), 6, 1.2);
-        this.mesh.traverse(o => { if (o.isMesh) o.material = M.charred; });
-        this.mesh.scale.y = 0.45;
+        // burnt out: charred all over (a few panels merely scorched)
+        this.mesh.traverse(o => { if (o.isMesh) o.material = o.material === M.sand || o.material === M.concrete || Math.random() < 0.2 ? M.scorched : M.charred; });
+        // turrets, launcher racks and dishes are blown off and land nearby
+        const loose = this.parts.turret || this.parts.rack || this.parts.dish;
+        if (loose && loose.parent && !this.sinking) {
+            const up = this.type === 'radar' ? 12 : 22;
+            fx.throwPart(loose, _v1.set(rand(-7, 7), rand(up, up + 12), rand(-7, 7)), 3, true);
+            this.parts.turret = this.parts.rack = this.parts.dish = null;
+        }
+        // the wreck settles: buildings and tanks cave in, vehicles slump on burst tyres, the board falls over
+        const m = this.mesh;
+        switch (this.type) {
+            case 'hangar': m.scale.y = 0.35; break;
+            case 'bunker': m.scale.y = 0.6; break;
+            case 'fuel': m.scale.y = 0.5; break;
+            case 'board': m.rotation.x = -1.35; break;
+            case 'radar': m.rotation.z = rand(-0.35, 0.35); m.rotation.x = rand(-0.2, 0.2); break;
+            case 'parked': m.position.y -= 0.8; m.rotation.z += rand(-0.12, 0.12); m.rotation.x += rand(-0.08, 0.08); break;
+            default: m.position.y -= 0.25; m.rotation.x += rand(-0.07, 0.07); m.rotation.z += rand(-0.1, 0.1);
+        }
         this.burnT = rand(40, 80);
+        // a column of black smoke that thins out as the fire burns down
+        if (!this.sinking) fx.smokeColumn(_v1.copy(this.pos).setY(this.pos.y - this.radius * 0.2), clamp(this.radius / 13, 0.5, 1.8), this.burnT * 0.8);
         this.game.events.emit('groundKilled', this, { source });
         if (this.route) this.route.speed = 0;
     }
@@ -348,13 +399,13 @@ class GroundTarget {
                 return;
             }
             if (this.burnT > 0) {
+                // (the smoke column itself is an effects emitter): flames licking over the wreck
                 this.burnT -= dt;
                 this.smokeT -= dt;
                 if (this.smokeT <= 0) {
-                    this.smokeT = 0.12;
-                    _v1.set(rand(-3, 3), rand(8, 14), rand(-3, 3));
-                    fx.smoke.emit(this.pos, _v1, rand(6, 10), 6, 40, [0.06, 0.06, 0.06], [0.28, 0.27, 0.26], 0.7, 0, 0.15, 6);
-                    if (Math.random() < 0.5) fx.puffFire(_v2.copy(this.pos).add(_v1.set(rand(-4, 4), 0, rand(-4, 4))), _v1.set(0, 12, 0), 6, 0.6);
+                    this.smokeT = 0.15;
+                    const r = this.radius * 0.4;
+                    if (Math.random() < 0.6) fx.puffFire(_v2.copy(this.pos).add(_v1.set(rand(-r, r), rand(-1, 1), rand(-r, r))), _v1.set(0, rand(4, 8), 0), rand(2.5, 4.5) * clamp(this.radius / 10, 0.6, 1.8), 0.6);
                 }
             }
             return;
