@@ -49,7 +49,7 @@ const QUALITY = {
     // that much finer again, filled in over a few frames by jittering the march (temporal upsampling);
     // steps: primary march; light: light march; detail: small billows (0 none, 1 one octave, 2 two near the
     // camera); shadowRows: rows of the cloud-shadow map redrawn per frame
-    high:   { scale: 0.5, up: 2, steps: 112, light: 5, detail: 2, shadowRows: 32 },
+    high:   { scale: 0.5, up: 2, steps: 120, light: 5, detail: 2, shadowRows: 32 },
     medium: { scale: 0.42, up: 2, steps: 88, light: 4, detail: 1, shadowRows: 32 },
     low:    { scale: 0.28, up: 1.5, steps: 56, light: 3, detail: 0, shadowRows: 16 },
 };
@@ -194,15 +194,20 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
     float phase(float mu, float k) { return min(0.7 * hg(mu, 0.6 * k) + 0.3 * hg(mu, -0.25 * k), 2.5); }
 
     // optical depth toward the sun: LIGHT_STEPS samples, each step longer than the last (~680 m in all). Every
-    // frame the samples slide along the ray by a different fraction of their step, the same for every pixel (an
-    // offset per pixel speckles the shading with dark grains where a sample lands in a dense spot); the resolve
-    // pass averages the frames into smooth soft shadows without the banding of fixed sample positions
-    // (far away, where a pixel spans more than the first step, that step is left out)
-    float lightDepth(vec3 p, float lod, bool far) {
+    // frame the samples slide along the ray by a different fraction of their step, mostly the same for every
+    // pixel (a fully random offset per pixel speckles the shading with dark grains where a sample lands in a
+    // dense spot) plus a little per-pixel dither, new every frame (else the average of the frames leaves faint
+    // contour lines);
+    // the resolve pass averages the frames into smooth soft shadows.
+    // (far away, where a pixel spans more than the first step, that step is left out; behind a lot of cloud,
+    // where the point adds little to the pixel, the last ones)
+    float lightDither;
+    float lightDepth(vec3 p, float lod, bool far, bool dim) {
         float od = 0.0, d = 0.0, st = LIGHT_STEP0;
         for (int j = 0; j < LIGHT_STEPS; j++) {
+            if (dim && j >= LIGHT_STEPS - 2) break;
             if (far && j == 0) { d = st; st *= LIGHT_RATIO; continue; }
-            float dj = d + st * fract(frame * 0.6180339 + float(j) * 0.3819660);
+            float dj = d + st * fract(frame * 0.6180339 + float(j) * 0.3819660 + lightDither);
             vec3 q = p + sunDir * dj;
             if (q.y > slab.y) break;
             float a;
@@ -255,34 +260,47 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
         t1 = min(t1, min(limit, maxDist / max(hd, 1e-3)));
         if (t1 <= t0) return;
 
+        lightDither = 0.3 * fract(52.9829189 * fract(dot(gl_FragCoord.yx + 7.0 + frame * 5.588238, vec2(0.06711056, 0.00583715))));
         float mu = dot(rd, sunDir);
         float ph0 = phase(mu, 1.0), ph1 = phase(mu, 0.5), ph2 = phase(mu, 0.25);
         // a per-pixel start offset turns step banding into grain: interleaved gradient noise, shifted every frame
         // (evenly spread offsets that the resolve pass averages into a smooth result faster than white noise)
         float jit = fract(52.9829189 * fract(dot(gl_FragCoord.xy + frame * 5.588238, vec2(0.06711056, 0.00583715))));
         float t = t0 + stepAt(t0) * jit;
-        float T = 1.0, entry = NO_HIT, tw = 0.0, aw = 0.0, empty = 0.0;
+        float T = 1.0, entry = NO_HIT, tw = 0.0, aw = 0.0, empty = 0.0, fine = 0.0, lastStep = 0.0, refines = 0.0, inside = 0.0, wasClear = 0.0;
         vec3 C = vec3(0.0);
         for (int i = 0; i < MAX_STEPS; i++) {
             if (t >= t1) break;
             vec3 p = ro + rd * t;
-            float dt = stepAt(t);
+            // (a long way through thin cloud, e.g. skimming along a ragged base, the steps grow, so the ray doesn't
+            // run out of them before it gets through)
+            float dt = stepAt(t) * (1.0 + floor(inside / 20.0));
             vec4 wm = weatherAt(p);
             float gap = cloudGap(p, wm);
             // (whole steps only: a skip to the estimated surface would line every ray up there and undo the jitter)
-            if (gap > 0.0) { t += dt * clamp(floor(gap / dt), 1.0, 5.0); continue; }
+            if (gap > 0.0 && fine <= 0.0) { lastStep = dt * clamp(floor(gap / dt), 1.0, 5.0); t += lastStep; wasClear = 1.0; continue; }
             float lod = max(0.0, log2(dt / ${(BASE_SIZE / BASE_RES).toFixed(1)}));
             pixFoot = t * pixAngle * 2.0;
             float amb;
             // (the smooth weather lookup only where its creases could show)
             float den = cloudDensity(p, t < 8000.0 ? weatherSmooth(p) : wm, lod, t < 5000.0, amb);
             den *= smoothstep(4.0, 40.0, t); // inside a cloud, keep the first few tens of metres clear enough to see your own jet
-            // came in on a double step: back up one step and take the surface at the normal spacing
-            if (den > 0.0 && empty > 2.0) { t -= dt; empty = 0.0; continue; }
+            // came in from clear air: go back over the last step in quarter steps, so where the surface is found
+            // doesn't jump by a whole step from one pixel to the next (dithered, that is grain on a cloud's face).
+            // Only for the first surface, and near enough for it to show (in and out of ragged wisps it would eat
+            // up the ray's steps)
+            if (den > 0.0 && wasClear > 0.0 && fine <= 0.0 && lastStep > dt * 0.5 && refines < 1.0 && t < 6000.0) {
+                float back = min(lastStep, dt); // (the last step, or the last of a skip: clear air before that)
+                t -= back; fine = floor(back / dt * 4.0 + 0.5); empty = 0.0; refines += 1.0;
+                continue;
+            }
+            // (other surfaces reached on a long stride: back up to one step past the last clear sample)
+            if (den > 0.0 && fine <= 0.0 && lastStep > dt * 1.5) { t -= lastStep - dt; lastStep = dt; empty = 0.0; continue; }
+            float h = fine > 0.0 ? dt * 0.25 : dt;
             if (den > 0.0) {
-                float seg = min(dt, t1 - t);
+                float seg = min(h, t1 - t);
                 float a = 1.0 - exp(-den * SIGMA * seg);
-                float od = lightDepth(p, lod, pixFoot > 20.0);
+                float od = lightDepth(p, lod, pixFoot > 20.0, T < 0.25);
                 // sun: single scattering plus two weaker, less attenuated, flatter octaves standing in for the
                 // multiple scattering that makes the sunlit side of a thick cloud so bright
                 float sun = exp(-od) * ph0 + 0.45 * exp(-od * 0.35) * ph1 + 0.18 * exp(-od * 0.12) * ph2;
@@ -294,10 +312,13 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
                 if (entry == NO_HIT && 1.0 - T * (1.0 - a) > 0.03) entry = t;
                 T *= 1.0 - a;
                 if (T < 0.015) break;
-                empty = 0.0;
-            } else empty += 1.0;
-            // clear air inside the layer (between towers, under the deck): stride on in double steps
-            t += dt * (empty > 2.0 ? 2.0 : 1.0);
+                empty = 0.0; inside += 1.0; wasClear = 0.0;
+            } else { empty += 1.0; wasClear = 1.0; }
+            // clear air inside the layer (between towers, under the deck, along a cloud base): stride on in double,
+            // then triple steps
+            lastStep = fine > 0.0 ? h : dt * (empty > 8.0 ? 3.0 : empty > 2.0 ? 2.0 : 1.0);
+            fine -= 1.0;
+            t += lastStep;
         }
         float alpha = 1.0 - T;
         if (aw <= 0.0) return;
