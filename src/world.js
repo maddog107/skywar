@@ -1722,6 +1722,15 @@ export class World {
         this.uWind.value.set(ws > 0.1 ? wind.x / ws : 1, 0.35 + ws * 0.06 + storm * 0.9, ws > 0.1 ? wind.z / ws : 0);
         // sun shadows: the sharp near map follows the focus object; the wide far map covers the ground ahead
         this.aimShadow(this.sun, focus, 70, 600);
+        // The near map's depth range must reach the ground below the jet: with the reversed depth buffer, ground
+        // beyond its far plane passes three's frustum test and reads as shadowed (a dark square on the terrain
+        // down-sun of the jet whenever it flies more than ~1 km up).
+        {
+            const sc = this.sun.shadow.camera;
+            const agl = Math.max(0, focus.y - Math.max(terrainHeight(focus.x, focus.z), 0));
+            const need = Math.min(40000, Math.max(1200, 600 + (agl + 400) / Math.max(this.sunDir.y, 0.08) + 300));
+            if (Math.abs(need - sc.far) > 150) { sc.far = need; sc.updateProjectionMatrix(); }
+        }
         // the far map is coarse and mostly static scenery: re-render it every other frame (every third on medium)
         const fs = this.sunFar.shadow;
         fs.autoUpdate = false;
