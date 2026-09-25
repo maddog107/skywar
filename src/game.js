@@ -1411,6 +1411,9 @@ export class Game {
             this.pullUp = false;
         }
         this.shake = Math.max(0, this.shake - rawDt * 2.2);
+        // buffet in a stall (the deeper past max AoA, the harder it shakes)
+        const sd = this.player && this.player.alive && !this.pilotMode ? this.player.stallDepth || 0 : 0;
+        if (sd > 0) this.shake = Math.max(this.shake, Math.min(0.6, 0.15 + sd * 0.5));
         if (this.state === 'dead') {
             this.deathT += rawDt;
             if (this.deathT > 4.5) {

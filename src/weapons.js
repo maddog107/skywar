@@ -157,7 +157,15 @@ export class Weapons {
                 const h = terrainHeight(b.pos.x, b.pos.z);
                 if (b.pos.y < h || b.pos.y < 0) {
                     if (b.pos.y < 0 && h < 0) g.effects.smoke.emit(b.pos, _v1.set(0, 18, 0), 0.7, 1, 4, [0.9, 0.95, 1], [0.8, 0.85, 0.9], 0.7, 0, 1, -20);
-                    else g.effects.groundImpact(b.pos);
+                    else {
+                        g.effects.groundImpact(b.pos);
+                        // strafing: a round striking the ground right by someone on foot still hurts (fragments, ricochet)
+                        const pm = g.pilotMode;
+                        if (b.team === 'red' && b.damage > 0 && pm && pm.alive && pm.walker) {
+                            const d = Math.hypot(pm.pos.x - b.pos.x, pm.pos.z - b.pos.z);
+                            if (d < 2.5) pm.takeHit(b.damage * (1.6 - d * 0.4), 'CUT DOWN BY GUNFIRE');
+                        }
+                    }
                     dead = true;
                 }
             }
@@ -244,7 +252,7 @@ export class Weapons {
                     if (k >= 0) t.incoming.splice(k, 1);
                 }
                 // decoyed by flares?
-                if (t.isFlare !== true && m.kind !== 'sam' && !W.radar) this.checkFlares(m, dir, dist);
+                if (t.isFlare !== true && m.kind !== 'sam' && !W.radar) this.checkFlares(m, rhat, dist); // seeker line of sight
                 const vr = _v4.subVectors(tv, m.vel);
                 // Proportional navigation: a = N * Vc * LOS_rate
                 const losRate = _v2.crossVectors(r, vr).divideScalar(Math.max(dist * dist, 1));
@@ -444,16 +452,22 @@ export class Weapons {
         }
     }
 
-    checkFlares(m, dir, distToTarget) {
+    checkFlares(m, los, distToTarget) {
         for (const f of this.flares) {
             if (f.checked.has(m)) continue;
-            const r = _v2.subVectors(f.pos, m.pos);
+            if (f.owner && f.owner.team === m.team) continue; // your own side's flares don't pull your missiles
+            // own scratch vector: the caller's _v2 still holds the line of sight it needs for navigation
+            const r = (this._flareR || (this._flareR = new THREE.Vector3())).subVectors(f.pos, m.pos);
             const d = r.length();
             if (d > 2600 || d > distToTarget * 1.6) continue;
-            if (r.divideScalar(d).dot(dir) < 0.6) continue;
+            // only a flare the seeker sees next to its target (within ~14°) can pull it off
+            if (r.divideScalar(d).dot(los) < 0.97) continue;
             f.checked.add(m);
-            // each flare has a chance to seduce the seeker
-            const chance = f.owner?.isPlayer ? 0.11 : 0.05 + (f.owner?.pilot?.skill ?? 0.5) * 0.06;
+            // one roll per salvo per missile (a salvo is 4 flares)
+            const salvos = m.salvos || (m.salvos = new Set());
+            if (salvos.has(f.salvo)) continue;
+            salvos.add(f.salvo);
+            const chance = f.owner?.isPlayer ? 0.35 : 0.12 + (f.owner?.pilot?.skill ?? 0.5) * 0.15;
             if (Math.random() < chance) {
                 if (m.target.incoming) {
                     const k = m.target.incoming.indexOf(m);
@@ -560,6 +574,7 @@ export class Weapons {
         ac.lastFlare = now;
         ac.flares--;
         const up = ac.getUp(_v1), right = ac.getRight(_v2);
+        const salvo = {};
         for (let k = 0; k < 4; k++) {
             const s = new THREE.Sprite(this.flareMat);
             s.scale.setScalar(9);
@@ -570,7 +585,7 @@ export class Weapons {
             const vel = ac.vel.clone().multiplyScalar(0.6)
                 .addScaledVector(right, side * rand(25, 45))
                 .addScaledVector(up, rand(-30, -8));
-            this.flares.push({ sprite: s, pos: s.position, vel, life: rand(3, 4), owner: ac, isFlare: true, alive: true, hitRadius: 0, checked: new Set(), smokeT: 0, trail: null });
+            this.flares.push({ sprite: s, pos: s.position, vel, life: rand(3, 4), owner: ac, isFlare: true, alive: true, hitRadius: 0, checked: new Set(), salvo, smokeT: 0, trail: null });
         }
         this.game.events.emit('flares', ac);
         return true;

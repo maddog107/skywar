@@ -239,6 +239,14 @@ describe('transports and the ejected pilot', () => {
                     seat: { landed: onGround, vel: new THREE.Vector3(), deployed: true }, walker: onGround ? {} : null, health: 100, hits: 0,
                     headPos(out) { return out.copy(this.pos).setY(this.pos.y + (this.walker ? 1.45 : 1.9)); },
                     takeHit(d) { this.hits++; this.health -= d; if (this.health <= 0) this.alive = false; },
+                    // the real PilotOnFoot's hit interface (pilot.js): a body capsule, simplified to a sphere here
+                    bulletHit(a, b, dmg) {
+                        const c = this.headPos(new THREE.Vector3()).setY(this.pos.y + 1), ab = new THREE.Vector3().subVectors(b, a);
+                        const t = Math.max(0, Math.min(1, new THREE.Vector3().subVectors(c, a).dot(ab) / Math.max(ab.lengthSq(), 1e-9)));
+                        if (a.clone().addScaledVector(ab, t).distanceTo(c) > 1.2) return false;
+                        this.takeHit(22 + dmg); return true;
+                    },
+                    blast(at, R, dmg) { const d = at.distanceTo(this.pos); if (d < R) this.takeHit(dmg * (1 - d / R)); },
                 };
                 g.pilotMode = pm;
                 g.player = { pos: pm.pos, alive: false };
