@@ -7,7 +7,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { AIRCRAFT, MODES, DIFFICULTY, TIMES } from './config.js';
-import { World, BASES } from './world.js';
+import { World, BASES, terrainHeight } from './world.js';
 import { Effects } from './effects.js';
 import { Audio } from './audio.js';
 import { Input } from './input.js';
@@ -580,6 +580,11 @@ function frame(dt) {
 
     cockpitPass.enabled = cockpit.enabled && !game.groundStart && game.state !== 'menu' && ((game.player && game.player.alive) || !!game.pilotMode);
     $('clickToFly').classList.toggle('show', game.state === 'playing' && !game.photo && settings.controlMode !== 'mousestick' && !input.locked);
+    // Depth precision: push the near plane out as the camera climbs (the cockpit has its own camera),
+    // so distant beaches and the water plane don't fight in the depth buffer.
+    const agl = camera.position.y - Math.max(terrainHeight(camera.position.x, camera.position.z), 0);
+    const near = clamp(agl / 80, 0.5, 6);
+    if (Math.abs(camera.near - near) > 0.05) { camera.near = near; camera.updateProjectionMatrix(); }
     composer.render(dt);
     hud.draw(game, dt);
     music.update(dt, game);

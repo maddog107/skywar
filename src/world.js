@@ -475,11 +475,13 @@ export class World {
         this.VIEW_TILES = 9;
     }
 
+    // Tile resolution by distance (in tiles). The far rings used to be very coarse (a vertex every
+    // 170 m), which made shorelines jump by tens of metres whenever a tile switched resolution.
     lodFor(dist) {
         if (dist < 1.6) return 96;
-        if (dist < 3.2) return 48;
-        if (dist < 5.5) return 24;
-        return 12;
+        if (dist < 3.2) return 64;
+        if (dist < 5.5) return 40;
+        return 24;
     }
 
     buildTileGeometry(tx, tz, seg) {
@@ -494,8 +496,12 @@ export class World {
         const pos = new Float32Array(vCount * 3), nor = new Float32Array(vCount * 3), col = new Float32Array(vCount * 3);
         const skirt = 30 + step * 1.5;
         const cN = new THREE.Vector3();
+        // Drawn height only (physics keeps the true terrain): open a ~2 m step at the waterline —
+        // shallow lakebed dips a little, the first metre of beach rises a little — so the flat water plane
+        // and near-flat beaches never fight in the depth buffer and flicker between sand and water.
+        const shore = (h) => h < 0 ? h - 1.5 * Math.max(0, 1 + h / 6) : h + 0.6 * Math.max(0, 1 - h);
         const setVert = (k, i, j, drop) => {
-            const h = H[(j + 1) * N + (i + 1)];
+            const h = shore(H[(j + 1) * N + (i + 1)]);
             pos[k * 3] = x0 + i * step; pos[k * 3 + 1] = h - drop; pos[k * 3 + 2] = z0 + j * step;
             const hl = H[(j + 1) * N + i], hr = H[(j + 1) * N + i + 2], hd = H[j * N + i + 1], hu = H[(j + 2) * N + i + 1];
             cN.set(hl - hr, 2 * step, hd - hu).normalize();
@@ -595,6 +601,8 @@ export class World {
             wanted.add(key);
             const seg = this.lodFor(dist);
             const t = this.tiles.get(key);
+            // hysteresis: a tile sitting right on a ring boundary keeps its resolution instead of flipping back and forth
+            if (t && t.seg !== seg && (this.lodFor(dist - 0.35) === t.seg || this.lodFor(dist + 0.35) === t.seg)) continue;
             if (!t || t.seg !== seg) jobs.push({ tx, tz, seg, key, dist, has: !!t });
         }
         // remove tiles out of range
