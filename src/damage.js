@@ -300,7 +300,7 @@ export class Wreckage {
                     const k = clamp((s.t - 1.4) / 0.9, 0, 1);
                     s.chute.scale.setScalar(0.1 + k * 0.9);
                     // strong drag toward drift with the wind, gentle sink
-                    const sink = s.dead ? -9 : s.sink != null ? -s.sink : -6.5;
+                    const sink = s.dead ? -(s.sink ?? 9) : s.sink != null ? -s.sink : -6.5; // a shredded canopy (pilot.js raises s.sink) falls fast
                     const target = _v.set(g.wind.x * 1.5 + (s.glide ? s.glide.x : 0), sink, g.wind.z * 1.5 + (s.glide ? s.glide.z : 0));
                     s.vel.lerp(target, 1 - Math.exp(-(s.player ? 1.6 : 2.2) * dt));
                     // upright + gentle sway; a steered canopy banks into its turns

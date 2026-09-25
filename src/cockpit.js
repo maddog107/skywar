@@ -189,7 +189,8 @@ export class Cockpit {
         this.camera.fov = mainCamera.fov; this.camera.aspect = mainCamera.aspect;
         this.camera.updateProjectionMatrix();
         this.syncLights(world);
-        const firing = pm.fireT > 0.05 && pm.reloadT <= 0 && game.input.mouse.left;
+        // a round went off in the last 50 ms (pilot.js stamps lastShotT; older builds only had fireT)
+        const firing = pm.reloadT <= 0 && (pm.lastShotT != null ? game.time - pm.lastShotT < 0.05 : pm.fireT > 0.05 && game.input.mouse.left);
         if (firing) this.rifleKick = 1;
         this.rifleKick = Math.max(0, this.rifleKick - dt * 14);
         const reload = pm.reloadT > 0 ? Math.sin(Math.min(1, (2.2 - pm.reloadT) / 2.2) * Math.PI) : 0;
