@@ -725,8 +725,16 @@ export class HUD {
             ctx.font = (C ? '700 24px' : '700 34px') + ' "Rajdhani", "Share Tech Mono", sans-serif';
             let bw = ctx.measureText(b.text).width;
             ctx.font = (C ? '600 12px' : '600 15px') + ' "Share Tech Mono", ui-monospace, monospace';
-            if (b.sub) bw = Math.max(bw, Math.min(ctx.measureText(b.sub).width, maxW));
-            const bh = b.sub ? (C ? 50 : 64) : (C ? 32 : 44);
+            // a long subtitle wraps onto a second line rather than being squeezed
+            let subs = b.sub ? [b.sub] : [];
+            if (b.sub && ctx.measureText(b.sub).width > maxW) {
+                const mid = b.sub.length / 2;
+                let cut = -1;
+                for (let i = 0; i < b.sub.length; i++) if (b.sub[i] === ' ' && (cut < 0 || Math.abs(i - mid) < Math.abs(cut - mid))) cut = i;
+                if (cut > 0) subs = [b.sub.slice(0, cut), b.sub.slice(cut + 1)];
+            }
+            for (const t of subs) bw = Math.max(bw, Math.min(ctx.measureText(t).width, maxW));
+            const bh = (subs.length ? (C ? 50 : 64) : (C ? 32 : 44)) + (subs.length > 1 ? (C ? 16 : 20) : 0);
             const grd = ctx.createLinearGradient(this.w / 2 - bw / 2 - 60, 0, this.w / 2 + bw / 2 + 60, 0);
             grd.addColorStop(0, 'rgba(0,8,6,0)'); grd.addColorStop(0.15, 'rgba(0,8,6,0.32)'); grd.addColorStop(0.85, 'rgba(0,8,6,0.32)'); grd.addColorStop(1, 'rgba(0,8,6,0)');
             ctx.fillStyle = grd;
@@ -734,10 +742,8 @@ export class HUD {
             ctx.fillStyle = b.color || GREEN;
             ctx.font = (C ? '700 24px' : '700 34px') + ' "Rajdhani", "Share Tech Mono", sans-serif';
             ctx.fillText(b.text, this.w / 2, by, maxW);
-            if (b.sub) {
-                ctx.font = (C ? '600 12px' : '600 15px') + ' "Share Tech Mono", ui-monospace, monospace';
-                ctx.fillText(b.sub, this.w / 2, by + (C ? 22 : 32), maxW);
-            }
+            ctx.font = (C ? '600 12px' : '600 15px') + ' "Share Tech Mono", ui-monospace, monospace';
+            subs.forEach((t, i) => ctx.fillText(t, this.w / 2, by + (C ? 22 : 32) + i * (C ? 16 : 20), maxW));
             ctx.globalAlpha = 1;
         }
         // first seconds of a sortie: the essential keys, under the banner (not on touch screens: no keyboard there)

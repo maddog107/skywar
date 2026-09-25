@@ -128,7 +128,7 @@ export class Game {
         this.shots = 0; this.hits = 0; this.missilesFired = 0; this.missileHits = 0; this.groundKills = 0;
         this.gloc = 0; this.damageFlash = 0; this.whiteout = 0; this.redout = false;
         this.hitmarkerT = -10; this.killmarkerT = -10;
-        this.collateral = 0; this._collateralCall = false; this.bellyT = 0;
+        this.collateral = 0; this._collateralCall = false; this.bellyT = 0; this.lastDeath = null;
         // nothing carries over from the last sortie: stick ramps, head look, slow-mo, callouts, rearm timers
         this.stick.pitch = this.stick.roll = this.stick.yaw = 0;
         this.freeLook.yaw = this.freeLook.pitch = this.freeLook.t = 0;
@@ -564,6 +564,7 @@ export class Game {
     pilotKilled(cause) {
         this.addFeed('PILOT KIA', '#ff4a3d');
         this.showBanner('KILLED IN ACTION', cause || '', 4, '#ff4a3d');
+        this.lastDeath = 'killed in action';
         this.state = 'dead';
         this.deathT = 0;
         this.missileCam = null;
@@ -724,6 +725,7 @@ export class Game {
                 this.state = 'dead';
                 this.deathT = 0;
                 const crashed = kind === 'crash' && (!source || this.time - ac.lastHitTime > 5);
+                this.lastDeath = crashed ? 'crashed' : 'shot down';
                 if (crashed) {
                     this.showBanner('CRASHED', ac.onGround || ac.pos.y < 300 ? 'Too fast, too hard, or not level — check the approach speed on the HUD' : '', 4, '#ff4a3d');
                     this.audio.say(pick(['That was not a landing.', 'Ouch.', 'Well, that was a mess.']), true);
@@ -1583,6 +1585,7 @@ export class Game {
             accuracy: acc, missiles: this.missilesFired, missileHits: this.missileHits, groundKills: this.groundKills, collateral: this.collateral,
             mode: this.mission ? 'missions' : this.mode, aircraft: this.aircraftId,
             mission: this.mission ? this.mission.title : null, missionId: this.missionId, daily: this.isDaily, seconds: this.missionTime,
+            reason: victory ? 'victory' : this.lastDeath || 'ended', // for the results title: 'shot down' | 'crashed' | 'killed in action' | 'ended'
         });
         if (victory) this.audio.say(this.mission ? 'Mission accomplished. Outstanding work.' : 'Mission complete. All targets destroyed. Return to base.', true);
         else if (this.mission) this.audio.say('Mission failed.', true);
