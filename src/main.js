@@ -594,6 +594,7 @@ function buildCredits() {
         ['SWAT (the pilot on foot and under the parachute)', 'Quaternius', 'CC0', 'https://poly.pizza/m/Btfn3G5Xv4'],
         ['Man (the civilian in Grand Theft Aero)', 'Quaternius', 'CC0', 'https://poly.pizza/m/HMnuH5geEG'],
         ['M939 Truck', 'J-Toastie', 'CC BY 3.0', 'https://poly.pizza/m/y8lBpvMlim'],
+        ['Trees, grass, ferns and ground textures (photoscans; see models/vegetation and models/ground)', 'Poly Haven', 'CC0', 'https://polyhaven.com'],
     ];
     const body = $('creditsBody');
     body.innerHTML = '';
