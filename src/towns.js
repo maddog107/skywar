@@ -20,11 +20,16 @@ import { buildRoads, roadMaterial, streetMaterial, junctionMaterial, sidewalkMat
     junctionShape, SurfaceBuilder, pointAt, tangentAt, smooth01, STREET_HALF, SIDEWALK, ROAD_HALF } from './roads.js';
 import { mergeGeometries as mergeGeos } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Traffic } from './traffic.js';
-import { setBridgeNight } from './bridges.js';
+import { setBridgeNight, BridgeBatch } from './bridges.js';
 import { Buildings } from './buildings.js';
+import { townGradeAt } from './terraincore.js';
 import { CarSet, PAINTS, NearInstances } from './carset.js';
 
 const EXTENT = 24000, CELL = 3200;
+// towns drawn together (see perTown): the kinds drawn at any distance as one mesh for the whole map (from the air
+// most towns are in view anyway), the ones only drawn close per 8 km square
+const TOWN_CELL = Infinity, FAR_CELL = 8000;
+const townCellKey = (t, C) => C === Infinity ? 0 : Math.floor(t.x / C) * 1000 + Math.floor(t.z / C);
 const BLOCK_CELL = 2;
 const STREET_Y = 0.3;             // street surface above the graded ground
 const WALK = STREET_HALF + SIDEWALK; // half-width of a street with its pavements
@@ -77,18 +82,10 @@ class TownSurface {
         this.H = H; this.M = M;
     }
 
-    // [smoothed height, weight 0..1] at world (x, z), or null outside
-    sample(x, z) {
-        const t = this.t, dx = x - t.x, dz = z - t.z;
-        if (dx * dx + dz * dz > this.ext2) return null;
-        const u = dx * t.bx.x + dz * t.bx.z, v = dx * t.ax.x + dz * t.ax.z;
-        const fi = u / this.C + this.n, fj = v / this.C + this.n, N = this.N;
-        const i = Math.max(0, Math.min(N - 2, Math.floor(fi))), j = Math.max(0, Math.min(N - 2, Math.floor(fj)));
-        const a = Math.max(0, Math.min(1, fi - i)), b = Math.max(0, Math.min(1, fj - j));
-        const k = j * N + i;
-        const bil = (A) => (A[k] * (1 - a) + A[k + 1] * a) * (1 - b) + (A[k + N] * (1 - a) + A[k + N + 1] * a) * b;
-        const w = smooth01((bil(this.M) - 0.15) / 0.6);
-        return w > 0 ? [bil(this.H), w] : null;
+    // plain data for terraincore.js townGradeAt (also what the terrain worker gets)
+    pack() {
+        const t = this.t;
+        return { x: t.x, z: t.z, bxx: t.bx.x, bxz: t.bx.z, axx: t.ax.x, axz: t.ax.z, C: this.C, n: this.n, N: this.N, ext2: this.ext2, H: this.H, M: this.M };
     }
 }
 
@@ -339,17 +336,21 @@ export class Towns {
         this.rand = mulberry32(2024);
         this.towns = this.placeTowns();
         this.planStreets();
-        this.townCell = new Map(); // towns by 1 km cell (for townBase)
-        for (const t of this.towns) {
+        // the ground as the towns grade it, as plain data (terraincore.js townGradeAt; the terrain worker gets a copy):
+        // each town's smoothed surface, the towns by 1 km cell, and levelled pads (stadiums, added as they're built)
+        this.grade = { towns: [], cells: new Map(), pads: [] };
+        this.pads = this.grade.pads;
+        this.towns.forEach((t, ti) => {
             t.surf = new TownSurface(t, this.streetDefs.filter(sd => sd.t === t));
+            this.grade.towns.push(t.surf.pack());
             const e = Math.sqrt(t.surf.ext2) + 12;
             for (let cx = Math.floor((t.x - e) / 1000); cx <= Math.floor((t.x + e) / 1000); cx++)
                 for (let cz = Math.floor((t.z - e) / 1000); cz <= Math.floor((t.z + e) / 1000); cz++) {
                     const k = cx * 100003 + cz;
-                    if (!this.townCell.has(k)) this.townCell.set(k, []);
-                    this.townCell.get(k).push(t);
+                    if (!this.grade.cells.has(k)) this.grade.cells.set(k, []);
+                    this.grade.cells.get(k).push(ti);
                 }
-        }
+        });
         this.deadEnds = [];
         this.junctions = [];
         // town streets first (with their junctions), then the roads that join their ends
@@ -370,6 +371,7 @@ export class Towns {
         this.deadEnds.push(...deadEnds);
         this.paths = paths;
         this.bridges = bridges;
+        this.bridgeBatch = new BridgeBatch(this.group, bridges); // their decks and piers drawn a few meshes at a time
         for (const p of paths) { p.half = ROAD_HALF; }
         this.roadJunctions();
         this.shapeJunctions();
@@ -388,7 +390,7 @@ export class Towns {
         this.buildRoadblocks(this.deadEnds);
         this.traffic = new Traffic(this.group, [...paths, ...this.streetPaths], this.dirtPaths, this);
         for (const p of this.dirtPaths) p.half = 3.2;
-        this.ground = new RoadGround([...paths, ...this.streetPaths, ...this.dirtPaths], (x, z, h) => this.townBase(x, z, h));
+        this.ground = new RoadGround([...paths, ...this.streetPaths, ...this.dirtPaths], this.grade);
         for (const g of surfaces) if (g) this.ground.protect(g);
         this.time = 0;
         // nothing in a town moves as an object (cars and people are instances) except collapsing bridges
@@ -403,25 +405,8 @@ export class Towns {
     }
 
     // ── the ground as the town grades it ──
-    // natural height h at (x, z) → the graded ground (inside towns), else h
-    townBase(x, z, h) {
-        if (h < 0.5) return h;
-        const l = this.townCell.get(Math.floor(x / 1000) * 100003 + Math.floor(z / 1000));
-        if (l) for (const t of l) {
-            const s = t.surf.sample(x, z);
-            if (s) { h += (s[0] - h) * s[1]; break; }
-        }
-        // levelled platforms (a stadium): flat inside the ellipse, easing back to the ground around it
-        if (this.pads) for (const pd of this.pads) {
-            const dx = x - pd.x, dz = z - pd.z;
-            if (dx * dx + dz * dz > (pd.a + pd.blend) ** 2) continue;
-            const c = Math.cos(pd.yaw), s = Math.sin(pd.yaw), lx = dx * c - dz * s, lz = dx * s + dz * c;
-            const e = Math.hypot(lx / pd.a, lz / pd.b); // 1 on the rim
-            const w = e <= 1 ? 1 : 1 - smooth01((e - 1) * Math.min(pd.a, pd.b) / pd.blend);
-            if (w > 0) h += (pd.y - h) * w;
-        }
-        return h;
-    }
+    // natural height h at (x, z) → the graded ground (inside towns, on levelled pads), else h
+    townBase(x, z, h) { return townGradeAt(this.grade, x, z, h); }
     groundAt(x, z) { return this.townBase(x, z, terrainHeight(x, z)); }
 
     // ── spatial blocker (roads, streets, buildings): 4 m cells ──
@@ -803,12 +788,18 @@ export class Towns {
         return set;
     }
 
-    // One InstancedMesh per town for a kind of building part, each with its own tight bounding sphere,
-    // so towns out of view (or out of the small shadow frustum) cost nothing. `far`: not drawn beyond this.
-    // attrs(n): per-instance attributes (the geometry is cloned per town to carry them)
+    // One InstancedMesh per group of towns for a kind of building part. `far`: not drawn beyond this.
+    // The towns are grouped by the TOWN_CELL (FAR_CELL for kinds only drawn close) square their centre is in:
+    // one draw call covers many towns instead of one each (a draw costs the same CPU time however many
+    // instances it has, and the GPU drops the ones out of view early).
+    // attrs(n): per-instance attributes (the geometry is cloned per group to carry them)
     perTown(geo, mat, list, write, { shadow = true, far = Infinity, attrs = null } = {}) {
-        const byTown = new Map();
-        for (const o of list) { if (!byTown.has(o.t)) byTown.set(o.t, []); byTown.get(o.t).push(o); }
+        const byTown = new Map(), C = far < Infinity ? FAR_CELL : TOWN_CELL;
+        for (const o of list) {
+            const k = townCellKey(o.t, C);
+            if (!byTown.has(k)) byTown.set(k, []);
+            byTown.get(k).push(o);
+        }
         const out = [];
         for (const items of byTown.values()) {
             let g = geo;
@@ -1336,14 +1327,20 @@ export class Towns {
         for (const st of this.stadiums || []) this.drawStadium(st, B);
     }
 
-    // lawns, ponds, plazas and forecourts of a town as one mesh (vertex colours), draped on the graded ground
+    // lawns, ponds, plazas and forecourts of a group of towns (see perTown) as one mesh (vertex colours), draped on
+    // the graded ground
     drawGround(list) {
         const byTown = new Map();
-        for (const o of list) { if (!byTown.has(o.t)) byTown.set(o.t, []); byTown.get(o.t).push(o); }
+        for (const o of list) {
+            const k = townCellKey(o.t, TOWN_CELL);
+            if (!byTown.has(k)) byTown.set(k, []);
+            byTown.get(k).push(o);
+        }
         const mat = liftWithDistance(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: offsetUnits(-2) }));
-        for (const [t, items] of byTown) {
+        for (const items of byTown.values()) {
             const pos = [], col = [], idx = [];
             for (const o of items) {
+                const t = o.t;
                 const N = o.kind === 'pond' ? 10 : 5;
                 const base = pos.length / 3;
                 const lift = o.kind === 'pond' ? 0.36 : o.kind === 'lawn' ? 0.3 : 0.33;
@@ -1688,18 +1685,25 @@ export class Towns {
 
     update(dt, cam) {
         this.time += dt;
+        this.bridgeBatch.update(); // bridges reset for a new sortie
         if (this.buildings) this.buildings.update(dt, cam);
         // parked cars: re-pick the ones near the camera when it has moved a fair way
         // (and the street furniture, and which towns' rooftop clutter / trees are close enough to draw)
+        // The sets are re-picked one per frame (crossing into a town used to redo them all in one frame: a 10-30 ms
+        // hitch at speed); after a jump of more than a kilometre (respawn, quick position) all at once.
         if (cam && (!this._parkAt || this._parkAt.distanceToSquared(cam) > 150 * 150)) {
+            const jump = !this._parkAt || this._parkAt.distanceToSquared(cam) > 1000 * 1000;
             this._parkAt = (this._parkAt || new THREE.Vector3()).copy(cam);
-            if (this.parkedSet) this.parkedSet.commit(cam, 2200);
-            for (const set of this.nearSets || []) set.commit(cam, 2000);
+            const q = this._refresh || (this._refresh = []);
+            q.length = 0;
+            if (this.parkedSet) q.push(this.parkedSet);
+            q.push(...(this.nearSets || []));
+            if (jump) while (q.length) this.recommit(q.pop(), cam);
             for (const im of this.townMeshes || []) {
                 const sp = im.boundingSphere, far = im.userData.far;
                 if (far < Infinity) im.visible = Math.hypot(sp.center.x - cam.x, sp.center.z - cam.z) - sp.radius < far;
             }
-        }
+        } else if (cam && this._refresh && this._refresh.length) this.recommit(this._refresh.pop(), cam);
         this.updatePeople(dt, cam);
         if (!this.lamps) return;
         let dirty = false;
@@ -1712,6 +1716,9 @@ export class Towns {
         }
         if (dirty) this.lamps.refreshColors();
     }
+
+    // re-pick the parked cars / a street-furniture set around the camera
+    recommit(set, cam) { set.commit(cam, set === this.parkedSet ? 2200 : 2000); }
 
     setNight(on) {
         if (this.lampGlow) this.lampGlow.visible = on;

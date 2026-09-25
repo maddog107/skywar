@@ -228,6 +228,13 @@ function makeGeo(maxVerts, index) {
     if (index) g.setIndex(index);
     return g;
 }
+// flag just the first `verts` vertices of a rebuilt strip for upload (not the whole preallocated buffer)
+function uploadUsed(geo, verts) {
+    for (const a of [geo.attributes.position, geo.attributes.aData]) {
+        a.clearUpdateRanges();
+        if (verts > 0) { a.addUpdateRange(0, verts * a.itemSize); a.needsUpdate = true; }
+    }
+}
 function stripIndex(nPts) {
     const idx = [];
     for (let i = 0; i < nPts - 1; i++) {
@@ -403,8 +410,7 @@ class Wake {
                 dat[j * 4] = P[i].s; dat[j * 4 + 1] = hw * sg; dat[j * 4 + 2] = d + (1 - ageFade) * 1800; dat[j * 4 + 3] = hw;
             }
         }
-        geo.attributes.position.needsUpdate = true;
-        geo.attributes.aData.needsUpdate = true;
+        uploadUsed(geo, n * 2);
         geo.setDrawRange(0, Math.max(0, n - 1) * 6);
     }
 
@@ -444,8 +450,7 @@ class Wake {
             }
             used = i + 1;
         }
-        geo.attributes.position.needsUpdate = true;
-        geo.attributes.aData.needsUpdate = true;
+        uploadUsed(geo, used * 2);
         geo.setDrawRange(0, Math.max(0, used - 1) * 6);
     }
 

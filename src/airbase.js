@@ -11,9 +11,10 @@ import { propParts } from './props.js';
 import { makeBuildingMaterial } from './towns.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createAircraftModel } from './models.js';
+import { mergeStaticModel, mergeInPlace } from './meshmerge.js';
 import { AIRCRAFT } from './config.js';
 import { propInstance, propSize, hasProp } from './props.js';
-import { makeRadialTexture, clamp, rand, freezeStatic, offsetUnits } from './util.js';
+import { makeRadialTexture, clamp, rand, freezeStatic, freezeLocal, offsetUnits } from './util.js';
 import { roadMaterial } from './roads.js';
 import { registerAirTarget, Downed, AIR } from './softtargets.js';
 import { WORLD_BUILDINGS } from './buildings.js';
@@ -113,18 +114,28 @@ function simpleGear(L, halfSpan, bellyY, H) {
 }
 
 // A parked aircraft: model + gear, origin on the ground. Returned facing -Z.
+// Nothing on a parked (or scripted air traffic) airframe moves by itself, so its meshes are merged once per type
+// (meshmerge.js: a few draw calls instead of up to ~40) and every copy shares that geometry.
+const _parkedTemplates = new Map();
 export function makeParkedModel(id) {
-    const { object, rig } = createAircraftModel(id);
+    let tpl = _parkedTemplates.get(id);
     const spec = AIRCRAFT[id];
-    const H = -(rig.minY ?? -spec.length * 0.08) + 1.2;
+    if (!tpl) {
+        const m = createAircraftModel(id), rig = m.rig;
+        const H = -(rig.minY ?? -spec.length * 0.08) + 1.2;
+        m.object.traverse(o => { if (o.isMesh) o.castShadow = true; });
+        const gear = simpleGear(spec.length, rig.halfSpan || spec.span / 2, rig.minY ?? -spec.length * 0.08, H);
+        gear.traverse(o => { if (o.isMesh) o.castShadow = true; });
+        // the gear stays a group of its own (air traffic shows / hides it), its six parts merged
+        tpl = { object: mergeStaticModel(m.object), gear: mergeInPlace(gear), rig, H };
+        _parkedTemplates.set(id, tpl);
+    }
+    const object = tpl.object.clone(), gear = tpl.gear.clone();
     const root = new THREE.Group();
-    object.position.y = H;
+    object.position.y = tpl.H;
     root.add(object);
-    const gear = simpleGear(spec.length, rig.halfSpan || spec.span / 2, rig.minY ?? -spec.length * 0.08, H);
-    gear.position.y = H;
+    gear.position.y = tpl.H;
     root.add(gear);
-    // chocks and a boarding ladder make it look parked
-    root.traverse(o => { if (o.isMesh) o.castShadow = true; });
     return root;
 }
 
@@ -137,7 +148,9 @@ function makeRotor(R, blades, tail = false) {
         b.position.z = R / 2;
         const piv = new THREE.Group(); piv.rotation.y = (k / blades) * Math.PI * 2; piv.add(b); g.add(piv);
     }
-    const disc = new THREE.Mesh(new THREE.CircleGeometry(R, 32), new THREE.MeshBasicMaterial({ color: 0x111111, transparent: true, opacity: 0.12, depthWrite: false, side: THREE.DoubleSide }));
+    // (flat: one pass shows both faces exactly as three.js's back-then-front passes would, without re-resolving
+    // the shader twice a frame)
+    const disc = new THREE.Mesh(new THREE.CircleGeometry(R, 32), new THREE.MeshBasicMaterial({ color: 0x111111, transparent: true, opacity: 0.12, depthWrite: false, side: THREE.DoubleSide, forceSinglePass: true }));
     disc.rotation.x = -Math.PI / 2;
     g.add(disc);
     g.userData.disc = disc;
@@ -161,6 +174,7 @@ export function makeHelicopter(id) {
 class Heli {
     constructor(scene, id, waypoints, alt, speed) {
         this.mesh = makeHelicopter(id);
+        freezeLocal(this.mesh, [this.mesh.userData.rotor]); // the airframe moves as a whole, the rotor turns on it
         scene.add(this.mesh);
         const pts = waypoints.map(p => new THREE.Vector3(p.x, Math.max(terrainHeight(p.x, p.z), 0) + alt, p.z));
         // keep clear of hills between waypoints
@@ -681,7 +695,9 @@ export class Airbases {
         root.traverse(o => {
             if (!o.isMesh || Array.isArray(o.material)) return;
             const gg = o.geometry.clone().applyMatrix4(o.matrixWorld);
-            for (const k of Object.keys(gg.attributes)) if (!['position', 'normal', 'uv'].includes(k)) gg.deleteAttribute(k);
+            // (merged plain parts carry colour, roughness / metalness and emissive per vertex: meshmerge.js)
+            const keep = o.material.vertexColors ? ['position', 'normal', 'uv', 'color', 'aRM', 'aEmi'] : ['position', 'normal', 'uv'];
+            for (const k of Object.keys(gg.attributes)) if (!keep.includes(k)) gg.deleteAttribute(k);
             if (!gg.attributes.uv) gg.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(gg.attributes.position.count * 2), 2));
             if (!gg.attributes.normal) gg.computeVertexNormals();
             const ng = gg.index ? gg.toNonIndexed() : gg;

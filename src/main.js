@@ -185,8 +185,9 @@ async function boot() {
     audio.callouts = settings.callouts;
     buildMenu();
     $('loadFill').style.width = '100%';
-    // compile shaders before showing the menu (avoids first-frame hitches)
+    // compile shaders and upload the world before showing the menu (avoids first-frame hitches)
     renderer.compile(scene, camera);
+    try { warmUpload(); } catch (e) { /* non-fatal */ }
     setTimeout(() => {
         $('loading').classList.remove('show');
         showMenu();
@@ -519,10 +520,38 @@ function launch() {
     try {
         game.effects.explosion(new THREE.Vector3(0, -500, 0), 0.1);
         renderer.compile(scene, camera);
+        warmUpload();
         cockpit.rifle.visible = true;
         renderer.compile(cockpit.scene, cockpit.camera);
         cockpit.rifle.visible = false;
     } catch (e) { /* non-fatal */ }
+}
+
+// three.js uploads an object's buffers and textures (and builds its shadow shaders) the first time it draws it,
+// so flying into a part of the world not seen yet this session could upload megabytes in one frame (a 50-400 ms
+// hitch). Draw everything once, hidden or out of view or not, into a 1x1 target (shadows too), then put every
+// visible / frustumCulled flag back as it was. At boot (behind the loading screen) that's the whole world; at
+// launch only the sortie's new ships, jets and targets still need uploading.
+let warmTarget = null;
+function warmUpload() {
+    const hidden = [], culled = [];
+    scene.traverse(o => {
+        if (!o.visible) { hidden.push(o); o.visible = true; }
+        if (o.frustumCulled && (o.isMesh || o.isLine || o.isPoints || o.isSprite)) { culled.push(o); o.frustumCulled = false; }
+    });
+    const far = world.sunFar && world.sunFar.shadow;
+    try {
+        if (far) far.needsUpdate = true;
+        warmTarget = warmTarget || new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType });
+        const prev = renderer.getRenderTarget();
+        renderer.setRenderTarget(warmTarget);
+        renderer.render(scene, camera);
+        renderer.setRenderTarget(prev);
+    } finally {
+        for (const o of hidden) o.visible = false;
+        for (const o of culled) o.frustumCulled = true;
+        if (far) far.needsUpdate = true; // redrawn properly next frame
+    }
 }
 
 function showGameOver(r) {

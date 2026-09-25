@@ -17,7 +17,7 @@ import * as THREE from 'three';
 import { samplePath, LANE, liftWithDistance } from './roads.js';
 import { rand, makeRadialTexture } from './util.js';
 import { propParts } from './props.js';
-import { CarSet, PAINTS, PAINTS_BUS } from './carset.js';
+import { CarSet, PAINTS, PAINTS_BUS, mergeVehicleParts, vehicleMaterial } from './carset.js';
 
 const _p = new THREE.Vector3(), _t = new THREE.Vector3(), _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _e = new THREE.Euler(0, 0, 0, 'YXZ'), _v = new THREE.Vector3(), _v2 = new THREE.Vector3();
 const GAP = 3.5;     // metres kept to the vehicle ahead when stopped
@@ -39,9 +39,13 @@ export class Traffic {
         this.buggyCount = Math.min(60, dirtPaths.length * 3);
         this.buggyParts = [];
         const parts = this.buggyCount ? propParts('buggy') : null;
-        if (parts) for (const pt of parts) {
-            const im = new THREE.InstancedMesh(pt.geometry, liftWithDistance(pt.material.clone()), this.buggyCount);
+        const merged = parts && mergeVehicleParts(parts); // one draw call for every buggy (see carset.js)
+        const drawn = merged ? [{ geometry: merged, material: vehicleMaterial(true) }] : (parts || []).map(pt => ({ geometry: pt.geometry, material: liftWithDistance(pt.material.clone()) }));
+        const white = new THREE.Color(1, 1, 1);
+        for (const d of drawn) {
+            const im = new THREE.InstancedMesh(d.geometry, d.material, this.buggyCount);
             im.frustumCulled = false; im.castShadow = true;
+            if (merged) for (let k = 0; k < this.buggyCount; k++) im.setColorAt(k, white); // same shader variant as the cars
             scene.add(im);
             this.buggyParts.push(im);
         }
@@ -142,21 +146,25 @@ export class Traffic {
 
     // every lane's vehicles, ordered in their direction of travel: each car gets its lane (c._lane) and the
     // oncoming one (c._other). Returns the lanes.
+    // (every frame: the per-path lists are kept and refilled, not reallocated)
     lanes() {
         const L = this._lanes || (this._lanes = new Map());
-        for (const l of L.values()) l.length = 0;
+        for (const e of L.values()) { e.fw.length = 0; e.bw.length = 0; }
         for (const c of this.cars) {
             if (c.stolen || !c.path) continue;
-            let m = L.get(c.path);
-            if (!m) L.set(c.path, m = []);
-            m.push(c);
+            let e = L.get(c.path);
+            if (!e) L.set(c.path, e = { fw: [], bw: [] });
+            (c.dir > 0 ? e.fw : e.bw).push(c);
         }
         const out = [];
-        for (const [p, list] of L) {
-            if (!list.length) { L.delete(p); continue; }
-            const fw = list.filter(c => c.dir > 0).sort((a, b) => a.s - b.s), bw = list.filter(c => c.dir < 0).sort((a, b) => b.s - a.s);
-            for (const c of fw) { c._lane = fw; c._other = bw; }
-            for (const c of bw) { c._lane = bw; c._other = fw; }
+        for (const [p, e] of L) {
+            const { fw, bw } = e;
+            if (!fw.length && !bw.length) { if (p.turn) L.delete(p); continue; } // a turn's path is used once
+            // stable insertion sorts (short lists): the same order as sorting a filtered copy
+            for (let i = 1; i < fw.length; i++) { const c = fw[i]; let j = i - 1; while (j >= 0 && fw[j].s > c.s) { fw[j + 1] = fw[j]; j--; } fw[j + 1] = c; }
+            for (let i = 1; i < bw.length; i++) { const c = bw[i]; let j = i - 1; while (j >= 0 && bw[j].s < c.s) { bw[j + 1] = bw[j]; j--; } bw[j + 1] = c; }
+            for (let i = 0; i < fw.length; i++) { const c = fw[i]; c._lane = fw; c._other = bw; c._k = i; }
+            for (let i = 0; i < bw.length; i++) { const c = bw[i]; c._lane = bw; c._other = fw; c._k = i; }
             out.push(fw, bw);
         }
         return out;
@@ -305,7 +313,7 @@ export class Traffic {
         // keep a gap to the vehicle ahead (a wreck too), pulling round a wreck when the other lane is clear
         const lane = c._lane;
         if (lane) {
-            const k = lane.indexOf(c);
+            const k = lane[c._k] === c ? c._k : lane.indexOf(c);
             let lead = lane[k + 1];
             if (lead && lead === c.passing) lead = lane[k + 2];
             if (lead) {
@@ -442,16 +450,20 @@ export class Traffic {
             this.pools.instanceMatrix.clearUpdateRanges();
             if (pools) { this.pools.instanceMatrix.addUpdateRange(0, pools * 16); this.pools.instanceMatrix.needsUpdate = true; }
         }
+        let nb = 0; // buggies drawn: only the ones near the camera, packed to the front (like the cars)
         for (const b of this.buggies) {
             if (!b.dead) this.moveBuggy(b, dt);
             this.fallUpdate(b, dt, game);
             b.bounce += dt * (4 + b.speed * 0.5);
             b.yOff = b.fall ? b.yOff : Math.abs(Math.sin(b.bounce)) * 0.12 * Math.min(1, b.speed / 8);
             this.pose(b, 1.4);
-            _e.set(Math.asin(Math.max(-1, Math.min(1, _t.y))) + Math.sin(b.bounce * 1.3) * 0.03, Math.atan2(-_t.x, -_t.z), b.dead ? 0.4 : Math.sin(b.bounce * 0.7) * 0.04);
-            _q.setFromEuler(_e);
-            _m.compose(_p, _q, _s.set(1, 1, 1));
-            for (const im of this.buggyParts) im.setMatrixAt(b.i, _m);
+            if (!cam || (_p.x - cam.x) ** 2 + (_p.z - cam.z) ** 2 < 3500 * 3500) {
+                _e.set(Math.asin(Math.max(-1, Math.min(1, _t.y))) + Math.sin(b.bounce * 1.3) * 0.03, Math.atan2(-_t.x, -_t.z), b.dead ? 0.4 : Math.sin(b.bounce * 0.7) * 0.04);
+                _q.setFromEuler(_e);
+                _m.compose(_p, _q, _s.set(1, 1, 1));
+                for (const im of this.buggyParts) im.setMatrixAt(nb, _m);
+                nb++;
+            }
             // dust plume, only where someone can see it
             if (game && !b.dead && b.speed > 6 && cam && cam.distanceToSquared(b.pos) < 900 * 900) {
                 b.dust -= dt;
@@ -464,7 +476,14 @@ export class Traffic {
         }
         // only the cars near the camera go to the GPU
         this.carSet.commit(cam || { x: 0, z: 0 }, cam ? 3500 : 1e9);
-        for (const im of this.buggyParts) im.instanceMatrix.needsUpdate = true;
+        for (const im of this.buggyParts) {
+            const was = im.count;
+            im.count = nb; im.visible = nb > 0;
+            if (!nb && !was) continue;
+            im.instanceMatrix.clearUpdateRanges();
+            if (nb) im.instanceMatrix.addUpdateRange(0, nb * 16);
+            im.instanceMatrix.needsUpdate = nb > 0;
+        }
         if (this.lights.visible) lp.needsUpdate = true;
     }
 

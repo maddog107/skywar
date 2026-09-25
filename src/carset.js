@@ -73,6 +73,64 @@ function boxParts() {
         { geometry: cabin, material: new THREE.MeshStandardMaterial({ color: 0x2a3440, roughness: 0.2, metalness: 0.6 }) }];
 }
 
+// ── One mesh per vehicle ──
+// A model's parts (one per material) merged into one geometry: each part's colour becomes a vertex colour, and
+// aMat = (paint mask, roughness, metalness) per vertex. With vehicleMaterial() a whole car is one draw call (and
+// one instance buffer) instead of one per material. Only plain untextured, opaque standard materials merge;
+// returns null otherwise (the caller keeps a mesh per part).
+export function mergeVehicleParts(parts, paintName = null) {
+    if (!parts || !parts.length) return null;
+    const ok = parts.every(pt => {
+        const m = pt.material;
+        return m && m.isMeshStandardMaterial && !m.isMeshPhysicalMaterial && !m.map && !m.normalMap && !m.roughnessMap && !m.metalnessMap && !m.emissiveMap && !m.alphaMap
+            && !m.transparent && m.opacity === 1 && m.side === THREE.FrontSide && !m.vertexColors && m.emissive.getHex() === 0
+            && pt.geometry.attributes.position && pt.geometry.attributes.normal;
+    });
+    if (!ok) return null;
+    const geos = parts.map(pt => {
+        const src = pt.geometry.index ? pt.geometry.toNonIndexed() : pt.geometry;
+        const n = src.attributes.position.count, m = pt.material;
+        const paint = !!paintName && m.name === paintName;
+        const c = paint ? { r: 1, g: 1, b: 1 } : m.color;
+        const col = new Float32Array(n * 3), mat = new Float32Array(n * 3);
+        for (let i = 0; i < n; i++) {
+            col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+            mat[i * 3] = paint ? 1 : 0; mat[i * 3 + 1] = m.roughness; mat[i * 3 + 2] = m.metalness;
+        }
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', src.attributes.position);
+        g.setAttribute('normal', src.attributes.normal);
+        g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+        g.setAttribute('aMat', new THREE.BufferAttribute(mat, 3));
+        return g;
+    });
+    try { return mergeGeometries(geos); } catch (e) { return null; }
+}
+
+// The material for mergeVehicleParts geometry (shared by every vehicle type): vertex colours, the instance colour
+// on the painted parts only (a negative one darkens every part: a wreck), roughness / metalness per vertex.
+const _vehicleMats = {};
+export function vehicleMaterial(onRoad = false) {
+    const key = onRoad ? 'road' : 'plain';
+    if (_vehicleMats[key]) return _vehicleMats[key];
+    const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 });
+    if (onRoad) liftWithDistance(m); // ride with the road surface's distance lift
+    const lift = m.onBeforeCompile, liftKey = onRoad ? m.customProgramCacheKey() : '';
+    m.onBeforeCompile = (sh, r) => {
+        if (onRoad) lift(sh, r);
+        sh.vertexShader = sh.vertexShader
+            .replace('#include <common>', '#include <common>\nattribute vec3 aMat;\nvarying vec2 vRM;')
+            .replace('#include <color_vertex>', THREE.ShaderChunk.color_vertex.replace('vColor.rgb *= instanceColor.rgb;',
+                'vColor.rgb *= instanceColor.r < 0.0 ? -instanceColor.rgb : mix(vec3(1.0), instanceColor.rgb, aMat.x);') + '\nvRM = aMat.yz;');
+        sh.fragmentShader = sh.fragmentShader
+            .replace('#include <common>', '#include <common>\nvarying vec2 vRM;')
+            .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = vRM.x;')
+            .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = vRM.y;');
+    };
+    m.customProgramCacheKey = () => 'vehicle:' + liftKey;
+    return (_vehicleMats[key] = m);
+}
+
 export class CarSet {
     constructor(parent, n, rng = Math.random, { castShadow = false, allowSpecial = true, onRoad = false, big = false } = {}) {
         this.n = n;
@@ -97,19 +155,25 @@ export class CarSet {
         for (const [t, count] of counts) {
             const parts = (t.make ? t.make() : propParts(t.id)) || boxParts();
             const list = [];
-            for (const pt of parts) {
-                const isPaint = t.paint ? pt.material.name === t.paint : false;
-                const mat = isPaint || onRoad ? pt.material.clone() : pt.material;
-                if (isPaint) mat.color.setRGB(1, 1, 1); // the instance colour is the paint
-                if (onRoad) liftWithDistance(mat); // ride with the road surface's distance lift
-                const im = new THREE.InstancedMesh(pt.geometry, mat, count);
+            const white = new THREE.Color(1, 1, 1);
+            const merged = mergeVehicleParts(parts, t.paint);
+            // one draw call per vehicle type (every part in one geometry); per-material meshes only as a fallback
+            const drawn = merged ? [{ geometry: merged, material: vehicleMaterial(onRoad), merged: true, paint: !!t.paint }]
+                : parts.map(pt => {
+                    const isPaint = t.paint ? pt.material.name === t.paint : false;
+                    const mat = isPaint || onRoad ? pt.material.clone() : pt.material;
+                    if (isPaint) mat.color.setRGB(1, 1, 1); // the instance colour is the paint
+                    if (onRoad) liftWithDistance(mat); // ride with the road surface's distance lift
+                    return { geometry: pt.geometry, material: mat, merged: false, paint: isPaint };
+                });
+            for (const d of drawn) {
+                const im = new THREE.InstancedMesh(d.geometry, d.material, count);
                 im.frustumCulled = false;
                 im.castShadow = castShadow;
                 im.receiveShadow = castShadow;
-                const white = new THREE.Color(1, 1, 1);
                 for (let k = 0; k < count; k++) im.setColorAt(k, white);
                 parent.add(im);
-                list.push({ im, paint: isPaint });
+                list.push({ im, paint: d.paint, merged: d.merged });
             }
             this.meshes.set(t, list);
         }
@@ -137,9 +201,11 @@ export class CarSet {
                 const o = i * 16, dx = M[o + 12] - center.x, dz = M[o + 14] - center.z;
                 if (dx * dx + dz * dz > r2 || M[o] === 0 && M[o + 5] === 0) continue; // far away, or hidden (zero scale)
                 for (const p of list) {
-                    p.im.instanceMatrix.array.set(M.subarray(o, o + 16), k * 16);
+                    const A = p.im.instanceMatrix.array, d = k * 16;
+                    for (let c = 0; c < 16; c++) A[d + c] = M[o + c];
                     const ca = p.im.instanceColor.array, co = k * 3;
-                    if (this.wrecked[i]) { ca[co] = dark[0]; ca[co + 1] = dark[1]; ca[co + 2] = dark[2]; }
+                    // (a merged vehicle reads a negative colour as "burnt out": every part darkens, see vehicleMaterial)
+                    if (this.wrecked[i]) { const sg = p.merged ? -1 : 1; ca[co] = dark[0] * sg; ca[co + 1] = dark[1] * sg; ca[co + 2] = dark[2] * sg; }
                     else if (p.paint) { ca[co] = P[i * 3]; ca[co + 1] = P[i * 3 + 1]; ca[co + 2] = P[i * 3 + 2]; }
                     else { ca[co] = ca[co + 1] = ca[co + 2] = 1; }
                 }
@@ -197,7 +263,8 @@ export class NearInstances {
         for (let i = 0; i < this.n; i++) {
             const o = i * 16, dx = M[o + 12] - center.x, dz = M[o + 14] - center.z;
             if (dx * dx + dz * dz > r2) continue;
-            A.set(M.subarray(o, o + 16), k * 16);
+            const d = k * 16;
+            for (let c = 0; c < 16; c++) A[d + c] = M[o + c];
             this.slots[k++] = i;
         }
         const was = this.k;

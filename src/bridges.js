@@ -23,6 +23,61 @@ export function setBridgeNight(on) { MAT.cable.color.setHex(on ? 0x3a3d44 : 0xde
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3();
 
+// position + normal only, non-indexed: the decks and piers of every bridge in a cell merge into one geometry
+function flatGeo(g) {
+    const n = g.index ? g.toNonIndexed() : g;
+    if (n !== g) g.dispose();
+    for (const k of Object.keys(n.attributes)) if (k !== 'position' && k !== 'normal') n.deleteAttribute(k);
+    return n;
+}
+
+// ── Every bridge in a few draw calls ──
+// The standing decks, piers, road surfaces and cables of all bridges in a CELL x CELL m square are merged into
+// one mesh each (3 draw calls per cell instead of 3-4 per bridge); a bridge marks its cell dirty when its deck
+// changes (collapse, reset) and update() rebuilds it.
+const CELL = 16000;
+export class BridgeBatch {
+    constructor(parent, bridges) {
+        this.parent = parent;
+        this.cells = new Map();
+        for (const br of bridges) {
+            const k = Math.floor(br.pos.x / CELL) * 1000 + Math.floor(br.pos.z / CELL);
+            let c = this.cells.get(k);
+            if (!c) this.cells.set(k, c = { batch: this, bridges: [], dirty: true, meshes: null });
+            c.bridges.push(br);
+            br.cell = c;
+        }
+        this.update();
+    }
+
+    update() { for (const c of this.cells.values()) if (c.dirty) this.rebuild(c); }
+
+    rebuild(c) {
+        c.dirty = false;
+        if (!c.meshes) {
+            const concrete = new THREE.Mesh(new THREE.BufferGeometry(), MAT.concrete);
+            concrete.castShadow = true; concrete.receiveShadow = true;
+            const road = new THREE.Mesh(new THREE.BufferGeometry(), Bridge.roadMaterial);
+            road.receiveShadow = true;
+            const cables = new THREE.LineSegments(new THREE.BufferGeometry(), MAT.cable);
+            c.meshes = [concrete, road, cables];
+            for (const m of c.meshes) { m.matrixAutoUpdate = false; m.visible = false; this.parent.add(m); }
+        }
+        const parts = [[], [], []];
+        for (const br of c.bridges) {
+            for (const g of [br.pierGeo, br.deckGeo]) if (g) parts[0].push(g);
+            if (br.roadGeo) parts[1].push(br.roadGeo);
+            if (br.cableGeo) parts[2].push(br.cableGeo);
+        }
+        c.meshes.forEach((m, i) => {
+            m.geometry.dispose();
+            m.geometry = parts[i].length ? mergeGeometries(parts[i]) : new THREE.BufferGeometry();
+            m.visible = parts[i].length > 0;
+            if (m.visible) m.geometry.computeBoundingSphere();
+        });
+    }
+}
+
 function boxGeo(w, h, d, x, y, z, rotY = 0, pitch = 0) {
     const g = new THREE.BoxGeometry(w, h, d);
     _q.setFromEuler(new THREE.Euler(pitch, rotY, 0, 'YXZ'));
@@ -128,33 +183,28 @@ export class Bridge {
                 this.towers.push({ s, top, p });
             }
         }
-        if (piers.length) {
-            const pg = mergeGeometries(piers.map(g => g.index ? g.toNonIndexed() : g));
-            piers.forEach(g => g.dispose());
-            this.piers = new THREE.Mesh(pg, MAT.concrete);
-            this.piers.castShadow = true; this.piers.receiveShadow = true;
-            this.group.add(this.piers);
-        }
+        // (world space, drawn by the BridgeBatch with every other bridge nearby)
+        this.pierGeo = piers.length ? flatGeo(mergeGeometries(piers.map(g => g.index ? g.toNonIndexed() : g))) : null;
+        piers.forEach(g => g.dispose());
     }
 
-    // Rebuild the intact deck (and cables) from the segments still standing
+    // Rebuild the intact deck (and cables) from the segments still standing (world-space geometry the
+    // BridgeBatch merges; the falling pieces are meshes of their own)
     rebuildDeck() {
-        for (const m of [this.deckMesh, this.roadMesh, this.cables]) if (m) { this.group.remove(m); m.geometry.dispose(); }
+        for (const g of [this.deckGeo, this.roadGeo, this.cableGeo]) if (g) g.dispose();
         const cg = [], rg = [];
         this.segGeo.forEach((sg, i) => {
             if (this.fallen[i]) return;
             cg.push(sg.concrete.clone().applyMatrix4(sg.local));
             rg.push(sg.road.clone().applyMatrix4(sg.local));
         });
-        this.deckMesh = this.roadMesh = this.cables = null;
+        this.deckGeo = this.roadGeo = this.cableGeo = null;
         if (cg.length) {
-            this.deckMesh = new THREE.Mesh(mergeGeometries(cg), MAT.concrete);
-            this.deckMesh.castShadow = true; this.deckMesh.receiveShadow = true;
-            this.roadMesh = new THREE.Mesh(mergeGeometries(rg), Bridge.roadMaterial);
-            this.roadMesh.receiveShadow = true;
-            this.group.add(this.deckMesh, this.roadMesh);
+            this.deckGeo = flatGeo(mergeGeometries(cg));
+            this.roadGeo = mergeGeometries(rg);
         }
         cg.forEach(g => g.dispose()); rg.forEach(g => g.dispose());
+        if (this.cell) this.cell.dirty = true;
         if (this.towers.length) {
             const pts = [];
             for (const tw of this.towers) {
@@ -171,8 +221,7 @@ export class Bridge {
             }
             const g = new THREE.BufferGeometry();
             g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-            this.cables = new THREE.LineSegments(g, MAT.cable);
-            this.group.add(this.cables);
+            this.cableGeo = g;
         }
     }
 
@@ -259,6 +308,7 @@ export class Bridge {
         const i0 = this.fallen.indexOf(true), i1 = this.fallen.lastIndexOf(true);
         this.gap = [i0 * this.segLen, (i1 + 1) * this.segLen];
         this.rebuildDeck();
+        if (this.cell) this.cell.batch.rebuild(this.cell); // the fallen span leaves the merged deck right away
         if (g) {
             const at = this.pointAt(sc, new THREE.Vector3());
             g.effects.explosion(at, 3);

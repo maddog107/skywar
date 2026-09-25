@@ -519,7 +519,9 @@ export class Effects {
         tg.setIndex(new THREE.BufferAttribute(tIdx, 1));
         tg.setAttribute('position', new THREE.BufferAttribute(this.tracerPos, 3).setUsage(THREE.DynamicDrawUsage));
         tg.setAttribute('color', new THREE.BufferAttribute(this.tracerCol, 3).setUsage(THREE.DynamicDrawUsage));
-        this.tracers = new THREE.Mesh(tg, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false }));
+        // (additive, so one pass over both faces looks exactly like three.js's back-then-front passes, without
+        // re-resolving the shader for each of them every frame)
+        this.tracers = new THREE.Mesh(tg, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, forceSinglePass: true, fog: false }));
         this.tracers.frustumCulled = false;
         this.tracers.renderOrder = 9;
         scene.add(this.tracers);
@@ -552,6 +554,7 @@ export class Effects {
         const L = this.lightU;
         const m = new THREE.ShaderMaterial({
             transparent: true, depthWrite: false, side: THREE.DoubleSide, fog: false,
+            forceSinglePass: additive, // (additive: the draw order of its faces doesn't matter, one pass is exact)
             blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
             defines: additive ? {} : { LIT: '' },
             uniforms: { color: { value: new THREE.Color(...color) }, fogColor: { value: new THREE.Color() }, fogDensity: { value: 0 }, time: { value: 0 }, ...L },

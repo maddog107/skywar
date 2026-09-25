@@ -10,7 +10,7 @@
 import * as THREE from 'three';
 import { BASES, runwayInfo, runwayNumbers, baseToWorld, worldToBase, terrainHeight } from './world.js';
 import { makeParkedModel } from './airbase.js';
-import { makeRadialTexture, clamp, rand, lerp } from './util.js';
+import { makeRadialTexture, clamp, rand, lerp, freezeLocal } from './util.js';
 import { AIRCRAFT } from './config.js';
 import { registerAirTarget, unregisterAirTarget, Downed, AIR } from './softtargets.js';
 
@@ -56,6 +56,7 @@ class Flight {
         this.pitch = 0; this.bank = 0; this.speed = 0;
         this.t = 0;
         this.lights = sys.makeLights(this.mesh, AIRCRAFT[type].length, AIRCRAFT[type].span);
+        freezeLocal(this.mesh); // only the airframe as a whole moves (gear and lights just show / hide)
         // shootable (softtargets.js)
         this.alive = true;
         this.radius = Math.max(AIRCRAFT[type].span, AIRCRAFT[type].length) * 0.4;
