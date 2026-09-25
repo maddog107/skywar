@@ -244,7 +244,7 @@ export function makeWeatherMap(N = WEATHER_RES) {
     for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
         const u = (x + 0.5) / N, v = (y + 0.5) / N;
         // warped domain: irregular outlines instead of ellipses
-        const px = u * S + warpX(u, v) * 320 + fineX(u, v) * 90, pz = v * S + warpZ(u + 0.37, v + 0.13) * 320 + fineZ(u, v) * 90;
+        const px = u * S + warpX(u, v) * 320 + fineX(u, v) * 160, pz = v * S + warpZ(u + 0.37, v + 0.13) * 320 + fineZ(u, v) * 160;
         let pot = 0, hw = 0, hs = 0;
         for (const o of octaves) {
             const cx = Math.floor(px / o.cell), cz = Math.floor(pz / o.cell), P = o.P, pts = o.pts;
@@ -263,7 +263,7 @@ export function makeWeatherMap(N = WEATHER_RES) {
                 hw += wgt; hs += wgt * pts[k + 4];
             }
         }
-        pot += lumps(u, v) * 0.07 + lumps2(u, v) * 0.04; // lumpy outlines
+        pot += lumps(u, v) * 0.09 + lumps2(u, v) * 0.06; // lumpy outlines
         let h = hw > 0 ? hs / hw : 0.5;
         // stratocumulus sheets: flat (low tops), a notch below the usual cumulus threshold of cloudy weather
         const su = u + warpX(u, v) * 0.006 + fineX(u, v) * 0.002, sv = v + warpZ(u, v) * 0.006 + fineZ(u, v) * 0.002;

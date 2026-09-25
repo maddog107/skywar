@@ -137,7 +137,7 @@ const FIELD_GLSL = /* glsl */`
         vec2 n = textureLod(tBase, (p - wind) / BASE_SIZE, lod).rg;
         // the lower part fuller, so the turrets stand on one body; the slow second channel makes some clouds
         // more solid than others
-        float nb = mix(n.r, 1.0, 0.45 * (1.0 - smoothstep(0.05, 0.45, hf))) * prof;
+        float nb = mix(smoothstep(0.06, 0.94, n.r), 1.0, 0.45 * (1.0 - smoothstep(0.05, 0.45, hf))) * prof;
         float c = cov * (0.85 + 0.4 * n.g);
         float d = clamp((nb - (1.0 - c)) / max(c, 0.05), 0.0, 1.0);
         // deck: a broad, gently undulating layer (slow noise) with softer lumps than the cumulus
@@ -146,7 +146,7 @@ const FIELD_GLSL = /* glsl */`
         // small billows on the surface (30-130 m heads) and, within a kilometre or so, a finer octave (10-35 m),
         // each faded out once the pixel's footprint is too big to show it (finer than a pixel they only make fur):
         // rounded (billowy) on the sides and top, frayed into wisps at the base
-        float dm = 0.12;
+        float dm = 0.17;
         if (detail && d > 0.0 && d < 0.6) {
             vec3 q = (p - wind * 1.3) / DETAIL_SIZE;
             float ld = log2(pixFoot / ${(DETAIL_SIZE / DETAIL_RES).toFixed(2)});
@@ -158,7 +158,7 @@ const FIELD_GLSL = /* glsl */`
                 float ff = 1.0 - smoothstep(0.8, 2.4, lf);
                 if (ff > 0.0) nd = mix(nd, nd * 0.6 + 0.4 * textureLod(tDetail, FINE_ROT * q * 3.7 + 0.31, max(lf + 0.3, 0.0)).r, ff);
                 #endif
-                dm = mix(dm, mix(nd, 1.0 - nd, smoothstep(0.02, 0.15, amb)) * 0.35, fade);
+                dm = mix(dm, mix(nd, 1.0 - nd, smoothstep(0.02, 0.15, amb)) * 0.5, fade);
             }
         }
         d = clamp((d - dm) / (1.0 - dm), 0.0, 1.0);
@@ -301,13 +301,34 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
         oInfo = vec4(entry, limit, tw / aw, 1.0);
     }`;
 
+// The clamp box for the resolve: the lowest and highest value among each march sample's 3x3 neighbourhood,
+// at the march's resolution (and a tent-filtered copy of the frame, for while the view moves). The resolve reads it bilinearly, so the box changes smoothly from pixel to pixel
+// (a box taken per march texel would clamp the history in blocks while moving, a woven pattern).
+const BOX_FRAG = /* glsl */`
+    precision highp float;
+    uniform sampler2D tCur;
+    uniform vec2 lowRes;
+    layout(location = 0) out vec4 oLo;
+    layout(location = 1) out vec4 oHi;
+    layout(location = 2) out vec4 oMean;
+    void main() {
+        ivec2 ip = ivec2(gl_FragCoord.xy), mx = ivec2(lowRes) - 1;
+        vec4 lo = vec4(1e5), hi = vec4(-1e5), sum = vec4(0.0);
+        for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+            vec4 v = texelFetch(tCur, clamp(ip + ivec2(x, y), ivec2(0), mx), 0);
+            lo = min(lo, v); hi = max(hi, v);
+            sum += v * float((2 - x * x) * (2 - y * y));
+        }
+        oLo = lo; oHi = hi; oMean = sum / 16.0;
+    }`;
+
 // Temporal upsampling resolve (at the history's resolution, finer than the march): rebuild this frame's
-// image at each history pixel from the jittered march samples around it (a Gaussian by their distance), then
+// image at each history pixel from the four jittered march samples around it (bilinear), then
 // blend it into the history reprojected to where the cloud was last frame (by the cloud's mean depth), read
 // with a sharp Catmull-Rom filter and clamped to this frame's neighbourhood so nothing ghosts. A sample that
 // lands right on the pixel counts for more, and a moving view takes more of the new frame (less smear).
 const RESOLVE_FRAG = /* glsl */`
-    uniform sampler2D tCur, tInfo, tHist;
+    uniform sampler2D tCur, tInfo, tHist, tLo, tHi, tMean;
     uniform mat4 projInv, camWorld, prevViewProj;
     uniform vec3 camPos;
     uniform vec2 lowRes, histRes, jitter;
@@ -323,9 +344,11 @@ const RESOLVE_FRAG = /* glsl */`
                + texture2D(tHist, vec2(t12.x, t3.y)) * (w12.x * w3.y);
         return r / (w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y);
     }
-    vec4 rSum, rLo, rHi; float rW, rConf, rCut; vec2 rX; ivec2 rC, rMx;
-    float limAt(ivec2 o) { return texelFetch(tInfo, clamp(rC + o, ivec2(0), rMx), 0).y; }
-    void tap(ivec2 o, float lim) {
+    vec4 rSum; float rW, rConf, rCut, rD, rDW; vec2 rX; ivec2 rC, rMx;
+    // (the scene distance and the cloud's mean depth there)
+    vec2 infoAt(ivec2 o) { return texelFetch(tInfo, clamp(rC + o, ivec2(0), rMx), 0).yz; }
+    void tap(ivec2 o, vec2 info) {
+        float lim = info.x;
         // a march sample whose ray hit something near and much nearer than its neighbours' (a jet, a hillside)
         // doesn't speak for the sky next to it: leave it out (the composite's depth test cuts the cloud at the
         // object's edge). (Far ridges keep theirs: the march already looks past them where a texel straddles one.)
@@ -333,36 +356,51 @@ const RESOLVE_FRAG = /* glsl */`
         ivec2 ip = clamp(rC + o, ivec2(0), rMx);
         vec4 v = texelFetch(tCur, ip, 0);
         vec2 d = vec2(ip) + 0.5 + jitter - rX;
-        float w = exp(-1.6 * dot(d, d));
+        vec2 b = max(1.0 - abs(d), 0.0); // (bilinear between the jittered samples: smooth even in one frame)
+        float w = b.x * b.y + 1e-4;
         rSum += v * w; rW += w; rConf = max(rConf, w);
-        rLo = min(rLo, v); rHi = max(rHi, v);
+        // the cloud's depth, interpolated the same way (for the reprojection: one depth per march texel would
+        // shift the history in blocks while moving)
+        if (v.a > 0.01) { rD += info.y * w; rDW += w; }
     }
     void main() {
         // the four march samples around this pixel (jittered positions; unrolled, no arrays: those end up in slow
         // memory on some GPUs)
         rX = gl_FragCoord.xy / histRes * lowRes; // this pixel, in march pixels
+        // the clamp box (see BOX_FRAG), read between the march samples; nothing in it: no cloud here (the history
+        // would be clamped to nothing anyway), which is most of the screen
+        vec2 buv = (rX - jitter) / lowRes;
+        vec4 hi = texture2D(tHi, buv);
+        if (hi.a < 1e-4) { gl_FragColor = vec4(0.0); return; }
         rC = ivec2(floor(rX - 0.5 - jitter)); rMx = ivec2(lowRes) - 1;
         ivec2 mx = rMx;
         vec2 x = rX;
-        float l0 = limAt(ivec2(0, 0)), l1 = limAt(ivec2(1, 0)), l2 = limAt(ivec2(0, 1)), l3 = limAt(ivec2(1, 1));
-        rCut = min(max(max(l0, l1), max(l2, l3)) * 0.6, 3000.0);
-        rSum = vec4(0.0); rLo = vec4(1e5); rHi = vec4(-1e5); rW = 0.0; rConf = 0.0;
+        vec2 l0 = infoAt(ivec2(0, 0)), l1 = infoAt(ivec2(1, 0)), l2 = infoAt(ivec2(0, 1)), l3 = infoAt(ivec2(1, 1));
+        rCut = min(max(max(l0.x, l1.x), max(l2.x, l3.x)) * 0.6, 3000.0);
+        rSum = vec4(0.0); rW = 0.0; rConf = 0.0; rD = 0.0; rDW = 0.0;
         tap(ivec2(0, 0), l0); tap(ivec2(1, 0), l1); tap(ivec2(0, 1), l2); tap(ivec2(1, 1), l3);
-        // (the clamp box of four noisy samples, opened up a little)
-        vec4 ext = (rHi - rLo) * 0.25;
-        vec4 sum = rSum, lo = rLo - ext, hi = rHi + ext;
+        // (the box opened up a little)
+        vec4 lo = texture2D(tLo, buv), ext = (hi - lo) * 0.1;
+        lo -= ext; hi += ext;
+        vec4 sum = rSum;
         float ws = rW, conf = rConf;
         vec4 cur = sum / max(ws, 1e-5);
         vec2 uv = gl_FragCoord.xy / histRes;
         vec4 vp = projInv * vec4(uv * 2.0 - 1.0, 0.5, 1.0);
         vec3 rd = normalize(mat3(camWorld) * (vp.xyz / vp.w));
-        float d = texelFetch(tInfo, clamp(ivec2(x), ivec2(0), mx), 0).z;
+        float d = rDW > 0.0 ? rD / rDW : 20000.0;
         vec4 pc = prevViewProj * vec4(camPos + rd * min(d, 20000.0), 1.0);
         vec2 puv = pc.xy / pc.w * 0.5 + 0.5;
         if (reset > 0.5 || pc.w <= 0.0 || puv.x < 0.0 || puv.y < 0.0 || puv.x > 1.0 || puv.y > 1.0) { gl_FragColor = cur; return; }
         vec4 h = clamp(historyAt(puv), lo, hi);
-        float moved = length((puv - uv) * histRes);
-        float a = max(mix(0.02, 0.12, (conf - 0.4) / 0.6) + min(moved * 0.02, 0.2), minBlend);
+        float moved = length((puv - uv) * histRes), m = smoothstep(0.3, 2.0, moved);
+        // while moving, the new frame's own grain (its dither pattern) would show: take it softened
+        cur = mix(cur, texture2D(tMean, buv), 0.65 * m);
+        // still: a sample right on the pixel counts for more (the finer image builds up over the jitter pattern);
+        // moving: the same share of the new frame everywhere (a share that varied across the sample grid would
+        // weave the grid into the picture), more of it the faster the view moves
+        float a = mix(mix(0.02, 0.2, conf * conf), 0.22 + min(moved * 0.01, 0.2), m);
+        a = max(a, minBlend);
         gl_FragColor = mix(h, cur, clamp(a, 0.0, 1.0));
     }`;
 
@@ -537,6 +575,9 @@ export class Clouds {
         // the march buffer: premultiplied colour + alpha, and (cloud entry distance, scene distance, mean depth)
         this.rt = new THREE.WebGLRenderTarget(4, 4, { count: 2, type: THREE.HalfFloatType, depthBuffer: false, stencilBuffer: false });
         for (const t of this.rt.textures) { t.minFilter = t.magFilter = THREE.NearestFilter; t.generateMipmaps = false; }
+        // the resolve's clamp box (lowest, highest of each march sample's neighbourhood), read bilinearly
+        this.boxRT = new THREE.WebGLRenderTarget(4, 4, { count: 3, type: THREE.HalfFloatType, depthBuffer: false, stencilBuffer: false });
+        for (const t of this.boxRT.textures) { t.minFilter = t.magFilter = THREE.LinearFilter; t.generateMipmaps = false; }
         // temporal history (ping-pong) at a finer resolution: what the composite actually shows
         this.hist = [0, 1].map(() => new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, depthBuffer: false, stencilBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, generateMipmaps: false }));
         this.histIdx = 0;
@@ -568,10 +609,18 @@ export class Clouds {
             fragmentShader: marchFrag(FOG_GLSL),
         });
         this.marchScene = pass(this.marchMat);
+        this.boxMat = new THREE.ShaderMaterial({
+            glslVersion: THREE.GLSL3, depthTest: false, depthWrite: false, blending: THREE.NoBlending,
+            uniforms: { tCur: { value: this.rt.textures[0] }, lowRes: { value: new THREE.Vector2(4, 4) } },
+            vertexShader: TRI_VERT,
+            fragmentShader: BOX_FRAG,
+        });
+        this.boxScene = pass(this.boxMat);
         this.resolveMat = new THREE.ShaderMaterial({
             depthTest: false, depthWrite: false, blending: THREE.NoBlending,
             uniforms: {
                 tCur: { value: this.rt.textures[0] }, tInfo: { value: this.rt.textures[1] }, tHist: { value: null },
+                tLo: { value: this.boxRT.textures[0] }, tHi: { value: this.boxRT.textures[1] }, tMean: { value: this.boxRT.textures[2] },
                 projInv: { value: new THREE.Matrix4() }, camWorld: { value: new THREE.Matrix4() }, prevViewProj: { value: this.prevViewProj },
                 camPos: { value: new THREE.Vector3() }, lowRes: { value: new THREE.Vector2(4, 4) }, histRes: { value: new THREE.Vector2(4, 4) },
                 jitter: { value: new THREE.Vector2() }, reset: { value: 1 }, minBlend: { value: 0 },
@@ -664,7 +713,7 @@ export class Clouds {
     // compile the offscreen passes now rather than on the first frame that shows a cloud
     compile() {
         try {
-            for (const sc of [this.marchScene, this.resolveScene, this.shadowScene]) this.renderer.compile(sc, this.marchCam);
+            for (const sc of [this.marchScene, this.boxScene, this.resolveScene, this.shadowScene]) this.renderer.compile(sc, this.marchCam);
         } catch (e) { /* no GL (tests) */ }
     }
 
@@ -755,7 +804,7 @@ export class Clouds {
         const lw = Math.max(1, Math.round(w * s)), lh = Math.max(1, Math.round(h * s));
         const hw = Math.max(1, Math.round(lw * this.q.up)), hh = Math.max(1, Math.round(lh * this.q.up));
         if (this.rt.width !== lw || this.rt.height !== lh || this.hist[0].width !== hw || this.hist[0].height !== hh) {
-            this.rt.setSize(lw, lh);
+            this.rt.setSize(lw, lh); this.boxRT.setSize(lw, lh);
             for (const hr of this.hist) hr.setSize(hw, hh);
             this.resetHistory = true;
         }
@@ -769,7 +818,7 @@ export class Clouds {
         u.camWorld.value.copy(camera.matrixWorld);
         u.camPos.value.setFromMatrixPosition(camera.matrixWorld);
         u.camNear.value = camera.near; u.camFar.value = camera.far;
-        u.lowRes.value.set(lw, lh);
+        u.lowRes.value.set(lw, lh); this.boxMat.uniforms.lowRes.value.set(lw, lh);
         u.pixAngle.value = 2 / (camera.projectionMatrix.elements[5] * lh); // radians per march pixel
         this.frame = (this.frame + 1) % 64;
         u.frame.value = this.frame;
@@ -800,6 +849,8 @@ export class Clouds {
         if (this.shadows) this.drawShadows(renderer);
         renderer.setRenderTarget(this.rt);
         renderer.render(this.marchScene, this.marchCam);
+        renderer.setRenderTarget(this.boxRT);
+        renderer.render(this.boxScene, this.marchCam);
         renderer.setRenderTarget(out);
         renderer.render(this.resolveScene, this.marchCam);
         renderer.setRenderTarget(target, face, mip);
@@ -853,19 +904,19 @@ export class Clouds {
         const sd = cover > 0 ? Math.min(hdk + 90, dk.z * cover - hdk) * 0.002 : -1;
         if (cov * prof <= 0 && sd <= 0) return 0;
         const n0 = this.baseAt(p.x, p.y, p.z, _n), n1 = _n[1];
-        const nb = (n0 + (1 - n0) * 0.45 * (1 - ss(0.05, 0.45, hf))) * prof;
+        const nr = ss(0.06, 0.94, n0), nb = (nr + (1 - nr) * 0.45 * (1 - ss(0.05, 0.45, hf))) * prof;
         const cc = cov * (0.85 + 0.4 * n1);
         const d = Math.max(sat((nb - (1 - cc)) / Math.max(cc, 0.05)), sat(sd / 0.03) * sat(n0 * 0.6 + n1 * 0.6 - 0.2));
-        return Math.min(sat((d - 0.12) / 0.88) * 3, 1);
+        return Math.min(sat((d - 0.17) / 0.83) * 3, 1);
     }
 
     dispose() {
         this.disposed = true;
         this.unhook();
         this.mesh.removeFromParent();
-        this.rt.dispose(); this.shadowRT.dispose(); this.shadowTex.dispose();
+        this.rt.dispose(); this.boxRT.dispose(); this.shadowRT.dispose(); this.shadowTex.dispose();
         for (const h of this.hist) h.dispose();
-        this.marchMat.dispose(); this.compMat.dispose(); this.resolveMat.dispose(); this.shadowMat.dispose();
+        this.marchMat.dispose(); this.compMat.dispose(); this.resolveMat.dispose(); this.shadowMat.dispose(); this.boxMat.dispose();
         this.mesh.geometry.dispose();
         for (const t of this.textures) t.dispose();
     }
