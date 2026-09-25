@@ -493,11 +493,14 @@ export class Pilot {
         const gunRun = this.target && this.target === g.pilotMode && this.strafePhase === 'in' && this.target.pos.distanceTo(ac.pos) < 3500;
         if (avoidTerrain(ac, c, minAGL, gunRun)) { wantGuns = false; if (gunRun) this.strafePhase = 'out'; }
 
-        if (wantGuns) {
+        // short aimed bursts with a pause to re-aim between them (aces fire longer and re-engage sooner):
+        // burstT > 0 is firing time left, < 0 the pause still to sit out
+        if (this.burstT > 0) {
+            if (wantGuns) g.weapons.fireGun(ac, g.time);
             this.burstT -= dt;
-            if (this.burstT > -0.6) g.weapons.fireGun(ac, g.time);
-            if (this.burstT < -0.6 - (1 - sk)) this.burstT = rand(0.4, 1.2);
-        } else if (this.burstT < 0) this.burstT = Math.min(this.burstT + dt, 0);
+            if (this.burstT <= 0) this.burstT = -(lerp(1.6, 0.7, sk) + rand(0, 0.4));
+        } else if (this.burstT < 0) this.burstT = Math.min(0, this.burstT + dt);
+        else if (wantGuns) { this.burstT = lerp(0.35, 0.7, sk) + rand(0, 0.3); g.weapons.fireGun(ac, g.time); }
     }
 
     // Offensive BFM: pursuit geometry, energy, guns and missiles. Returns { dir, throttle, guns, gCap }.
@@ -524,8 +527,8 @@ export class Pilot {
             // where the rounds would meet the target (skill: how much of its turn is anticipated)
             const T = gunLead(ac, t, this.lead, lerp(0.3, 1, sk));
             _c.copy(this.lead);
-            // aim error that shrinks with skill
-            const wob = (1 - sk) * 26;
+            // aim error that shrinks with skill (a wandering offset of the aim point, metres)
+            const wob = 8 + (1 - sk) * 34;
             this.aimWobble += dt;
             _c.x += Math.sin(this.aimWobble * 1.7) * wob;
             _c.y += Math.sin(this.aimWobble * 2.3 + 1) * wob;

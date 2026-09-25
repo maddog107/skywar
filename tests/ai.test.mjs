@@ -149,6 +149,36 @@ describe('skill and difficulty', () => {
         assert.ok(ace.pct > rookie.pct * 1.3, `ace ${(ace.pct * 100).toFixed(1)}% vs rookie ${(rookie.pct * 100).toFixed(1)}%`);
     });
 
+    test('gun damage on a weaving player scales with difficulty (rookie < veteran < ace, veteran fair)', () => {
+        const perMin = (difficulty, skill) => {
+            let dmg = 0, secs = 0;
+            for (let s = 1; s <= 6; s++) {
+                seeded(s * 977, () => {
+                    const g = arenaGame({ difficulty });
+                    const P = g.spawn('f16', { team: 'blue', pos: { x: 0, y: 3000, z: -20000 }, heading: 0, isPlayer: true, speedFrac: 0.6 });
+                    P.maxHealth = P.health = 1e6;
+                    g.player = P;
+                    const E = g.spawn('mig29', { team: 'red', pos: { x: 800, y: 3200, z: -17000 }, heading: 0, skill, speedFrac: 0.6 });
+                    E.missiles = 0;
+                    const emit = g.events.emit;
+                    g.events.emit = (n, w, d) => { if (n === 'hit' && w === P && d.kind === 'gun') dmg += d.amount * 0.45 * g.difficulty.dmgTaken; emit(n, w, d); };
+                    const dir = new THREE.Vector3();
+                    for (let i = 0; i < 60 * 30; i++) {
+                        const hdg = Math.sin(g.time * 0.35) * 1.4; // weaving ±80°
+                        steerToward(P, dir.set(-Math.sin(hdg), (3000 - P.pos.y) / 3000, -Math.cos(hdg)).normalize(), P.controls, 1);
+                        P.controls.throttle = 0.9;
+                        g.step(1 / 30);
+                    }
+                    secs += 60;
+                });
+            }
+            return dmg / (secs / 60);
+        };
+        const rookie = perMin('rookie', 0.35), veteran = perMin('veteran', 0.6), ace = perMin('ace', 0.9);
+        assert.ok(rookie < veteran && veteran < ace, `hp/min rookie ${rookie.toFixed(1)}, veteran ${veteran.toFixed(1)}, ace ${ace.toFixed(1)}`);
+        assert.ok(veteran < 20, `veteran ${veteran.toFixed(1)} hp/min on a 90 hp jet`);
+    });
+
     test('flares: a veteran decoys roughly a quarter of rear-aspect heat seekers (one salvo per missile)', () => {
         let decoyed = 0, n = 0, salvos = 0;
         for (let s = 1; s <= 60; s++) {
