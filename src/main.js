@@ -25,6 +25,7 @@ import { Airbases } from './airbase.js';
 import { AirTraffic } from './airtraffic.js';
 import { preloadProps } from './props.js';
 import { preloadCharacter } from './character.js';
+import { preloadShips } from './naval.js';
 import { setupTouch, isTouchDevice } from './touch.js';
 import { Aircraft, refSpeeds } from './aircraft.js';
 import { Pilot } from './ai.js';
@@ -155,7 +156,7 @@ async function boot() {
     world.setTime(settings.time);
     world.updateTerrain(new THREE.Vector3(0, 0, 0), true);
     $('loadText').textContent = 'LOADING AIRFRAMES…';
-    await Promise.all([preloadModels((f) => { $('loadFill').style.width = (10 + f * 60) + '%'; }), preloadProps(), preloadCharacter()]);
+    await Promise.all([preloadModels((f) => { $('loadFill').style.width = (10 + f * 60) + '%'; }), preloadProps(), preloadCharacter(), preloadShips()]);
     $('loadText').textContent = 'BUILDING TOWNS & ROADS…';
     await new Promise(r => setTimeout(r, 20));
     world.towns = new Towns(scene, world);
