@@ -33,6 +33,7 @@ const DECK_THICK = 650;              // its thickness where fully covered (m)
 const SIGMA = 0.065;                 // extinction at full density (1/m)
 const NO_HIT = 60000;                // "no cloud" / "sky" distance (fits a half float)
 const TOWER = 2.6;                   // the tallest towering cumulus, in units of the weather's usual cloud height
+const TOWER_MAX = 1400;              // ... but at most this much above the usual tops (m): a storm's are tall already
 
 // per weather: coverage threshold on the weather map (lower = more cloud), cloud base, tallest tops above
 // the base, base altitude variation, deck amount (0 = none)
@@ -46,8 +47,9 @@ const WEATHER = {
 const QUALITY = {
     // scale: march buffer size relative to the CSS pixel size; up: the history (what the composite shows) is
     // that much finer again, filled in over a few frames by jittering the march (temporal upsampling);
-    // steps: primary march; light: light march; shadowRows: rows of the cloud-shadow map redrawn per frame
-    high:   { scale: 0.5, up: 2, steps: 112, light: 5, detail: 1, shadowRows: 32 },
+    // steps: primary march; light: light march; detail: small billows (0 none, 1 one octave, 2 two near the
+    // camera); shadowRows: rows of the cloud-shadow map redrawn per frame
+    high:   { scale: 0.5, up: 2, steps: 112, light: 5, detail: 2, shadowRows: 32 },
     medium: { scale: 0.42, up: 2, steps: 88, light: 4, detail: 1, shadowRows: 32 },
     low:    { scale: 0.28, up: 1.5, steps: 56, light: 3, detail: 0, shadowRows: 16 },
 };
@@ -104,12 +106,14 @@ const FIELD_GLSL = /* glsl */`
     // it is fuller low down (a cumulus is one body, its turrets are at the top), and the weather says how tall
     // it grows. Density is soft (0..1), not a hard surface: thin edges and wisps let the light through.
     float baseAlt(vec4 wm) { return cu.y + (wm.a - 0.5) * cu.w; }
+    // the tallest the cumulus here can grow above its base (m)
+    float cloudTop(vec4 wm) { return min(cu.z * wm.g, cu.z + ${TOWER_MAX.toFixed(1)}); }
     // cumulus before noise: returns the cover (0..1); hf: height fraction (0 base .. 1 top, unclamped),
     // prof: the vertical profile
     float cumulusShape(vec3 p, vec4 wm, out float hf, out float prof) {
         float cov = clamp((wm.r - cu.x) / (1.0 - cu.x), 0.0, 1.0);
         float h = p.y - baseAlt(wm);
-        hf = h / (cu.z * wm.g * (0.35 + 0.65 * sqrt(cov)));
+        hf = h / (cloudTop(wm) * (0.35 + 0.65 * sqrt(cov)));
         prof = clamp(h * 0.035, 0.0, 1.0) * (1.0 - smoothstep(0.5, 1.0, hf));
         return cov;
     }
@@ -123,7 +127,7 @@ const FIELD_GLSL = /* glsl */`
     // conservative distance (m) to where cloud could start, for skipping empty air
     float cloudGap(vec3 p, vec4 wm) {
         float h = p.y - baseAlt(wm);
-        float g = max((cu.x - wm.r) * 450.0, max(-h, h - cu.z * wm.g));
+        float g = max((cu.x - wm.r) * 450.0, max(-h, h - cloudTop(wm)));
         if (dk.x > 0.0) g = min(g, max(dk.y - 150.0 - p.y, p.y - dk.y - dk.z - 50.0));
         return g;
     }
@@ -133,7 +137,7 @@ const FIELD_GLSL = /* glsl */`
         float hf, prof, hd;
         float cov = cumulusShape(p, wm, hf, prof), sd = deckShape(p, wm, hd);
         amb = clamp(hf, 0.0, 1.0);
-        if (cov * prof <= 0.0 && sd <= 0.0) return 0.0;
+        if (prof <= 1.0 - 1.25 * cov && sd <= 0.0) return 0.0; // (even the strongest billow wouldn't make cloud)
         vec2 n = textureLod(tBase, (p - wind) / BASE_SIZE, lod).rg;
         // the lower part fuller, so the turrets stand on one body; the slow second channel makes some clouds
         // more solid than others
@@ -147,13 +151,14 @@ const FIELD_GLSL = /* glsl */`
         // each faded out once the pixel's footprint is too big to show it (finer than a pixel they only make fur):
         // rounded (billowy) on the sides and top, frayed into wisps at the base
         float dm = 0.17;
+        #if DETAIL > 0
         if (detail && d > 0.0 && d < 0.6) {
             vec3 q = (p - wind * 1.3) / DETAIL_SIZE;
             float ld = log2(pixFoot / ${(DETAIL_SIZE / DETAIL_RES).toFixed(2)});
             float fade = 1.0 - smoothstep(0.8, 2.6, ld);
             if (fade > 0.0) {
                 float nd = textureLod(tDetail, q, max(ld + 0.3, 0.0)).r;
-                #if DETAIL
+                #if DETAIL > 1
                 float lf = ld + 1.89; // the same for the finer octave (3.7 times smaller)
                 float ff = 1.0 - smoothstep(0.8, 2.4, lf);
                 if (ff > 0.0) nd = mix(nd, nd * 0.6 + 0.4 * textureLod(tDetail, FINE_ROT * q * 3.7 + 0.31, max(lf + 0.3, 0.0)).r, ff);
@@ -161,6 +166,7 @@ const FIELD_GLSL = /* glsl */`
                 dm = mix(dm, mix(nd, 1.0 - nd, smoothstep(0.02, 0.15, amb)) * 0.5, fade);
             }
         }
+        #endif
         d = clamp((d - dm) / (1.0 - dm), 0.0, 1.0);
         return min(d * 3.0, 1.0);
     }`;
@@ -191,14 +197,16 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
     // frame the samples slide along the ray by a different fraction of their step, the same for every pixel (an
     // offset per pixel speckles the shading with dark grains where a sample lands in a dense spot); the resolve
     // pass averages the frames into smooth soft shadows without the banding of fixed sample positions
-    float lightDepth(vec3 p, float lod) {
+    // (far away, where a pixel spans more than the first step, that step is left out)
+    float lightDepth(vec3 p, float lod, bool far) {
         float od = 0.0, d = 0.0, st = LIGHT_STEP0;
         for (int j = 0; j < LIGHT_STEPS; j++) {
+            if (far && j == 0) { d = st; st *= LIGHT_RATIO; continue; }
             float dj = d + st * fract(frame * 0.6180339 + float(j) * 0.3819660);
             vec3 q = p + sunDir * dj;
             if (q.y > slab.y) break;
             float a;
-            vec4 wq = j < 2 ? weatherSmooth(q) : weatherAt(q);
+            vec4 wq = j < 1 ? weatherSmooth(q) : weatherAt(q);
             od += cloudDensity(q, wq, lod + 0.5 + float(j) * 0.5, false, a) * st;
             d += st; st *= LIGHT_RATIO;
         }
@@ -266,14 +274,15 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
             float lod = max(0.0, log2(dt / ${(BASE_SIZE / BASE_RES).toFixed(1)}));
             pixFoot = t * pixAngle * 2.0;
             float amb;
-            float den = cloudDensity(p, weatherSmooth(p), lod, t < 5000.0, amb);
+            // (the smooth weather lookup only where its creases could show)
+            float den = cloudDensity(p, t < 8000.0 ? weatherSmooth(p) : wm, lod, t < 5000.0, amb);
             den *= smoothstep(4.0, 40.0, t); // inside a cloud, keep the first few tens of metres clear enough to see your own jet
             // came in on a double step: back up one step and take the surface at the normal spacing
             if (den > 0.0 && empty > 2.0) { t -= dt; empty = 0.0; continue; }
             if (den > 0.0) {
                 float seg = min(dt, t1 - t);
                 float a = 1.0 - exp(-den * SIGMA * seg);
-                float od = lightDepth(p, lod);
+                float od = lightDepth(p, lod, pixFoot > 20.0);
                 // sun: single scattering plus two weaker, less attenuated, flatter octaves standing in for the
                 // multiple scattering that makes the sunlit side of a thick cloud so bright
                 float sun = exp(-od) * ph0 + 0.45 * exp(-od * 0.35) * ph1 + 0.18 * exp(-od * 0.12) * ph2;
@@ -302,8 +311,9 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
     }`;
 
 // The clamp box for the resolve: the lowest and highest value among each march sample's 3x3 neighbourhood,
-// at the march's resolution (and a tent-filtered copy of the frame, for while the view moves). The resolve reads it bilinearly, so the box changes smoothly from pixel to pixel
-// (a box taken per march texel would clamp the history in blocks while moving, a woven pattern).
+// at the march's resolution (and a tent-filtered copy of the frame, for while the view moves). The resolve
+// reads it bilinearly, so the box changes smoothly from pixel to pixel (a box taken per march texel would
+// clamp the history in blocks while moving: a woven pattern).
 const BOX_FRAG = /* glsl */`
     precision highp float;
     uniform sampler2D tCur;
@@ -373,8 +383,6 @@ const RESOLVE_FRAG = /* glsl */`
         vec4 hi = texture2D(tHi, buv);
         if (hi.a < 1e-4) { gl_FragColor = vec4(0.0); return; }
         rC = ivec2(floor(rX - 0.5 - jitter)); rMx = ivec2(lowRes) - 1;
-        ivec2 mx = rMx;
-        vec2 x = rX;
         vec2 l0 = infoAt(ivec2(0, 0)), l1 = infoAt(ivec2(1, 0)), l2 = infoAt(ivec2(0, 1)), l3 = infoAt(ivec2(1, 1));
         rCut = min(max(max(l0.x, l1.x), max(l2.x, l3.x)) * 0.6, 3000.0);
         rSum = vec4(0.0); rW = 0.0; rConf = 0.0; rD = 0.0; rDW = 0.0;
@@ -382,9 +390,8 @@ const RESOLVE_FRAG = /* glsl */`
         // (the box opened up a little)
         vec4 lo = texture2D(tLo, buv), ext = (hi - lo) * 0.1;
         lo -= ext; hi += ext;
-        vec4 sum = rSum;
-        float ws = rW, conf = rConf;
-        vec4 cur = sum / max(ws, 1e-5);
+        vec4 cur = rSum / max(rW, 1e-5);
+        float conf = rConf;
         vec2 uv = gl_FragCoord.xy / histRes;
         vec4 vp = projInv * vec4(uv * 2.0 - 1.0, 0.5, 1.0);
         vec3 rd = normalize(mat3(camWorld) * (vp.xyz / vp.w));
@@ -747,7 +754,7 @@ export class Clouds {
         const f = this.fieldU;
         f.cu.value.set(W.thr, W.base, W.thick, W.baseVar);
         f.dk.value.set(W.deck, DECK_Y, DECK_THICK, 0);
-        let lo = W.base - W.baseVar * 0.7 - 30, hi = W.base + W.baseVar * 0.7 + W.thick * TOWER + 60;
+        let lo = W.base - W.baseVar * 0.7 - 30, hi = W.base + W.baseVar * 0.7 + Math.min(W.thick * TOWER, W.thick + TOWER_MAX) + 60;
         if (W.deck > 0) { lo = Math.min(lo, DECK_Y - 160); hi = Math.max(hi, DECK_Y + DECK_THICK + 60); }
         f.slab.value.set(lo, hi);
         // shadows: rays from the bottom of the layer; a point up among the clouds has less of them above it
@@ -897,12 +904,12 @@ export class Clouds {
         const wm = this.weatherAt(p.x, p.z, _wm);
         const cov = sat((wm[0] - cu.x) / (1 - cu.x));
         const h = p.y - (cu.y + (wm[3] - 0.5) * cu.w);
-        const hf = h / (cu.z * wm[1] * (0.35 + 0.65 * Math.sqrt(cov)));
+        const hf = h / (Math.min(cu.z * wm[1], cu.z + TOWER_MAX) * (0.35 + 0.65 * Math.sqrt(cov)));
         const prof = sat(h * 0.035) * (1 - ss(0.5, 1, hf));
         const c = dk.x > 0 ? sat((wm[2] - (1 - dk.x)) / 0.35) : 0, cover = c * c * (3 - 2 * c);
         const hdk = p.y - dk.y;
         const sd = cover > 0 ? Math.min(hdk + 90, dk.z * cover - hdk) * 0.002 : -1;
-        if (cov * prof <= 0 && sd <= 0) return 0;
+        if (prof <= 1 - 1.25 * cov && sd <= 0) return 0;
         const n0 = this.baseAt(p.x, p.y, p.z, _n), n1 = _n[1];
         const nr = ss(0.06, 0.94, n0), nb = (nr + (1 - nr) * 0.45 * (1 - ss(0.05, 0.45, hf))) * prof;
         const cc = cov * (0.85 + 0.4 * n1);
