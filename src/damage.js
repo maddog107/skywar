@@ -116,6 +116,8 @@ export class Wreckage {
         this.game = game;
         this.parts = [];
         this.seats = [];
+        // smoke and dust drift with the game's wind (the vector is updated in place when the weather changes)
+        if (game.effects && game.wind) game.effects.wind = game.wind;
         const chuteTex = chuteTexture();
         this.chuteMat = new THREE.MeshStandardMaterial({ map: chuteTex, side: THREE.DoubleSide, roughness: 0.9 });
         this.seatMat = new THREE.MeshStandardMaterial({ color: 0x3b4430, roughness: 0.8 });
