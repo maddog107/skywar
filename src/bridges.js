@@ -35,7 +35,7 @@ function flatGeo(g) {
 // The standing decks, piers, road surfaces and cables of all bridges in a CELL x CELL m square are merged into
 // one mesh each (3 draw calls per cell instead of 3-4 per bridge); a bridge marks its cell dirty when its deck
 // changes (collapse, reset) and update() rebuilds it.
-const CELL = 6000;
+const CELL = 16000;
 export class BridgeBatch {
     constructor(parent, bridges) {
         this.parent = parent;

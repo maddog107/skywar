@@ -26,7 +26,10 @@ import { townGradeAt } from './terraincore.js';
 import { CarSet, PAINTS, NearInstances } from './carset.js';
 
 const EXTENT = 24000, CELL = 3200;
-const TOWN_CELL = 16000, FAR_CELL = 8000; // towns drawn together (see perTown)
+// towns drawn together (see perTown): the kinds drawn at any distance as one mesh for the whole map (from the air
+// most towns are in view anyway), the ones only drawn close per 8 km square
+const TOWN_CELL = Infinity, FAR_CELL = 8000;
+const townCellKey = (t, C) => C === Infinity ? 0 : Math.floor(t.x / C) * 1000 + Math.floor(t.z / C);
 const BLOCK_CELL = 2;
 const STREET_Y = 0.3;             // street surface above the graded ground
 const WALK = STREET_HALF + SIDEWALK; // half-width of a street with its pavements
@@ -783,15 +786,15 @@ export class Towns {
         return set;
     }
 
-    // One InstancedMesh per group of nearby towns for a kind of building part, each with its own bounding sphere,
-    // so towns out of view (or out of the small shadow frustum) cost little. `far`: not drawn beyond this.
+    // One InstancedMesh per group of towns for a kind of building part. `far`: not drawn beyond this.
     // The towns are grouped by the TOWN_CELL (FAR_CELL for kinds only drawn close) square their centre is in:
-    // one draw call covers a cluster of towns instead of one each (40 towns → ~15-20 groups).
+    // one draw call covers many towns instead of one each (a draw costs the same CPU time however many
+    // instances it has, and the GPU drops the ones out of view early).
     // attrs(n): per-instance attributes (the geometry is cloned per group to carry them)
     perTown(geo, mat, list, write, { shadow = true, far = Infinity, attrs = null } = {}) {
         const byTown = new Map(), C = far < Infinity ? FAR_CELL : TOWN_CELL;
         for (const o of list) {
-            const k = Math.floor(o.t.x / C) * 1000 + Math.floor(o.t.z / C);
+            const k = townCellKey(o.t, C);
             if (!byTown.has(k)) byTown.set(k, []);
             byTown.get(k).push(o);
         }
@@ -1327,7 +1330,7 @@ export class Towns {
     drawGround(list) {
         const byTown = new Map();
         for (const o of list) {
-            const k = Math.floor(o.t.x / TOWN_CELL) * 1000 + Math.floor(o.t.z / TOWN_CELL);
+            const k = townCellKey(o.t, TOWN_CELL);
             if (!byTown.has(k)) byTown.set(k, []);
             byTown.get(k).push(o);
         }
