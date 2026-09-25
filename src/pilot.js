@@ -128,8 +128,10 @@ export class PilotOnFoot {
         this.prevE = eDown;
         if (best) {
             const vip = this.game.mstate && this.game.mstate.transport === best;
-            const boardable = !vip && (best.pilotDead || best.abandoned || best.team === 'blue');
-            this.hint = vip ? 'PROTECT THE VIP — NO BOARDING' : boardable ? (best === this.from ? 'E — CLIMB BACK IN' : best.team === 'blue' && !best.pilotDead ? 'E — BOARD ' : 'E — HIJACK ') + (best === this.from ? '' : best.spec.name.toUpperCase()) + ' (' + Math.round(bd) + ' m)' : 'SHOOT THE PILOT THROUGH THE CANOPY TO HIJACK';
+            // a mission on its last jet: that jet is the only one you may fly (no second life by commandeering another)
+            const lastJet = g.mission && g.lives <= 0 && best !== this.from;
+            const boardable = !vip && !lastJet && (best.pilotDead || best.abandoned || best.team === 'blue');
+            this.hint = vip ? 'PROTECT THE VIP — NO BOARDING' : lastJet ? 'LAST JET — YOU CAN ONLY FLY YOUR OWN' : boardable ? (best === this.from ? 'E — CLIMB BACK IN' : best.team === 'blue' && !best.pilotDead ? 'E — BOARD ' : 'E — HIJACK ') + (best === this.from ? '' : best.spec.name.toUpperCase()) + ' (' + Math.round(bd) + ' m)' : 'SHOOT THE PILOT THROUGH THE CANOPY TO HIJACK';
             if (boardable && ePress && this.hijackT <= 0) this.hijack(best);
         }
         // leap animation into the hijacked jet
@@ -139,8 +141,8 @@ export class PilotOnFoot {
         }
         if (s.landed) {
             this.landedT += dt;
-            if (!this.hint) this.hint = g.lives > 0 ? 'ENTER — REQUEST A NEW JET  (' + (g.lives === Infinity ? '∞' : g.lives) + ' LEFT)' : 'NO AIRFRAMES LEFT';
-            if (input.down('Enter') && this.landedT > 1) g.respawnPlayer();
+            if (!this.hint) this.hint = g.lives > 0 ? 'ENTER — REQUEST A NEW JET  (' + (g.lives === Infinity ? '∞' : g.lives) + ' LEFT)' : 'NO AIRFRAMES LEFT — ENTER: END THE SORTIE';
+            if (input.down('Enter') && this.landedT > 1) g.respawnPlayer(); // (with none left, that ends the sortie)
         } else if (s.deployed) {
             // a long ride down from altitude: allow skipping it (the hijack prompt takes priority)
             this.airT = (this.airT || 0) + dt;

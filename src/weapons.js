@@ -308,7 +308,8 @@ export class Weapons {
         const d = m.pos.distanceTo(t.pos);
         let dmg = m.W.damage * clamp(1.5 - d / 40, 0.6, 1.3);
         if (t.isPlayer) dmg *= 0.8;
-        if (t.damage) t.damage(dmg, m.owner, m.kind === 'rkt' ? 'rocket' : 'missile');
+        if (AIR_TARGETS.includes(t)) this.hitAir(t, dmg, m.owner); // a helicopter or airliner locked with T
+        else if (t.damage) t.damage(dmg, m.owner, m.kind === 'rkt' ? 'rocket' : 'missile');
         g.events.emit('missileHit', m.owner, { target: t, missile: m });
     }
 
@@ -328,12 +329,19 @@ export class Weapons {
     }
 
     // ── The rest of the world: town buildings, cars, helicopters and air traffic ──
+    // damage a helicopter / airliner (softtargets.js); tells the game when that brought it down
+    hitAir(t, amount, owner) {
+        if (!t.alive) return;
+        t.hit(amount, this.game, owner);
+        if (!t.alive) this.game.events.emit('airKilled', t, { source: owner });
+    }
+
     worldBulletHit(b, prev) {
         const g = this.game;
         for (const t of AIR_TARGETS) {
             if (!t.alive || Math.abs(t.pos.x - b.pos.x) > 120 || Math.abs(t.pos.z - b.pos.z) > 120) continue;
             if (segHitsSphere(prev, b.pos, t.pos, t.radius)) {
-                t.hit(b.damage, g, b.owner);
+                this.hitAir(t, b.damage, b.owner);
                 g.effects.impact(b.pos, null);
                 if (b.owner === g.player) g.hitmarkerT = g.time;
                 return true;
@@ -365,7 +373,7 @@ export class Weapons {
 
     worldMissileHit(m) {
         for (const t of AIR_TARGETS) {
-            if (t.alive && t.pos.distanceToSquared(m.pos) < (t.radius + 6) ** 2) { t.hit(m.W.damage * 1.5, this.game, m.owner); return true; }
+            if (t.alive && t.pos.distanceToSquared(m.pos) < (t.radius + 6) ** 2) { this.hitAir(t, m.W.damage * 1.5, m.owner); return true; }
         }
         const bl = this.game.world.towns && this.game.world.towns.buildings;
         return !!(bl && bl.at(m.pos.x, m.pos.y, m.pos.z));
@@ -379,7 +387,7 @@ export class Weapons {
         for (const t of AIR_TARGETS) {
             if (!t.alive) continue;
             const d = t.pos.distanceTo(at);
-            if (d < R + t.radius) t.hit(amount * 0.5 * (1 - d / (R + t.radius)), g, owner);
+            if (d < R + t.radius) this.hitAir(t, amount * 0.5 * (1 - d / (R + t.radius)), owner);
         }
     }
 

@@ -181,3 +181,18 @@ input[type=range] { accent-color: var(--accent); width: 170px; }
 .t-buttons { position: absolute; right: 86px; bottom: 28px; display: grid; grid-template-columns: repeat(4, 58px); gap: 6px; }
 .t-buttons button { height: 44px; border: 1px solid rgba(255,255,255,0.3); background: rgba(0,0,0,0.3); color: #fff; font-family: 'Share Tech Mono', monospace; font-size: 12px; }
 .t-buttons button.big { height: 58px; background: rgba(255,181,71,0.25); border-color: rgba(255,181,71,0.6); }
+
+/* touch screens have no pointer lock to capture */
+@media (pointer: coarse) { #clickToFly { display: none !important; } }
+body:has(#touchUI.show) #clickToFly { display: none !important; }
+
+/* short (landscape phone) screens: smaller stick and throttle, the buttons in two columns by the throttle,
+   so the centre of the screen (HUD tapes, radar) stays clear */
+@media (max-height: 500px) {
+    .t-stick { left: 16px; bottom: 16px; width: 120px; height: 120px; }
+    .t-knob { width: 48px; height: 48px; margin: -24px 0 0 -24px; }
+    .t-throttle { right: 14px; bottom: 16px; width: 40px; height: 150px; }
+    .t-buttons { right: 64px; bottom: 16px; grid-template-columns: repeat(2, 52px); gap: 5px; }
+    .t-buttons button { height: 32px; font-size: 11px; }
+    .t-buttons button.big { height: 42px; }
+}

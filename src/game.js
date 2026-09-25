@@ -46,6 +46,8 @@ const LOADOUTS = {
 };
 export const LOADOUT_KEYS = Object.keys(LOADOUTS);
 export const LOADOUT_LABELS = LOADOUTS;
+// score lost for civilian damage in the combat modes and missions (Free Flight / Sandbox: anything goes)
+const COLLATERAL = { building: 50, aircraft: 300 };
 const CALLSIGNS = ['VIPER', 'MAVERICK', 'JESTER', 'ICEMAN', 'GHOST', 'REAPER', 'HAWK', 'NOMAD'];
 const WINGMEN = ['BOLT', 'SABRE'];
 
@@ -124,8 +126,15 @@ export class Game {
         this.missionTime = 0;
         this.score = 0; this.kills = 0; this.wave = 0; this.combo = 1; this.comboT = 0;
         this.shots = 0; this.hits = 0; this.missilesFired = 0; this.missileHits = 0; this.groundKills = 0;
-        this.gloc = 0; this.damageFlash = 0; this.whiteout = 0;
+        this.gloc = 0; this.damageFlash = 0; this.whiteout = 0; this.redout = false;
         this.hitmarkerT = -10; this.killmarkerT = -10;
+        this.collateral = 0; this._collateralCall = false; this.bellyT = 0;
+        // nothing carries over from the last sortie: stick ramps, head look, slow-mo, callouts, rearm timers
+        this.stick.pitch = this.stick.roll = this.stick.yaw = 0;
+        this.freeLook.yaw = this.freeLook.pitch = this.freeLook.t = 0;
+        this.timeScale = 1; this.slowmoT = 0; this.shake = 0; this.firing = false;
+        this._bingo = false; this.rearmT = 0; this._rearmMsg = false; this._rearmDone = false;
+        this.missileCamHold = 0; this.prevE = false; this.mouseStick = null;
         this.feed = [];
         this.banner = null;
         this.waveBreak = 0;
@@ -158,6 +167,7 @@ export class Game {
             for (const b of this.world.towns.bridges) b.game = this;
             this.world.towns.traffic.reset();
             if (this.world.towns.buildings) this.world.towns.buildings.reset(); // rebuilt town for every sortie
+            this.hookBuildings();
         }
         if (this.mode === 'strike' || this.mode === 'sandbox') this.ground.spawnEnemyBase();
         // enemy parked jets are real targets when the enemy base is live, decoration otherwise
@@ -217,8 +227,58 @@ export class Game {
                 this.aircraft.push(w);
             }
         }
+        this.tip = this.makeTip();
         this.world.updateTerrain(p.pos, true);
         this.input.lock();
+    }
+
+    // First seconds of a sortie: a one-line reminder of the essential keys (drawn by the HUD, fading out)
+    makeTip() {
+        const p = this.player, m = this.settings.controlMode;
+        if (this.groundStart || !p) return null; // the Ready Room / heist HUD has its own key line
+        const fly = m === 'mouseaim' ? 'MOUSE: FLY' : m === 'mousestick' ? 'MOUSE: STICK' : 'W/S/A/D: FLY';
+        const help = 'F1: ALL CONTROLS';
+        let text;
+        if (p.onGround) text = 'Z OR 1–0: THROTTLE · A/D: STEER · S: ROTATE · U: AUTO-TAKEOFF · ' + help;
+        else if (this.mode === 'rings') text = fly + ' · Z / SHIFT: THROTTLE · FLY THROUGH THE RINGS IN ORDER · ' + help;
+        else if (!p.spec.gun && !p.spec.missiles) text = fly + ' · Z / SHIFT: THROTTLE · G: GEAR · F: FLAPS · Y: AUTO-LAND · ' + help;
+        else text = fly + ' · ' + (m === 'keyboard' ? 'SPACE' : 'LMB') + ': GUNS · ' + (m === 'keyboard' ? 'M' : 'RMB') + ': FIRE WEAPON · X: SWITCH · T: TARGET · R: FLARES · ' + help;
+        return { text, t: this.time, dur: 14 };
+    }
+
+    // Free Flight / Sandbox: blowing things up is the point. Everywhere else the towns are civilian.
+    get collateralFree() { return this.mode === 'freeflight' || this.mode === 'sandbox'; }
+
+    // Town buildings (buildings.js) score for the player when destroyed; the game takes that over so it can depend
+    // on the mode: points in Free Flight / Sandbox and in an enemy-held town, a collateral penalty elsewhere
+    hookBuildings() {
+        const bl = this.world.towns && this.world.towns.buildings;
+        if (!bl || bl._gameHook) return;
+        bl._gameHook = true;
+        const destroy = bl.destroy.bind(bl);
+        bl.destroy = (b, game, source) => {
+            const mine = !!game && !!source && (source === game.player || source === game.pilotMode);
+            destroy(b, game, mine ? null : source); // its own scoring only ever covers the player
+            if (mine && game === this) this.buildingDestroyed(b);
+        };
+    }
+
+    buildingDestroyed(b) {
+        const pts = b.kind === 'tower' ? 150 : b.kind === 'apt' ? 80 : 40;
+        const what = b.kind === 'tower' ? 'TOWER BLOCK' : b.kind === 'apt' ? 'APARTMENT BLOCK' : 'BUILDING';
+        if (b.enemy || this.collateralFree) {
+            this.score += pts;
+            this.addFeed((b.enemy ? 'ENEMY-HELD ' : '') + what + ' DESTROYED  +' + pts, '#ffc23f');
+        } else this.collateralHit('CIVILIAN ' + what + ' DESTROYED', COLLATERAL.building);
+        this.events.emit('buildingKilled', b);
+    }
+
+    collateralHit(what, penalty) {
+        if (this.state !== 'playing') return;
+        this.collateral++;
+        this.score = Math.max(0, this.score - penalty);
+        this.addFeed('COLLATERAL: ' + what + '  −' + penalty, '#ff9f5a');
+        if (!this._collateralCall) { this._collateralCall = true; this.audio.say('Check your fire! Those are civilians down there.', true); }
     }
 
     // Where the player starts: air, runway, apron (taxi) or carrier catapult
@@ -731,7 +791,9 @@ export class Game {
             if (!ac.isPlayer) return;
             const pts = this.mode === 'freeflight' || this.mode === 'sandbox' ? 150 : 0;
             this.score += pts;
-            this.showBanner(water ? 'DITCHED — YOU SURVIVED' : 'CRASH LANDED — YOU SURVIVED', 'E: climb out · ENTER: new jet' + (pts ? '  +' + pts : ''), 6, '#5dffa0');
+            const last = this.lives <= 0;
+            this.showBanner(water ? 'DITCHED — YOU SURVIVED' : 'CRASH LANDED — YOU SURVIVED',
+                last && this.mission ? 'The jet is a write-off — and it was your only one.' : 'E: climb out · ENTER: ' + (last ? 'end the sortie' : 'new jet') + (pts ? '  +' + pts : ''), 6, '#5dffa0');
             this.audio.say(pick(['We walked away from that one.', 'Any landing you can walk away from!', 'Well, that happened.']));
         });
         ev.on('flameout', (ac) => {
@@ -748,6 +810,11 @@ export class Game {
             if (missile.owner === this.player) this.addFeed('MISSILE SHOT DOWN BY CIWS', '#ffc23f');
         });
         ev.on('bomb', (ac) => { if (ac.isPlayer) this.audio.say(pick(['Bombs away!', 'Pickle, pickle.', 'Bomb released.'])); });
+        // a helicopter or airliner brought down by our weapons (weapons.js hitAir)
+        ev.on('airKilled', (t, { source }) => {
+            if (!source || (source !== this.player && source !== this.pilotMode) || this.collateralFree) return;
+            this.collateralHit('NEUTRAL AIRCRAFT DOWN', COLLATERAL.aircraft);
+        });
     }
 
     rearm(p) {
@@ -963,6 +1030,7 @@ export class Game {
         return (isOnRunway(p.pos.x, p.pos.z)?.friendly && !p.deck) || (p.deck && p.deck.team === 'blue');
     }
 
+    // Hostiles: enemy aircraft and ground targets. Auto-select and the T cycle take these first.
     candidates() {
         const out = [];
         for (const a of this.aircraft) if (a.alive && a.team !== 'blue' && !a.onGround) out.push(a);
@@ -970,25 +1038,42 @@ export class Game {
         return out;
     }
 
+    // Neutral air traffic (softtargets.js: the airbase helicopters, airliners, transports): lockable with T after
+    // every hostile, never auto-selected. Only airborne ones — not the jets taxiing or parked at the airports.
+    neutralCandidates(maxD = 10000) {
+        const p = this.player, out = [];
+        if (!p) return out;
+        for (const t of AIR_TARGETS) {
+            if (!t.alive || t.done || t.pos.distanceToSquared(p.pos) > maxD * maxD) continue;
+            if (t.pos.y - Math.max(terrainHeight(t.pos.x, t.pos.z), 0) < 15) continue;
+            out.push(t);
+        }
+        return out;
+    }
+
+    isNeutral(t) { return !!t && AIR_TARGETS.includes(t); }
+
     cycleTarget() {
         const p = this.player;
         const fwd = p.getForward(_v);
-        const list = this.candidates()
+        const rank = (arr, maxD) => arr
             .map(t => ({ t, d: t.pos.distanceTo(p.pos), dot: _v2.subVectors(t.pos, p.pos).normalize().dot(fwd) }))
-            .filter(o => o.d < 15000)
+            .filter(o => o.d < maxD)
             .sort((a, b) => b.dot - a.dot);
-        if (!list.length) { this.lockTarget = null; return; }
+        const list = [...rank(this.candidates(), 15000), ...rank(this.neutralCandidates(), 10000)];
+        if (!list.length) { this.lockTarget = null; this.addFeed('NO TARGETS IN RANGE', '#9fb2c4'); return; }
         const i = list.findIndex(o => o.t === this.lockTarget);
-        this.lockTarget = list[(i + 1) % list.length].t;
+        const t = this.lockTarget = list[(i + 1) % list.length].t;
         this.lockProgress = 0;
         this.audio.tick(1200, 0.08, 0.04);
+        if (this.isNeutral(t)) this.addFeed('TARGET: ' + t.name.toUpperCase() + ' — NEUTRAL', '#cfd8e0');
     }
 
     updateTargeting(dt) {
         const p = this.player;
         const fwd = p.getForward(_v);
         let t = this.lockTarget;
-        if (t && (!t.alive || t.pos.distanceTo(p.pos) > 16000)) { t = this.lockTarget = null; this.lockProgress = 0; }
+        if (t && (!t.alive || t.done || t.exploded || t.pos.distanceTo(p.pos) > 16000)) { t = this.lockTarget = null; this.lockProgress = 0; }
         if (!t) {
             // auto-select the target nearest the nose
             let best = null, bestS = -Infinity;
@@ -1033,7 +1118,8 @@ export class Game {
             if (bl && a.pos.y < bl.maxTop + r) {
                 const b = bl.at(a.pos.x, a.pos.y, a.pos.z, r);
                 if (b) {
-                    bl.damage(b, 2000 + a.speed * 4, this, a === this.player ? this.player : null);
+                    // flying into a house isn't "destroying" it: no points, no collateral penalty on top of the crash
+                    bl.damage(b, 2000 + a.speed * 4, this, null);
                     if (a === this.player) this.addFeed('FLEW INTO A BUILDING', '#ff4a3d');
                     a.crash();
                     if (a.alive && b.alive) a.pos.y = Math.max(a.pos.y, b.top + 10); // sandbox bounce: out of the rubble
@@ -1202,7 +1288,7 @@ export class Game {
             }
         } else { this.rearmT = 0; this._rearmMsg = false; this._rearmDone = false; }
         // fuel callouts
-        if (p.fuel < 0.2 && !this._bingo && this.settings.fuel !== false && this.mode !== 'sandbox') { this._bingo = true; this.addFeed('BINGO FUEL — RETURN TO BASE', '#ffc23f'); this.audio.say('Bingo fuel. Return to base.'); }
+        if (p.fuel < 0.2 && !this._bingo && !p.flameout && this.settings.fuel !== false && this.mode !== 'sandbox') { this._bingo = true; this.addFeed('BINGO FUEL — RETURN TO BASE', '#ffc23f'); this.audio.say('Bingo fuel. Return to base.'); }
         if (p.fuel > 0.3) this._bingo = false;
     }
 
@@ -1389,6 +1475,8 @@ export class Game {
                 this.score += Math.max(500, Math.round(10000 - this.missionTime * 25));
                 this.gameOver(true);
             }
+        } else if (this.mode === 'freeflight') {
+            this.objective = 'FREE FLIGHT — EXPLORE'; // (the Ready Room swaps in its own while you drive)
         } else if (this.mode === 'sandbox') {
             this.objective = 'SANDBOX — N: SPAWN BANDIT · X: WEAPONS · BOMBS AWAY';
         } else if (this.mode === 'rings' && this.rings && this.player.alive && !this.pilotMode) {
@@ -1414,7 +1502,7 @@ export class Game {
             this.mission.update && this.mission.update(this);
             if (this.mission.objective) this.objective = this.mission.objective(this, this.objective);
             let r = this.mission.check ? this.mission.check(this) : null;
-            if (!r && this.lives <= 0 && this.pilotMode && !this.pilotMode.seat.walkedOut) r = 'lose'; // one-life missions end when you bail out
+            if (!r && this.lives <= 0) r = this.lastJetCheck(dt);
             if (r && this.state === 'playing') {
                 this.gameOver(r === 'win');
                 return;
@@ -1426,6 +1514,22 @@ export class Game {
         if (p.pos.y > 14000 && p.vel) p.vel.y -= 10 * dt;
     }
 
+    // Missions on their last jet (one-life missions from the start): bailing out ends it, and so does losing the
+    // airframe any other way — a belly landing writes it off, and walking away from it only works if you come back
+    // to it (pilot.js won't let you board a different one)
+    lastJetCheck(dt) {
+        const pm = this.pilotMode, p = this.player;
+        if (pm && !pm.seat.walkedOut) return 'lose';
+        const jet = pm ? pm.from : p;
+        if (!jet) return null;
+        if (!jet.alive && pm) { this.showBanner('AIRFRAME LOST', 'Your jet was destroyed while you were out of it.', 5, '#ff4a3d'); return 'lose'; }
+        if (jet.bellied && jet.speed < 2) {
+            this.bellyT += dt;
+            if (this.bellyT > 3.5) { this.showBanner('AIRFRAME WRITTEN OFF', 'One jet, one life — that was it.', 5, '#ff4a3d'); return 'lose'; }
+        } else this.bellyT = 0;
+        return null;
+    }
+
     gameOver(victory) {
         if (victory && this.mission) this.score += 1500 + (this.lives > 0 ? 500 * this.lives : 0);
         this.state = 'over';
@@ -1433,7 +1537,7 @@ export class Game {
         const acc = this.shots ? Math.round((this.hits / this.shots) * 100) : 0;
         this.onGameOver && this.onGameOver({
             victory, score: Math.round(this.score), kills: this.kills, wave: this.wave, time: this.clockText(),
-            accuracy: acc, missiles: this.missilesFired, missileHits: this.missileHits, groundKills: this.groundKills,
+            accuracy: acc, missiles: this.missilesFired, missileHits: this.missileHits, groundKills: this.groundKills, collateral: this.collateral,
             mode: this.mission ? 'missions' : this.mode, aircraft: this.aircraftId,
             mission: this.mission ? this.mission.title : null, missionId: this.missionId, daily: this.isDaily, seconds: this.missionTime,
         });
@@ -1511,7 +1615,8 @@ export class Game {
         }
         p.root.visible = !p.exploded && mode !== 'cockpit';
         const holdLook = this.input.down('KeyC') && this.lockTarget;
-        const lookBack = this.input.down('KeyL');
+        // L: hold to look behind — except stopped on a friendly pad, where it changes the loadout
+        const lookBack = this.input.down('KeyL') && !(p.onGround && p.speed < 3 && this.atFriendlyPad(p));
 
         if (mode === 'cockpit') {
             const eye = _v.copy(p.rig.cockpit).applyMatrix4(p.model.matrixWorld);
