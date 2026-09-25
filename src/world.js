@@ -973,8 +973,8 @@ export class World {
         try {
             for (let i = 0; i < n; i++) {
                 const w = new Worker(new URL('./terrainworker.js', import.meta.url), { type: 'module' });
-                w.busy = 0;
-                w.onmessage = (e) => { w.busy--; this.readyTiles.push(e.data); };
+                w.load = 0; // vertices queued (a big close-up tile is ~13x a far one)
+                w.onmessage = (e) => { w.load -= e.data.cost; this.readyTiles.push(e.data); };
                 w.onerror = (e) => { console.warn('terrain worker failed, building tiles on the main thread', e.message || e); this.stopTerrainWorkers(); };
                 this.workers.push(w);
             }
@@ -995,14 +995,16 @@ export class World {
         for (const w of this.workers) w.postMessage({ type: 'ground', ground });
     }
 
-    // hand a tile job to the least busy worker (false: all are full)
+    // hand a tile job to the least loaded worker (false: all have a full queue: ~3 close-up tiles or ~40 far ones,
+    // so a worker never idles for the rest of a frame, and not so many that a turn leaves it building stale tiles)
     dispatchTile(j) {
         let best = null;
-        for (const w of this.workers) if (w.busy < 2 && (!best || w.busy < best.busy)) best = w;
+        for (const w of this.workers) if (w.load < 30000 && (!best || w.load < best.load)) best = w;
         if (!best) return false;
-        best.busy++;
+        const cost = (j.seg + 3) * (j.seg + 3);
+        best.load += cost;
         this.inflight.set(j.key, { seg: j.seg, gen: this.terrainGen });
-        best.postMessage({ type: 'build', id: ++this.jobId, tx: j.tx, tz: j.tz, seg: j.seg, T: this.TILE, gen: this.terrainGen });
+        best.postMessage({ type: 'build', id: ++this.jobId, tx: j.tx, tz: j.tz, seg: j.seg, T: this.TILE, gen: this.terrainGen, cost });
         return true;
     }
 

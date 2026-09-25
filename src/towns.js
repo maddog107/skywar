@@ -20,7 +20,7 @@ import { buildRoads, roadMaterial, streetMaterial, junctionMaterial, sidewalkMat
     junctionShape, SurfaceBuilder, pointAt, tangentAt, smooth01, STREET_HALF, SIDEWALK, ROAD_HALF } from './roads.js';
 import { mergeGeometries as mergeGeos } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Traffic } from './traffic.js';
-import { setBridgeNight } from './bridges.js';
+import { setBridgeNight, BridgeBatch } from './bridges.js';
 import { Buildings } from './buildings.js';
 import { townGradeAt } from './terraincore.js';
 import { CarSet, PAINTS, NearInstances } from './carset.js';
@@ -367,6 +367,7 @@ export class Towns {
         this.deadEnds.push(...deadEnds);
         this.paths = paths;
         this.bridges = bridges;
+        this.bridgeBatch = new BridgeBatch(this.group, bridges); // their decks and piers drawn a few meshes at a time
         for (const p of paths) { p.half = ROAD_HALF; }
         this.roadJunctions();
         this.shapeJunctions();
@@ -1666,6 +1667,7 @@ export class Towns {
 
     update(dt, cam) {
         this.time += dt;
+        this.bridgeBatch.update(); // bridges reset for a new sortie
         if (this.buildings) this.buildings.update(dt, cam);
         // parked cars: re-pick the ones near the camera when it has moved a fair way
         // (and the street furniture, and which towns' rooftop clutter / trees are close enough to draw)

@@ -17,7 +17,7 @@ import * as THREE from 'three';
 import { samplePath, LANE, liftWithDistance } from './roads.js';
 import { rand, makeRadialTexture } from './util.js';
 import { propParts } from './props.js';
-import { CarSet, PAINTS, PAINTS_BUS } from './carset.js';
+import { CarSet, PAINTS, PAINTS_BUS, mergeVehicleParts, vehicleMaterial } from './carset.js';
 
 const _p = new THREE.Vector3(), _t = new THREE.Vector3(), _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _e = new THREE.Euler(0, 0, 0, 'YXZ'), _v = new THREE.Vector3(), _v2 = new THREE.Vector3();
 const GAP = 3.5;     // metres kept to the vehicle ahead when stopped
@@ -39,9 +39,13 @@ export class Traffic {
         this.buggyCount = Math.min(60, dirtPaths.length * 3);
         this.buggyParts = [];
         const parts = this.buggyCount ? propParts('buggy') : null;
-        if (parts) for (const pt of parts) {
-            const im = new THREE.InstancedMesh(pt.geometry, liftWithDistance(pt.material.clone()), this.buggyCount);
+        const merged = parts && mergeVehicleParts(parts); // one draw call for every buggy (see carset.js)
+        const drawn = merged ? [{ geometry: merged, material: vehicleMaterial(true) }] : (parts || []).map(pt => ({ geometry: pt.geometry, material: liftWithDistance(pt.material.clone()) }));
+        const white = new THREE.Color(1, 1, 1);
+        for (const d of drawn) {
+            const im = new THREE.InstancedMesh(d.geometry, d.material, this.buggyCount);
             im.frustumCulled = false; im.castShadow = true;
+            if (merged) for (let k = 0; k < this.buggyCount; k++) im.setColorAt(k, white); // same shader variant as the cars
             scene.add(im);
             this.buggyParts.push(im);
         }
@@ -442,16 +446,20 @@ export class Traffic {
             this.pools.instanceMatrix.clearUpdateRanges();
             if (pools) { this.pools.instanceMatrix.addUpdateRange(0, pools * 16); this.pools.instanceMatrix.needsUpdate = true; }
         }
+        let nb = 0; // buggies drawn: only the ones near the camera, packed to the front (like the cars)
         for (const b of this.buggies) {
             if (!b.dead) this.moveBuggy(b, dt);
             this.fallUpdate(b, dt, game);
             b.bounce += dt * (4 + b.speed * 0.5);
             b.yOff = b.fall ? b.yOff : Math.abs(Math.sin(b.bounce)) * 0.12 * Math.min(1, b.speed / 8);
             this.pose(b, 1.4);
-            _e.set(Math.asin(Math.max(-1, Math.min(1, _t.y))) + Math.sin(b.bounce * 1.3) * 0.03, Math.atan2(-_t.x, -_t.z), b.dead ? 0.4 : Math.sin(b.bounce * 0.7) * 0.04);
-            _q.setFromEuler(_e);
-            _m.compose(_p, _q, _s.set(1, 1, 1));
-            for (const im of this.buggyParts) im.setMatrixAt(b.i, _m);
+            if (!cam || (_p.x - cam.x) ** 2 + (_p.z - cam.z) ** 2 < 3500 * 3500) {
+                _e.set(Math.asin(Math.max(-1, Math.min(1, _t.y))) + Math.sin(b.bounce * 1.3) * 0.03, Math.atan2(-_t.x, -_t.z), b.dead ? 0.4 : Math.sin(b.bounce * 0.7) * 0.04);
+                _q.setFromEuler(_e);
+                _m.compose(_p, _q, _s.set(1, 1, 1));
+                for (const im of this.buggyParts) im.setMatrixAt(nb, _m);
+                nb++;
+            }
             // dust plume, only where someone can see it
             if (game && !b.dead && b.speed > 6 && cam && cam.distanceToSquared(b.pos) < 900 * 900) {
                 b.dust -= dt;
@@ -464,7 +472,14 @@ export class Traffic {
         }
         // only the cars near the camera go to the GPU
         this.carSet.commit(cam || { x: 0, z: 0 }, cam ? 3500 : 1e9);
-        for (const im of this.buggyParts) im.instanceMatrix.needsUpdate = true;
+        for (const im of this.buggyParts) {
+            const was = im.count;
+            im.count = nb; im.visible = nb > 0;
+            if (!nb && !was) continue;
+            im.instanceMatrix.clearUpdateRanges();
+            if (nb) im.instanceMatrix.addUpdateRange(0, nb * 16);
+            im.instanceMatrix.needsUpdate = nb > 0;
+        }
         if (this.lights.visible) lp.needsUpdate = true;
     }
 
