@@ -6,6 +6,7 @@
 // Eye point is the origin; forward is -Z.
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
+import { buildRifleModel } from './rifle.js';
 import { clamp, damp, MS_TO_KTS, M_TO_FT, DEG } from './util.js';
 
 const _v = new THREE.Vector3(), _q = new THREE.Quaternion();
@@ -53,22 +54,7 @@ export class Cockpit {
 
     // AK-47 view model (child of the overlay camera)
     buildRifle() {
-        const wood = new THREE.MeshStandardMaterial({ color: 0x7a3f1c, roughness: 0.6, metalness: 0.05 });
-        const steel = new THREE.MeshStandardMaterial({ color: 0x1d1f22, roughness: 0.45, metalness: 0.8 });
-        const g = new THREE.Group();
-        const add = (geo, mat, x, y, z, rx = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.x = rx; g.add(m); return m; };
-        add(new THREE.BoxGeometry(0.05, 0.07, 0.34), steel, 0, 0, 0);                 // receiver
-        add(new THREE.BoxGeometry(0.052, 0.03, 0.3), steel, 0, 0.045, -0.02);           // dust cover
-        add(new THREE.CylinderGeometry(0.009, 0.009, 0.42, 8), steel, 0, 0.02, -0.38, Math.PI / 2); // barrel
-        add(new THREE.CylinderGeometry(0.012, 0.012, 0.3, 8), steel, 0, 0.05, -0.3, Math.PI / 2);   // gas tube
-        add(new THREE.BoxGeometry(0.056, 0.06, 0.2), wood, 0, 0.01, -0.26);              // handguard
-        add(new THREE.BoxGeometry(0.012, 0.05, 0.012), steel, 0, 0.07, -0.55);           // front sight
-        add(new THREE.CylinderGeometry(0.014, 0.014, 0.05, 8), steel, 0, 0.02, -0.61, Math.PI / 2); // muzzle
-        const mag = add(new THREE.BoxGeometry(0.035, 0.2, 0.07), steel, 0, -0.12, -0.06, 0.35); // curved mag (approx)
-        const mag2 = add(new THREE.BoxGeometry(0.035, 0.1, 0.07), steel, 0, -0.2, -0.1, 0.6);
-        void mag; void mag2;
-        add(new THREE.BoxGeometry(0.04, 0.12, 0.05), wood, 0, -0.08, 0.1, -0.3);        // pistol grip
-        add(new THREE.BoxGeometry(0.045, 0.08, 0.3), wood, 0, -0.03, 0.3, 0.12);         // stock
+        const g = buildRifleModel();
         this.flash = new THREE.PointLight(0xffa040, 0, 3, 2);
         this.flash.position.set(0, 0.03, -0.7);
         g.add(this.flash);

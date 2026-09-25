@@ -47,6 +47,7 @@ export class PilotOnFoot {
         seat.heading = this.yaw;
         this.flareT = 0; this.flareUsed = false;
         this.walker = null;
+        if (seat.character) seat.character.setRifle(true); // third person: the AK is in his hand
         if (seat.walkedOut) this.startWalking();
     }
 
@@ -64,6 +65,7 @@ export class PilotOnFoot {
         g.scene.add(ch.root);
         ch.root.scale.setScalar(1);
         ch.root.rotation.set(0, 0, 0);
+        ch.setRifle(true);
         this.walker = { mesh: ch.root, character: ch, speed: 0, anim: 0, yaw: this.yaw };
         this.placeWalker();
     }
@@ -168,8 +170,12 @@ export class PilotOnFoot {
         if (tp) o.addScaledVector(d, this.walker ? 4.5 : 17);
         d.x += rand(-0.006, 0.006); d.y += rand(-0.006, 0.006); d.z += rand(-0.006, 0.006);
         d.normalize();
-        // tracer for looks
-        g.weapons.bullets.push({ pos: o.clone().addScaledVector(d, 3), vel: d.clone().multiplyScalar(715).add(this.seat.vel), owner: this, team: 'blue', damage: 0, life: 1.2, tracer: this.mag % 3 === 0, color: [3.2, 2.4, 1.2] });
+        // tracer for looks: from the rifle's muzzle when you can see it
+        const ch = this.walker ? this.walker.character : this.seat.character;
+        const mz = tp && ch && ch.muzzlePos(new THREE.Vector3());
+        if (mz) g.effects.fire.emit(mz, this.seat.vel, 0.05, 0.35, 0.12, [4, 3, 1.6], [2, 1, 0.3], 1, 0, 0, 0);
+        const td = mz ? o.clone().addScaledVector(d, 250).sub(mz).normalize() : d; // converge on the aim point
+        g.weapons.bullets.push({ pos: mz ? mz.clone() : o.clone().addScaledVector(d, 3), vel: td.clone().multiplyScalar(715).add(this.seat.vel), owner: this, team: 'blue', damage: 0, life: 1.2, tracer: this.mag % 3 === 0, color: [3.2, 2.4, 1.2] });
         g.audio.gunshot && g.audio.gunshot();
         g.events.emit('rifle', this);
         // hitscan: pilots in cockpits, parachutists, airframes
@@ -241,6 +247,11 @@ export class PilotOnFoot {
             const L = Math.hypot(mx, mz); mx /= L; mz /= L;
             let dy = Math.atan2(-mx, -mz) - w.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
             w.yaw += dy * Math.min(1, dt * 10);
+        }
+        // shooting: square up to where you're aiming so the rifle points at it
+        if ((this.lastShotT ?? -9) > g.time - 0.3) {
+            let da = this.yaw - w.yaw; da = Math.atan2(Math.sin(da), Math.cos(da));
+            w.yaw += da * Math.min(1, dt * 14);
         }
         w.speed = damp(w.speed, (f || r) ? (input.down('ShiftLeft', 'ShiftRight') ? 6.5 : 3.4) : 0, 8, dt);
         const p = s.root.position;
