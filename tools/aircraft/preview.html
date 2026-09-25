@@ -1,0 +1,48 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<base href="/">
+<title>SKYWAR aircraft preview</title>
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"
+} }
+</script>
+</head>
+<body style="background:#222;color:#ddd;font:14px sans-serif">
+<p>Aircraft preview harness (does not start the game). Either use it from the console
+(<code>await P.loadNew({...}); P.save(P.sheet(...), name)</code>, see preview.js) or pass a job in the URL hash:<br>
+<code>preview.html#{"new":{"f22":{"file":"aircraft/f22.glb","rot":[0,0,0]}},"sheets":[{"title":"F-22","out":"cmp/f22.png","rows":[["old","f22"],["new","new_f22",{"markers":true}]]}]}</code><br>
+Results are POSTed as PNGs to P.UPLOAD (a tiny local upload server).</p>
+<pre id="log"></pre>
+<script type="module">
+    const log = (s) => { document.getElementById('log').textContent += s + '\n'; };
+    try {
+        const P = await import('/tools/aircraft/preview.js?t=' + Date.now());
+        window.P = P;
+        await P.loadGameModels();
+        const job = location.hash.length > 2 ? JSON.parse(decodeURIComponent(location.hash.slice(1))) : null;
+        if (job) {
+            if (job.upload) P.setUpload(job.upload);
+            if (job.new) await P.loadNew(job.new);
+            for (const sh of job.sheets || []) {
+                const rows = [];
+                for (const [label, id, opts] of sh.rows) {
+                    try { rows.push([label, await P.views(id, { ...(sh.opts || {}), ...(opts || {}) })]); }
+                    catch (e) { log('row failed ' + label + ': ' + e.message); }
+                }
+                if (rows.length) log(await P.save(P.sheet(rows, sh.title || ''), sh.out));
+            }
+            await P.save(Object.assign(document.createElement('canvas'), { width: 1, height: 1 }), (job.done || 'done') + '.png');
+        }
+        document.title = 'READY';
+    } catch (e) {
+        log('ERROR ' + e.stack);
+        document.title = 'ERROR';
+        try { await fetch('http://localhost:8117/?name=error.txt', { method: 'POST', body: 'data:text/plain;base64,' + btoa(String(e.stack)) }); } catch (_) {}
+    }
+</script>
+</body>
+</html>
