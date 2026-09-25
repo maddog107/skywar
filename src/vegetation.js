@@ -26,15 +26,16 @@ const LOOK = [
     { tint: [1, 1, 1], crown: [0.5, 0.5], top: 0.5, shift: 0 },               // grass
     { tint: [0.8, 0.9, 0.8], crown: [0.5, 0.5], top: 0.5, shift: 0 },         // fern
 ];
-// Ground layers: texture, tile size (m), how much of the photo's own hue is kept, and its mean colour (linear,
-// per pixel with gamma 2.2), so the shader can use it as a ratio around 1 and keep the terrain's own colour
+// Ground layers: texture, tile size (m), how much of the photo's own hue is kept, and its mean colour (per
+// pixel, squared as the shader linearises it), so the shader can use it as a ratio around 1 and keep the
+// terrain's own colour
 export const GROUND = [
-    { name: 'rocky_terrain_02', tile: 9, chroma: 0.55, mean: [0.08, 0.077, 0.01] },     // 0 lush meadow with pebbles
-    { name: 'aerial_grass_rock', tile: 13, chroma: 0.55, mean: [0.172, 0.123, 0.024] }, // 1 dry grass and moss
-    { name: 'dirt_aerial_02', tile: 17, chroma: 0.5, mean: [0.21, 0.118, 0.052] },      // 2 bare dirt
-    { name: 'aerial_rocks_04', tile: 24, chroma: 0.2, mean: [0.134, 0.089, 0.029] },    // 3 rock and scree
-    { name: 'coast_sand_01', tile: 7, chroma: 0.4, mean: [0.231, 0.176, 0.109] },       // 4 beach sand
-    { name: 'snow_field_aerial', tile: 19, chroma: 0.3, mean: [0.264, 0.264, 0.32] },   // 5 snow
+    { name: 'rocky_terrain_02', tile: 9, chroma: 0.55, mean: [0.1003, 0.0964, 0.014] },     // 0 lush meadow with pebbles
+    { name: 'aerial_grass_rock', tile: 13, chroma: 0.55, mean: [0.2017, 0.1485, 0.0317] }, // 1 dry grass and moss
+    { name: 'dirt_aerial_02', tile: 17, chroma: 0.5, mean: [0.2404, 0.1422, 0.0678] },      // 2 bare dirt
+    { name: 'aerial_rocks_04', tile: 24, chroma: 0.2, mean: [0.1588, 0.1087, 0.0372] },    // 3 rock and scree
+    { name: 'coast_sand_01', tile: 7, chroma: 0.4, mean: [0.2629, 0.2057, 0.1326] },       // 4 beach sand
+    { name: 'snow_field_aerial', tile: 19, chroma: 0.3, mean: [0.2948, 0.2947, 0.3521] },   // 5 snow
 ];
 const ATLAS = 1024; // texture array layer size (the atlases are 3x3 frames of 512 or 256 px)
 
@@ -206,32 +207,32 @@ const FRAG_PARS = /* glsl */`
     }`;
 
 // Terrain close-up detail (world.js terrain material): one ground layer at two scales (the second rotated
-// and 3.4x larger), mixed so their variance is kept (Heitz & Neyret), as a colour ratio around 1; adds its
-// normal map's tangent xy (weighted) to nrm when nearN > 0. Defines GROUND_LITE: no normal maps.
+// and 3.4x larger), mixed so their variance is kept (Heitz & Neyret), as a colour ratio around 1; adds the
+// fine scale's normal map (tangent xy, weighted) to nrm when nearN > 0. Defines GROUND_LITE: no normal maps.
 export const GROUND_GLSL = /* glsl */`
     uniform highp sampler2DArray gDiff, gNorm;
     uniform float gReady;
     uniform vec3 gMean[${GROUND.length}];
     const float gTile[${GROUND.length}] = float[${GROUND.length}](${GROUND.map(g => g.tile.toFixed(1)).join(', ')});
     const float gChroma[${GROUND.length}] = float[${GROUND.length}](${GROUND.map(g => g.chroma.toFixed(2)).join(', ')});
-    // p: position in the projection plane (m), dx / dy: its screen derivatives
+    // p: position in the projection plane (m), dx / dy: its screen derivatives; mixK: share of the fine scale
+    // (0: coarse only, its sample is skipped)
     vec3 groundLayer(int i, vec2 p, vec2 dx, vec2 dy, float mixK, float nearN, float w, inout vec2 nrm) {
         const mat2 GR = mat2(0.8, 0.6, -0.6, 0.8);
-        float sc = 1.0 / gTile[i], L = float(i);
+        float sc = 1.0 / gTile[i], L = float(i), k2 = 1.0 - mixK;
         vec2 uv1 = vec2(p.x, -p.y) * sc, g1x = vec2(dx.x, -dx.y) * sc, g1y = vec2(dy.x, -dy.y) * sc;
         vec2 uv2 = GR * uv1 * 0.29 + vec2(0.37, 0.71), g2x = GR * g1x * 0.29, g2y = GR * g1y * 0.29;
         vec3 m = gMean[i];
-        vec3 r1 = pow(textureGrad(gDiff, vec3(uv1, L), g1x, g1y).rgb, vec3(2.2)) / m - 1.0;
-        vec3 r2 = pow(textureGrad(gDiff, vec3(uv2, L), g2x, g2y).rgb, vec3(2.2)) / m - 1.0;
-        float k2 = 1.0 - mixK;
-        #ifndef GROUND_LITE
-        if (nearN > 0.0) {
-            vec2 n1 = textureGrad(gNorm, vec3(uv1, L), g1x, g1y).xy * 2.0 - 1.0;
-            vec2 n2 = (textureGrad(gNorm, vec3(uv2, L), g2x, g2y).xy * 2.0 - 1.0) * GR; // rotated back (v * M = transpose(M) * v)
-            nrm += (n1 * mixK + n2 * k2) * w;
+        vec3 c2 = textureGrad(gDiff, vec3(uv2, L), g2x, g2y).rgb;
+        vec3 r = (c2 * c2 / m - 1.0) * k2; // (squared: close enough to sRGB -> linear, and cheap)
+        if (mixK > 0.01) {
+            vec3 c1 = textureGrad(gDiff, vec3(uv1, L), g1x, g1y).rgb;
+            r += (c1 * c1 / m - 1.0) * mixK;
+            #ifndef GROUND_LITE
+            if (nearN > 0.0) nrm += (textureGrad(gNorm, vec3(uv1, L), g1x, g1y).xy * 2.0 - 1.0) * w;
+            #endif
         }
-        #endif
-        vec3 r = (r1 * mixK + r2 * k2) * inversesqrt(mixK * mixK + k2 * k2) + 1.0;
+        r = r * inversesqrt(mixK * mixK + k2 * k2) + 1.0;
         // keep some of the photo's own colour variation (a grey stone in the grass), not all of its hue
         return mix(vec3(dot(r, vec3(0.3, 0.59, 0.11))), r, gChroma[i]);
     }`;

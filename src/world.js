@@ -858,7 +858,9 @@ export class World {
                         float gw[6];
                         gw[0] = wg * (1.0 - dryK) * (1.0 - dirtK); gw[1] = wg * dryK * (1.0 - dirtK); gw[2] = wg * dirtK;
                         gw[3] = wr; gw[4] = ws; gw[5] = wn;
-                        float mixK = 0.3 + 0.4 * smoothstep(0.25, 0.75, texture2D(groundMap, wxz / 61.0 + 0.23).a);
+                        // share of the fine scale: varies across the ground; far away (where it would be finer than a
+                        // pixel) only the coarse one is sampled
+                        float mixK = (0.3 + 0.4 * smoothstep(0.25, 0.75, texture2D(groundMap, wxz / 61.0 + 0.23).a)) * (1.0 - smoothstep(300.0, 650.0, tDist));
                         float nearN = nearF * (1.0 - smoothstep(150.0, 480.0, tDist));
                         vec3 gc = vec3(0.0); float gs = 0.0;
                         for (int i = 0; i < 6; i++) {
@@ -1192,6 +1194,9 @@ export class World {
         this.treeMat = this.veg.makeMaterial(9000, 11500, 'town').mat;
         this.treeShadows = true;
         this.lowTrees = false; // set by setQuality()
+        // no forests until the towns and roads exist (they call refreshTrees) or the game loop runs: the
+        // forced terrain build at boot would otherwise plant every tile twice
+        this.deferTrees = true;
     }
 
     // Rebuild tree tiles (after towns/roads exist, so no trees grow on them): the old trees stay up until
@@ -1203,6 +1208,7 @@ export class World {
 
     // updateTerrain has rebuilt each tile's set
     refreshTrees() {
+        this.deferTrees = false;
         for (const t of this.tiles ? this.tiles.values() : []) t.treesDone = false;
         if (this.pendingJob && this.pendingJob.job.kind === 'trees') this.pendingJob = null;
     }
@@ -1210,6 +1216,7 @@ export class World {
     buildTrees(tx, tz) { return runJob(this.treesJob(tx, tz)); }
 
     *treesJob(tx, tz) {
+        if (this.deferTrees) return null;
         const T = this.TILE, low = this.lowTrees;
         const r = mulberry32((tx * 73856093) ^ (tz * 19349663));
         // the forest noise (as the ground is painted, see colorAt) on a coarse grid, interpolated per tree
@@ -1696,6 +1703,7 @@ export class World {
     // ── Per-frame ──
     update(dt, camera, focus, wind) {
         this.time += dt;
+        if (this.deferTrees) this.refreshTrees();
         this.skyDome.position.copy(camera.position);
         this.stars.position.copy(camera.position);
         this.skyMat.uniforms.camPos.value.copy(camera.position);
