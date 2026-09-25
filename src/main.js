@@ -76,21 +76,25 @@ cockpitPass.clear = false;
 cockpitPass.clearDepth = true;
 cockpitPass.enabled = false;
 composer.addPass(cockpitPass);
-// only real emitters (lights, fire, the sun's glint) are bright enough to bloom
-const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.35, 0.25, 1.0); // tight radius: a wide one hazes the whole night scene
+// only real emitters (lights, fire, the sun's glint and disc) are bright enough to bloom; sunlit cloud tops stay under it
+const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.35, 0.25, 1.1); // tight radius: a wide one hazes the whole night scene
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
-// a light grade on the tone-mapped image: a touch more saturation and contrast, so it isn't milky
+// a light grade on the tone-mapped image: a touch more saturation, a soft S-curve for contrast that doesn't clip
+// highlights or crush shadows, and a faint vignette that pulls the eye to the middle of the screen
 const grade = new ShaderPass({
-    uniforms: { tDiffuse: { value: null }, saturation: { value: 1.08 }, contrast: { value: 1.05 } },
+    uniforms: { tDiffuse: { value: null }, saturation: { value: 1.1 }, contrast: { value: 0.22 }, vignette: { value: 0.16 }, aspect: { value: 1 } },
     vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-    fragmentShader: `uniform sampler2D tDiffuse; uniform float saturation, contrast; varying vec2 vUv;
+    fragmentShader: `uniform sampler2D tDiffuse; uniform float saturation, contrast, vignette, aspect; varying vec2 vUv;
         void main() {
             vec4 c = texture2D(tDiffuse, vUv);
             float l = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
             c.rgb = mix(vec3(l), c.rgb, saturation);
-            c.rgb = (c.rgb - 0.5) * contrast + 0.5;
-            gl_FragColor = vec4(clamp(c.rgb, 0.0, 1.0), c.a);
+            c.rgb = clamp(c.rgb, 0.0, 1.0);
+            c.rgb = mix(c.rgb, c.rgb * c.rgb * (3.0 - 2.0 * c.rgb), contrast);
+            vec2 d = (vUv - 0.5) * vec2(aspect, 1.0);
+            c.rgb *= 1.0 - vignette * smoothstep(0.35, 1.05, length(d));
+            gl_FragColor = vec4(c.rgb, c.a);
         }`,
 });
 composer.addPass(grade);
@@ -109,7 +113,7 @@ function applyQuality() {
     smaa.enabled = q === 'high' && pr < 1.5;
     if (world) {
         world.VIEW_TILES = q === 'low' ? 6 : q === 'medium' ? 8 : 9;
-        world.sun.castShadow = q !== 'low';
+        world.setQuality(q); // shadow cascades, tree shadows, ground detail, fog edge
     }
     scene.traverse(o => { if (o.material) o.material.needsUpdate = true; });
 }
@@ -120,7 +124,9 @@ function resize() {
     camera.updateProjectionMatrix();
     renderer.setSize(w, h);
     composer.setSize(w, h);
+    grade.uniforms.aspect.value = w / h;
 }
+grade.uniforms.aspect.value = window.innerWidth / window.innerHeight;
 window.addEventListener('resize', resize);
 
 // ── Systems ──
