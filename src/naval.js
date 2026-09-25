@@ -12,7 +12,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { terrainHeight } from './world.js';
 import { loft, createAircraftModel } from './models.js';
-import { rand, clamp, lerp, interceptTime } from './util.js';
+import { rand, clamp, lerp, interceptTime, offsetUnits } from './util.js';
 import { WEAPONS } from './config.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3();
@@ -90,8 +90,157 @@ const MAT = {
     glass: new THREE.MeshStandardMaterial({ color: 0x1a2530, roughness: 0.1, metalness: 0.9 }),
     white: new THREE.MeshStandardMaterial({ color: 0xd8dbdc, roughness: 0.5 }),
     charred: new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 1 }),
+    boot: new THREE.MeshStandardMaterial({ color: 0x1c1d1f, roughness: 0.8, metalness: 0.2 }),   // waterline band
+    deckGear: new THREE.MeshStandardMaterial({ color: 0x2f3236, roughness: 0.6, metalness: 0.4 }),
+    yellow: new THREE.MeshStandardMaterial({ color: 0xc9a227, roughness: 0.6 }),
+    // night lights (unlit, over-bright so they bloom a little)
+    lRed: new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 0.15, 0.1) }),
+    lGreen: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.1, 3, 0.4) }),
+    lWhite: new THREE.MeshBasicMaterial({ color: new THREE.Color(2.4, 2.3, 2.0) }),
+    lBlue: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.25, 0.5, 2.6) }),
+    lAmber: new THREE.MeshBasicMaterial({ color: new THREE.Color(2.6, 1.3, 0.2) }),
+    windowLit: new THREE.MeshBasicMaterial({ color: new THREE.Color(1.3, 1.05, 0.6) }),
 };
+const LIGHT_GEO = new THREE.SphereGeometry(0.45, 6, 4);
+function lamp(mat, x, y, z, parent, s = 1) {
+    const m = new THREE.Mesh(LIGHT_GEO, mat);
+    m.position.set(x, y, z); m.scale.setScalar(s);
+    parent.add(m);
+    return m;
+}
 let deckTex = null;
+
+// ── Wakes: foam ribbons lying on the water ──
+// A turbulent white track behind the stern that spreads and fades over a minute, and the two
+// diverging arms of the Kelvin wave pattern (~19.5°) peeling off the bow.
+let foamTex = null;
+function foamTexture() {
+    if (foamTex) return foamTex;
+    const W = 128, H = 256, c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const x = c.getContext('2d');
+    x.fillStyle = '#000'; x.fillRect(0, 0, W, H);
+    for (let i = 0; i < 900; i++) {
+        const px = Math.random() * W, py = Math.random() * H, r = 1 + Math.random() * Math.random() * 9;
+        const g = x.createRadialGradient(px, py, 0, px, py, r);
+        g.addColorStop(0, `rgba(255,255,255,${0.25 + Math.random() * 0.5})`); g.addColorStop(1, 'rgba(255,255,255,0)');
+        x.fillStyle = g;
+        for (const oy of [-H, 0, H]) for (const ox of [-W, 0, W]) { x.save(); x.translate(ox, oy); x.beginPath(); x.arc(px, py, r, 0, 6.28); x.fill(); x.restore(); }
+    }
+    foamTex = new THREE.CanvasTexture(c);
+    foamTex.wrapS = foamTex.wrapT = THREE.RepeatWrapping;
+    foamTex.anisotropy = 4;
+    return foamTex;
+}
+let wakeMat = null;
+function wakeMaterial(fx) {
+    if (wakeMat) return wakeMat;
+    const L = fx.lightU;
+    wakeMat = new THREE.ShaderMaterial({
+        transparent: true, depthWrite: false, fog: false, side: THREE.DoubleSide,
+        polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: offsetUnits(-4),
+        uniforms: { map: { value: foamTexture() }, fogColor: { value: new THREE.Color() }, fogDensity: { value: 0 }, sunCol: L.sunCol, ambTop: L.ambTop, time: { value: 0 } },
+        vertexShader: /* glsl */`
+            attribute vec3 wake; varying vec3 vW; varying float vDist;
+            void main() { vW = wake; vec4 mv = modelViewMatrix * vec4(position, 1.0); vDist = -mv.z; gl_Position = projectionMatrix * mv; }`,
+        fragmentShader: /* glsl */`
+            uniform sampler2D map; uniform vec3 fogColor, sunCol, ambTop; uniform float fogDensity, time; varying vec3 vW; varying float vDist;
+            void main() {
+                float across = vW.y;
+                vec2 uv = vec2(across * 0.5 + 0.5, vW.z / 60.0);
+                float foam = texture2D(map, uv).r * 0.7 + texture2D(map, uv * vec2(0.5, 2.3) + vec2(0.3, time * 0.01)).r * 0.5;
+                float edge = smoothstep(1.0, 0.35, abs(across));
+                float f = smoothstep(0.25, 0.95, foam);
+                float a = clamp(vW.x * edge * (0.25 + f * 0.9), 0.0, 1.0);
+                if (a < 0.01) discard;
+                // aerated water shows turquoise where the foam is thin
+                vec3 col = mix(vec3(0.35, 0.62, 0.66), vec3(0.93, 0.97, 1.0), f) * (ambTop * 1.1 + sunCol * 0.9);
+                float fogF = 1.0 - exp(-pow(fogDensity * vDist, 2.0));
+                gl_FragColor = vec4(mix(col, fogColor, fogF), a * (1.0 - fogF));
+            }`,
+    });
+    return wakeMat;
+}
+
+const WAKE_N = 72;
+class Wake {
+    constructor(ship) {
+        this.ship = ship;
+        const fx = ship.game.effects;
+        this.pts = []; // { bx, bz, sx, sz, px, pz, t }
+        const n = WAKE_N * 2 * 3; // 3 strips × points × 2 verts
+        this.pos = new Float32Array(n * 3);
+        this.data = new Float32Array(n * 3);
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage));
+        geo.setAttribute('wake', new THREE.BufferAttribute(this.data, 3).setUsage(THREE.DynamicDrawUsage));
+        const idx = [];
+        for (let s = 0; s < 3; s++) for (let i = 0; i < WAKE_N - 1; i++) {
+            const a = (s * WAKE_N + i) * 2;
+            idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+        }
+        geo.setIndex(idx);
+        this.geo = geo;
+        this.mesh = new THREE.Mesh(geo, wakeMaterial(fx));
+        this.mesh.frustumCulled = false;
+        this.mesh.renderOrder = 2;
+        ship.game.scene.add(this.mesh);
+        this.dist = 0;
+    }
+
+    update(now, fog) {
+        const s = this.ship, L = s.def.L, B = s.def.B;
+        const h = s.heading, fx = -Math.sin(h), fz = -Math.cos(h); // bow direction
+        const px = -fz, pz = fx;                                     // starboard
+        const x = s.mesh.position.x, z = s.mesh.position.z;
+        const n0 = this.pts.length;
+        const last = this.pts[n0 - 1], fixed = this.pts[n0 - 2];
+        const bx = x + fx * L * 0.46, bz = z + fz * L * 0.46, sx = x - fx * L * 0.46, sz = z - fz * L * 0.46;
+        const moving = s.alive || s.sinkT < 20;
+        // the newest point rides along with the ship until it is 9 m past the last fixed one
+        if (moving && (n0 < 2 || Math.hypot(sx - fixed.sx, sz - fixed.sz) > 9)) {
+            if (last) this.dist = last.u + Math.hypot(sx - last.sx, sz - last.sz);
+            this.pts.push({ bx, bz, sx, sz, px, pz, t: now, u: this.dist });
+            if (this.pts.length > WAKE_N) this.pts.shift();
+        } else if (moving) {
+            Object.assign(last, { bx, bz, sx, sz, px, pz, t: now, u: fixed.u + Math.hypot(sx - fixed.sx, sz - fixed.sz) });
+        }
+        const speed = Math.abs(s.orbit.w) * s.orbit.R;
+        const n = this.pts.length, P = this.pos, D = this.data, y = 0.12;
+        for (let k = 0; k < 3; k++) {
+            for (let i = 0; i < WAKE_N; i++) {
+                const o = ((k * WAKE_N + i) * 2) * 3;
+                const pt = this.pts[Math.min(i, n - 1)];
+                if (!pt || i >= n) { D[o] = D[o + 3] = 0; continue; }
+                const age = now - pt.t;
+                let cx, cz, w, a;
+                if (k === 0) {
+                    cx = pt.sx; cz = pt.sz; w = B * 0.26 + age * 0.6;
+                    a = 0.7 * Math.max(0, 1 - age / 65) ** 1.5;
+                } else {
+                    const side = k === 1 ? -1 : 1, off = B * 0.5 + age * speed * 0.354;
+                    cx = pt.bx + pt.px * side * off; cz = pt.bz + pt.pz * side * off; w = 2.5 + age * 0.35;
+                    a = 0.35 * Math.max(0, 1 - age / 45) ** 2;
+                }
+                // fade in over the newest points (the hull covers them)
+                a *= Math.min(1, (n - 1 - i) / 2 + 0.2);
+                P[o] = cx - pt.px * w; P[o + 1] = y; P[o + 2] = cz - pt.pz * w;
+                P[o + 3] = cx + pt.px * w; P[o + 4] = y; P[o + 5] = cz + pt.pz * w;
+                D[o] = a; D[o + 1] = -1; D[o + 2] = pt.u;
+                D[o + 3] = a; D[o + 4] = 1; D[o + 5] = pt.u;
+            }
+        }
+        this.geo.attributes.position.needsUpdate = true;
+        this.geo.attributes.wake.needsUpdate = true;
+        const u = this.mesh.material.uniforms;
+        u.fogColor.value.copy(fog.color); u.fogDensity.value = fog.density; u.time.value = now;
+    }
+
+    dispose() {
+        this.mesh.parent && this.mesh.parent.remove(this.mesh);
+        this.geo.dispose();
+    }
+}
 
 function box(w, h, d, mat, x, y, z, parent) {
     const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
@@ -141,6 +290,52 @@ function buildCarrier() {
         object.scale.setScalar(0.95);
         g.add(object);
     }
+    // waterline band, deck-edge catwalks, blast deflectors behind the bow catapults, the arresting
+    // wires across the landing area, a couple of deck tractors, island windows and antennas
+    const boot = new THREE.Mesh(loft([
+        [-L * 0.5, 2.05, 1.2, 1.2, 2.5], [-L * 0.44, 14.1, 1.2, 1.3, 3], [-L * 0.3, 20.1, 1.2, 1.3, 4],
+        [0, 21.1, 1.2, 1.3, 5], [L * 0.4, 20.1, 1.2, 1.3, 5], [L * 0.5, 18.1, 1.2, 1.3, 5],
+    ], 20), MAT.boot);
+    g.add(boot);
+    for (const s of [-1, 1]) box(3, 0.6, L * 0.7, MAT.deckGear, s * (T.B * 0.5 + 1.5) - 4, T.deckY - 2.2, 0, g);
+    for (const x of [15, 32]) { const d = box(12, 3.2, 0.4, MAT.deckGear, x - 4, T.deckY, -L * 0.2, g); d.rotation.x = -0.9; }
+    for (let k = 0; k < 4; k++) {
+        const w = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 30, 5), MAT.deckGear);
+        w.rotation.z = Math.PI / 2; w.rotation.y = -0.16;
+        w.position.set(-16 - k * 4.2 * 0.16, T.deckY + 0.12, L * 0.5 - 118 - k * 26 * 0.99);
+        g.add(w);
+    }
+    for (const [x, z] of [[T.B * 0.5 - 22, L * 0.2], [T.B * 0.5 - 30, L * 0.27], [-T.B * 0.5 + 12, -L * 0.1]]) {
+        box(2.2, 1.3, 3.8, MAT.yellow, x, T.deckY, z, g);
+        box(1.8, 0.7, 1.4, MAT.hullDark, x, T.deckY + 1.3, z + 0.9, g);
+    }
+    box(10.3, 1.2, 36.2, MAT.hullDark, ix, T.deckY + 6, iz, g);   // bridge-deck window band
+    for (const [dx, h] of [[-2, 7], [2, 5]]) {
+        const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.2, h, 5), MAT.super);
+        ant.position.set(ix + dx, T.deckY + 47 + h / 2 - 4, iz - 4);
+        g.add(ant);
+    }
+    // night lighting: masthead, port/starboard sides, deck-edge and centreline lights, the bridge
+    const lights = new THREE.Group();
+    lights.name = 'ship:lights';
+    lamp(MAT.lWhite, ix, T.deckY + 50, iz - 4, lights, 1.2);
+    lamp(MAT.lRed, -T.B * 0.5 + 1, T.deckY + 1, 0, lights, 1.4);
+    lamp(MAT.lGreen, T.B * 0.5 - 5, T.deckY + 1, 0, lights, 1.4);
+    lamp(MAT.lRed, ix, T.deckY + 44, iz + 2, lights);
+    for (let k = 0; k < 14; k++) {
+        const z = L * 0.5 - 8 - k * 14;
+        for (const side of [-1, 1]) {
+            const lx = -16 + side * 18 - (L * 0.5 - z) * 0.16 * 0.3;
+            lamp(MAT.lBlue, lx, T.deckY + 0.3, z, lights, 0.5);
+        }
+        lamp(MAT.lWhite, -16 - (L * 0.5 - z) * 0.05, T.deckY + 0.25, z, lights, 0.35);
+    }
+    for (let k = 0; k < 8; k++) lamp(MAT.lAmber, 16, T.deckY + 0.3, -L * 0.45 + k * 18, lights, 0.45);
+    const bridge = new THREE.Mesh(new THREE.BoxGeometry(10.5, 1.8, 17), MAT.windowLit);
+    bridge.position.set(ix, T.deckY + 21.1, iz - 3);
+    lights.add(bridge);
+    g.add(lights);
+
     // CIWS and SAM mounts
     const mounts = [
         { type: 'ciws', p: new THREE.Vector3(T.B * 0.5 - 2, T.deckY - 2, -L * 0.45) },
@@ -176,6 +371,24 @@ function buildDestroyer() {
     parts.radar = radar;
     box(8, 3, 14, MAT.super, 0, T.deckY, 34, g); // funnel/hangar
     box(9, 2, 10, MAT.hullDark, 0, T.deckY - 1, -44, g); // VLS
+    // waterline band, VLS hatch grid, helicopter deck markings, lights
+    g.add(new THREE.Mesh(loft([
+        [-L * 0.5, 0.55, 0.9, 0.9, 2], [-L * 0.4, 6.1, 0.9, 1.0, 2.5], [-L * 0.1, 10.1, 0.9, 1.0, 3.5],
+        [L * 0.3, 10.1, 0.9, 1.0, 4], [L * 0.5, 8.1, 0.9, 1.0, 4],
+    ], 18), MAT.boot));
+    for (let r = 0; r < 4; r++) for (let c = 0; c < 3; c++) box(2.2, 0.15, 1.8, MAT.deckGear, -2.8 + c * 2.8, T.deckY + 1, -47.5 + r * 2.3, g);
+    box(12, 0.08, 0.5, MAT.white, 0, T.deckY, 58, g);
+    box(0.5, 0.08, 12, MAT.white, 0, T.deckY, 58, g);
+    const lights = new THREE.Group();
+    lights.name = 'ship:lights';
+    lamp(MAT.lWhite, 0, T.deckY + 33, -4, lights);
+    lamp(MAT.lRed, -8, T.deckY + 11, -8, lights, 1.2);
+    lamp(MAT.lGreen, 8, T.deckY + 11, -8, lights, 1.2);
+    lamp(MAT.lWhite, 0, T.deckY + 2, L * 0.5 - 1, lights);
+    const bridge = new THREE.Mesh(new THREE.BoxGeometry(10.4, 1.4, 5.6), MAT.windowLit);
+    bridge.position.set(0, T.deckY + 12.9, -12);
+    lights.add(bridge);
+    g.add(lights);
     const mounts = [
         { type: 'gun', p: new THREE.Vector3(0, T.deckY, -58) },
         { type: 'sam', p: new THREE.Vector3(0, T.deckY + 1, -44) },
@@ -216,7 +429,7 @@ function addMount(g, m) {
 function mergeStatic(g) {
     g.updateMatrixWorld(true);
     const moving = new Set();
-    g.traverse(o => { if (o.name === 'ship:radar' || o.name.startsWith('ship:mount')) o.traverse(c => moving.add(c)); });
+    g.traverse(o => { if (o.name === 'ship:radar' || o.name === 'ship:lights' || o.name.startsWith('ship:mount')) o.traverse(c => moving.add(c)); });
     const byMat = new Map(), merged = [];
     g.traverse(o => {
         if (!o.isMesh || moving.has(o) || o.isSkinnedMesh || o.isInstancedMesh) return;
@@ -275,8 +488,12 @@ function makeShip(type) {
     }
     const group = t.group.clone(true);
     const radar = group.getObjectByName('ship:radar');
+    const lights = group.getObjectByName('ship:lights');
     const mounts = t.mounts.map((m, i) => ({ type: m.type, p: m.p.clone(), turret: group.getObjectByName('ship:mount' + i), fireT: rand(0, 2), lockT: 0 }));
-    return { group, parts: radar ? { radar } : {}, mounts };
+    const parts = {};
+    if (radar) parts.radar = radar;
+    if (lights) { parts.lights = lights; lights.visible = false; }
+    return { group, parts, mounts };
 }
 
 export class Ship {
@@ -311,6 +528,8 @@ export class Ship {
         this.wakeT = 0;
         this.ammo = { sam: type === 'carrier' ? 8 : 12 };
         this.place(0);
+        this.wake = new Wake(this);
+        this.lightsOn = null;
     }
 
     place(dt) {
@@ -425,15 +644,22 @@ export class Ship {
         this.place(dt);
         if (this.parts.radar) this.parts.radar.rotation.y += dt * 1.6;
         if (!this.alive && this.sinkT > 70) { this.remove(); return 'gone'; }
-        // wake & bow spray
+        // wake (foam ribbons on the water), churn at the stern and spray off the bow
+        this.wake.update(g.time, g.scene.fog);
         this.wakeT -= dt;
         if (this.wakeT <= 0 && this.alive) {
-            this.wakeT = 0.12;
-            const stern = this.toWorld(rand(-6, 6), 0.5, this.def.L * 0.5);
-            fx.smoke.emit(stern, _v.set(rand(-2, 2), 1, rand(-2, 2)), 6, 6, 26, [0.95, 0.97, 1], [0.9, 0.93, 0.96], 0.5, 0, 0.4, 0);
-            const bow = this.toWorld(rand(-3, 3), 1, -this.def.L * 0.5);
-            fx.smoke.emit(bow, _v.set(rand(-5, 5), 3, 0), 1.5, 3, 9, [1, 1, 1], [0.95, 0.95, 1], 0.5, 0, 1, -3);
+            this.wakeT = 0.18;
+            const stern = this.toWorld(rand(-5, 5), 0.6, this.def.L * 0.49);
+            fx.smoke.emit(stern, _v.set(rand(-2, 2), rand(1, 3), rand(-2, 2)), rand(2, 3.5), 3, 12, [0.95, 0.97, 1], [0.9, 0.93, 0.96], 0.4, 0, 0.6, -0.5);
+            const side = Math.random() < 0.5 ? -1 : 1;
+            const bow = this.toWorld(side * rand(2, this.def.B * 0.25), 1.5, -this.def.L * 0.47);
+            const out = this.toWorld(side * 12, 0, -this.def.L * 0.47).sub(this.mesh.position).setY(0).normalize();
+            fx.smoke.emit(bow, _v.copy(out).multiplyScalar(rand(4, 8)).setY(rand(3, 6)), rand(1.2, 2), 2.5, 8, [1, 1, 1], [0.93, 0.95, 0.98], 0.55, 0, 1, -6);
         }
+        // deck, island and navigation lights after dark
+        const night = !!g.world && (g.world.timeKey === 'night' || g.world.timeKey === 'dusk');
+        if (night !== this.lightsOn && this.parts.lights) { this.lightsOn = night; this.parts.lights.visible = night && this.alive; }
+        if (!this.alive && this.parts.lights && this.parts.lights.visible) this.parts.lights.visible = false;
         // fires from battle damage
         if (this.fires) {
             const dmgFrac = this.alive ? 1 - this.hp / this.maxHp : 1;
@@ -534,6 +760,7 @@ export class Ship {
 
     remove() {
         this.game.scene.remove(this.mesh);
+        if (this.wake) { this.wake.dispose(); this.wake = null; }
         this.gone = true;
     }
 }
