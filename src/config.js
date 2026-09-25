@@ -54,7 +54,7 @@ export const AIRCRAFT = {
     }),
     // same jet as below, drawn with the new hand-built model (tools/f35a_model.py) for comparison
     f35n: jet({
-        name: 'F-35A Lightning II (new model)', role: 'Multirole Stealth', country: 'USA', length: 15.7, span: 10.7,
+        name: 'F-35A Lightning II (Blender model)', role: 'Multirole Stealth', country: 'USA', length: 15.7, span: 10.7,
         desc: 'Sensor-fused stealth multirole. Big missile load, decent in a knife fight. New Blender-built model.',
         flight: { speed: 374, mach: 1.6, cd0: 0.0538, aoaLimiter: true, accel: 13.5, gLimit: 9, roll: 3.9, alpha: 28, lift: 0.98 },
         health: 115, missiles: 8, gun: { damage: 10, rate: 14, ammo: 360, name: 'GAU-22 25mm' },

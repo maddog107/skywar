@@ -100,7 +100,9 @@ export class Game {
         }
         r.bridge = false;
         r.runway = isOnRunway(x, z);
-        r.h = Math.max(th, 0);
+        // inside a town the ground is drawn on its graded (smoothed) hillside: stand, drive and land on that
+        const towns = this.world.towns;
+        r.h = Math.max(towns && towns.townBase ? towns.townBase(x, z, th) : th, 0);
         r.water = th < -0.5 && !r.runway;
         r.ship = null; r.hull = false;
         return r;
