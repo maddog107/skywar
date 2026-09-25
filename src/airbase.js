@@ -15,8 +15,9 @@ import { AIRCRAFT } from './config.js';
 import { propInstance, propSize, hasProp } from './props.js';
 import { makeRadialTexture, clamp, rand, freezeStatic } from './util.js';
 import { roadMaterial } from './roads.js';
+import { registerAirTarget, Downed } from './softtargets.js';
 
-const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler(0, 0, 0, 'YXZ');
+const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler(0, 0, 0, 'YXZ'), _v3 = new THREE.Vector3();
 
 const MAT = {
     concrete: new THREE.MeshStandardMaterial({ color: 0xb9b5ab, roughness: 0.9 }),
@@ -141,8 +142,37 @@ class Heli {
         this.bank = 0;
         this.prevYaw = null;
         this.alive = true;
+        this.radius = 8;
+        this.hp = this.maxHp = 70;
+        this.vel = new THREE.Vector3();
+        registerAirTarget(this);
     }
+    get pos() { return this.mesh.position; }
+
+    // shootable (softtargets.js): smoking when hurt, down it comes at zero
+    hit(amount, game, source) {
+        if (!this.alive || amount <= 0) return;
+        this.hp -= amount;
+        this.game = game;
+        if (this.hp > 0) return;
+        this.alive = false;
+        this.downed = new Downed(this.mesh, this.vel, game, { spin: 4, size: 0.6 });
+        this.respawnT = 90;
+        if (source && (source === game.player || source === game.pilotMode)) game.addFeed('HELICOPTER DOWN', '#ffc23f');
+    }
+
     update(dt) {
+        if (!this.alive) {
+            if (this.downed && !this.downed.update(dt)) this.downed = null;
+            this.respawnT -= dt;
+            if (this.respawnT <= 0 && !this.downed) { // a replacement takes up the circuit
+                this.alive = true; this.hp = this.maxHp; this.mesh.visible = true; this.prevYaw = null;
+                this.mesh.quaternion.identity();
+            }
+            return;
+        }
+        if (this.hp < this.maxHp * 0.5 && this.game && Math.random() < dt * 12) this.game.effects.puffSmoke(this.mesh.position, _v2.set(0, 2, 0), 1.5, 0.15, 2, 0.5);
+        const before = _v3.copy(this.mesh.position);
         this.u = (this.u + this.speed * dt / this.len) % 1;
         const p = this.curve.getPointAt(this.u, _v);
         const ground = Math.max(terrainHeight(p.x, p.z), 0);
@@ -159,6 +189,7 @@ class Heli {
         _e.set(-0.1, yaw, this.bank);
         this.mesh.quaternion.setFromEuler(_e);
         this.mesh.userData.rotor.rotation.y += dt * 28;
+        if (dt > 0) this.vel.subVectors(this.mesh.position, before).divideScalar(dt);
     }
 }
 

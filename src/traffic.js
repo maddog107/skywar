@@ -75,7 +75,7 @@ export class Traffic {
         c.cruise = path.street ? rand(10, 14) : rand(16, 27);
         c.speed = c.cruise;
         c.wait = 0; c.stopDone = null; c.stopT = 0;
-        c.dead = false; c.fall = 0; c.vy = 0; c.yOff = 0; c.smoke = 0; c.stolen = false;
+        c.dead = false; c.fall = 0; c.vy = 0; c.yOff = 0; c.smoke = 0; c.stolen = false; c.hp = 30;
         c.color = PAINTS[Math.floor(Math.random() * PAINTS.length)];
         this.carSet.restore(c.i, c.color);
     }
@@ -85,7 +85,7 @@ export class Traffic {
         b.path = path; b.dir = Math.random() < 0.5 ? 1 : -1;
         b.s = rand(5, path.len - 5);
         b.cruise = rand(11, 19); b.speed = b.cruise;
-        b.dead = false; b.fall = 0; b.yOff = 0; b.vy = 0; b.smoke = 0; b.bounce = Math.random() * 10;
+        b.dead = false; b.fall = 0; b.yOff = 0; b.vy = 0; b.smoke = 0; b.bounce = Math.random() * 10; b.hp = 20;
         b.dust = 0;
     }
 
@@ -139,6 +139,19 @@ export class Traffic {
         c.smoke = fall ? 0 : rand(12, 25);
         if (c.buggy) return;
         this.carSet.wreck(c.i);
+    }
+
+    // a round (or a rammed car) hitting near p: the car there takes the damage, a few rounds wreck it
+    hitAt(p, amount, game, r = 2.8) {
+        for (const list of [this.cars, this.buggies]) for (const c of list) {
+            if (c.dead || !c.pos || c.stolen) continue;
+            const dx = c.pos.x - p.x, dz = c.pos.z - p.z, dy = p.y - c.pos.y;
+            if (dx * dx + dz * dz > r * r || dy < -1 || dy > 3) continue;
+            c.hp = (c.hp ?? 30) - amount;
+            if (c.hp <= 0) { this.wreck(c, false); if (game) game.effects.explosion(c.pos, 0.5); }
+            return c;
+        }
+        return null;
     }
 
     // Explosion at `at` with radius R wrecks nearby vehicles

@@ -45,6 +45,15 @@ class HeistGround extends GroundStart {
         super.drive(dt, input, e);
     }
 
+    // ran into traffic at `speed` m/s: the stolen car takes some of it
+    onBump(speed) {
+        const c = this.car;
+        if (c.hp == null || c.flip || c.wrecked) return;
+        c.hp -= speed * 0.9;
+        this.game.addFeed('CRASH! CAR ' + Math.max(0, Math.round(c.hp)) + '%', '#ff9f5a');
+        if (c.hp <= 0) this.flipCar(1, -Math.sin(c.yaw), -Math.cos(c.yaw));
+    }
+
     // an MP vehicle hit the car at relative speed `rel` (m/s): dents, a shove, and maybe a roll
     rammed(u, rel) {
         const c = this.car, g = this.game;

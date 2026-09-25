@@ -16,6 +16,7 @@ import { buildRoads, roadMaterial, outsideBases, samplePath, liftWithDistance, R
 import { mergeGeometries as mergeGeos } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Traffic } from './traffic.js';
 import { setBridgeNight } from './bridges.js';
+import { Buildings } from './buildings.js';
 import { CarSet, PAINTS, NearInstances } from './carset.js';
 
 const EXTENT = 24000, CELL = 3200;
@@ -482,40 +483,50 @@ export class Towns {
         const all = [...items.house.map(o => ({ ...o, kind: 'house' })), ...items.town.map(o => ({ ...o, kind: 'town' })), ...items.apt.map(o => ({ ...o, kind: 'apt' }))];
         for (const o of all) {
             const top = o.y + o.ht;
-            if (o.kind === 'house') roofs.push({ t: o.t, x: o.x, y: top, z: o.z, w: o.w * 1.12, d: o.d * 1.14, h: 2 + o.d * 0.2, yaw: o.yaw, hue: o.hue });
+            if (o.kind === 'house') roofs.push({ t: o.t, x: o.x, y: top, z: o.z, w: o.w * 1.12, d: o.d * 1.14, h: 2 + o.d * 0.2, yaw: o.yaw, hue: o.hue, b: o });
             else {
-                flatRoofs.push({ t: o.t, x: o.x, y: top, z: o.z, w: o.w + 0.4, d: o.d + 0.4, yaw: o.yaw });
-                if (o.kind === 'apt' || o.hue < 0.4) acUnits.push({ t: o.t, x: o.x + (o.hue - 0.5) * o.w * 0.4, y: top + 0.1, z: o.z, yaw: o.yaw, s: 1.4 + o.hue * 1.4 });
+                flatRoofs.push({ t: o.t, x: o.x, y: top, z: o.z, w: o.w + 0.4, d: o.d + 0.4, yaw: o.yaw, b: o });
+                if (o.kind === 'apt' || o.hue < 0.4) acUnits.push({ t: o.t, x: o.x + (o.hue - 0.5) * o.w * 0.4, y: top + 0.1, z: o.z, yaw: o.yaw, s: 1.4 + o.hue * 1.4, b: o });
             }
         }
+        // every building is also a solid, destructible record (buildings.js) that knows the instances drawing it
+        const B = this.buildings = new Buildings(this.group);
+        for (const o of [...all, ...items.tower]) o.rec = B.add({ ...o, kind: o.kind || 'tower', roofH: o.kind === 'house' ? 2 + o.d * 0.2 : 0 });
+        const own = (o, im, i) => { const b = o.rec || (o.b && o.b.rec); if (b) B.part(b, im, i); };
         this.perTown(wallGeo, houseMat, all, (im, i, o) => {
+            own(o, im, i);
             q.setFromAxisAngle(up, o.yaw);
             im.setMatrixAt(i, m.compose(p.set(o.x, o.y, o.z), q, s.set(o.w, o.ht, o.d)));
             im.setColorAt(i, c.setHex(o.kind === 'apt' ? aptCols[Math.floor(o.hue * aptCols.length)] : wallCols[Math.floor(o.hue * wallCols.length)]));
         });
         for (const o of items.tower) {
-            flatRoofs.push({ t: o.t, x: o.x, y: o.y + o.ht, z: o.z, w: o.w + 0.6, d: o.d + 0.6, yaw: o.yaw });
-            acUnits.push({ t: o.t, x: o.x, y: o.y + o.ht + 0.1, z: o.z, yaw: o.yaw, s: 3 + o.hue * 3 });
-            if (o.ht > 80) acUnits.push({ t: o.t, x: o.x, y: o.y + o.ht, z: o.z, yaw: 0, s: 0.5, mast: 18 });
+            flatRoofs.push({ t: o.t, x: o.x, y: o.y + o.ht, z: o.z, w: o.w + 0.6, d: o.d + 0.6, yaw: o.yaw, b: o });
+            acUnits.push({ t: o.t, x: o.x, y: o.y + o.ht + 0.1, z: o.z, yaw: o.yaw, s: 3 + o.hue * 3, b: o });
+            if (o.ht > 80) acUnits.push({ t: o.t, x: o.x, y: o.y + o.ht, z: o.z, yaw: 0, s: 0.5, mast: 18, b: o });
         }
         this.perTown(wallGeo, towerMat, items.tower, (im, i, o) => {
+            own(o, im, i);
             q.setFromAxisAngle(up, o.yaw);
             im.setMatrixAt(i, m.compose(p.set(o.x, o.y, o.z), q, s.set(o.w, o.ht, o.d)));
             im.setColorAt(i, c.setHex(towerCols[Math.floor(o.hue * towerCols.length)]));
         });
         // gable roofs: ridge along the building's long side (w), gables at the ends
         this.perTown(gableGeometry(), new THREE.MeshStandardMaterial({ roughness: 0.8, side: THREE.DoubleSide }), roofs, (im, i, o) => {
+            own(o, im, i);
             q.setFromAxisAngle(up, o.yaw + Math.PI / 2);
             im.setMatrixAt(i, m.compose(p.set(o.x, o.y, o.z), q, s.set(o.d, o.h, o.w)));
             im.setColorAt(i, c.setHex(roofCols[Math.floor(o.hue * 7) % roofCols.length]));
         });
         this.perTown(wallGeo, new THREE.MeshStandardMaterial({ color: 0x55585c, roughness: 0.9 }), flatRoofs, (im, i, o) => {
+            own(o, im, i);
             q.setFromAxisAngle(up, o.yaw); im.setMatrixAt(i, m.compose(p.set(o.x, o.y - 0.2, o.z), q, s.set(o.w, 0.6, o.d)));
         });
         // rooftop clutter is too small to see from far away
         this.perTown(wallGeo, new THREE.MeshStandardMaterial({ color: 0x9da3a6, roughness: 0.6, metalness: 0.4 }), acUnits, (im, i, o) => {
+            own(o, im, i);
             q.setFromAxisAngle(up, o.yaw); im.setMatrixAt(i, m.compose(p.set(o.x, o.y, o.z), q, o.mast ? s.set(o.s, o.mast, o.s) : s.set(o.s * 1.6, o.s * 0.7, o.s)));
         }, { far: 7000 });
+        B.index();
         for (const sp of specials) this.group.add(this.makeChurch(sp));
         this.buildDriveways(driveways);
         // parks: a lawn following the ground, and trees
@@ -804,6 +815,7 @@ export class Towns {
 
     update(dt, cam) {
         this.time += dt;
+        if (this.buildings) this.buildings.update(dt);
         // parked cars: re-pick the ones near the camera when it has moved a fair way
         // (and the street furniture, and which towns' rooftop clutter / trees are close enough to draw)
         if (cam && (!this._parkAt || this._parkAt.distanceToSquared(cam) > 150 * 150)) {

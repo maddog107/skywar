@@ -10,6 +10,7 @@ import { BASES, runwayInfo, runwayNumbers, baseToWorld, worldToBase, terrainHeig
 import { makeParkedModel } from './airbase.js';
 import { makeRadialTexture, clamp, rand, lerp } from './util.js';
 import { AIRCRAFT } from './config.js';
+import { registerAirTarget, unregisterAirTarget, Downed } from './softtargets.js';
 
 const GS = 3 * Math.PI / 180;
 const PERF = {
@@ -58,6 +59,11 @@ class Flight {
         this.pitch = 0; this.bank = 0; this.speed = 0;
         this.t = 0;
         this.lights = sys.makeLights(this.mesh, AIRCRAFT[type].length, AIRCRAFT[type].span);
+        // shootable (softtargets.js)
+        this.alive = true;
+        this.radius = Math.max(AIRCRAFT[type].span, AIRCRAFT[type].length) * 0.4;
+        this.hp = this.maxHp = Math.round(40 + AIRCRAFT[type].length * 6);
+        registerAirTarget(this);
         if (kind === 'arrival') {
             const d = rand(9000, 14000);
             this.pos.copy(this.touch).addScaledVector(this.fwd, -d);
@@ -104,7 +110,22 @@ class Flight {
         return Math.hypot(dx, dz);
     }
 
+    hit(amount, game, source) {
+        if (!this.alive || amount <= 0) return;
+        this.hp -= amount;
+        this.game = game;
+        if (this.hp > 0) return;
+        this.alive = false;
+        const vel = new THREE.Vector3(-Math.sin(this.yaw), Math.sin(this.pitch), -Math.cos(this.yaw)).multiplyScalar(this.speed);
+        if (this.pos.y - this.b.h < 3) { vel.y = 0; } // on the ground: it burns where it stands
+        this.downed = new Downed(this.mesh, vel, game, { spin: 0.4, size: Math.min(2, this.radius / 10) });
+        if (this.lights) for (const sp of [this.lights.beacon, this.lights.land, ...this.lights.wing]) sp.visible = false;
+        if (source && (source === game.player || source === game.pilotMode)) game.addFeed(AIRCRAFT[this.type].name.toUpperCase() + ' DOWN', '#ffc23f');
+    }
+
     update(dt) {
+        if (!this.alive) { if (!this.downed || !this.downed.update(dt)) this.done = true; return; }
+        if (this.hp < this.maxHp * 0.5 && this.game && Math.random() < dt * 10) this.game.effects.puffSmoke(this.pos, _v.set(0, 2, 0), 2, 0.15, 2, 0.5);
         this.t += dt;
         const P = this.perf, b = this.b;
         switch (this.state) {
@@ -190,6 +211,7 @@ class Flight {
     }
 
     remove() {
+        unregisterAirTarget(this);
         this.sys.scene.remove(this.mesh);
         // the model's geometry and materials are shared; only the light sprites' materials are this flight's own
         if (this.lights) for (const sp of [this.lights.beacon, this.lights.land, ...this.lights.wing]) sp.material.dispose();

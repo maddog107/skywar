@@ -256,6 +256,8 @@ export class PilotOnFoot {
         w.speed = damp(w.speed, (f || r) ? (input.down('ShiftLeft', 'ShiftRight') ? 6.5 : 3.4) : 0, 8, dt);
         const p = s.root.position;
         const nx = p.x + mx * w.speed * dt, nz = p.z + mz * w.speed * dt;
+        const bl = g.world.towns && g.world.towns.buildings;
+        if (bl && bl.blocks(nx, nz, p.y)) { w.speed = 0; this.placeWalker(); return; } // walls are solid
         const ahead = g.surfaceAt(nx, nz, p.y + 1.5);
         const wasWet = g.surfaceAt(p.x, p.z, p.y + 1.5).water;
         if (!ahead.water || wasWet) { p.x = nx; p.z = nz; } // no walking out onto lakes (you can wade ashore)

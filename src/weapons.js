@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { WEAPONS } from './config.js';
 import { rand, clamp, segPointDistSq, G, makeRadialTexture } from './util.js';
 import { terrainHeight } from './world.js';
+import { AIR_TARGETS, segHitsSphere } from './softtargets.js';
 
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _v4 = new THREE.Vector3();
 const _prev = new THREE.Vector3();
@@ -128,6 +129,7 @@ export class Weapons {
                     }
                 }
             }
+            if (!dead && b.damage > 0) dead = this.worldBulletHit(b, _prev);
             if (!dead && b.team === 'red' && b.damage > 0 && g.pilotMode && g.pilotMode.alive) {
                 const head = g.pilotMode.headPos(_v1);
                 if (segPointDistSq(_prev, b.pos, head) < 2.4 * 2.4) { g.pilotMode.takeHit(b.damage * 2.5); dead = true; }
@@ -282,6 +284,12 @@ export class Weapons {
                 this.removeMissile(i);
                 continue;
             }
+            if (m.armed !== false && this.worldMissileHit(m)) {
+                fx.explosion(m.pos, 0.8);
+                this.splash(m);
+                this.removeMissile(i);
+                continue;
+            }
             const h = terrainHeight(m.pos.x, m.pos.z);
             if (m.pos.y < Math.max(h, 0) || m.life <= 0 || (m.age > W.boost + 2 && speed < 170)) {
                 if (m.pos.y < 0 && h < 0) fx.waterSplash(m.pos, 0.6);
@@ -316,6 +324,63 @@ export class Weapons {
             if (d < R + t.radius) t.damage(m.W.damage * clamp(1.2 - d / (R + t.radius), 0.3, 1), m.owner, m.kind === 'rkt' ? 'rocket' : 'missile');
         }
         g.world.towns?.traffic.blast(m.pos, R * 0.6, g);
+        this.worldBlast(m.pos, R, m.W.damage * 2.2, m.owner);
+    }
+
+    // ── The rest of the world: town buildings, cars, helicopters and air traffic ──
+    worldBulletHit(b, prev) {
+        const g = this.game;
+        for (const t of AIR_TARGETS) {
+            if (!t.alive || Math.abs(t.pos.x - b.pos.x) > 120 || Math.abs(t.pos.z - b.pos.z) > 120) continue;
+            if (segHitsSphere(prev, b.pos, t.pos, t.radius)) {
+                t.hit(b.damage, g, b.owner);
+                g.effects.impact(b.pos, null);
+                if (b.owner === g.player) g.hitmarkerT = g.time;
+                return true;
+            }
+        }
+        const towns = g.world.towns;
+        if (!towns || b.pos.y > 700) return false;
+        const bl = towns.buildings;
+        if (bl && b.pos.y < bl.maxTop) {
+            // a round moves ~17 m a frame: sample along the step so it can't skip through a house
+            for (let k = 1; k <= 4; k++) {
+                const p = _v1.lerpVectors(prev, b.pos, k / 4);
+                const hit = bl.at(p.x, p.y, p.z);
+                if (hit) { bl.damage(hit, b.damage, g, b.owner); g.effects.impact(p, null); b.pos.copy(p); return true; }
+            }
+        }
+        // cars: sample the step too — the band just above the road is thinner than one frame's travel
+        if (b.pos.y - terrainHeight(b.pos.x, b.pos.z) < 40) {
+            for (let k = 1; k <= 6; k++) {
+                const p = _v1.lerpVectors(prev, b.pos, k / 6);
+                const h = terrainHeight(p.x, p.z);
+                if (p.y - h > 4) continue;
+                if (towns.traffic.hitAt(p, b.damage, g)) { g.effects.impact(p, null); b.pos.copy(p); return true; }
+                if (p.y < h) break; // into the ground first
+            }
+        }
+        return false;
+    }
+
+    worldMissileHit(m) {
+        for (const t of AIR_TARGETS) {
+            if (t.alive && t.pos.distanceToSquared(m.pos) < (t.radius + 6) ** 2) { t.hit(m.W.damage * 1.5, this.game, m.owner); return true; }
+        }
+        const bl = this.game.world.towns && this.game.world.towns.buildings;
+        return !!(bl && bl.at(m.pos.x, m.pos.y, m.pos.z));
+    }
+
+    // blast damage to buildings and anything flying close
+    worldBlast(at, R, amount, owner) {
+        const g = this.game;
+        const bl = g.world.towns && g.world.towns.buildings;
+        if (bl) bl.explode(at, R, amount, g, owner);
+        for (const t of AIR_TARGETS) {
+            if (!t.alive) continue;
+            const d = t.pos.distanceTo(at);
+            if (d < R + t.radius) t.hit(amount * 0.5 * (1 - d / (R + t.radius)), g, owner);
+        }
     }
 
     checkFlares(m, dir, distToTarget) {
@@ -377,12 +442,14 @@ export class Weapons {
             b.pos.addScaledVector(b.vel, dt);
             b.mesh.quaternion.setFromUnitVectors(_v1.set(0, 0, -1), _v2.copy(b.vel).normalize());
             const s = g.surfaceAt(b.pos.x, b.pos.z, b.pos.y + 2);
+            const blds = g.world.towns && g.world.towns.buildings;
+            const onBuilding = blds && blds.at(b.pos.x, b.pos.y, b.pos.z);
             let hitShip = null;
             if (g.ground) for (const t of g.ground.targets) if (t.alive && t.hitTest && t.team !== b.team && t.hitTest(b.pos)) { hitShip = t; break; }
-            if (b.pos.y > s.h && !hitShip && b.life > 0) continue;
+            if (b.pos.y > s.h && !hitShip && !onBuilding && b.life > 0) continue;
             // impact
             const at = b.pos.clone();
-            if (!hitShip) at.y = s.h;
+            if (!hitShip && !onBuilding) at.y = s.h;
             if (s.water && !hitShip) {
                 fx.waterSplash(at, 2.2);
                 fx.explosion(at, 0.8);
@@ -390,7 +457,7 @@ export class Weapons {
                 fx.explosion(at, 2.4);
                 fx.debrisBurst(at, _v1.set(0, 40, 0), 5, 0.8);
                 for (let k = 0; k < 20; k++) fx.smoke.emit(at, _v1.set(rand(-25, 25), rand(15, 60), rand(-25, 25)), rand(2, 4), 6, 22, [0.35, 0.3, 0.24], [0.5, 0.45, 0.38], 0.8, 0, 1.2, -12);
-                if (!hitShip && !s.ship) this.addCrater(at);
+                if (!hitShip && !s.ship && !onBuilding) this.addCrater(at);
             }
             g.audio.boom(g.camera.position.distanceTo(at), 1.6);
             if (g.camera.position.distanceTo(at) < 800) g.shake = Math.min(1.5, g.shake + 0.6);
@@ -402,6 +469,7 @@ export class Weapons {
                 if (d < W.splash + t.radius) t.damage(W.damage * clamp(1.2 - d / (W.splash + t.radius), 0.2, 1), b.owner, 'bomb');
             }
             g.world.towns?.traffic.blast(at, W.splash * 0.7, g);
+            this.worldBlast(at, W.splash, W.damage * 4, b.owner);
             for (const a of g.aircraft) {
                 if (!a.alive || a.team === b.team) continue;
                 const d = a.pos.distanceTo(at);

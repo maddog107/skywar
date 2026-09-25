@@ -111,6 +111,8 @@ export class GroundStart {
     canMove(a, b, r) {
         const la = this.local(a), lb = this.local(b);
         if (this.blockedAt(lb, r)) return 'obstacle';
+        const bl = this.game.world.towns && this.game.world.towns.buildings;
+        if (bl && bl.blocks(b.x, b.z, a.y, r * 0.6)) return 'obstacle'; // town buildings are solid
         const ia = this.insideFence(la), ib = this.insideFence(lb);
         if (ia === ib) return 'ok';
         const atGate = Math.abs(lb.lz - this.gate.lz) < 11 && Math.abs(lb.lx - this.fence.x1) < 6;
@@ -169,6 +171,21 @@ export class GroundStart {
             }
         }
         c.pos.y = this.groundY(c.pos.x, c.pos.z);
+        // hitting traffic: a hard enough knock wrecks the other car, and it slows (and dents) yours
+        c.bumpT = Math.max(0, (c.bumpT || 0) - dt);
+        const traffic = g.world.towns && g.world.towns.traffic;
+        if (traffic && c.bumpT <= 0 && Math.abs(c.v) > 3) {
+            const ahead = 2.4 * Math.sign(c.v);
+            const other = traffic.hitAt(_v2.set(c.pos.x - Math.sin(c.yaw) * ahead, c.pos.y + 0.5, c.pos.z - Math.cos(c.yaw) * ahead), Math.abs(c.v) * 1.6, g, 2.6);
+            if (other) {
+                c.bumpT = 0.6;
+                g.shake = Math.min(1.4, g.shake + Math.abs(c.v) * 0.05);
+                g.audio.tick(80, 0.3, 0.45);
+                g.effects.impact(_v.copy(c.pos).setY(c.pos.y + 1), null);
+                if (this.onBump) this.onBump(Math.abs(c.v));
+                c.v *= 0.35;
+            }
+        }
         this.placeCar();
         if (this.driveHook && this.driveHook(dt, e)) return;
         // checkpoint: stop by the booth and the sentry waves you through

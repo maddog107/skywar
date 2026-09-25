@@ -17,6 +17,7 @@ import { RingCourse } from './rings.js';
 import { GroundStart } from './groundstart.js';
 import { HEIST_JET } from './heist.js';
 import { updateCharacters } from './character.js';
+import { AIR_TARGETS } from './softtargets.js';
 import { readStick, rampAxis, expo, STICK_EXPO } from './input.js';
 import { clamp, damp, lerp, rand, pick, formatTime, G } from './util.js';
 import { BASES, RUNWAY, terrainHeight, isOnRunway, baseToWorld } from './world.js';
@@ -155,6 +156,7 @@ export class Game {
             this.ground.addBridges(this.world.towns.bridges);
             for (const b of this.world.towns.bridges) b.game = this;
             this.world.towns.traffic.reset();
+            if (this.world.towns.buildings) this.world.towns.buildings.reset(); // rebuilt town for every sortie
         }
         if (this.mode === 'strike' || this.mode === 'sandbox') this.ground.spawnEnemyBase();
         // enemy parked jets are real targets when the enemy base is live, decoration otherwise
@@ -1021,6 +1023,32 @@ export class Game {
         }
     }
 
+    // Flying into a town building or a helicopter / airliner: the aircraft is lost and so, mostly, is what it hit
+    worldCollisions() {
+        const bl = this.world.towns && this.world.towns.buildings;
+        for (const a of this.aircraft) {
+            if (!a.alive || a.falling || a.onGround) continue;
+            const r = a.hitRadius * 0.45;
+            if (bl && a.pos.y < bl.maxTop + r) {
+                const b = bl.at(a.pos.x, a.pos.y, a.pos.z, r);
+                if (b) {
+                    bl.damage(b, 2000 + a.speed * 4, this, a === this.player ? this.player : null);
+                    if (a === this.player) this.addFeed('FLEW INTO A BUILDING', '#ff4a3d');
+                    a.crash();
+                    if (a.alive && b.alive) a.pos.y = Math.max(a.pos.y, b.top + 10); // sandbox bounce: out of the rubble
+                    continue;
+                }
+            }
+            for (const t of AIR_TARGETS) {
+                if (!t.alive || t.pos.distanceToSquared(a.pos) > (t.radius * 0.8 + r) ** 2) continue;
+                t.hit(1e4, this, a === this.player ? this.player : null);
+                if (a === this.player) this.addFeed('MID-AIR COLLISION', '#ff4a3d');
+                a.crash();
+                break;
+            }
+        }
+    }
+
     // ═════════════ Player control ═════════════
     // Stopped on the ground (after a crash landing, or just parked): climb out and walk
     canClimbOut(p) { return p.onGround && p.speed < 0.8 && p.controls.throttle < 0.06 && !p.deck; }
@@ -1220,6 +1248,7 @@ export class Game {
         for (const a of this.aircraft) if (a.lockedBy) a.lockedBy.clear(); // lockers re-register each frame
         for (const a of this.aircraft) if (a.pilot && a.alive && !a.pilotDead) a.pilot.update(dt);
         for (const a of this.aircraft) a.update(dt);
+        this.worldCollisions();
         this.weapons.update(dt);
         this.wreckage.update(dt);
         this.ground.update(dt);
