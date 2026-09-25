@@ -110,13 +110,14 @@ export class Traffic {
         // nearest stop line ahead: 9 m before the junction centre
         let st = null, dist = Infinity;
         for (const s of stops) {
-            const line = s.s - c.dir * 9;
+            if (s.from !== undefined && s.from !== -c.dir) continue; // the stop line for the other direction
+            const line = s.s - c.dir * (s.line ?? 9);
             const d = (line - c.s) * c.dir;
             if (d > -0.5 && d < dist) { dist = d; st = s; }
         }
         if (!st || dist > 60) return Infinity;
         const key = st.inter;
-        if (st.inter.type === 'light') {
+        if ((st.kind || st.inter.type) === 'light') {
             const state = this.towns.lightState(st.inter, st.axis);
             if (state === 'green' || (state === 'amber' && dist < 10)) return Infinity;
             return Math.max(0, (dist - 1) * 0.45);
