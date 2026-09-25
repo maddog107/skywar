@@ -474,7 +474,7 @@ class FoamLine {
             // ring width: thin contact foam, widened by the bow wave (out to ~s 0.15, back by 0.3), a little
             // pile-up just ahead of the stem, and the churn round the transom
             const bump = s < 0.3 ? Math.sin(s / 0.3 * Math.PI) : 0;
-            const width = (g.contact || 2.4) + (g.bowWave || 16) * (0.6 * bump + 0.35 * Math.exp(-s / 0.03)) + (g.sternWave || 7) * sternW;
+            const width = (g.contact || 2.4) + (g.bowWave || 16) * (0.6 * bump + 0.12 * Math.exp(-s / 0.03)) + (g.sternWave || 7) * sternW;
             for (let k = 0; k < rows; k++) {
                 const r = R[k], j = i * rows + k;
                 const ox = x + nrm[i][0] * width * r, oz = z + nrm[i][1] * width * r;
