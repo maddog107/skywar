@@ -107,7 +107,7 @@ class BitGrid {
     has(cx, cz) { const c = this.chunk(cx, cz, false); if (!c) return false; const b = ((cz & 63) << 6) | (cx & 63); return (c[b >> 5] & (1 << (b & 31))) !== 0; }
 }
 
-const _v = new THREE.Vector3();
+const _v = new THREE.Vector3(), _t2 = new THREE.Vector3(), _q = new THREE.Quaternion(), _ax = new THREE.Vector3();
 // where segments a0-a1 and b0-b1 cross (t, u: fractions along each), or null
 function segCross(a0, a1, b0, b1) {
     const r0 = a1.x - a0.x, r1 = a1.z - a0.z, s0 = b1.x - b0.x, s1 = b1.z - b0.z;
@@ -380,6 +380,7 @@ export class Towns {
         surfaces.push(this.dirtGeo);
         this.buildSignals();
         this.buildBuildings();
+        this.buildings.onBlast = (p, r) => this.panic(p, r); // a building blown up sends people running
         this.buildLamps();
         this.buildPeople();
         this.buildRoadblocks(this.deadEnds);
@@ -1460,26 +1461,52 @@ export class Towns {
         this.group.add(this.people, this.peopleRest);
     }
 
+    // an explosion (or a crash) at `at`: people close by are killed, everyone within a few hundred metres runs
+    // away from it along their pavement
+    panic(at, R) {
+        if (!this.walkers) return;
+        const run = Math.max(90, R * 6), kill = Math.max(4, R * 0.7);
+        for (const w of this.walkers) {
+            if (w.dead || w.x === undefined) continue;
+            const dx = w.x - at.x, dz = w.z - at.z, d2 = dx * dx + dz * dz;
+            if (d2 > run * run) continue;
+            if (d2 < kill * kill && Math.abs((w.y ?? at.y) - at.y) < 12) { w.dead = true; continue; }
+            samplePath(w.path, w.s, _v, _t2);
+            w.dir = _t2.x * dx + _t2.z * dz >= 0 ? 1 : -1;
+            w.panic = 7 + Math.random() * 8;
+            w.run = 3.6 + Math.random() * 2;
+        }
+    }
+    resetPeople() { for (const w of this.walkers || []) { w.dead = false; w.panic = 0; } }
+
     updatePeople(dt, cam) {
         if (!this.people) return;
         const T = this._pt || (this._pt = { m: new THREE.Matrix4(), q: new THREE.Quaternion(), s: new THREE.Vector3(), p: new THREE.Vector3(), t: new THREE.Vector3(), up: new THREE.Vector3(0, 1, 0), c: new THREE.Color() });
         const { m, q, s, p, t, up } = T;
         const R2 = 1800 * 1800;
+        const lie = T.lie || (T.lie = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2));
         let k = 0;
         for (const w of this.walkers) {
-            w.s += w.dir * w.speed * dt;
-            if (w.s < 1 || w.s > w.path.len - 1) { w.dir = -w.dir; w.s = Math.max(1, Math.min(w.path.len - 1, w.s)); }
+            // running from an explosion for a while, then back to a stroll
+            const run = w.panic > 0;
+            if (run) w.panic -= dt;
+            if (!w.dead) {
+                w.s += w.dir * (run ? w.run : w.speed) * dt;
+                if (w.s < 1 || w.s > w.path.len - 1) { w.dir = -w.dir; w.s = Math.max(1, Math.min(w.path.len - 1, w.s)); }
+            }
             // too far away to see: just keep walking, don't draw
             if (cam && w.x !== undefined && (w.x - cam.x) ** 2 + (w.z - cam.z) ** 2 > R2) continue;
             samplePath(w.path, w.s, p, t);
-            w.x = p.x; w.z = p.z;
+            w.x = p.x; w.z = p.z; w.y = p.y;
             const i = k++;
             // on the pavement on one side of the street
             const lat = (STREET_HALF + 1.4) * w.side;
             p.x += -t.z * lat; p.z += t.x * lat;
-            w.ph += dt * w.speed * 5.5;
-            p.y += (p.g || 0) * lat + Math.abs(Math.sin(w.ph)) * 0.06; // the pavement's height (cheaper than sampling the ground)
+            w.ph += dt * (run ? w.run * 3.4 : w.speed * 5.5);
+            p.y += (p.g || 0) * lat + (w.dead ? 0.22 : Math.abs(Math.sin(w.ph)) * (run ? 0.14 : 0.06)); // the pavement's height
             q.setFromAxisAngle(up, Math.atan2(-t.x * w.dir, -t.z * w.dir));
+            if (w.dead) q.multiply(lie); // flat on the pavement
+            else if (run) q.multiply(_q.setFromAxisAngle(_ax.set(1, 0, 0), -0.25)); // leaning into the run
             m.compose(p, q, s.set(1, w.h, 1));
             m.toArray(this.people.instanceMatrix.array, i * 16);
             m.toArray(this.peopleRest.instanceMatrix.array, i * 16);
