@@ -111,11 +111,11 @@ function collect(root, keep) {
                         flat.setAttribute('aRM', new THREE.BufferAttribute(rm, 2));
                         flat.setAttribute('aEmi', new THREE.BufferAttribute(emi, 3));
                     }
-                    const key = (sig || m.uuid) + '#' + names.join(',');
+                    // (meshes that cast / receive shadows differently stay apart, so the merge draws them exactly the same)
+                    const key = (sig || m.uuid) + '#' + names.join(',') + '#' + o.castShadow + o.receiveShadow;
                     let e = groups.get(key);
-                    if (!e) groups.set(key, e = { mat: m, plain: !!sig, sig, geos: [], cast: false, receive: false });
+                    if (!e) groups.set(key, e = { mat: m, plain: !!sig, sig, geos: [], cast: o.castShadow, receive: o.receiveShadow });
                     e.geos.push(flat);
-                    e.cast = e.cast || o.castShadow; e.receive = e.receive || o.receiveShadow;
                 }
                 used.push(o);
             }

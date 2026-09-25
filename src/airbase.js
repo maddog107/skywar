@@ -11,7 +11,7 @@ import { propParts } from './props.js';
 import { makeBuildingMaterial } from './towns.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createAircraftModel } from './models.js';
-import { mergeStaticModel } from './meshmerge.js';
+import { mergeStaticModel, mergeInPlace } from './meshmerge.js';
 import { AIRCRAFT } from './config.js';
 import { propInstance, propSize, hasProp } from './props.js';
 import { makeRadialTexture, clamp, rand, freezeStatic, freezeLocal, offsetUnits } from './util.js';
@@ -119,22 +119,23 @@ function simpleGear(L, halfSpan, bellyY, H) {
 const _parkedTemplates = new Map();
 export function makeParkedModel(id) {
     let tpl = _parkedTemplates.get(id);
+    const spec = AIRCRAFT[id];
     if (!tpl) {
-        const m = createAircraftModel(id);
-        tpl = { object: mergeStaticModel(m.object), rig: m.rig };
+        const m = createAircraftModel(id), rig = m.rig;
+        const H = -(rig.minY ?? -spec.length * 0.08) + 1.2;
+        m.object.traverse(o => { if (o.isMesh) o.castShadow = true; });
+        const gear = simpleGear(spec.length, rig.halfSpan || spec.span / 2, rig.minY ?? -spec.length * 0.08, H);
+        gear.traverse(o => { if (o.isMesh) o.castShadow = true; });
+        // the gear stays a group of its own (air traffic shows / hides it), its six parts merged
+        tpl = { object: mergeStaticModel(m.object), gear: mergeInPlace(gear), rig, H };
         _parkedTemplates.set(id, tpl);
     }
-    const object = tpl.object.clone(), rig = tpl.rig;
-    const spec = AIRCRAFT[id];
-    const H = -(rig.minY ?? -spec.length * 0.08) + 1.2;
+    const object = tpl.object.clone(), gear = tpl.gear.clone();
     const root = new THREE.Group();
-    object.position.y = H;
+    object.position.y = tpl.H;
     root.add(object);
-    const gear = simpleGear(spec.length, rig.halfSpan || spec.span / 2, rig.minY ?? -spec.length * 0.08, H);
-    gear.position.y = H;
+    gear.position.y = tpl.H;
     root.add(gear);
-    // chocks and a boarding ladder make it look parked
-    root.traverse(o => { if (o.isMesh) o.castShadow = true; });
     return root;
 }
 
