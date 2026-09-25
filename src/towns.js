@@ -104,6 +104,7 @@ class BitGrid {
         return c;
     }
     set(cx, cz) { const c = this.chunk(cx, cz, true), b = ((cz & 63) << 6) | (cx & 63); c[b >> 5] |= 1 << (b & 31); }
+    clone() { const g = new BitGrid(); for (const [k, c] of this.chunks) g.chunks.set(k, c.slice()); return g; }
     has(cx, cz) { const c = this.chunk(cx, cz, false); if (!c) return false; const b = ((cz & 63) << 6) | (cx & 63); return (c[b >> 5] & (1 << (b & 31))) !== 0; }
 }
 
@@ -376,6 +377,7 @@ export class Towns {
         for (const p of paths) this.markPath(p.pts, ROAD_HALF + 3);
         for (const p of this.streetPaths) this.markPath(p.pts, WALK + 0.3);
         for (const J of this.junctions) if (!J.streets) for (const [x, z] of J.poly) this.mark(x, z, 1.5); // street corners are covered by the streets' own marks
+        this.streetGrid = this.blockGrid.clone(); // just the roads and streets (the blocker gets buildings too)
         this.dirtPaths = this.buildDirtTrails();
         surfaces.push(this.dirtGeo);
         this.buildSignals();
@@ -430,6 +432,7 @@ export class Towns {
         }
     }
     blocked(x, z) { return this.blockGrid.has(Math.floor(x / BLOCK_CELL), Math.floor(z / BLOCK_CELL)); }
+    onStreet(x, z) { return this.streetGrid.has(Math.floor(x / BLOCK_CELL), Math.floor(z / BLOCK_CELL)); }
     // every cell within r of the polyline (a capsule per segment)
     markPath(pts, r) {
         const C = BLOCK_CELL, R = r + C * 0.5, R2 = R * R, G = this.blockGrid;
@@ -1229,7 +1232,9 @@ export class Towns {
             // balconies on the apartment blocks: a slab and a parapet at every floor, front and back
             if (b.balconies) {
                 const fh = 2.9, y0 = b.y + b.plinth + 0.5 + (b.shop ? 4.2 : fh);
-                for (let f = 0; y0 + f * fh < top - 2; f++) for (const sd of [1, -1]) {
+                // not on a side that stands right on the pavement (they'd hang over the street)
+                const sides = [1, -1].filter(sd => [-0.35, 0, 0.35].every(k => { const q = at(k * b.w, sd * (b.d / 2 + 1.4)); return !this.onStreet(q.x, q.z); }));
+                for (let f = 0; y0 + f * fh < top - 2; f++) for (const sd of sides) {
                     const q = at(0, sd * (b.d / 2 + 0.6));
                     bits.push({ t, x: q.x, y: y0 + f * fh - 0.1, z: q.z, w: b.w * 0.72, h: 0.2, d: 1.2, yaw: b.yaw, col: 0xc8c4bc, b });
                     const q2 = at(0, sd * (b.d / 2 + 1.15));

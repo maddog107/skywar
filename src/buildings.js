@@ -355,11 +355,11 @@ export class Buildings {
             const list = cam ? [...this.burning].filter(f => f.fire > 0).sort((a, c) => ((a.b.x - cam.x) ** 2 + (a.b.z - cam.z) ** 2) - ((c.b.x - cam.x) ** 2 + (c.b.z - cam.z) ** 2)) : this.burning;
             for (const f of list) {
                 if (n >= G.length || f.fire <= 0) break;
-                const b = f.b, s = G[n++], size = Math.max(b.w, b.d) * 1.6 + 10;
+                const b = f.b, s = G[n++], size = Math.max(b.w, b.d) * 1.25 + 8;
                 const fl = 0.8 + Math.sin(f.flick * 9.1) * 0.08 + Math.sin(f.flick * 23.7) * 0.06;
                 s.position.set(b.x, b.y + 3 + size * 0.12, b.z);
                 s.scale.setScalar(size * fl);
-                s.material.opacity = (this.night ? 0.95 : 0.35) * Math.min(1, f.fire / 4) * fl;
+                s.material.opacity = (this.night ? 0.8 : 0.3) * Math.min(1, f.fire / 4) * fl;
                 s.visible = true;
             }
         }

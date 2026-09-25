@@ -623,8 +623,9 @@ export function buildRoads(group, nodes, { heightAt = terrainHeight, avoid = [] 
         // drop samples that bunch up (fence corners, bypasses)
         for (let q = samples.length - 2; q > 0; q--) if (Math.hypot(samples[q].x - samples[q - 1].x, samples[q].z - samples[q - 1].z) < 3) samples.splice(q, 1);
         // round off the corners that pushing round fences and towns leaves (not the port lead-ins, not at water)
-        const fixedEnd = (k) => (pa && !pa.branch && k < 4) || (pb && !pb.branch && k > samples.length - 5) || k === 0 || k === samples.length - 1;
-        for (let it = 0; it < 3; it++) for (let k = 1; k < samples.length - 1; k++) {
+        // (the last point of a port lead-in may move, so the bend out of it is rounded too)
+        const fixedEnd = (k) => (pa && !pa.branch && k < 3) || (pb && !pb.branch && k > samples.length - 4) || k === 0 || k === samples.length - 1;
+        for (let it = 0; it < 5; it++) for (let k = 1; k < samples.length - 1; k++) {
             const a = samples[k - 1], q = samples[k], b = samples[k + 1];
             if (fixedEnd(k) || a.kind !== 'land' || q.kind !== 'land' || b.kind !== 'land') continue;
             q.x = 0.25 * a.x + 0.5 * q.x + 0.25 * b.x; q.z = 0.25 * a.z + 0.5 * q.z + 0.25 * b.z;
