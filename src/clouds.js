@@ -48,10 +48,11 @@ const QUALITY = {
     // scale: march buffer size relative to the CSS pixel size; up: the history (what the composite shows) is
     // that much finer again, filled in over a few frames by jittering the march (temporal upsampling);
     // steps: primary march; light: light march; detail: small billows (0 none, 1 one octave, 2 two near the
-    // camera); shadowRows: rows of the cloud-shadow map redrawn per frame
-    high:   { scale: 0.5, up: 2, steps: 120, light: 5, detail: 2, shadowRows: 32 },
-    medium: { scale: 0.42, up: 2, steps: 88, light: 4, detail: 1, shadowRows: 32 },
-    low:    { scale: 0.28, up: 1.5, steps: 56, light: 3, detail: 0, shadowRows: 16 },
+    // camera); shadowRows: rows of the cloud-shadow map redrawn per frame; lightDither: how much of the light
+    // march's sample offset is random per pixel (the rest is shared)
+    high:   { scale: 0.5, up: 2, steps: 120, light: 5, detail: 2, shadowRows: 32, lightDither: 1 },
+    medium: { scale: 0.42, up: 2, steps: 88, light: 4, detail: 1, shadowRows: 32, lightDither: 1 },
+    low:    { scale: 0.28, up: 1.5, steps: 56, light: 3, detail: 0, shadowRows: 16, lightDither: 0.3 },
 };
 const SHADOW_RES = 512;              // cloud-shadow map: the whole weather tile, 64 m a texel
 const SHADOW_STEPS = 24;
@@ -188,17 +189,33 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
     ${FIELD_GLSL}
     #define NO_HIT ${NO_HIT.toFixed(1)}
 
-    float stepAt(float t) { return 10.0 + t * 0.01; }
+    // The march's step grows with distance, dt = 10 m + 1% of t. In step units k, t(k) = 1000 m (e^0.01k - 1), every
+    // step is 1, and every sample sits at k = whole number + this frame's jitter, whatever skips, strides and
+    // back-ups the ray took on the way. (Steps counted in metres from wherever a skip happened to land left the
+    // samples of neighbouring rays on different grids, and their averages then differed: straight streaks across
+    // distant clouds where the rays' skip histories changed.)
+    float tOf(float k) { return 1000.0 * (exp(0.01 * k) - 1.0); }
+    float kOf(float t) { return 100.0 * log(1.0 + t * 0.001); }
     // Henyey-Greenstein, scaled so an isotropic phase is 1
     float hg(float mu, float g) { float g2 = g * g; return (1.0 - g2) / pow(1.0 + g2 - 2.0 * g * mu, 1.5); }
     float phase(float mu, float k) { return min(0.7 * hg(mu, 0.6 * k) + 0.3 * hg(mu, -0.25 * k), 2.5); }
 
-    // optical depth toward the sun: LIGHT_STEPS samples, each step longer than the last (~680 m in all). Every
-    // frame the samples slide along the ray by a different fraction of their step, mostly the same for every
-    // pixel (a fully random offset per pixel speckles the shading with dark grains where a sample lands in a
-    // dense spot) plus a little per-pixel dither, new every frame (else the average of the frames leaves faint
-    // contour lines);
-    // the resolve pass averages the frames into smooth soft shadows.
+    // Sampling offsets (the march's start and the light march's samples): every pixel steps through the golden
+    // ratio sequence, one value a frame, from its own random start. Consecutive frames then always cover the
+    // step evenly, so the resolve pass's short running average converges to the smooth result, and what little
+    // is left over is fine unstructured grain. (A dither pattern shared across pixels, like interleaved gradient
+    // noise, leaves its own structure behind in the average: a woven screen-door pattern on the cloud faces.)
+    float pixHash(uint s) {
+        uvec3 v = uvec3(uvec2(gl_FragCoord.xy), s) * 1664525u + 1013904223u;
+        v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+        v ^= v >> 16u;
+        v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+        return float(v.x) * (1.0 / 4294967296.0);
+    }
+    #define GOLDEN 0.6180339887
+    // optical depth toward the sun: LIGHT_STEPS samples, each step longer than the last (~680 m in all), each
+    // taken at a fraction of its step that changes every frame (see above), so small billows cast soft shadows
+    // once the resolve pass has averaged a few frames, without the contour lines of fixed sample positions.
     // (far away, where a pixel spans more than the first step, that step is left out; behind a lot of cloud,
     // where the point adds little to the pixel, the last ones)
     float lightDither;
@@ -207,7 +224,7 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
         for (int j = 0; j < LIGHT_STEPS; j++) {
             if (dim && j >= LIGHT_STEPS - 2) break;
             if (far && j == 0) { d = st; st *= LIGHT_RATIO; continue; }
-            float dj = d + st * fract(frame * 0.6180339 + float(j) * 0.3819660 + lightDither);
+            float dj = d + st * fract(lightDither + frame * GOLDEN + float(j) * 0.3819660);
             vec3 q = p + sunDir * dj;
             if (q.y > slab.y) break;
             float a;
@@ -260,25 +277,29 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
         t1 = min(t1, min(limit, maxDist / max(hd, 1e-3)));
         if (t1 <= t0) return;
 
-        lightDither = 0.3 * fract(52.9829189 * fract(dot(gl_FragCoord.yx + 7.0 + frame * 5.588238, vec2(0.06711056, 0.00583715))));
+        // (on 'low', with only three long light steps, a fully random offset per pixel is too noisy: mostly the
+        // shared one there)
+        lightDither = pixHash(7u) * LIGHT_DITHER;
         float mu = dot(rd, sunDir);
         float ph0 = phase(mu, 1.0), ph1 = phase(mu, 0.5), ph2 = phase(mu, 0.25);
-        // a per-pixel start offset turns step banding into grain: interleaved gradient noise, shifted every frame
-        // (evenly spread offsets that the resolve pass averages into a smooth result faster than white noise)
-        float jit = fract(52.9829189 * fract(dot(gl_FragCoord.xy + frame * 5.588238, vec2(0.06711056, 0.00583715))));
-        float t = t0 + stepAt(t0) * jit;
-        float T = 1.0, entry = NO_HIT, tw = 0.0, aw = 0.0, empty = 0.0, fine = 0.0, lastStep = 0.0, refines = 0.0, inside = 0.0, wasClear = 0.0;
+        // a start offset per pixel turns step banding into grain, which the resolve pass averages away (see above);
+        // the first sample is the first grid point (k = whole number + jitter) at or after the slab
+        float jit = fract(pixHash(0u) + frame * GOLDEN);
+        float k = floor(kOf(t0) - jit) + 1.0 + jit;
+        float T = 1.0, entry = NO_HIT, tw = 0.0, aw = 0.0, fine = 0.0, lastK = 0.0, refines = 0.0, inside = 0.0, wasClear = 0.0;
         vec3 C = vec3(0.0);
         for (int i = 0; i < MAX_STEPS; i++) {
+            float t = tOf(k);
             if (t >= t1) break;
             vec3 p = ro + rd * t;
             // (a long way through thin cloud, e.g. skimming along a ragged base, the steps grow, so the ray doesn't
             // run out of them before it gets through)
-            float dt = stepAt(t) * (1.0 + floor(inside / 20.0));
+            float mult = 1.0 + floor(inside / 20.0);
+            float dt = (10.0 + t * 0.01) * mult;
             vec4 wm = weatherAt(p);
             float gap = cloudGap(p, wm);
-            // (whole steps only: a skip to the estimated surface would line every ray up there and undo the jitter)
-            if (gap > 0.0 && fine <= 0.0) { lastStep = dt * clamp(floor(gap / dt), 1.0, 5.0); t += lastStep; wasClear = 1.0; continue; }
+            // clear air: skip whole steps (which keeps the ray on its grid)
+            if (gap > 0.0 && fine <= 0.0) { lastK = clamp(floor(gap / dt * 0.95), 1.0, 5.0) * mult; k += lastK; wasClear = 1.0; continue; }
             float lod = max(0.0, log2(dt / ${(BASE_SIZE / BASE_RES).toFixed(1)}));
             pixFoot = t * pixAngle * 2.0;
             float amb;
@@ -289,16 +310,16 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
             // doesn't jump by a whole step from one pixel to the next (dithered, that is grain on a cloud's face).
             // Only for the first surface, and near enough for it to show (in and out of ragged wisps it would eat
             // up the ray's steps)
-            if (den > 0.0 && wasClear > 0.0 && fine <= 0.0 && lastStep > dt * 0.5 && refines < 1.0 && t < 6000.0) {
-                float back = min(lastStep, dt); // (the last step, or the last of a skip: clear air before that)
-                t -= back; fine = floor(back / dt * 4.0 + 0.5); empty = 0.0; refines += 1.0;
+            if (den > 0.0 && wasClear > 0.0 && fine <= 0.0 && lastK > 0.3 && refines < 1.0 && t < 6000.0) {
+                float back = min(lastK, mult); // (the last step, or the last of a skip: clear air before that)
+                k -= back; fine = back * 4.0; refines += 1.0;
                 continue;
             }
-            // (other surfaces reached on a long stride: back up to one step past the last clear sample)
-            if (den > 0.0 && fine <= 0.0 && lastStep > dt * 1.5) { t -= lastStep - dt; lastStep = dt; empty = 0.0; continue; }
-            float h = fine > 0.0 ? dt * 0.25 : dt;
+            // (other surfaces reached on a skip: back up to one step past the last clear sample)
+            if (den > 0.0 && fine <= 0.0 && lastK > mult * 1.5) { k -= lastK - mult; lastK = mult; continue; }
+            float hk = fine > 0.0 ? 0.25 : mult; // this sample's share of the ray, in steps
             if (den > 0.0) {
-                float seg = min(h, t1 - t);
+                float seg = min(tOf(k + hk), t1) - t;
                 float a = 1.0 - exp(-den * SIGMA * seg);
                 float od = lightDepth(p, lod, pixFoot > 20.0, T < 0.25);
                 // sun: single scattering plus two weaker, less attenuated, flatter octaves standing in for the
@@ -312,13 +333,13 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
                 if (entry == NO_HIT && 1.0 - T * (1.0 - a) > 0.03) entry = t;
                 T *= 1.0 - a;
                 if (T < 0.015) break;
-                empty = 0.0; inside += 1.0; wasClear = 0.0;
-            } else { empty += 1.0; wasClear = 1.0; }
-            // clear air inside the layer (between towers, under the deck, along a cloud base): stride on in double,
-            // then triple steps
-            lastStep = fine > 0.0 ? h : dt * (empty > 8.0 ? 3.0 : empty > 2.0 ? 2.0 : 1.0);
+                inside += 1.0; wasClear = 0.0;
+            } else wasClear = 1.0;
+            // (no longer strides in clear air between clouds: samples two or three steps apart missed thin cloud in
+            // a pattern shared by neighbouring rays, which showed as streaks and banding; it saved next to nothing)
+            lastK = fine > 0.0 ? 0.25 : mult;
             fine -= 1.0;
-            t += lastStep;
+            k += lastK;
         }
         float alpha = 1.0 - T;
         if (aw <= 0.0) return;
@@ -328,7 +349,9 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
         C = mix(C, skyFogColor(fogColor, ray, fg.y) * alpha, fg.x);
         float fade = 1.0 - smoothstep(maxDist * 0.8, maxDist, length(ray.xz));
         oColor = vec4(C, alpha) * fade;
-        oInfo = vec4(entry, limit, tw / aw, 1.0);
+        // (a veil too thin to reach the entry opacity still needs a depth, or the composite's depth test would
+        // hide it behind the terrain: its mean depth)
+        oInfo = vec4(entry == NO_HIT ? tw / aw : entry, limit, tw / aw, 1.0);
     }`;
 
 // The clamp box for the resolve: the lowest and highest value among each march sample's 3x3 neighbourhood,
@@ -356,8 +379,8 @@ const BOX_FRAG = /* glsl */`
 // Temporal upsampling resolve (at the history's resolution, finer than the march): rebuild this frame's
 // image at each history pixel from the four jittered march samples around it (bilinear), then
 // blend it into the history reprojected to where the cloud was last frame (by the cloud's mean depth), read
-// with a sharp Catmull-Rom filter and clamped to this frame's neighbourhood so nothing ghosts. A sample that
-// lands right on the pixel counts for more, and a moving view takes more of the new frame (less smear).
+// with a sharp Catmull-Rom filter and clamped to this frame's neighbourhood so nothing ghosts; a moving view
+// takes more of the new frame (less smear).
 const RESOLVE_FRAG = /* glsl */`
     uniform sampler2D tCur, tInfo, tHist, tLo, tHi, tMean;
     uniform mat4 projInv, camWorld, prevViewProj;
@@ -375,7 +398,7 @@ const RESOLVE_FRAG = /* glsl */`
                + texture2D(tHist, vec2(t12.x, t3.y)) * (w12.x * w3.y);
         return r / (w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y);
     }
-    vec4 rSum; float rW, rConf, rCut, rD, rDW; vec2 rX; ivec2 rC, rMx;
+    vec4 rSum; float rW, rCut, rD, rDW; vec2 rX; ivec2 rC, rMx;
     // (the scene distance and the cloud's mean depth there)
     vec2 infoAt(ivec2 o) { return texelFetch(tInfo, clamp(rC + o, ivec2(0), rMx), 0).yz; }
     void tap(ivec2 o, vec2 info) {
@@ -389,7 +412,7 @@ const RESOLVE_FRAG = /* glsl */`
         vec2 d = vec2(ip) + 0.5 + jitter - rX;
         vec2 b = max(1.0 - abs(d), 0.0); // (bilinear between the jittered samples: smooth even in one frame)
         float w = b.x * b.y + 1e-4;
-        rSum += v * w; rW += w; rConf = max(rConf, w);
+        rSum += v * w; rW += w;
         // the cloud's depth, interpolated the same way (for the reprojection: one depth per march texel would
         // shift the history in blocks while moving)
         if (v.a > 0.01) { rD += info.y * w; rDW += w; }
@@ -406,13 +429,12 @@ const RESOLVE_FRAG = /* glsl */`
         rC = ivec2(floor(rX - 0.5 - jitter)); rMx = ivec2(lowRes) - 1;
         vec2 l0 = infoAt(ivec2(0, 0)), l1 = infoAt(ivec2(1, 0)), l2 = infoAt(ivec2(0, 1)), l3 = infoAt(ivec2(1, 1));
         rCut = min(max(max(l0.x, l1.x), max(l2.x, l3.x)) * 0.6, 3000.0);
-        rSum = vec4(0.0); rW = 0.0; rConf = 0.0; rD = 0.0; rDW = 0.0;
+        rSum = vec4(0.0); rW = 0.0; rD = 0.0; rDW = 0.0;
         tap(ivec2(0, 0), l0); tap(ivec2(1, 0), l1); tap(ivec2(0, 1), l2); tap(ivec2(1, 1), l3);
         // (the box opened up a little)
         vec4 lo = texture2D(tLo, buv), ext = (hi - lo) * 0.1;
         lo -= ext; hi += ext;
         vec4 cur = rSum / max(rW, 1e-5);
-        float conf = rConf;
         vec2 uv = gl_FragCoord.xy / histRes;
         vec4 vp = projInv * vec4(uv * 2.0 - 1.0, 0.5, 1.0);
         vec3 rd = normalize(mat3(camWorld) * (vp.xyz / vp.w));
@@ -422,12 +444,13 @@ const RESOLVE_FRAG = /* glsl */`
         if (reset > 0.5 || pc.w <= 0.0 || puv.x < 0.0 || puv.y < 0.0 || puv.x > 1.0 || puv.y > 1.0) { gl_FragColor = cur; return; }
         vec4 h = clamp(historyAt(puv), lo, hi);
         float moved = length((puv - uv) * histRes), m = smoothstep(0.3, 2.0, moved);
-        // while moving, the new frame's own grain (its dither pattern) would show: take it softened
-        cur = mix(cur, texture2D(tMean, buv), 0.65 * m);
-        // still: a sample right on the pixel counts for more (the finer image builds up over the jitter pattern);
-        // moving: the same share of the new frame everywhere (a share that varied across the sample grid would
-        // weave the grid into the picture), more of it the faster the view moves
-        float a = mix(mix(0.02, 0.2, conf * conf), 0.22 + min(moved * 0.01, 0.2), m);
+        // while moving, the new frame's own grain would show more: take it a little softened
+        cur = mix(cur, texture2D(tMean, buv), 0.4 * m);
+        // The same share of the new frame for every pixel: a share that varied with where the jittered samples
+        // fell (more for a pixel with a sample right on it) lets the few frames that weigh most show their
+        // dither, in a pattern woven from the sample grid. Small while still, so the sampling offsets average out;
+        // more of it the faster the view moves (less smearing behind the reprojection).
+        float a = mix(0.06, 0.12 + min(moved * 0.01, 0.1), m);
         a = max(a, minBlend);
         gl_FragColor = mix(h, cur, clamp(a, 0.0, 1.0));
     }`;
@@ -446,7 +469,7 @@ const COMPOSITE_VERT = /* glsl */`
 // starts, so the hardware depth test cuts it cleanly around aircraft and terrain at full resolution
 const COMPOSITE_FRAG = /* glsl */`
     uniform sampler2D tCloud, tInfo;
-    uniform vec2 lowRes, fullRes;
+    uniform vec2 lowRes, fullRes, jitter;
     uniform float camNear;
     uniform mat4 projMat;
     varying vec3 vRay;
@@ -454,16 +477,22 @@ const COMPOSITE_FRAG = /* glsl */`
         vec2 uv = gl_FragCoord.xy / fullRes;
         vec4 col = texture2D(tCloud, uv);
         if (col.a < 0.002) discard;
-        // the nearest cloud entry among the four march texels around, leaving out any whose ray hit something much
-        // nearer than the others (their cloud, if any, is behind that object anyway)
-        vec2 st = uv * lowRes - 0.5;
+        // where the cloud starts here: the entries of the four march texels around, interpolated between their
+        // (jittered) sample positions, leaving out any texel without cloud and any whose ray hit something much
+        // nearer than the others (their cloud, if any, is behind that object anyway). Interpolated rather than the
+        // nearest of the four, so where the depth test cuts a cloud against terrain close behind it, the cut runs
+        // smoothly instead of in steps of whole march texels.
+        vec2 st = uv * lowRes - 0.5 - jitter;
         ivec2 i0 = ivec2(floor(st)), mx = ivec2(lowRes) - 1;
+        vec2 f = st - floor(st);
         vec2 ia = texelFetch(tInfo, clamp(i0, ivec2(0), mx), 0).xy, ib = texelFetch(tInfo, clamp(i0 + ivec2(1, 0), ivec2(0), mx), 0).xy;
         vec2 ic = texelFetch(tInfo, clamp(i0 + ivec2(0, 1), ivec2(0), mx), 0).xy, id = texelFetch(tInfo, clamp(i0 + ivec2(1, 1), ivec2(0), mx), 0).xy;
         vec4 lim = vec4(ia.y, ib.y, ic.y, id.y), ent = vec4(ia.x, ib.x, ic.x, id.x);
         float lmax = max(max(lim.x, lim.y), max(lim.z, lim.w));
-        ent = mix(vec4(${NO_HIT.toFixed(1)}), ent, step(min(lmax * 0.6, 3000.0), lim));
-        float entry = min(min(ent.x, ent.y), min(ent.z, ent.w));
+        vec4 w = vec4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y) + 1e-4;
+        w *= step(min(lmax * 0.6, 3000.0), lim) * step(ent, vec4(${(NO_HIT - 1).toFixed(1)}));
+        float ws = dot(w, vec4(1.0));
+        float entry = ws > 0.0 ? dot(w, ent) / ws : ${NO_HIT.toFixed(1)};
         // (no entry in any of them: the cloud came from the history alone, e.g. while turning; far enough)
         float vz = max(min(entry, 30000.0) / length(vRay), camNear * 1.001);
         vec4 clip = projMat * vec4(vRay * vz, 1.0);
@@ -686,7 +715,7 @@ export class Clouds {
             blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
             uniforms: {
                 tCloud: { value: this.hist[0].texture }, tInfo: { value: this.rt.textures[1] },
-                lowRes: { value: new THREE.Vector2(4, 4) }, fullRes: { value: new THREE.Vector2(4, 4) },
+                lowRes: { value: new THREE.Vector2(4, 4) }, fullRes: { value: new THREE.Vector2(4, 4) }, jitter: { value: new THREE.Vector2() },
                 camNear: { value: 1 }, projInv: { value: new THREE.Matrix4() }, projMat: { value: new THREE.Matrix4() },
             },
             vertexShader: COMPOSITE_VERT,
@@ -764,7 +793,7 @@ export class Clouds {
         this.q = Q;
         const ratio = Q.light >= 5 ? 2 : Q.light === 4 ? 2.3 : 3;
         const step0 = 680 * (ratio - 1) / (Math.pow(ratio, Q.light) - 1); // the light march reaches ~680 m
-        const d = { MAX_STEPS: Q.steps, LIGHT_STEPS: Q.light, LIGHT_STEP0: step0.toFixed(2), LIGHT_RATIO: ratio.toFixed(2), DETAIL: Q.detail };
+        const d = { MAX_STEPS: Q.steps, LIGHT_STEPS: Q.light, LIGHT_STEP0: step0.toFixed(2), LIGHT_RATIO: ratio.toFixed(2), DETAIL: Q.detail, LIGHT_DITHER: Q.lightDither.toFixed(2) };
         const m = this.marchMat;
         if (JSON.stringify(m.defines) !== JSON.stringify(d)) { m.defines = d; m.needsUpdate = true; if (this.resolveScene) this.compile(); }
     }
@@ -853,7 +882,7 @@ export class Clouds {
         const j = JITTER[this.frame % JITTER.length];
         u.jitter.value.set(j[0], j[1]);
         const c = this.compMat.uniforms;
-        c.lowRes.value.set(lw, lh); c.fullRes.value.set(w, h);
+        c.lowRes.value.set(lw, lh); c.fullRes.value.set(w, h); c.jitter.value.copy(u.jitter.value);
         c.camNear.value = camera.near;
         c.projInv.value.copy(camera.projectionMatrixInverse);
         c.projMat.value.copy(camera.projectionMatrix);
