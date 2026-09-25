@@ -26,6 +26,7 @@ import { townGradeAt } from './terraincore.js';
 import { CarSet, PAINTS, NearInstances } from './carset.js';
 
 const EXTENT = 24000, CELL = 3200;
+const TOWN_CELL = 16000, FAR_CELL = 8000; // towns drawn together (see perTown)
 const BLOCK_CELL = 2;
 const STREET_Y = 0.3;             // street surface above the graded ground
 const WALK = STREET_HALF + SIDEWALK; // half-width of a street with its pavements
@@ -782,12 +783,18 @@ export class Towns {
         return set;
     }
 
-    // One InstancedMesh per town for a kind of building part, each with its own tight bounding sphere,
-    // so towns out of view (or out of the small shadow frustum) cost nothing. `far`: not drawn beyond this.
-    // attrs(n): per-instance attributes (the geometry is cloned per town to carry them)
+    // One InstancedMesh per group of nearby towns for a kind of building part, each with its own bounding sphere,
+    // so towns out of view (or out of the small shadow frustum) cost little. `far`: not drawn beyond this.
+    // The towns are grouped by the TOWN_CELL (FAR_CELL for kinds only drawn close) square their centre is in:
+    // one draw call covers a cluster of towns instead of one each (40 towns → ~15-20 groups).
+    // attrs(n): per-instance attributes (the geometry is cloned per group to carry them)
     perTown(geo, mat, list, write, { shadow = true, far = Infinity, attrs = null } = {}) {
-        const byTown = new Map();
-        for (const o of list) { if (!byTown.has(o.t)) byTown.set(o.t, []); byTown.get(o.t).push(o); }
+        const byTown = new Map(), C = far < Infinity ? FAR_CELL : TOWN_CELL;
+        for (const o of list) {
+            const k = Math.floor(o.t.x / C) * 1000 + Math.floor(o.t.z / C);
+            if (!byTown.has(k)) byTown.set(k, []);
+            byTown.get(k).push(o);
+        }
         const out = [];
         for (const items of byTown.values()) {
             let g = geo;
@@ -1315,14 +1322,20 @@ export class Towns {
         for (const st of this.stadiums || []) this.drawStadium(st, B);
     }
 
-    // lawns, ponds, plazas and forecourts of a town as one mesh (vertex colours), draped on the graded ground
+    // lawns, ponds, plazas and forecourts of a group of towns (see perTown) as one mesh (vertex colours), draped on
+    // the graded ground
     drawGround(list) {
         const byTown = new Map();
-        for (const o of list) { if (!byTown.has(o.t)) byTown.set(o.t, []); byTown.get(o.t).push(o); }
+        for (const o of list) {
+            const k = Math.floor(o.t.x / TOWN_CELL) * 1000 + Math.floor(o.t.z / TOWN_CELL);
+            if (!byTown.has(k)) byTown.set(k, []);
+            byTown.get(k).push(o);
+        }
         const mat = liftWithDistance(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: offsetUnits(-2) }));
-        for (const [t, items] of byTown) {
+        for (const items of byTown.values()) {
             const pos = [], col = [], idx = [];
             for (const o of items) {
+                const t = o.t;
                 const N = o.kind === 'pond' ? 10 : 5;
                 const base = pos.length / 3;
                 const lift = o.kind === 'pond' ? 0.36 : o.kind === 'lawn' ? 0.3 : 0.33;

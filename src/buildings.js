@@ -43,6 +43,8 @@ const COLLAPSE = 2.6; // seconds
 const _m = new THREE.Matrix4(), _m2 = new THREE.Matrix4(), _m3 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _axis = new THREE.Vector3(), _c = new THREE.Color();
 const HIDDEN = new THREE.Matrix4().makeScale(0, 0, 0);
+// flag one instance's slot for upload, not the whole buffer (an InstancedMesh can hold a whole group of towns)
+function touch(attr, i) { attr.addUpdateRange(i * attr.itemSize, attr.itemSize); attr.needsUpdate = true; }
 const DUST = new THREE.Color(0.45, 0.42, 0.38);
 
 // the town and the airbases share one set, so every structure in the world is found by the same queries
@@ -202,7 +204,7 @@ export class Buildings {
             if (!pt.im || !pt.im.instanceColor) continue;
             if (!pt.col) { pt.im.getColorAt(pt.i, _c); pt.col = _c.clone(); }
             pt.im.setColorAt(pt.i, _c.copy(pt.col).multiplyScalar(k));
-            pt.im.instanceColor.needsUpdate = true;
+            touch(pt.im.instanceColor, pt.i);
         }
     }
 
@@ -291,7 +293,7 @@ export class Buildings {
                     if (done) M = pt.role === 'wall' && !c.vehicle ? this.stub(b, pt) : HIDDEN;
                     else { M = _m.multiplyMatrices(_m2, pt.P ? _m3.multiplyMatrices(pt.P, pt.base) : pt.base); if (pt.Pinv) M.premultiply(pt.Pinv); }
                     pt.im.setMatrixAt(pt.i, M);
-                    pt.im.instanceMatrix.needsUpdate = true;
+                    touch(pt.im.instanceMatrix, pt.i);
                 } else for (const q of pt.meshes) {
                     // gone: squashed to nothing rather than hidden, so distance culling (which toggles .visible)
                     // can't bring it back
@@ -344,7 +346,7 @@ export class Buildings {
     stub(b, pt) {
         const h = b.top - b.y;
         const k = Math.min(1, Math.min(3.2, 1 + h * 0.08) / Math.max(h, 1)); // lower than the heap piled inside it
-        if (pt.im.instanceColor) { if (!pt.col) { pt.im.getColorAt(pt.i, _c); pt.col = _c.clone(); } pt.im.setColorAt(pt.i, _c.copy(pt.col).multiplyScalar(0.28)); pt.im.instanceColor.needsUpdate = true; }
+        if (pt.im.instanceColor) { if (!pt.col) { pt.im.getColorAt(pt.i, _c); pt.col = _c.clone(); } pt.im.setColorAt(pt.i, _c.copy(pt.col).multiplyScalar(0.28)); touch(pt.im.instanceColor, pt.i); }
         return _m.copy(pt.base).multiply(_m3.makeScale(1, k, 1));
     }
 
@@ -399,8 +401,8 @@ export class Buildings {
             if (b.alive && b.hp === b.maxHp) continue;
             for (const pt of b.parts) {
                 if (pt.im) {
-                    if (pt.base) { pt.im.setMatrixAt(pt.i, pt.base); pt.im.instanceMatrix.needsUpdate = true; }
-                    if (pt.col) { pt.im.setColorAt(pt.i, pt.col); pt.im.instanceColor.needsUpdate = true; }
+                    if (pt.base) { pt.im.setMatrixAt(pt.i, pt.base); touch(pt.im.instanceMatrix, pt.i); }
+                    if (pt.col) { pt.im.setColorAt(pt.i, pt.col); touch(pt.im.instanceColor, pt.i); }
                 } else if (pt.meshes) {
                     for (const q of pt.meshes) { q.o.matrixWorld.copy(q.base); q.o.matrixWorldAutoUpdate = q.auto; }
                     pt.meshes = null;
