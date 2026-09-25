@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { fbm, ridged, smoothstep, lerp, clamp, mulberry32, DEG, makeRadialTexture, freezeStatic } from './util.js';
 import { TIMES } from './config.js';
-import { Clouds } from './clouds.js';
+import { Clouds, CLOUD_SHADOW_GLSL } from './clouds.js';
 import { Vegetation, SP, GROUND_GLSL } from './vegetation.js';
 
 // ═══════════════════════════════════════════════════════════════
@@ -266,6 +266,7 @@ export class World {
         this.initTerrainMaterial();
         this.initWater();
         this.clouds = new Clouds(this.scene, this.renderer, { FOG_GLSL, SKY_FOG }); // raymarched cumulus + rain deck (clouds.js)
+        Object.assign(this.waterMat.uniforms, this.clouds.shadowUniforms()); // cloud shadows on the sea and lakes
         this.overcast = 0;
         this.initTreeAssets();
         this.initGrass();
@@ -1516,6 +1517,7 @@ export class World {
                 uniform sampler2D detailMap;
                 varying vec3 vWPos;
                 ${FOG_GLSL}
+                ${CLOUD_SHADOW_GLSL}
                 void main() {
                     vec2 p = vWPos.xz;
                     float dist = length(cameraPosition - vWPos);
@@ -1543,11 +1545,14 @@ export class World {
                     float fres = 0.02 + 0.98 * pow(1.0 - max(dot(n, v), 0.0), 5.0);
                     vec3 rf = reflect(-v, n);
                     vec3 sky = mix(horizonColor, skyColor, clamp(rf.y * 1.6, 0.0, 1.0));
-                    vec3 col = mix(deepColor, sky, fres);
+                    // under a cloud's shadow the water body loses its sunlit glow and the sun's glitter goes out
+                    // (the reflected sky stays)
+                    float csh = cloudSunShadowAt(vWPos);
+                    vec3 col = mix(deepColor * (0.45 + 0.55 * csh), sky, fres);
                     float sd = max(dot(rf, normalize(sunDir)), 0.0);
                     // the sun's glitter spreads into a broader, dimmer path with distance instead of pixel-sized spikes
                     float wide = smoothstep(200.0, 5000.0, dist);
-                    col += sunColor * (pow(sd, mix(900.0, 150.0, wide)) * mix(14.0, 3.0, wide) + pow(sd, 80.0) * 0.35);
+                    col += sunColor * (pow(sd, mix(900.0, 150.0, wide)) * mix(14.0, 3.0, wide) + pow(sd, 80.0) * 0.35) * csh;
                     float alpha = mix(0.72, 0.97, clamp(fres * 2.0 + smoothstep(200.0, 3000.0, dist), 0.0, 1.0));
                     vec3 ray = vWPos - cameraPosition;
                     vec2 fg = skyFogAmount(ray, cameraPosition.y);
