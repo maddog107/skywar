@@ -467,7 +467,7 @@ export class Weapons {
             const salvos = m.salvos || (m.salvos = new Set());
             if (salvos.has(f.salvo)) continue;
             salvos.add(f.salvo);
-            const chance = f.owner?.isPlayer ? 0.35 : 0.12 + (f.owner?.pilot?.skill ?? 0.5) * 0.15;
+            const chance = f.owner?.isPlayer ? 0.35 : 0.08 + (f.owner?.pilot?.skill ?? 0.5) * 0.25; // a good pilot times his flares better
             if (Math.random() < chance) {
                 if (m.target.incoming) {
                     const k = m.target.incoming.indexOf(m);
