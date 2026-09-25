@@ -142,7 +142,8 @@ class Heli {
         this.bank = 0;
         this.prevYaw = null;
         this.alive = true;
-        this.radius = 8;
+        this.radius = this.hitRadius = 8;
+        this.name = id === 'heli_military' ? 'UH-60 BLACK HAWK' : 'CIVIL HELICOPTER';
         this.hp = this.maxHp = 70;
         this.vel = new THREE.Vector3();
         registerAirTarget(this);

@@ -1,7 +1,7 @@
 // ═══════════════════════════════════════════════════════════════
 // Things in the air that aren't combat aircraft but can still be shot down:
 // the airbase helicopters and the scheduled air traffic. Each registers here
-// with { pos, radius, alive, hit(amount, game, source) }; weapons test bullets,
+// with { pos, vel, radius, hitRadius, name, alive, hit(amount, game, source) }; weapons test bullets,
 // missiles and blasts against the list, and the player can fly into them.
 // A shot-down one falls trailing smoke and fire and explodes where it lands.
 // ═══════════════════════════════════════════════════════════════

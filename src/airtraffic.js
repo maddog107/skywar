@@ -63,6 +63,9 @@ class Flight {
         this.alive = true;
         this.radius = Math.max(AIRCRAFT[type].span, AIRCRAFT[type].length) * 0.4;
         this.hp = this.maxHp = Math.round(40 + AIRCRAFT[type].length * 6);
+        this.hitRadius = this.radius;
+        this.vel = new THREE.Vector3();
+        this.name = AIRCRAFT[type].name;
         registerAirTarget(this);
         if (kind === 'arrival') {
             const d = rand(9000, 14000);
@@ -94,6 +97,7 @@ class Flight {
     distToTouch() { return _v.subVectors(this.touch, this.pos).setY(0).dot(this.fwd); }
 
     place() {
+        this.vel.set(-Math.sin(this.yaw) * Math.cos(this.pitch), Math.sin(this.pitch), -Math.cos(this.yaw) * Math.cos(this.pitch)).multiplyScalar(this.speed);
         this.mesh.position.copy(this.pos);
         _e.set(this.pitch, this.yaw, this.bank);
         this.mesh.quaternion.setFromEuler(_e);
