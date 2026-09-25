@@ -1,0 +1,216 @@
+{
+ "f22": {
+  "file": "aircraft/f22.glb",
+  "rot": [
+   0,
+   0,
+   0
+  ],
+  "nozzles": [
+   [
+    -0.033,
+    -0.04,
+    0.415
+   ],
+   [
+    0.033,
+    -0.04,
+    0.415
+   ]
+  ],
+  "nozzleR": 0.016
+ },
+ "fa18": {
+  "file": "aircraft/fa18.glb",
+  "rot": [
+   0,
+   0,
+   0
+  ]
+ },
+ "f35": {
+  "file": "aircraft/f35.glb",
+  "rot": [
+   0,
+   0,
+   0
+  ]
+ },
+ "gripen": {
+  "file": "aircraft/gripen.glb",
+  "rot": [
+   0,
+   0,
+   0
+  ],
+  "cockpit": [
+   -0.0248,
+   -0.2295
+  ]
+ },
+ "cessna": {
+  "file": "aircraft/cessna.glb",
+  "rot": [
+   0,
+   0,
+   0
+  ],
+  "nozzles": [],
+  "fixedGear": true,
+  "prop": {
+   "y": -0.04,
+   "r": 0.11,
+   "blades": 2
+  },
+  "cockpit": [
+   0.03,
+   -0.1
+  ]
+ },
+ "b737": {
+  "file": "aircraft/b737.glb",
+  "rot": [
+   0,
+   0,
+   0
+  ]
+ },
+ "b747": {
+  "file": "aircraft/b747.glb",
+  "rot": [
+   0,
+   0,
+   0
+  ]
+ },
+ "c130": {
+  "file": "aircraft/c130.glb",
+  "rot": [
+   0,
+   0,
+   0
+  ]
+ },
+ "f14": {
+  "file": "aircraft/f14.glb",
+  "rot": [
+   0,
+   0,
+   0
+  ]
+ },
+ "f15": {
+  "file": "aircraft/f15.glb",
+  "rot": [
+   0,
+   0,
+   0
+  ]
+ },
+ "mig29": {
+  "file": "aircraft/mig29.glb",
+  "rot": [
+   0,
+   0,
+   0
+  ],
+  "cockpit": [
+   0.021,
+   -0.2198
+  ]
+ },
+ "b2": {
+  "file": "aircraft/b2.glb",
+  "rot": [
+   0,
+   0,
+   0
+  ]
+ },
+ "su47": {
+  "file": "aircraft/su47.glb",
+  "rot": [
+   0,
+   0,
+   0
+  ]
+ },
+ "typhoon": {
+  "file": "aircraft/typhoon.glb",
+  "rot": [
+   0,
+   0,
+   0
+  ]
+ },
+ "su57": {
+  "file": "aircraft/su57.glb",
+  "rot": [
+   0,
+   0,
+   0
+  ]
+ },
+ "rafale": {
+  "file": "aircraft/rafale.glb",
+  "rot": [
+   0,
+   0,
+   0
+  ]
+ },
+ "f4": {
+  "file": "aircraft/f4.glb",
+  "rot": [
+   0,
+   0,
+   0
+  ],
+  "cockpit": [
+   -0.0087,
+   -0.2584
+  ],
+  "nozzles": [
+   [
+    -0.034,
+    -0.05,
+    0.36
+   ],
+   [
+    0.034,
+    -0.05,
+    0.36
+   ]
+  ],
+  "nozzleR": 0.022
+ },
+ "a10": {
+  "file": "aircraft/a10.glb",
+  "rot": [
+   0,
+   0,
+   0
+  ]
+ },
+ "su35": {
+  "file": "aircraft/su35.glb",
+  "rot": [
+   0,
+   0,
+   0
+  ],
+  "nozzles": [
+   [
+    -0.058,
+    -0.05,
+    0.425
+   ],
+   [
+    0.058,
+    -0.05,
+    0.425
+   ]
+  ],
+  "nozzleR": 0.026
+ }
+}
