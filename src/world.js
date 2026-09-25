@@ -4,6 +4,7 @@
 import * as THREE from 'three';
 import { fbm, ridged, smoothstep, lerp, clamp, mulberry32, DEG, makeRadialTexture, freezeStatic } from './util.js';
 import { TIMES } from './config.js';
+import { Clouds } from './clouds.js';
 
 // ═══════════════════════════════════════════════════════════════
 // Global shader patches (applied once at import, before anything compiles)
@@ -234,8 +235,6 @@ function periodicNoise(u, v, P, seed) {
 }
 
 const FAR_SHADOW = 1500; // half-size of the far shadow cascade (m)
-const CLOUD_AREA = 30000; // clouds wrap around the camera in a square this wide (m)
-const DECK_Y = 2400; // base of the overcast deck in rain and storms (m)
 // grass around the camera: a dense inner grid and a coarse outer one (cell size m, cells per side, blade scale);
 // ground data comes from tex x tex textures, texel metres apart, refilled once the camera has moved `recentre` m
 const GRASS = { layers: [{ cell: 0.5, n: 72, scale: 1 }, { cell: 1.5, n: 100, scale: 1.25 }], tex: 48, texel: 5, recentre: 20 };
@@ -316,7 +315,6 @@ export class World {
         this.scene = scene;
         this.renderer = renderer;
         this.time = 0;
-        this.windOffset = new THREE.Vector2();
         this.sunDir = new THREE.Vector3();
         this.fogColor = new THREE.Color();
         this.tiles = new Map();
@@ -330,8 +328,8 @@ export class World {
         this.initSky();
         this.initTerrainMaterial();
         this.initWater();
-        this.initClouds();
-        this.initOvercast();
+        this.clouds = new Clouds(this.scene, this.renderer, { FOG_GLSL, SKY_FOG }); // raymarched cumulus + rain deck (clouds.js)
+        this.overcast = 0;
         this.initTreeAssets();
         this.initGrass();
         this.initBases();
@@ -351,9 +349,7 @@ export class World {
     applyWeather(P) {
         const w = this.weather;
         const k = w === 'cloudy' ? 0.35 : w === 'rain' ? 0.7 : w === 'storm' ? 1 : 0;
-        // cloud cover: the share of cloud clusters shown, and how big their puffs grow
-        P.coverage = w === 'cloudy' ? 0.85 : w === 'rain' || w === 'storm' ? 1 : 0.5;
-        P.grow = w === 'cloudy' ? 1.15 : w === 'rain' ? 1.3 : w === 'storm' ? 1.4 : 1;
+        // cloud cover and cloud heights per weather live in clouds.js; here only how overcast it gets
         P.overcast = w === 'rain' ? 0.6 : w === 'storm' ? 0.85 : 0;
         if (!k) return;
         const grey = new THREE.Color(0x6f7780), dark = new THREE.Color(0x3a4048);
@@ -436,11 +432,13 @@ export class World {
         }
         const f = this.flash;
         this.hemi.intensity = this.baseHemi + f * 3;
+        this.clouds.flash = f; // lightning lights the clouds up from inside
         this.skyMat.uniforms.zenith.value.copy(this.palette.zenith).lerp(new THREE.Color(0.8, 0.82, 0.95), f * 0.6);
     }
 
     clearFlash() {
         this.flash = 0;
+        this.clouds.flash = 0;
         this.bolt.visible = false;
         if (this.baseHemi != null) this.hemi.intensity = this.baseHemi;
         if (this.palette) this.skyMat.uniforms.zenith.value.copy(this.palette.zenith);
@@ -540,26 +538,12 @@ export class World {
         wu.sunColor.value.copy(P.sun).multiplyScalar((night ? 0.4 : 1) * (1 - (P.overcast || 0) * 0.85)); // a moon glint on the water at night
         wu.sunDir.value.copy(this.sunDir);
 
-        const cu = this.cloudMat.uniforms;
-        cu.litColor.value.copy(P.clouds).multiplyScalar(1 - (P.overcast || 0) * 0.4);
-        cu.shadowColor.value.copy(P.cloudShadow);
-        cu.sunDir.value.copy(this.sunDir);
-        cu.sunColor.value.copy(P.sun).multiplyScalar(night ? 0.3 : 1);
-        this.cloudCoverBase = P.coverage ?? 0.5;
-        cu.coverage.value = this.cloudCoverBase * (this.quality === 'low' ? 0.7 : 1); // fewer clouds on 'low'
-        cu.grow.value = P.grow ?? 1;
-        // rain and storms: a grey overcast deck; the high clouds above it are hidden and sun shadows go soft
+        // clouds: weather-driven cover and the rain/storm deck, lit with the time-of-day palette
         this.overcast = P.overcast || 0;
-        cu.hideHigh.value = this.overcast > 0.3 ? 1 : 0;
-        const du = this.deckMat.uniforms;
-        du.amount.value = this.overcast;
-        du.litColor.value.copy(P.clouds);
-        du.shadowColor.value.copy(P.cloudShadow);
-        du.sunDir.value.copy(this.sunDir);
-        this.deck.visible = this.overcast > 0;
+        this.clouds.setWeather(this.weather, this.overcast);
+        this.clouds.setPalette({ lit: P.clouds, shadow: P.cloudShadow, sunDir: this.sunDir, overcast: this.overcast });
+        // under an overcast the sun's shadows go soft
         this.sun.shadow.intensity = this.sunFar.shadow.intensity = 1 - this.overcast * 0.6;
-        this.cloudCoverage = cu.coverage.value;
-        this.cloudGrow = cu.grow.value;
 
         this.terrainMat.emissive = new THREE.Color(night ? 0x020306 : 0x000000);
         this.terrainDesat.value = night ? 0.45 : 0; // moonlight washes the colour out of grass and sand
@@ -647,7 +631,7 @@ export class World {
         this.treeShadows = !low;
         // 'low' plants one kind of tree (one draw call per tile, as before); rebuild the tree tiles on a switch
         if (this.lowTrees !== low) { this.lowTrees = low; this.refreshTrees(); }
-        if (this.cloudCoverBase !== undefined) this.cloudCoverage = this.cloudMat.uniforms.coverage.value = this.cloudCoverBase * (low ? 0.7 : 1);
+        this.clouds.setQuality(q); // cheaper cloud march on lower settings
         for (const t of this.tiles.values()) if (t.trees) for (const m of t.trees.children) m.castShadow = this.treeShadows && m.geometry !== this.treeGeos.bush;
         this.terrainDetail.value = low ? 0 : 1;
         // 'low' compiles the terrain without close-up detail, bump, rock strata and surf
@@ -1583,279 +1567,6 @@ export class World {
         this.scene.add(this.water);
     }
 
-    // ── Clouds: one instanced draw call ──
-    // Cumulus clusters of a few large, soft puffs. Each puff is a camera-facing quad whose texture carries a
-    // cauliflower-shaped silhouette plus a normal map, so it is lit per pixel from the sun's direction; pixels
-    // below the cluster's base altitude fade out, which gives every cloud a flat, darker underside. Puffs are
-    // wrapped around the camera in the shader and depth-sorted on the CPU every few frames.
-    initClouds() {
-        const r = mulberry32(4242);
-        const puffs = [];
-        const CLUSTERS = 120, AREA = CLOUD_AREA;
-        for (let c = 0; c < CLUSTERS; c++) {
-            const cx = (r() - 0.5) * AREA, cz = (r() - 0.5) * AREA;
-            const high = r() < 0.18;                     // a few thin, high clouds
-            const base = high ? 2900 + r() * 800 : 1250 + r() * 600;
-            const R = high ? 700 + r() * 900 : 320 + r() * 560;   // footprint radius
-            const tall = high ? 0.12 : 0.35 + r() * 0.55;         // how much it towers, relative to R
-            const rank = r();                                     // lower ranks show first as cover increases
-            const n = high ? 4 + Math.floor(r() * 3) : 5 + Math.floor(r() * 6);
-            const ang = r() * Math.PI, stretch = 1 + r() * 0.9;
-            const ca = Math.cos(ang), sa = Math.sin(ang);
-            const top = base + tall * R * 1.3 + (high ? 250 : 420);
-            for (let i = 0; i < n; i++) {
-                const a = r() * Math.PI * 2, d = i === 0 ? 0 : Math.sqrt(0.15 + 0.85 * r()) * R;
-                const lx = Math.cos(a) * d * stretch, lz = Math.sin(a) * d;
-                const k = 1 - d / (R * 1.05); // 1 in the middle of the cluster
-                const size = (high ? 1000 : 560) * (0.55 + 0.45 * k + r() * 0.3);
-                const y = base + size * (high ? 0.12 : 0.15) + k * tall * R * 0.9 + r() * 30;
-                puffs.push({ x: cx + lx * ca - lz * sa, y, z: cz + lx * sa + lz * ca, size, base, top, rank, cell: Math.floor(r() * 8) + (high ? 8 : 0), high, a: high ? 0.55 : 1 });
-            }
-        }
-        const base = new THREE.PlaneGeometry(1, 1);
-        const geo = new THREE.InstancedBufferGeometry();
-        geo.index = base.index;
-        geo.setAttribute('position', base.attributes.position);
-        geo.setAttribute('uv', base.attributes.uv);
-        const N = puffs.length;
-        this.cloudA = new THREE.InstancedBufferAttribute(new Float32Array(N * 4), 4); // x, y, z, size
-        this.cloudB = new THREE.InstancedBufferAttribute(new Float32Array(N * 4), 4); // base, top, cell, rank
-        this.cloudC = new THREE.InstancedBufferAttribute(new Float32Array(N), 1);     // opacity
-        for (const at of [this.cloudA, this.cloudB, this.cloudC]) at.setUsage(THREE.DynamicDrawUsage);
-        geo.setAttribute('puffA', this.cloudA);
-        geo.setAttribute('puffB', this.cloudB);
-        geo.setAttribute('puffC', this.cloudC);
-        geo.instanceCount = N;
-        this.cloudPuffs = puffs;
-        this.cloudOrder = puffs.map((p, i) => i);
-        this.cloudDist = new Float32Array(N);
-        this.cloudSortPos = new THREE.Vector3(1e9, 0, 0);
-        this.cloudSortT = 0;
-
-        this.cloudMat = new THREE.ShaderMaterial({
-            transparent: true, depthWrite: false, fog: false,
-            uniforms: {
-                map: { value: this.makeCloudTexture() }, camPos: { value: new THREE.Vector3() }, wind: { value: new THREE.Vector2() },
-                litColor: { value: new THREE.Color(1, 1, 1) }, shadowColor: { value: new THREE.Color(0.6, 0.65, 0.7) },
-                sunColor: { value: new THREE.Color(1, 1, 1) }, sunDir: { value: new THREE.Vector3(0, 1, 0) }, fogColor: { value: new THREE.Color() },
-                area: { value: AREA }, coverage: { value: 0.5 }, grow: { value: 1 }, hideHigh: { value: 0 },
-                skyFogA: { value: SKY_FOG.a }, skyFogB: { value: SKY_FOG.b }, skyFogC: { value: SKY_FOG.c }, skyFogD: { value: SKY_FOG.d },
-            },
-            vertexShader: /* glsl */`
-                attribute vec4 puffA, puffB; attribute float puffC;
-                uniform vec3 camPos; uniform vec2 wind; uniform float area, coverage, grow, hideHigh;
-                varying vec2 vUv; varying vec3 vRight, vUp, vToCam, vRay; varying float vHgt, vCut, vAlpha, vFlip;
-                void main() {
-                    float size = puffA.w * grow;
-                    vec3 o = puffA.xyz;
-                    o.xz += wind;
-                    o.xz = camPos.xz + mod(o.xz - camPos.xz + area * 0.5, area) - area * 0.5;
-                    float dist = length(o - camPos);
-                    // hidden by the weather, or so close the camera is inside it: collapse the quad
-                    // hidden by the weather (high ones are above the overcast deck), or so close the camera is inside it
-                    if (puffB.w > coverage || (hideHigh > 0.5 && puffB.z > 7.5) || dist < size * 0.12) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
-                    // face the camera but stay upright in the world (so a rolled camera doesn't tip the puffs over);
-                    // looking straight up or down, fall back to the camera's own up
-                    vToCam = normalize(camPos - o);
-                    vec3 camUp = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
-                    vec3 upP = vec3(0.0, 1.0, 0.0) - vToCam * vToCam.y;
-                    float ul = length(upP);
-                    upP /= max(ul, 1e-3);
-                    if (dot(camUp, upP) < 0.0) camUp = -camUp;
-                    vUp = normalize(mix(camUp, upP, smoothstep(0.08, 0.35, ul)) + vec3(0.0, 1e-4, 0.0));
-                    vRight = normalize(cross(vUp, vToCam));
-                    vec2 q = position.xy * vec2(1.25, 1.0) * size;
-                    vec3 wp = o + vRight * q.x + vUp * q.y;
-                    vRay = wp - camPos;
-                    // atlas: 4 shapes, each also mirrored
-                    float cellId = mod(puffB.z, 8.0), cell = mod(cellId, 4.0);
-                    vFlip = step(3.5, cellId);
-                    vec2 uv0 = vec2(mix(uv.x, 1.0 - uv.x, vFlip), uv.y);
-                    vUv = (vec2(mod(cell, 2.0), floor(cell / 2.0)) + uv0) * 0.5;
-                    vHgt = (wp.y - puffB.x) / max(puffB.y - puffB.x, 1.0);
-                    vCut = (wp.y - puffB.x) / (size * 0.08);
-                    // fade in from the edge of the wrap area and out as the camera gets close
-                    vAlpha = puffC * smoothstep(size * 0.15, size * 0.6, dist) * (1.0 - smoothstep(area * 0.42, area * 0.5, length(o.xz - camPos.xz)));
-                    gl_Position = projectionMatrix * viewMatrix * vec4(wp, 1.0);
-                }`,
-            fragmentShader: /* glsl */`
-                uniform sampler2D map; uniform vec3 litColor, shadowColor, sunColor, sunDir, fogColor, camPos;
-                varying vec2 vUv; varying vec3 vRight, vUp, vToCam, vRay; varying float vHgt, vCut, vAlpha, vFlip;
-                ${FOG_GLSL}
-                void main() {
-                    vec4 t = texture2D(map, vUv);
-                    // soft, flat cloud base
-                    float a = t.a * vAlpha * smoothstep(0.0, 1.0, vCut);
-                    if (a < 0.004) discard;
-                    vec2 nxy = t.rg * 2.0 - 1.0;
-                    nxy.x *= 1.0 - 2.0 * vFlip;
-                    vec3 N = normalize(vRight * nxy.x + vUp * nxy.y + vToCam * sqrt(max(1.0 - dot(nxy, nxy), 0.0)));
-                    vec3 L = normalize(sunDir);
-                    float ndl = dot(N, L);
-                    float hgt = clamp(vHgt, 0.0, 1.0);
-                    // wrapped diffuse (clouds scatter light all round), self-shadowed toward the flat grey base
-                    float lit = clamp(ndl * 0.5 + 0.55, 0.0, 1.0) * mix(0.3, 1.0, smoothstep(0.0, 0.8, hgt)) * mix(1.0, 0.85, t.b);
-                    vec3 col = mix(shadowColor, litColor * 1.05, lit);
-                    // sky light on the tops
-                    col += shadowColor * 0.12 * max(N.y, 0.0);
-                    // light through thin edges when looking toward the sun (silver lining)
-                    vec3 V = normalize(vRay);
-                    float fwd = pow(max(dot(V, L), 0.0), 16.0);
-                    col += sunColor * fwd * (1.0 - t.b) * (1.0 - t.b) * 0.7;
-                    vec2 fog = skyFogAmount(vRay, camPos.y);
-                    col = mix(col, skyFogColor(fogColor, vRay, fog.y), fog.x);
-                    gl_FragColor = vec4(col, a * (1.0 - fog.x * 0.55));
-                    #include <tonemapping_fragment>
-                    #include <colorspace_fragment>
-                }`,
-        });
-        this.clouds = new THREE.Mesh(geo, this.cloudMat);
-        this.clouds.frustumCulled = false;
-        this.clouds.renderOrder = 5;
-        this.scene.add(this.clouds);
-        this.writeClouds();
-    }
-
-    // Overcast deck for rain and storms: one big quad following the camera at DECK_Y, broken up with noise,
-    // a dark ragged ceiling from below and a sunlit cloud sea from above
-    initOvercast() {
-        const geo = new THREE.PlaneGeometry(1, 1);
-        geo.rotateX(-Math.PI / 2);
-        this.deckMat = new THREE.ShaderMaterial({
-            transparent: true, depthWrite: false, fog: false, side: THREE.DoubleSide,
-            uniforms: {
-                groundMap: { value: this.groundTex }, wind: { value: new THREE.Vector2() }, amount: { value: 0 },
-                litColor: { value: new THREE.Color() }, shadowColor: { value: new THREE.Color() }, sunDir: { value: new THREE.Vector3(0, 1, 0) },
-                camPos: { value: new THREE.Vector3() }, fogColor: { value: new THREE.Color() },
-                skyFogA: { value: SKY_FOG.a }, skyFogB: { value: SKY_FOG.b }, skyFogC: { value: SKY_FOG.c }, skyFogD: { value: SKY_FOG.d },
-            },
-            vertexShader: /* glsl */`
-                varying vec3 vWPos;
-                void main() {
-                    vec4 wp = modelMatrix * vec4(position, 1.0);
-                    vWPos = wp.xyz;
-                    gl_Position = projectionMatrix * viewMatrix * wp;
-                }`,
-            fragmentShader: /* glsl */`
-                uniform sampler2D groundMap; uniform vec2 wind; uniform float amount;
-                uniform vec3 litColor, shadowColor, sunDir, camPos, fogColor;
-                varying vec3 vWPos;
-                ${FOG_GLSL}
-                void main() {
-                    vec2 p = vWPos.xz - wind;
-                    float n = texture2D(groundMap, p / 21000.0).a * 0.5 + texture2D(groundMap, p / 7300.0 + 0.31).a * 0.32 + texture2D(groundMap, p / 2300.0 + 0.67).a * 0.18;
-                    float cover = smoothstep(1.0 - amount, 1.35 - amount, n);
-                    vec3 ray = vWPos - camPos;
-                    float below = step(camPos.y, vWPos.y);
-                    // from below: grey, darker where thick; from above: lit tops
-                    vec3 under = shadowColor * mix(1.05, 0.55, smoothstep(0.35, 0.85, n));
-                    vec3 over = mix(shadowColor, litColor * 1.1, 0.55 + 0.45 * max(normalize(sunDir).y, 0.0)) * mix(0.72, 1.06, smoothstep(0.3, 0.8, n));
-                    vec3 col = mix(over, under, below);
-                    // thin out when the camera is at the deck's height (the whiteout takes over)
-                    float a = cover * smoothstep(40.0, 260.0, abs(ray.y)) * (1.0 - smoothstep(skyFogA.z * 0.8, skyFogA.w, length(ray.xz)));
-                    vec2 fg = skyFogAmount(ray, camPos.y);
-                    col = mix(col, skyFogColor(fogColor, ray, fg.y), fg.x);
-                    gl_FragColor = vec4(col, a);
-                    #include <tonemapping_fragment>
-                    #include <colorspace_fragment>
-                }`,
-        });
-        this.deck = new THREE.Mesh(geo, this.deckMat);
-        this.deck.scale.set(64000, 1, 64000);
-        this.deck.frustumCulled = false;
-        this.deck.renderOrder = 4;
-        this.deck.visible = false;
-        this.scene.add(this.deck);
-        this.overcast = 0;
-    }
-
-    // wrapped world position of a puff relative to the camera (the shader does the same)
-    cloudWrap(p, cam, out) {
-        const A = CLOUD_AREA;
-        let dx = p.x + this.windOffset.x - cam.x, dz = p.z + this.windOffset.y - cam.z;
-        dx = ((dx + A * 0.5) % A + A) % A - A * 0.5;
-        dz = ((dz + A * 0.5) % A + A) % A - A * 0.5;
-        return out.set(cam.x + dx, p.y, cam.z + dz);
-    }
-
-    // far puffs first (the one draw call blends them back to front)
-    sortClouds(cam) {
-        const P = this.cloudPuffs, D = this.cloudDist, O = this.cloudOrder;
-        for (let i = 0; i < P.length; i++) { this.cloudWrap(P[i], cam, _v1); D[i] = _v1.distanceToSquared(cam); }
-        O.sort((a, b) => D[b] - D[a]);
-        this.writeClouds();
-        this.cloudSortPos.copy(cam);
-    }
-
-    writeClouds() {
-        const A = this.cloudA.array, B = this.cloudB.array, C = this.cloudC.array;
-        this.cloudOrder.forEach((pi, i) => {
-            const p = this.cloudPuffs[pi];
-            A[i * 4] = p.x; A[i * 4 + 1] = p.y; A[i * 4 + 2] = p.z; A[i * 4 + 3] = p.size;
-            B[i * 4] = p.base; B[i * 4 + 1] = p.top; B[i * 4 + 2] = p.cell; B[i * 4 + 3] = p.rank;
-            C[i] = p.a;
-        });
-        this.cloudA.needsUpdate = this.cloudB.needsUpdate = this.cloudC.needsUpdate = true;
-    }
-
-    // Atlas of 4 puff shapes (2x2). Each is a union of sphere caps (lobes) roughened with noise:
-    // rg = normal (x, y), b = thickness, a = coverage. A DataTexture, so the normals under transparent
-    // pixels survive (a canvas would premultiply them away).
-    makeCloudTexture() {
-        const S = 512, C = 256;
-        const data = new Uint8Array(S * S * 4);
-        const r = mulberry32(777);
-        const H = new Float32Array(C * C), Wd = new Float32Array(C * C);
-        for (let cell = 0; cell < 4; cell++) {
-            // lobes: a big central dome, smaller ones around and on top of it
-            const lobes = [{ x: 0, y: -0.05, r: 0.25 }];
-            const n = 10 + Math.floor(r() * 6);
-            for (let i = 0; i < n; i++) {
-                const a = r() * Math.PI * 2, d = 0.08 + r() * 0.2;
-                const lr = 0.06 + r() * 0.11;
-                let ly = Math.sin(a) * d * 0.75 + 0.02;
-                if (ly < -0.12) ly = -0.12 + (ly + 0.12) * 0.25; // few lobes hang below the middle
-                lobes.push({ x: Math.cos(a) * d * 1.2, y: ly, r: lr * (ly > 0.05 ? 1.1 : 0.9) });
-            }
-            // smooth union of the sphere caps: rounded joins instead of creases between lobes
-            const smax = (a, b, k) => { const q = Math.max(k - Math.abs(a - b), 0) / k; return Math.max(a, b) + q * q * k * 0.25; };
-            for (let j = 0; j < C; j++) for (let i = 0; i < C; i++) {
-                const x = i / C - 0.5, y = j / C - 0.5; // row 0 is the bottom (v = 0)
-                let h = -0.05;
-                for (const L of lobes) {
-                    const dx = x - L.x, dy = y - L.y, d2 = L.r * L.r - dx * dx - dy * dy;
-                    h = smax(h, d2 > 0 ? Math.sqrt(d2) : -Math.sqrt(-d2) * 0.5, 0.05);
-                }
-                // gently billowing surface, and wispy, eroded edges
-                const nz = fbm(i * 0.028 + cell * 17, j * 0.028 - cell * 5, 3);
-                h += nz * 0.022 * clamp(h * 10, 0, 1);
-                H[j * C + i] = h;
-                Wd[j * C + i] = fbm(i * 0.09 - cell * 9, j * 0.09 + cell * 3, 3) * 0.04 + fbm(i * 0.3, j * 0.3 + cell * 7, 2) * 0.012;
-            }
-            const ox = (cell % 2) * C, oy = Math.floor(cell / 2) * C;
-            for (let j = 0; j < C; j++) for (let i = 0; i < C; i++) {
-                const h = H[j * C + i];
-                const hx = (H[j * C + Math.min(i + 1, C - 1)] - H[j * C + Math.max(i - 1, 0)]) * C / 2;
-                const hy = (H[Math.min(j + 1, C - 1) * C + i] - H[Math.max(j - 1, 0) * C + i]) * C / 2;
-                // surface normal (-dh/dx, -dh/dy, 1), a little flattened so puffs don't read as balls
-                const l = Math.hypot(hx * 0.75, hy * 0.75, 1);
-                const edge = Math.min(i, j, C - 1 - i, C - 1 - j) / (C * 0.06); // keep mip levels inside the cell
-                const cov = clamp((h + Wd[j * C + i]) / 0.08, 0, 1) * clamp(edge, 0, 1);
-                const k = ((oy + j) * S + ox + i) * 4;
-                data[k] = (-hx * 0.75 / l * 0.5 + 0.5) * 255;
-                data[k + 1] = (-hy * 0.75 / l * 0.5 + 0.5) * 255;
-                data[k + 2] = clamp(h / 0.28, 0, 1) * 255;
-                data[k + 3] = cov * cov * (3 - 2 * cov) * 255;
-            }
-        }
-        const tex = new THREE.DataTexture(data, S, S, THREE.RGBAFormat);
-        tex.magFilter = THREE.LinearFilter;
-        tex.minFilter = THREE.LinearMipmapLinearFilter;
-        tex.generateMipmaps = true;
-        tex.needsUpdate = true;
-        return tex;
-    }
-
     // ── Airbase dressing: runway, taxiways, hangars, tower, lights ──
     initBases() {
         this.baseLights = [];
@@ -2004,15 +1715,7 @@ export class World {
         const wu = this.waterMat.uniforms;
         wu.time.value = this.time;
         wu.fogColor.value.copy(fog.color);
-        const cu = this.cloudMat.uniforms;
-        this.windOffset.x += wind.x * dt * 0.6;
-        this.windOffset.y += wind.z * dt * 0.6;
-        cu.wind.value.copy(this.windOffset);
-        cu.camPos.value.copy(cam);
-        cu.fogColor.value.copy(fog.color);
-        // re-sort the cloud puffs now and then (they only drift slowly relative to each other)
-        this.cloudSortT -= dt;
-        if (this.cloudSortT <= 0 || cam.distanceToSquared(this.cloudSortPos) > 60 * 60) { this.sortClouds(cam); this.cloudSortT = 0.5; }
+        this.clouds.update(dt, camera, wind, fog.color);
         // trees sway with the wind, harder in a storm
         const ws = Math.hypot(wind.x, wind.z), storm = this.weather === 'storm' ? 1 : this.weather === 'rain' ? 0.5 : 0;
         this.uWind.value.set(ws > 0.1 ? wind.x / ws : 1, 0.35 + ws * 0.06 + storm * 0.9, ws > 0.1 ? wind.z / ws : 0);
@@ -2035,35 +1738,11 @@ export class World {
             this.aimShadow(this.sunFar, _fc.copy(_sc), FAR_SHADOW, 4000);
         }
         this.updateGrass(camera, dt);
-        if (this.deck.visible) {
-            this.deck.position.set(cam.x, DECK_Y, cam.z);
-            const du = this.deckMat.uniforms;
-            du.wind.value.copy(this.windOffset);
-            du.camPos.value.copy(cam);
-            du.fogColor.value.copy(fog.color);
-            // seen from above, the deck draws over the clouds below it
-            this.deck.renderOrder = cam.y > DECK_Y ? 6 : 4;
-        }
         this.updateTerrain(focus);
     }
 
-    // Returns 0..1: how deep inside a cloud a point is (for whiteout effect)
+    // Returns 0..1: how deep inside a cloud a point is (for the whiteout effect)
     cloudDensityAt(p) {
-        const cov = this.cloudCoverage ?? 0.5, grow = this.cloudGrow ?? 1;
-        let best = 0;
-        for (let i = 0; i < this.cloudPuffs.length; i += 1) {
-            const c = this.cloudPuffs[i];
-            if (c.rank > cov || p.y < c.base || (c.high && this.overcast > 0.3)) continue;
-            const R = c.size * grow * 0.42;
-            if (Math.abs(p.y - c.y) > R) continue;
-            this.cloudWrap(c, p, _v1);
-            const d = _v1.distanceTo(p);
-            if (d < R) best = Math.max(best, (1 - d / R) * c.a);
-        }
-        if (this.overcast > 0) {
-            const d = Math.abs(p.y - (DECK_Y + 90));
-            if (d < 110) best = Math.max(best, this.overcast * (1 - d / 110));
-        }
-        return best;
+        return this.clouds.whiteoutAt(p);
     }
 }
