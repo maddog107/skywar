@@ -17,10 +17,11 @@ import { groundHeight, terrainHeight, isOnRunway } from './world.js';
 const LIFT_K = 0.0016;
 const CL_MAX = 1.65;
 const K_INDUCED = 0.13;
+const POST_STALL = 0.35; // deepest post-stall AoA, as a fraction past max AoA (types without an AoA limiter)
 
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
 const _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
-const _acc = new THREE.Vector3();
+const _acc = new THREE.Vector3(), _vOld = new THREE.Vector3();
 const AX = new THREE.Vector3(1, 0, 0), AY = new THREE.Vector3(0, 1, 0), AZ = new THREE.Vector3(0, 0, 1);
 
 // Shared flame material template (additive, HDR so bloom picks it up)
@@ -62,41 +63,62 @@ function makeFlameMaterial() {
 }
 const navTex = makeRadialTexture(64, [[0, 'rgba(255,255,255,1)'], [0.2, 'rgba(255,255,255,0.8)'], [1, 'rgba(255,255,255,0)']]);
 
-// ── Compressibility ──
-// Real top speeds (Mach, at ~11 km). Drag rises through the transonic region,
-// peaks just past Mach 1 and falls off again at supersonic speed; each type's
-// wave-drag strength is calibrated so it tops out at its real Mach number.
-const MMAX = {
-    f22: 2.25, f35: 1.6, f35n: 1.6, f16: 2.05, f15: 2.5, fa18: 1.8, f14: 2.34, a10: 0.75, f4: 2.23, f2: 2.0,
-    su57: 2.0, su35: 2.25, mig29: 2.25, mig31: 2.83, typhoon: 2.0, rafale: 1.8, j20: 2.0, gripen: 2.0,
-    mig21: 2.05, mig25: 2.83, j10: 2.2, j8: 2.2, f5: 1.6, mirage: 2.2, jaguar: 1.6, su47: 1.65, b2: 0.95,
-    cessna: 0.25, b737: 0.82, b747: 0.92, c130: 0.6, racer: 0.72, pitts: 0.35,
-};
-const soundSpeed = (h) => 340 - Math.max(h, 0) * 0.004;
-const airDensity = (h) => Math.exp(-Math.max(h, 0) / 9000);
+// ── Thrust, drag and compressibility ──
+// Drag (per unit mass): q·(cd0·(1 + W·waveShape(M)) + K·Cl²/lift), q = liftK·V²·ρ.
+// Thrust: accel · lapse(ρ) · ram(M) · throttle curve.
+// Each type is calibrated at two points from config.js — the level top speed at sea level (`speed`)
+// and at 11 km (`mach`) — by solving for the wave-drag strength W and the ram-thrust gain k (the
+// subsonic drag cd0 is given, so handling at combat speeds stays as tuned). Subsonic types derive
+// cd0 from the sea-level point and W from the 11 km "wall" instead.
+export const soundSpeed = (h) => 340 - Math.max(h, 0) * 0.004;
+export const airDensity = (h) => Math.exp(-Math.max(h, 0) / 9000);
+const CAL_ALT = 11000;
+const MIL_RAM = 0.4; // share of the ram-thrust gain available without afterburner
 // wave-drag shape: 0 below the critical Mach, 1 at the peak (~M1.1), decaying when supersonic
-function waveShape(M, mmax) {
+export function waveShape(M, mmax) {
     if (mmax < 1) { const mc = mmax - 0.04; return M > mc ? 60 * (M - mc) * (M - mc) : 0; } // subsonic types hit a wall
     if (M < 0.85) return 0;
     if (M < 1.1) { const t = (M - 0.85) / 0.25; return t * t * (3 - 2 * t); }
     return 1 / (1 + 1.6 * (M - 1.1));
 }
-// supersonic ram recovery gives afterburning jets more thrust at speed
-const ramFactor = (M, spec) => (spec.category === 'civil' || spec.prop ? 1 : 1 + 0.18 * clamp(M - 0.9, 0, 1.8));
-const waveCache = {};
-function waveStrength(typeId, spec) {
-    if (waveCache[typeId] != null) return waveCache[typeId];
-    const f = spec.flight, mmax = MMAX[typeId] ?? (spec.category === 'civil' ? 0.85 : 1.8);
-    const liftK = LIFT_K * f.lift, cd0 = f.accel / (liftK * f.speed * f.speed), h = 11000, rho = airDensity(h);
-    const V = mmax * soundSpeed(h), q = liftK * V * V * rho;
-    const Cl = G / q;
-    const thrust = f.accel * (0.45 + 0.55 * rho) * ramFactor(mmax, spec);
-    // thrust = q·(cd0·(1 + W·shape) + K·Cl²/lift)  →  solve for W
-    const W = ((thrust / q - K_INDUCED * Cl * Cl / f.lift) / cd0 - 1) / Math.max(waveShape(mmax, mmax), 1e-3);
-    waveCache[typeId] = Math.max(0, W);
-    return waveCache[typeId];
+// jet engines lose thrust roughly as ρ^0.75 (ram recovery wins some back at speed); civil and prop types
+// keep a gentler curve (they cruise high on a much smaller thrust margin)
+const isJet = (spec) => !(spec.category === 'civil' || spec.prop);
+export const thrustLapse = (rho, spec) => (isJet(spec) ? Math.pow(rho, 0.75) : 0.45 + 0.55 * rho);
+const ramX = (M) => clamp(M - 0.9, 0, 2);
+
+const calCache = {};
+// Solve the two-point calibration for a type: { cd0, waveK, ramK }
+export function flightCalibration(typeId, spec = AIRCRAFT[typeId]) {
+    if (calCache[typeId]) return calCache[typeId];
+    const f = spec.flight, liftK = LIFT_K * f.lift, mmax = f.mach ?? 1.8;
+    const point = (h, M) => {
+        const V = M * soundSpeed(h), rho = airDensity(h), q = liftK * V * V * rho, Cl = G / q;
+        return { T: f.accel * thrustLapse(rho, spec) / q, ind: K_INDUCED * Cl * Cl / f.lift, s: waveShape(M, mmax), x: ramX(M) };
+    };
+    const p1 = point(0, f.speed / soundSpeed(0)), p2 = point(CAL_ALT, mmax);
+    let cd0 = f.cd0, W = 0, k = 0;
+    if (mmax < 1 || cd0 == null || !isJet(spec) || f.afterburner === false) {
+        // subsonic: the sea-level point sits (nearly) below the drag wall → cd0; the 11 km Mach sets the wall
+        const given = cd0;
+        for (let i = 0; i < 8; i++) {
+            if (given == null) cd0 = (p1.T - p1.ind) / (1 + W * p1.s);
+            W = Math.max(0, ((p2.T - p2.ind) / cd0 - 1) / Math.max(p2.s, 1e-3));
+        }
+    } else {
+        // T·(1 + k·x) = cd0·(1 + W·s) + ind at both points: linear in (k, W)
+        const a11 = p1.T * p1.x, a12 = -cd0 * p1.s, b1 = cd0 + p1.ind - p1.T;
+        const a21 = p2.T * p2.x, a22 = -cd0 * p2.s, b2 = cd0 + p2.ind - p2.T;
+        const det = a11 * a22 - a12 * a21;
+        k = (b1 * a22 - a12 * b2) / det;
+        W = (a11 * b2 - a21 * b1) / det;
+        // out of range (shouldn't happen with sane targets): keep one term at 0 and fit the other to 11 km
+        if (!(k >= 0)) { k = 0; W = ((p2.T - p2.ind) / cd0 - 1) / Math.max(p2.s, 1e-3); }
+        if (!(W >= 0)) { W = 0; k = Math.max(0, ((cd0 + p2.ind) / p2.T - 1) / Math.max(p2.x, 1e-3)); }
+    }
+    return (calCache[typeId] = { cd0, waveK: Math.max(0, W), ramK: k });
 }
-export function maxMach(typeId) { return MMAX[typeId] ?? 1.8; }
+export function maxMach(typeId) { return AIRCRAFT[typeId]?.flight.mach ?? 1.8; }
 
 // Handy reference speeds (m/s): stall with a flap setting, takeoff and approach
 export function refSpeeds(spec) {
@@ -127,6 +149,9 @@ export class Aircraft {
         const { object, rig } = createAircraftModel(typeId);
         this.model = object;
         this.rig = rig;
+        // procedural models (types without a .glb: F-22, F/A-18, A-10, Su-35, MiG-31, Gripen, ...) have no
+        // measured half span; weapons.js hangs missiles off it, so without this their launch position was NaN
+        if (!(rig.halfSpan > 0)) rig.halfSpan = this.spec.span / 2;
         this.root = new THREE.Group();
         this.root.add(object);
         game.scene.add(this.root);
@@ -140,12 +165,14 @@ export class Aircraft {
         this.pitchTau = f.pitchTau ?? clamp(0.3 / f.roll, 0.07, 0.35);
         this.alphaRate = f.alphaRate ?? clamp(0.3 * f.roll, 0.6, 1.4);
         this.rollResp = clamp(f.roll * 2.2, 3, 10); // 1/s: how quickly roll rate follows the stick
-        this.cd0 = f.accel / (this.liftK * f.speed * f.speed);
+        const cal = flightCalibration(typeId, this.spec);
+        this.cd0 = cal.cd0;
+        this.waveK = cal.waveK;
+        this.ramK = cal.ramK;
         this.mmax = maxMach(typeId);
-        this.waveK = waveStrength(typeId, this.spec);
         this.thrustAB = f.accel;
-        // no afterburner on civil and propeller aircraft: 90% throttle is nearly full power
-        this.hasAB = !(this.spec.category === 'civil' || this.spec.prop);
+        // no afterburner on civil, propeller and non-reheat jets (A-10, B-2): 90% throttle is nearly full power
+        this.hasAB = isJet(this.spec) && f.afterburner !== false;
         this.thrustMil = f.accel * (this.hasAB ? 0.62 : 0.92);
         this.hitRadius = clamp(this.spec.length * 0.55, 7, 22);
         this.gearOffset = -(rig.minY ?? -this.spec.length * 0.08) + 1.2;
@@ -172,6 +199,8 @@ export class Aircraft {
         this.deck = null; this.deckHeading = 0; this.relSpeed = 0; this.trap = false; this.catapult = 0;
         this.gLoad = 1;
         this.stalling = false;
+        this.stallExcess = 0; this.stallDepth = 0; this.stallDir = 1; // post-stall state (see updateFlight)
+        this.pullAvail = 1; this.pitchAuthority = 1; this.nAvail = 9; this.nNeutral = 1;
         this.speed = this.vel.length();
         this.mach = 0;
 
@@ -454,12 +483,13 @@ export class Aircraft {
         this.syncBody();
     }
 
-    // Engine thrust (m/s²) for the current throttle, including fuel starvation
-    thrustFor(rho) {
+    // Engine thrust (m/s²) for the current throttle at this air density and Mach, including fuel starvation
+    thrustFor(rho, mach = 0) {
         if (this.flameout && this.game.settings?.fuel === false && !this.bellied && !this.forcedFlameout) { this.flameout = false; this.fuel = Math.max(this.fuel, 0.05); }
         if (this.flameout || this.bellied) return 0;
-        const t = this.throttle;
-        return (t <= 0.9 ? this.thrustMil * (t / 0.9) : this.thrustMil + (this.thrustAB - this.thrustMil) * ((t - 0.9) / 0.1)) * (0.45 + 0.55 * rho);
+        const t = this.throttle, r = this.ramK * ramX(mach);
+        const mil = this.thrustMil * (1 + MIL_RAM * r), ab = this.thrustAB * (1 + r);
+        return (t <= 0.9 ? mil * (t / 0.9) : mil + (ab - mil) * ((t - 0.9) / 0.1)) * thrustLapse(rho, this.spec);
     }
 
     burnFuel(dt) {
@@ -513,10 +543,15 @@ export class Aircraft {
         // missing wing: strong roll toward the damaged side, less lift
         const lostL = this.lostRegions.has('wingL'), lostR = this.lostRegions.has('wingR');
         if (lostL !== lostR) rollTarget += (lostL ? -1 : 1) * f.roll * 0.3 * clamp(V / 150, 0.2, 1);
+        // stalled wing drops (one side lets go first)
+        if (this.stallDepth > 0) rollTarget += this.stallDir * f.roll * 0.3 * this.stallDepth * clamp(V / 60, 0.3, 1);
         // roll rate builds briskly and stops harder than it starts, so the wings stop near where the stick is centred
         const rollLag = this.rollResp * (Math.abs(rollTarget) < Math.abs(this.rollRate) ? 2.5 : 1);
-        this.rollRate = damp(this.rollRate, rollTarget, rollLag, dt);
-        _q1.setFromAxisAngle(AZ, -this.rollRate * dt);
+        // exact over the step for a first-order lag: the roll angle it sweeps is the same at any frame rate
+        const r0 = this.rollRate, eR = Math.exp(-rollLag * dt);
+        this.rollRate = rollTarget + (r0 - rollTarget) * eR;
+        const rollStep = rollTarget * dt + (r0 - rollTarget) * (1 - eR) / rollLag;
+        _q1.setFromAxisAngle(AZ, -rollStep);
         this.qv.multiply(_q1);
 
         // Lift direction & neutral G (so neutral stick holds the flight path)
@@ -531,6 +566,10 @@ export class Aircraft {
         // still max performance; AI and autopilot loops keep the raw mapping they're tuned for.
         const nAvail = q * (this.clEff * this.alphaMax + this.flapCl) / G;
         this.pitchAuthority = clamp((nAvail * 1.03 - nNeutral) / Math.max(gLim - nNeutral, 0.1), 0.1, 1);
+        // the same without the floor: the most pull (raw stick mapping) that stays on the right side of the
+        // stall — AI and autopilot cap their stick at this
+        this.pullAvail = clamp((nAvail - nNeutral) / Math.max(gLim - nNeutral, 0.1), 0, 1);
+        this.nAvail = nAvail; this.nNeutral = nNeutral;
         // flaps: extra lift makes the jet balloon up for a few seconds (like an untrimmed GeoFS jet)
         if (this._lastFlaps === undefined) this._lastFlaps = this.flaps;
         if (this.flaps !== this._lastFlaps) { this.balloon = (this.balloon || 0) + (this.flaps - this._lastFlaps) * 0.45; this._lastFlaps = this.flaps; }
@@ -545,34 +584,62 @@ export class Aircraft {
         // stall warning: slow (near the 1-G stall speed at this density & flap setting), or at max AoA while slowish —
         // not an alpha-limited break turn at corner speed
         const vStall = Math.sqrt(G / (this.liftK * rho * CL_MAX * (1 + 0.2 * this.flaps)));
-        this.stalling = !this.falling && (V < vStall * 1.1 || (alphaCmd > alphaLim * 0.98 && c.pitch > -0.2 && V < vStall * 1.6));
-        alphaCmd = clamp(alphaCmd, -alphaLim * 0.55, alphaLim);
+        // Post-stall: without an AoA limiter, pulling for more lift than the wing has lets the AoA creep past
+        // the stall (slowly, so a brief over-pull only buffets). Lift then falls off, drag rises and a wing
+        // drops; easing the stick (not pulling past the limit) brings the AoA straight back.
+        const over = alphaCmd / alphaLim - 1.05; // how far past the stall the stick asks for
+        const eTarget = !f.aoaLimiter && !this.falling && c.pitch > 0.02 && over > 0 ? POST_STALL * clamp(over / 0.4, 0, 1) : 0;
+        this.stallExcess = eTarget > this.stallExcess ? Math.min(eTarget, this.stallExcess + 0.3 * dt) : Math.max(eTarget, this.stallExcess - 2 * dt);
+        const alphaTop = alphaLim * (1 + this.stallExcess);
+        this.stalling = !this.falling && (V < vStall * 1.1 || (alphaCmd > alphaLim * 0.98 && c.pitch > -0.2 && V < vStall * 1.6) || this.stallDepth > 0);
+        alphaCmd = clamp(alphaCmd, -alphaLim * 0.55, alphaTop);
         // AoA follows the command through a first-order lag (smooth G onset, no overshoot or porpoising),
         // with the nose's slew rate relative to the flight path capped so it can't snap to max AoA
         const alphaRateMax = this.alphaRate * clamp(V / Math.min(120, f.speed * 0.6), 0.35, 1.2);
+        const a0 = this.alpha;
         const dA = (alphaCmd - this.alpha) * (1 - Math.exp(-dt / this.pitchTau));
         this.alpha += clamp(dA, -alphaRateMax * dt, alphaRateMax * dt);
-        this.alpha = clamp(this.alpha, -alphaLim * 0.6, alphaLim);
+        this.alpha = clamp(this.alpha, -alphaLim * 0.6, alphaTop);
+        // forces use the AoA/sideslip averaged over the step (not the end value), so the lift and G build up
+        // along the same time line at 30 fps as at 120
+        const aMid = (a0 + this.alpha) / 2;
 
         // Sideslip from rudder
         const betaCmd = c.yaw * 7 * DEG * authority;
+        const b0 = this.beta;
         this.beta = damp(this.beta, betaCmd, 4, dt);
+        const bMid = (b0 + this.beta) / 2;
 
-        const Cl = clS * this.alpha + cl0;
+        // lift curve: linear up to CL_MAX at max AoA, a short buffet plateau, then lift falls away
+        let Cl;
+        const aN = aMid / alphaLim;
+        if (aN <= 1) { Cl = clS * aMid; this.stallDepth = 0; }
+        else {
+            const depth = clamp((aN - 1.05) / (POST_STALL - 0.05), 0, 1);
+            if (depth > 0 && !(this.stallDepth > 0)) this.stallDir = Math.sign(this.rollRate + this.beta * 5) || (Math.random() < 0.5 ? -1 : 1);
+            this.stallDepth = depth;
+            Cl = CL_MAX * (1 - 0.35 * depth);
+        }
+        Cl += cl0;
         let lift = q * Cl * (1 - (this.lostRegions.has('wingL') ? 0.22 : 0) - (this.lostRegions.has('wingR') ? 0.22 : 0));
         const maxLift = gLim * G * 1.05;
         lift = clamp(lift, -maxLift * 0.45, maxLift);
-        const side = -q * this.clSlope * 0.45 * this.beta;
+        const side = -q * this.clSlope * 0.45 * bMid;
 
-        let cd = this.cd0 * (1 + 3.5 * this.brakeAnim) + K_INDUCED * Cl * Cl / f.lift + 0.6 * this.beta * this.beta;
+        let cd = this.cd0 * (1 + 3.5 * this.brakeAnim) + K_INDUCED * Cl * Cl / f.lift + 0.6 * bMid * bMid;
         if (this.gearAnim > 0.05) cd += this.cd0 * 0.8 * this.gearAnim;
+        cd += 0.3 * this.stallDepth; // separated flow over a stalled wing
         cd += this.cd0 * 0.85 * this.flapAnim * 2;
         if (this.flaps && V > 175 && this.isPlayer) { this.flaps = 0; this.game.events.emit('flapsBlown', this); }
         // compressibility: transonic drag rise, easing off once supersonic
         cd += this.cd0 * this.waveK * waveShape(this.mach, this.mmax);
+        // past the type's top Mach (thermal / structural limit) drag climbs steeply, so thinner air above
+        // 11 km only buys a few percent more
+        const overM = this.mach - this.mmax - 0.04;
+        if (overM > 0 && this.mmax >= 1) cd += this.cd0 * 40 * overM * overM;
         const drag = q * cd;
 
-        const thrustN = this.thrustFor(rho) * ramFactor(this.mach, this.spec);
+        const thrustN = this.thrustFor(rho, this.mach);
         this.afterburner = this.hasAB && this.throttle > 0.905 && !this.flameout;
         this.burnFuel(dt);
 
@@ -599,6 +666,7 @@ export class Aircraft {
         this.gLoad = lift / G + (this.gLoad - lift / G) * Math.exp(-10 * dt);
 
         const oldDir = _v2.copy(vhat);
+        _vOld.copy(this.vel); // start-of-step velocity, for the position update
         this.vel.addScaledVector(_acc, dt);
         V = this.vel.length();
         if (V < 5) { this.vel.addScaledVector(bodyFwd, 5 - V); V = 5; }
@@ -609,8 +677,8 @@ export class Aircraft {
         _q1.setFromUnitVectors(oldDir, newDir);
         this.qv.premultiply(_q1).normalize();
 
-        // Stall departure: well below the stall speed the nose falls through
-        const vDep = this.departV ?? (this.departV = refSpeeds(this.spec).stall * 0.8);
+        // Stall departure: well below the stall speed (true airspeed at this density and flap setting) the nose falls through
+        const vDep = vStall * 0.8;
         if (V < vDep && !this.falling) {
             const drop = (vDep - V) / vDep;
             const fwdW = _v2.set(0, 0, -1).applyQuaternion(this.qv);
@@ -623,7 +691,8 @@ export class Aircraft {
             }
         }
 
-        this.pos.addScaledVector(this.vel, dt);
+        // trapezoidal position step (average of the start and end velocity): turns trace the same arc at any frame rate
+        this.pos.addScaledVector(_vOld.add(this.vel), dt * 0.5);
         this.syncBody();
         this.checkGround(dt);
     }
@@ -681,7 +750,7 @@ export class Aircraft {
         this.relSpeed = V;
         this.speed = V;
         this.gLoad = 1;
-        this.stalling = false;
+        this.stalling = false; this.stallExcess = 0; this.stallDepth = 0;
         this.mach = V / 340;
         const dir = _v2.set(0, 0, -1).applyQuaternion(this.qv);
         this.vel.copy(dir).multiplyScalar(V);
