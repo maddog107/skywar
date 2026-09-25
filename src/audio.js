@@ -3,14 +3,17 @@
 //
 //   master (volume) → compressor → speakers
 //     ├─ world bus → "canopy" lowpass (muffled in the cockpit) → master
-//     │    engine (per class: jet / turbofan / turboprop / piston), wind & buffet,
-//     │    fly-by voices for nearby aircraft (Doppler, panned), guns, one-shots
-//     └─ ui bus: warning tones, radio clicks, menu ticks (never muffled)
+//     │    engine (per class: jet / turbofan / turboprop / piston, prop blade-pass buzz,
+//     │    afterburner light-off thump), wind & buffet, fly-by voices for nearby aircraft and
+//     │    airliners (Doppler, panned), helicopter rotor thump, sonic booms, guns, explosions
+//     ├─ inner bus: sounds inside the airframe (gear, flaps, airbrake hydraulics) — not muffled
+//     └─ ui bus: warning tones, radio static and clicks, menu ticks (never muffled)
 //
 // Every one-shot disconnects itself when it ends, heavy one-shots are voice-limited,
 // and nothing is scheduled while the context is suspended (or the tab is hidden).
 // ═══════════════════════════════════════════════════════════════
 import { clamp } from './util.js';
+import { AIRCRAFT } from './config.js';
 
 // real rates of fire (rounds/s) and character for the guns in config.js
 function gunProfile(gun) {
@@ -46,6 +49,8 @@ export class Audio {
         this.tones = {};
         this.boomEnds = [];    // end times of the heavy one-shots still playing (voice limit)
         this.voices = [];      // fly-by voices
+        this.boomWatch = new WeakMap(); // supersonic aircraft → closing/opening state for sonic booms
+        this.last = {};        // previous gear / flaps / airbrake / afterburner states
     }
 
     init() {
@@ -64,6 +69,7 @@ export class Audio {
         this.world.connect(this.cabin).connect(this.master);
         this.sfx = ctx.createGain(); this.sfx.connect(this.world);
         this.ui = ctx.createGain(); this.ui.gain.value = 0.5; this.ui.connect(this.master);
+        this.inner = ctx.createGain(); this.inner.gain.value = 0.8; this.inner.connect(this.master);
 
         // noise buffers
         const len = ctx.sampleRate * 2;
@@ -83,7 +89,9 @@ export class Audio {
         this.buildEngine();
         this.buildGun();
         this.buildFlyby();
+        this.buildHeli();
         this.buildTones();
+        this.buildRadio();
         // a hidden tab shouldn't keep droning (and must not queue up sounds to dump on return)
         document.addEventListener('visibilitychange', () => {
             if (!this.ctx) return;
@@ -153,6 +161,12 @@ export class Audio {
         this.chugLfo.connect(chugDepth).connect(chug.gain);
         this.piston.connect(this.pistonF).connect(chug).connect(this.pistonG).connect(this.engine);
         this.piston.start(); this.chugLfo.start();
+        // propeller blade-pass buzz (piston and turboprop)
+        this.propBuzz = ctx.createOscillator(); this.propBuzz.type = 'sawtooth'; this.propBuzz.frequency.value = 80;
+        this.propF = ctx.createBiquadFilter(); this.propF.type = 'bandpass'; this.propF.frequency.value = 240; this.propF.Q.value = 1.4;
+        this.propG = ctx.createGain(); this.propG.gain.value = 0;
+        this.propBuzz.connect(this.propF).connect(this.propG).connect(this.engine);
+        this.propBuzz.start();
         // wind over the canopy, and airframe buffet at high AoA / G
         this.windF = ctx.createBiquadFilter(); this.windF.type = 'bandpass'; this.windF.frequency.value = 900; this.windF.Q.value = 0.5;
         this.windG = ctx.createGain(); this.windG.gain.value = 0;
@@ -213,6 +227,38 @@ export class Audio {
         }
     }
 
+    // One voice for the nearest helicopter: the rotor's blade-slap thump over a turbine hiss
+    buildHeli() {
+        const ctx = this.ctx;
+        const out = ctx.createGain(); out.gain.value = 0;
+        const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+        const air = ctx.createBiquadFilter(); air.type = 'lowpass'; air.frequency.value = 3000;
+        const src = this.noiseSrc(this.pink); src.start(0, Math.random() * 1.9);
+        const lf = ctx.createBiquadFilter(); lf.type = 'lowpass'; lf.frequency.value = 500;
+        const slap = ctx.createGain(); slap.gain.value = 0.15;
+        const lfo = ctx.createOscillator(); lfo.type = 'square'; lfo.frequency.value = 17;
+        const depth = ctx.createGain(); depth.gain.value = 0.85;
+        lfo.connect(depth).connect(slap.gain); lfo.start();
+        src.connect(lf).connect(slap).connect(air);
+        const tur = this.noiseSrc(this.white); tur.start(0, Math.random() * 1.9);
+        const tf = ctx.createBiquadFilter(); tf.type = 'bandpass'; tf.frequency.value = 3200; tf.Q.value = 2;
+        const tg = ctx.createGain(); tg.gain.value = 0.05;
+        tur.connect(tf).connect(tg).connect(air);
+        if (pan) air.connect(pan).connect(out); else air.connect(out);
+        out.connect(this.world);
+        this.heli = { out, pan, air, src, lfo };
+    }
+
+    // Radio static that runs under a spoken callout (speech synthesis can't be filtered, so this is
+    // what makes it sound like it's coming over the radio)
+    buildRadio() {
+        const ctx = this.ctx;
+        const src = this.noiseSrc(this.white); src.start(0, Math.random() * 1.9);
+        const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1900; f.Q.value = 0.9;
+        this.radioG = ctx.createGain(); this.radioG.gain.value = 0;
+        src.connect(f).connect(this.radioG).connect(this.ui);
+    }
+
     buildTones() {
         const ctx = this.ctx;
         const mk = (type, freq, lp = 3000) => {
@@ -243,6 +289,8 @@ export class Audio {
             this.gunStop(t);
             for (const k in this.tones) set(this.tones[k].g.gain, 0, 0.03);
             for (const v of this.voices) { set(v.out.gain, 0, 0.2); v.target = null; }
+            if (this.heli) set(this.heli.out.gain, 0, 0.3);
+            this.last = {};
             return;
         }
         const inside = !!state.cockpit;
@@ -266,6 +314,8 @@ export class Audio {
         set(this.whineG.gain, piston ? 0 : (jet ? 0.012 + n2 * 0.025 : fan ? 0.02 + n2 * 0.04 : 0.025 + n2 * 0.03) * (inside ? 1.4 : 1));
         const ab = p.afterburner && running ? 1 : 0;
         set(this.abG.gain, ab * 1.1, 0.2);
+        // lighting the burner: a deep "whump" (the reheat igniting) before the roar settles
+        if (ab && this.last.ab === 0) this.abThump(inside);
         set(this.crackG.gain, ab * 0.22 * (inside ? 0.5 : 1), 0.15);
         // piston: firing frequency follows RPM; turboprops get the prop's beat too
         const rpm = running ? 900 + th * 1800 : 0;
@@ -274,6 +324,12 @@ export class Audio {
         set(this.chugLfo.frequency, Math.max(4, fire / 2));
         set(this.pistonF.frequency, 300 + th * 700);
         set(this.pistonG.gain, piston && running ? 0.25 + th * 0.35 : tprop && running ? 0.08 + th * 0.06 : 0);
+        // the propeller's blade-pass buzz: RPM × blades (turboprops hold a constant prop speed)
+        const blades = /racer/i.test(p.spec.name || '') ? 4 : 2;
+        const bpf = piston ? rpm / 60 * blades : 1020 / 60 * 6 * (0.95 + th * 0.05);
+        set(this.propBuzz.frequency, Math.max(20, bpf));
+        set(this.propF.frequency, Math.max(80, bpf * 3));
+        set(this.propG.gain, running && (piston || tprop) ? (piston ? 0.1 + th * 0.14 : 0.1 + th * 0.05) : 0);
         // wind: rises with dynamic pressure, brighter with speed; an open airbrake roars
         set(this.windG.gain, sp * sp * 0.16 * (inside ? 0.7 : 1) + (p.airbrake ? 0.08 : 0));
         set(this.windF.frequency, 400 + sp * 1600);
@@ -292,6 +348,36 @@ export class Audio {
         const warnBeep = (t * 4) % 1 < 0.4;
         set(this.tones.warn.g.gain, (state.pullUp || state.stall) && warnBeep ? 0.04 : 0, 0.005);
         this.updateFlyby(dt, p, t);
+        this.updateHeli(p, t);
+        // hydraulics and mechanisms (heard inside the airframe, so not through the canopy filter)
+        const L = this.last;
+        if (L.gear != null && p.gear !== L.gear && !p.fixedGear) this.hydraulic(2.2, p.gear ? 1 : -1, true);
+        const flaps = Math.round((p.flaps || 0) * 4);
+        if (L.flaps != null && flaps !== L.flaps) this.hydraulic(0.9, flaps > L.flaps ? 1 : -1, false);
+        if (L.airbrake != null && !!p.airbrake !== L.airbrake) this.hydraulic(0.7, p.airbrake ? 1 : -1, false, 0.7);
+        L.gear = p.gear; L.flaps = flaps; L.airbrake = !!p.airbrake; L.ab = ab;
+    }
+
+    updateHeli(p, t) {
+        const h = this.heli, g = p.game;
+        const helis = g && g.world && g.world.airbases && g.world.airbases.helis;
+        const cam = g && g.camera;
+        if (!h || !helis || !cam) return;
+        let best = null, bd = 1600;
+        for (const c of helis) { if (!c.alive) continue; const d = c.pos.distanceTo(cam.position); if (d < bd) { bd = d; best = c; } }
+        if (!best) { h.out.gain.setTargetAtTime(0, t, 0.3); return; }
+        const lp = cam.position, d = Math.max(1, bd);
+        const dx = best.pos.x - lp.x, dy = best.pos.y - lp.y, dz = best.pos.z - lp.z;
+        const vs = (best.vel.x * dx + best.vel.y * dy + best.vel.z * dz) / d, vl = (p.vel.x * dx + p.vel.y * dy + p.vel.z * dz) / d;
+        const dop = clamp((SOUND + vl) / (SOUND + vs), 0.6, 1.6);
+        h.lfo.frequency.setTargetAtTime((best.name && /HAWK/.test(best.name) ? 17.2 : 13.5) * dop, t, 0.1);
+        h.air.frequency.setTargetAtTime(250 + 7000 * Math.exp(-d / 600), t, 0.1);
+        h.out.gain.setTargetAtTime(clamp(1.6 / (1 + d / 90), 0, 0.9), t, 0.1);
+        if (h.pan) {
+            const e = cam.matrixWorldInverse.elements;
+            const cx = e[0] * best.pos.x + e[4] * best.pos.y + e[8] * best.pos.z + e[12];
+            h.pan.pan.setTargetAtTime(clamp(cx / (d * 0.8), -0.9, 0.9), t, 0.05);
+        }
     }
 
     updateGun(t, p, state, dt) {
@@ -330,6 +416,15 @@ export class Audio {
     gunStop(t) {
         if (!this.gunOn) return;
         this.gunOn = false;
+        // a rotary cannon's burst ends in a rolling roar (the rounds' reports arriving from downrange)
+        if (this.gunProf && this.gunProf.rotary) {
+            const ctx = this.ctx;
+            const r = this.noiseSrc(this.brown);
+            const rf = ctx.createBiquadFilter(); rf.type = 'lowpass'; rf.frequency.value = this.gunProf.band * 0.6;
+            const rg = ctx.createGain(); rg.gain.setValueAtTime(0.35 * this.gunSpin, t); rg.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+            r.connect(rf).connect(rg).connect(this.sfx); r.start(t, Math.random()); r.stop(t + 0.5);
+            this.cleanup(r, rf, rg);
+        }
         for (const g of [this.gunEnv.gain, this.thumpEnv.gain, this.gunToneG.gain]) {
             g.cancelScheduledValues(t);
             g.setTargetAtTime(0, t, 0.03);
@@ -350,6 +445,17 @@ export class Audio {
             if (a === p || !a.alive || a.exploded) continue;
             const d = a.pos.distanceTo(lp);
             if (d < 2500) cand.push({ a, d });
+            if (a.mach > 1 && d < 3000) this.checkBoom(a, lp, lv, d, t);
+        }
+        // civil and military traffic around the airports
+        const fl = g.world && g.world.airTraffic && g.world.airTraffic.flights;
+        if (fl) for (const f of fl) {
+            if (!f.alive || !f.mesh || !f.mesh.visible || !f.pos) continue;
+            const d = f.pos.distanceTo(lp);
+            if (d < 2500) {
+                if (!f.spec) f.spec = AIRCRAFT[f.type];
+                if (f.spec) cand.push({ a: f, d });
+            }
         }
         cand.sort((x, y) => x.d - y.d);
         const want = cand.slice(0, 3).map(c => c.a);
@@ -420,6 +526,14 @@ export class Audio {
         const og = ctx.createGain(); og.gain.setValueAtTime(0, t0); og.gain.setValueAtTime(vol * 0.7, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.65);
         o.connect(og).connect(this.sfx); o.start(t); o.stop(t + 0.7);
         this.cleanup(o, og);
+        // a big bass punch in the chest when it's close
+        if (dist < 450) {
+            const sb = ctx.createOscillator(); sb.type = 'sine';
+            sb.frequency.setValueAtTime(48, t); sb.frequency.exponentialRampToValueAtTime(24, t + 1.1);
+            const sg = ctx.createGain(); sg.gain.setValueAtTime(0, t0); sg.gain.setValueAtTime(vol * near * 0.9, t); sg.gain.exponentialRampToValueAtTime(0.001, t + 1.2);
+            sb.connect(sg).connect(this.sfx); sb.start(t); sb.stop(t + 1.25);
+            this.cleanup(sb, sg);
+        }
         // the crack of a close blast
         if (near > 0.08) {
             const c = this.noiseSrc(this.white);
@@ -438,6 +552,80 @@ export class Audio {
             r.connect(rf).connect(rg).connect(this.sfx); r.start(t, Math.random()); r.stop(t + 4.5);
             this.cleanup(r, rf, rg);
         }
+    }
+
+    abThump(inside) {
+        if (!this.running) return;
+        const ctx = this.ctx, t = ctx.currentTime;
+        const o = ctx.createOscillator(); o.type = 'sine';
+        o.frequency.setValueAtTime(70, t); o.frequency.exponentialRampToValueAtTime(35, t + 0.35);
+        const og = ctx.createGain(); og.gain.setValueAtTime(0, t); og.gain.linearRampToValueAtTime(inside ? 0.45 : 0.7, t + 0.02); og.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+        o.connect(og).connect(this.sfx); o.start(t); o.stop(t + 0.5);
+        this.cleanup(o, og);
+        const n = this.noiseSrc(this.brown);
+        const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.setValueAtTime(900, t); f.frequency.exponentialRampToValueAtTime(150, t + 0.4);
+        const g = ctx.createGain(); g.gain.setValueAtTime(0.9, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+        n.connect(f).connect(g).connect(this.sfx); n.start(t, Math.random()); n.stop(t + 0.55);
+        this.cleanup(n, f, g);
+    }
+
+    // hydraulic actuator: a motor whine rising (extending) or falling (retracting), ending in a clunk
+    hydraulic(dur, dir, clunk, vol = 1) {
+        if (!this.running) return;
+        const ctx = this.ctx, t = ctx.currentTime;
+        const o = ctx.createOscillator(); o.type = 'sawtooth';
+        const f0 = dir > 0 ? 190 : 260, f1 = dir > 0 ? 270 : 180;
+        o.frequency.setValueAtTime(f0, t); o.frequency.linearRampToValueAtTime(f1, t + dur);
+        const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 700;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.05 * vol, t + 0.15);
+        g.gain.setValueAtTime(0.05 * vol, t + dur - 0.15); g.gain.linearRampToValueAtTime(0, t + dur);
+        o.connect(f).connect(g).connect(this.inner); o.start(t); o.stop(t + dur + 0.05);
+        this.cleanup(o, f, g);
+        const h = this.noiseSrc(this.white);
+        const hf = ctx.createBiquadFilter(); hf.type = 'bandpass'; hf.frequency.value = 2400; hf.Q.value = 1.2;
+        const hg = ctx.createGain(); hg.gain.setValueAtTime(0, t); hg.gain.linearRampToValueAtTime(0.02 * vol, t + 0.1); hg.gain.setValueAtTime(0.02 * vol, t + dur - 0.1); hg.gain.linearRampToValueAtTime(0, t + dur);
+        h.connect(hf).connect(hg).connect(this.inner); h.start(t, Math.random()); h.stop(t + dur + 0.05);
+        this.cleanup(h, hf, hg);
+        if (clunk) {
+            // the gear locking up / down
+            const c = this.noiseSrc(this.brown);
+            const cf = ctx.createBiquadFilter(); cf.type = 'lowpass'; cf.frequency.value = 400;
+            const cg = ctx.createGain(); cg.gain.setValueAtTime(0, t); cg.gain.setValueAtTime(0.8, t + dur); cg.gain.exponentialRampToValueAtTime(0.001, t + dur + 0.25);
+            c.connect(cf).connect(cg).connect(this.inner); c.start(t, Math.random()); c.stop(t + dur + 0.3);
+            this.cleanup(c, cf, cg);
+        }
+    }
+
+    // A supersonic aircraft's shock cone sweeps over us just after it passes: the double crack of
+    // the N-wave, heard when the sound gets here
+    checkBoom(a, lp, lv, d, t) {
+        const dx = a.pos.x - lp.x, dy = a.pos.y - lp.y, dz = a.pos.z - lp.z;
+        const closing = (a.vel.x - lv.x) * dx + (a.vel.y - lv.y) * dy + (a.vel.z - lv.z) * dz < 0;
+        const w = this.boomWatch.get(a);
+        if (w && w.closing && !closing && t - w.last > 5) {
+            w.last = t;
+            this.sonicBoom(d, clamp(a.mach - 1, 0, 1));
+        }
+        if (w) w.closing = closing; else this.boomWatch.set(a, { closing, last: -99 });
+    }
+
+    sonicBoom(dist, strength = 0.5) {
+        if (!this.running) return;
+        const ctx = this.ctx, t0 = ctx.currentTime, t = t0 + Math.min(dist / SOUND * 0.6, 3);
+        const vol = clamp(1.3 / (1 + dist / 800), 0.1, 1) * (0.7 + strength * 0.5);
+        for (const [dt, k] of [[0, 1], [0.11, 0.85]]) {
+            const c = this.noiseSrc(this.white);
+            const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 2200 * Math.exp(-dist / 3000) + 300;
+            const g = ctx.createGain(); g.gain.setValueAtTime(0, t0); g.gain.setValueAtTime(vol * k, t + dt); g.gain.exponentialRampToValueAtTime(0.001, t + dt + 0.09);
+            c.connect(f).connect(g).connect(this.sfx); c.start(t + dt, Math.random()); c.stop(t + dt + 0.12);
+            this.cleanup(c, f, g);
+        }
+        const o = ctx.createOscillator(); o.type = 'sine';
+        o.frequency.setValueAtTime(60, t); o.frequency.exponentialRampToValueAtTime(28, t + 0.5);
+        const og = ctx.createGain(); og.gain.setValueAtTime(0, t0); og.gain.setValueAtTime(vol * 0.8, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.7);
+        o.connect(og).connect(this.sfx); o.start(t); o.stop(t + 0.75);
+        this.cleanup(o, og);
     }
 
     thunder(dist = 2000) {
@@ -551,7 +739,21 @@ export class Audio {
             const voices = speechSynthesis.getVoices();
             const v = voices.find(v => /en-US/.test(v.lang) && /Alex|Daniel|Fred|Google US|Aaron/i.test(v.name)) || voices.find(v => /^en/.test(v.lang));
             if (v) u.voice = v;
-            if (this.volume > 0) { this.radioClick(0.1 * this.volume + 0.04); u.onend = () => this.radioClick(0.08 * this.volume + 0.03); }
+            if (this.volume > 0 && this.running) {
+                // keyed mic: click, static under the voice (off at the estimated end if onend never comes), click
+                this.radioClick(0.1 * this.volume + 0.04);
+                const t = this.ctx.currentTime, est = 0.6 + text.length * 0.065 / u.rate;
+                this.radioG.gain.cancelScheduledValues(t);
+                this.radioG.gain.setTargetAtTime(0.022, t, 0.02);
+                this.radioG.gain.setTargetAtTime(0, t + est, 0.05);
+                u.onend = () => {
+                    if (!this.ctx) return;
+                    const t2 = this.ctx.currentTime;
+                    this.radioG.gain.cancelScheduledValues(t2);
+                    this.radioG.gain.setTargetAtTime(0, t2, 0.03);
+                    this.radioClick(0.08 * this.volume + 0.03);
+                };
+            }
             speechSynthesis.speak(u);
         } catch (e) { /* ignore */ }
     }
