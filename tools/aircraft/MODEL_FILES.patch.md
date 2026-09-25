@@ -13,7 +13,7 @@ Keep `f16`, `f2` and `f35n` exactly as they are. For the ids below, replace the 
 for the ids that were procedural: f22, fa18, a10, su35, mig31, gripen, cessna, b737):
 
 ```js
-    f22: { file: 'aircraft/f22.glb', rot: [0, 0, 0], nozzles: [[-0.033, -0.04, 0.415], [0.033, -0.04, 0.415]], nozzleR: 0.016 },
+    f22: { file: 'aircraft/f22.glb', rot: [0, 0, 0], nozzles: [[-0.033, -0.04, 0.415], [0.033, -0.04, 0.415]], nozzleR: 0.016, cockpit: [0.0, -0.265] },
     fa18: { file: 'aircraft/fa18.glb', rot: [0, 0, 0], cockpit: [0.016, -0.238] },
     a10: { file: 'aircraft/a10.glb', rot: [0, 0, 0], nozzles: [[-0.08, 0.024, 0.304], [0.08, 0.024, 0.304]], nozzleR: 0.027 },
     su35: { file: 'aircraft/su35.glb', rot: [0, 0, 0], nozzles: [[-0.058, -0.05, 0.425], [0.058, -0.05, 0.425]], nozzleR: 0.026 },

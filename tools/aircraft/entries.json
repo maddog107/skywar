@@ -18,7 +18,11 @@
     0.415
    ]
   ],
-  "nozzleR": 0.016
+  "nozzleR": 0.016,
+  "cockpit": [
+   0.0,
+   -0.265
+  ]
  },
  "fa18": {
   "file": "aircraft/fa18.glb",
