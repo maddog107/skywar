@@ -22,6 +22,7 @@ import { mergeGeometries as mergeGeos } from 'three/addons/utils/BufferGeometryU
 import { Traffic } from './traffic.js';
 import { setBridgeNight } from './bridges.js';
 import { Buildings } from './buildings.js';
+import { townGradeAt } from './terraincore.js';
 import { CarSet, PAINTS, NearInstances } from './carset.js';
 
 const EXTENT = 24000, CELL = 3200;
@@ -77,18 +78,10 @@ class TownSurface {
         this.H = H; this.M = M;
     }
 
-    // [smoothed height, weight 0..1] at world (x, z), or null outside
-    sample(x, z) {
-        const t = this.t, dx = x - t.x, dz = z - t.z;
-        if (dx * dx + dz * dz > this.ext2) return null;
-        const u = dx * t.bx.x + dz * t.bx.z, v = dx * t.ax.x + dz * t.ax.z;
-        const fi = u / this.C + this.n, fj = v / this.C + this.n, N = this.N;
-        const i = Math.max(0, Math.min(N - 2, Math.floor(fi))), j = Math.max(0, Math.min(N - 2, Math.floor(fj)));
-        const a = Math.max(0, Math.min(1, fi - i)), b = Math.max(0, Math.min(1, fj - j));
-        const k = j * N + i;
-        const bil = (A) => (A[k] * (1 - a) + A[k + 1] * a) * (1 - b) + (A[k + N] * (1 - a) + A[k + N + 1] * a) * b;
-        const w = smooth01((bil(this.M) - 0.15) / 0.6);
-        return w > 0 ? [bil(this.H), w] : null;
+    // plain data for terraincore.js townGradeAt (also what the terrain worker gets)
+    pack() {
+        const t = this.t;
+        return { x: t.x, z: t.z, bxx: t.bx.x, bxz: t.bx.z, axx: t.ax.x, axz: t.ax.z, C: this.C, n: this.n, N: this.N, ext2: this.ext2, H: this.H, M: this.M };
     }
 }
 
@@ -339,17 +332,21 @@ export class Towns {
         this.rand = mulberry32(2024);
         this.towns = this.placeTowns();
         this.planStreets();
-        this.townCell = new Map(); // towns by 1 km cell (for townBase)
-        for (const t of this.towns) {
+        // the ground as the towns grade it, as plain data (terraincore.js townGradeAt; the terrain worker gets a copy):
+        // each town's smoothed surface, the towns by 1 km cell, and levelled pads (stadiums, added as they're built)
+        this.grade = { towns: [], cells: new Map(), pads: [] };
+        this.pads = this.grade.pads;
+        this.towns.forEach((t, ti) => {
             t.surf = new TownSurface(t, this.streetDefs.filter(sd => sd.t === t));
+            this.grade.towns.push(t.surf.pack());
             const e = Math.sqrt(t.surf.ext2) + 12;
             for (let cx = Math.floor((t.x - e) / 1000); cx <= Math.floor((t.x + e) / 1000); cx++)
                 for (let cz = Math.floor((t.z - e) / 1000); cz <= Math.floor((t.z + e) / 1000); cz++) {
                     const k = cx * 100003 + cz;
-                    if (!this.townCell.has(k)) this.townCell.set(k, []);
-                    this.townCell.get(k).push(t);
+                    if (!this.grade.cells.has(k)) this.grade.cells.set(k, []);
+                    this.grade.cells.get(k).push(ti);
                 }
-        }
+        });
         this.deadEnds = [];
         this.junctions = [];
         // town streets first (with their junctions), then the roads that join their ends
@@ -388,7 +385,7 @@ export class Towns {
         this.buildRoadblocks(this.deadEnds);
         this.traffic = new Traffic(this.group, [...paths, ...this.streetPaths], this.dirtPaths, this);
         for (const p of this.dirtPaths) p.half = 3.2;
-        this.ground = new RoadGround([...paths, ...this.streetPaths, ...this.dirtPaths], (x, z, h) => this.townBase(x, z, h));
+        this.ground = new RoadGround([...paths, ...this.streetPaths, ...this.dirtPaths], this.grade);
         for (const g of surfaces) if (g) this.ground.protect(g);
         this.time = 0;
         // nothing in a town moves as an object (cars and people are instances) except collapsing bridges
@@ -401,25 +398,8 @@ export class Towns {
     }
 
     // ── the ground as the town grades it ──
-    // natural height h at (x, z) → the graded ground (inside towns), else h
-    townBase(x, z, h) {
-        if (h < 0.5) return h;
-        const l = this.townCell.get(Math.floor(x / 1000) * 100003 + Math.floor(z / 1000));
-        if (l) for (const t of l) {
-            const s = t.surf.sample(x, z);
-            if (s) { h += (s[0] - h) * s[1]; break; }
-        }
-        // levelled platforms (a stadium): flat inside the ellipse, easing back to the ground around it
-        if (this.pads) for (const pd of this.pads) {
-            const dx = x - pd.x, dz = z - pd.z;
-            if (dx * dx + dz * dz > (pd.a + pd.blend) ** 2) continue;
-            const c = Math.cos(pd.yaw), s = Math.sin(pd.yaw), lx = dx * c - dz * s, lz = dx * s + dz * c;
-            const e = Math.hypot(lx / pd.a, lz / pd.b); // 1 on the rim
-            const w = e <= 1 ? 1 : 1 - smooth01((e - 1) * Math.min(pd.a, pd.b) / pd.blend);
-            if (w > 0) h += (pd.y - h) * w;
-        }
-        return h;
-    }
+    // natural height h at (x, z) → the graded ground (inside towns, on levelled pads), else h
+    townBase(x, z, h) { return townGradeAt(this.grade, x, z, h); }
     groundAt(x, z) { return this.townBase(x, z, terrainHeight(x, z)); }
 
     // ── spatial blocker (roads, streets, buildings): 4 m cells ──

@@ -13,6 +13,7 @@ import * as THREE from 'three';
 import { terrainHeight, BASES, fenceOf, baseToWorld, worldToBase } from './world.js';
 import { Bridge } from './bridges.js';
 import { offsetUnits } from './util.js';
+import { SEG_STRIDE, roadBaseConform, roadConform, vkey, smooth01 } from './terraincore.js';
 
 export const ROAD_HALF = 7;      // 14 m wide: two 7 m lanes
 export const LANE = 3.3;          // lane centre offset from the middle
@@ -398,13 +399,15 @@ export class SurfaceBuilder {
 const EDGE = 1.5, SHOULDER = 16, UNDER = 0.25, MARGIN = 0.1, FILL = 0.7;
 const GRIDS = [2048 / 96, 2048 / 64];
 export class RoadGround {
-    // base(x, z, h): the ground before roads are cut in (e.g. a town's graded surface), or null
+    // base: the ground before roads are cut in — a town grade (terraincore.js townGradeAt), or null.
+    // The segments live in plain arrays (this.R) so the terrain worker can evaluate the same ground (packed()).
     constructor(paths, base = null) {
         this.cell = 64;
-        this.grid = new Map();
+        this.grid = new Map(); // cell → segment indices
         this.base = base;
         this.surfaces = [];
         this.solved = false;
+        const segs = [];
         for (const p of paths) {
             const half = p.ribbonHalf ?? p.half ?? ROAD_HALF, reach = half + EDGE + SHOULDER, P = p.pts;
             for (let k = 0; k + 1 < P.length; k++) {
@@ -412,56 +415,38 @@ export class RoadGround {
                 if (p.bridges.some(br => b.s > br.s0 + 0.01 && a.s < br.s1 - 0.01)) continue; // the deck carries itself
                 const L = Math.hypot(b.x - a.x, b.z - a.z);
                 if (L < 0.01) continue;
-                const seg = { a, b, L, tx: (b.x - a.x) / L, tz: (b.z - a.z) / L, half, reach };
+                const si = segs.length / SEG_STRIDE;
+                segs.push(a.x, a.z, a.y, a.g || 0, b.x, b.z, b.y, b.g || 0, L, (b.x - a.x) / L, (b.z - a.z) / L, half, reach);
                 const c0x = Math.floor((Math.min(a.x, b.x) - reach) / this.cell), c1x = Math.floor((Math.max(a.x, b.x) + reach) / this.cell);
                 const c0z = Math.floor((Math.min(a.z, b.z) - reach) / this.cell), c1z = Math.floor((Math.max(a.z, b.z) + reach) / this.cell);
                 for (let cx = c0x; cx <= c1x; cx++) for (let cz = c0z; cz <= c1z; cz++) {
                     const key = cx * 100003 + cz;
                     let list = this.grid.get(key);
                     if (!list) this.grid.set(key, list = []);
-                    list.push(seg);
+                    list.push(si);
                 }
             }
         }
+        for (const [k, l] of this.grid) this.grid.set(k, Int32Array.from(l));
+        this.R = { cell: this.cell, grid: this.grid, segs: Float64Array.from(segs), edge: EDGE, shoulder: SHOULDER, under: UNDER, base, grids: GRIDS, over: null };
     }
 
     // surfaces (world-space BufferGeometry) the terrain must stay under
     protect(geometry) { this.surfaces.push(geometry); this.solved = false; }
 
     // drawn height of the ground at (x, z), given its natural height h, before the solve
-    baseConform(x, z, h) {
-        if (this.base) h = this.base(x, z, h);
-        if (h < 0) return h; // never build land out into a lake
-        const list = this.grid.get(Math.floor(x / this.cell) * 100003 + Math.floor(z / this.cell));
-        if (!list) return h;
-        let bestW = 0, target = h;
-        for (const sg of list) {
-            const t = Math.max(0, Math.min(sg.L, (x - sg.a.x) * sg.tx + (z - sg.a.z) * sg.tz));
-            const px = sg.a.x + sg.tx * t, pz = sg.a.z + sg.tz * t;
-            const lat = (x - px) * -sg.tz + (z - pz) * sg.tx; // + to the right of travel
-            const d = Math.hypot(x - px, z - pz);
-            if (d >= sg.reach) continue;
-            const w = d <= sg.half + EDGE ? 1 : 1 - smooth01((d - sg.half - EDGE) / SHOULDER);
-            if (w <= bestW) continue;
-            const u = t / sg.L;
-            const y = sg.a.y + (sg.b.y - sg.a.y) * u, g = (sg.a.g || 0) + ((sg.b.g || 0) - (sg.a.g || 0)) * u;
-            bestW = w;
-            target = y + g * Math.max(-sg.half, Math.min(sg.half, lat)) - UNDER;
-        }
-        return h + (target - h) * bestW;
-    }
+    baseConform(x, z, h) { return roadBaseConform(this.R, x, z, h); }
 
     // drawn height (what world.js asks for every terrain vertex)
     conform(x, z, h) {
         if (!this.solved) this.solve();
-        let out = Infinity;
-        for (let g = 0; g < GRIDS.length; g++) {
-            const st = GRIDS[g], i = Math.round(x / st), j = Math.round(z / st);
-            if (Math.abs(i * st - x) > 1e-3 || Math.abs(j * st - z) > 1e-3) continue;
-            const v = this.over[g].get(vkey(i, j));
-            if (v !== undefined && v < out) out = v;
-        }
-        return out < Infinity ? out : this.baseConform(x, z, h);
+        return roadConform(this.R, x, z, h);
+    }
+
+    // everything conform() needs, as plain data (Maps, typed arrays): what the terrain worker gets
+    packed() {
+        if (!this.solved) this.solve();
+        return this.R;
     }
 
     // the drawn ground at any point, as the close-up tiles draw it (for putting things on it)
@@ -475,7 +460,7 @@ export class RoadGround {
 
     solve() {
         this.solved = true;
-        this.over = GRIDS.map(st => this.solveGrid(st));
+        this.over = this.R.over = GRIDS.map(st => this.solveGrid(st));
         this.surfaces = []; // done with them
     }
 
@@ -566,8 +551,7 @@ export class RoadGround {
         return out;
     }
 }
-const vkey = (i, j) => (i + 8192) * 16384 + (j + 8192);
-export const smooth01 = (t) => { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 * t); };
+export { smooth01 };
 
 // ── The intercity road network ──
 // nodes: [{ x, z, ports? }] — a port is where a road may start: { x, z, dx, dz (outward), y?, g?, hw?, multi? }

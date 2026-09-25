@@ -5,6 +5,9 @@ import * as THREE from 'three';
 import { fbm, ridged, smoothstep, lerp, clamp, mulberry32, DEG, makeRadialTexture, freezeStatic } from './util.js';
 import { TIMES } from './config.js';
 import { Clouds } from './clouds.js';
+import { BASES, terrainHeight, colorAt as groundColorAt, tileJob, runJob } from './terraincore.js';
+// the height function and the airbase list live in terraincore.js (no three.js: the terrain worker uses them too)
+export { BASES, terrainHeight };
 
 // ═══════════════════════════════════════════════════════════════
 // Global shader patches (applied once at import, before anything compiles)
@@ -107,22 +110,7 @@ function patchCascadeShadows() {
 patchFogChunks();
 export const CASCADES = patchCascadeShadows();
 
-// ── Airbases (terrain is flattened around them) ──
-// Each base lists its runways in base-local metres (lx across, lz along; rot = extra rotation).
-// layout picks the dressing: 'standard' (the original bases), 'miramar' (military, parallel runways),
-// 'civil' (airline terminals). Runway numbers are worked out from the real compass heading.
-export const BASES = [
-    { id: 'home', name: 'SKYWAR AIR BASE', x: 0, z: 0, h: 22, r: 1500, heading: 0, friendly: true, layout: 'standard',
-        runways: [{ lx: 0, lz: 0, len: 3000, w: 55 }] },
-    { id: 'enemy', name: 'ENEMY AIR BASE', x: 7000, z: -17000, h: 38, r: 1700, heading: 0.35, friendly: false, layout: 'standard',
-        runways: [{ lx: 0, lz: 0, len: 3000, w: 55 }] },
-    { id: 'miramar', name: 'MCAS MIRAMAR', x: -10000, z: -19100, h: 58, r: 2800, heading: 0.698, friendly: true, layout: 'miramar',
-        runways: [{ lx: -520, lz: 0, len: 3650, w: 60 }, { lx: -220, lz: 300, len: 2900, w: 46 }, { lx: -430, lz: -250, len: 1150, w: 45, rot: 0.87 }],
-        fence: { x0: -900, x1: 1450, z0: -2150, z1: 2150 }, gate: { lx: 1450, lz: -300 } },
-    { id: 'civil', name: 'HARBOR INTERNATIONAL', x: -13600, z: 10900, h: 14, r: 2100, heading: 0.315, friendly: true, layout: 'civil', civil: true,
-        runways: [{ lx: 0, lz: 0, len: 2900, w: 60 }],
-        fence: { x0: -250, x1: 900, z0: -1650, z1: 1650 }, gate: { lx: 900, lz: 0 } },
-];
+// ── Airbases (BASES, in terraincore.js: terrain is flattened around them) ──
 export const RUNWAY = { length: 3000, width: 55 };
 // Perimeter fence and main gate, in base-local metres (x across the runway, toward the apron = +x; z along it)
 export const FENCE = { x0: -190, x1: 570, z0: -1720, z1: 1720 };
@@ -171,30 +159,6 @@ export function worldToBase(b, x, z) {
     return { lx: dx * c + dz * s, lz: -dx * s + dz * c };
 }
 
-// ── Height function (metres). Shared by rendering, collisions and AI ──
-export function terrainHeight(x, z) {
-    let c = fbm(x * 0.000065 + 3.1, z * 0.000065 - 7.7, 4);
-    let flatten = 1, flatH = 0;
-    for (let i = 0; i < BASES.length; i++) {
-        const b = BASES[i];
-        const dx = x - b.x, dz = z - b.z;
-        const d2 = dx * dx + dz * dz;
-        c += 0.45 * Math.exp(-d2 / (7000 * 7000));
-        if (d2 < b.r * b.r * 4) {
-            const f = smoothstep(b.r, b.r * 2, Math.sqrt(d2));
-            if (f < flatten) { flatten = f; flatH = b.h; }
-        }
-    }
-    const land = smoothstep(-0.04, 0.16, c);
-    const mountainMask = smoothstep(-0.05, 0.3, fbm(x * 0.00011 + 11.3, z * 0.00011 + 5.2, 3));
-    const m = ridged(x * 0.00032 + 1.7, z * 0.00032 - 4.1, 5);
-    const hills = fbm(x * 0.0008 + 2.2, z * 0.0008 + 9.1, 4);
-    const detail = fbm(x * 0.0035, z * 0.0035, 3);
-    let h = land * (32 + hills * 170 + m * m * 1900 * mountainMask + detail * 22) + (1 - land) * (-140 + detail * 20);
-    if (flatten < 1) h = lerp(flatH, h, flatten);
-    return h;
-}
-
 // Approximate surface normal (for AI and landing checks)
 export function terrainNormal(x, z, out) {
     const e = 6;
@@ -214,9 +178,6 @@ export function isOnRunway(x, z) {
     }
     return null;
 }
-
-// run a build generator (see World.tileGeometryJob) to completion
-function runJob(it) { let r; do { r = it.next(); } while (!r.done); return r.value; }
 
 // 2D gradient noise that tiles over the unit square with P cells per side (seamless textures), about -1..1
 const GRAD_X = new Float32Array(256), GRAD_Y = new Float32Array(256);
@@ -976,119 +937,81 @@ export class World {
 
     buildTileGeometry(tx, tz, seg) { return runJob(this.tileGeometryJob(tx, tz, seg)); }
 
-    // Tile builds are generators that yield every few rows, so updateTerrain can spread a big tile
-    // over several frames instead of hitching for 20-60 ms.
+    // A tile build on this thread (terraincore.js tileJob, the same code the terrain worker runs): a generator that
+    // yields every few rows, so updateTerrain can spread it over several frames when there are no workers.
     *tileGeometryJob(tx, tz, seg) {
-        const T = this.TILE, step = T / seg, x0 = tx * T, z0 = tz * T;
-        const N = seg + 3; // one extra ring on each side for normals
-        const H = new Float32Array(N * N);
-        for (let j = 0; j < N; j++) {
-            for (let i = 0; i < N; i++) {
-                const x = x0 + (i - 1) * step, z = z0 + (j - 1) * step, h = terrainHeight(x, z);
-                H[j * N + i] = this.groundConform ? this.groundConform.conform(x, z, h) : h;
-            }
-            if ((j & 3) === 3) yield;
-        }
-        const V = seg + 1;
-        const vCount = V * V + V * 4;
-        const pos = new Float32Array(vCount * 3), nor = new Float32Array(vCount * 3), col = new Float32Array(vCount * 3), ht = new Float32Array(vCount);
-        const skirt = 30 + step * 1.5;
-        const cN = new THREE.Vector3();
-        // Drawn height only (physics keeps the true terrain): open a ~2 m step at the waterline —
-        // shallow lakebed dips a little, the first metre of beach rises a little — so the flat water plane
-        // and near-flat beaches never fight in the depth buffer and flicker between sand and water.
-        const shore = (h) => h < 0 ? h - 1.5 * Math.max(0, 1 + h / 6) : h + 0.6 * Math.max(0, 1 - h);
-        const setVert = (k, i, j, drop) => {
-            const h = shore(H[(j + 1) * N + (i + 1)]);
-            ht[k] = H[(j + 1) * N + (i + 1)];
-            pos[k * 3] = x0 + i * step; pos[k * 3 + 1] = h - drop; pos[k * 3 + 2] = z0 + j * step;
-            const hl = H[(j + 1) * N + i], hr = H[(j + 1) * N + i + 2], hd = H[j * N + i + 1], hu = H[(j + 2) * N + i + 1];
-            cN.set(hl - hr, 2 * step, hd - hu).normalize();
-            nor[k * 3] = cN.x; nor[k * 3 + 1] = cN.y; nor[k * 3 + 2] = cN.z;
-            this.colorAt(pos[k * 3], h, pos[k * 3 + 2], cN.y, col, k * 3);
-        };
-        let k = 0;
-        for (let j = 0; j < V; j++) {
-            for (let i = 0; i < V; i++) setVert(k++, i, j, 0);
-            if (j & 1) yield;
-        }
-        // skirts: top, bottom, left, right edges
-        const skirtStart = k;
-        for (let i = 0; i < V; i++) setVert(k++, i, 0, skirt);
-        for (let i = 0; i < V; i++) setVert(k++, i, seg, skirt);
-        for (let j = 0; j < V; j++) setVert(k++, 0, j, skirt);
-        for (let j = 0; j < V; j++) setVert(k++, seg, j, skirt);
+        const g = this.groundConform, conform = g ? (x, z, h) => g.conform(x, z, h) : null;
+        return this.tileGeometry(yield* tileJob(tx, tz, seg, this.TILE, conform));
+    }
 
-        const idx = new (vCount > 65535 ? Uint32Array : Uint16Array)(seg * seg * 6 + seg * 24);
-        let n = 0;
-        const tri = (a, b, c) => { idx[n++] = a; idx[n++] = b; idx[n++] = c; };
-        for (let j = 0; j < seg; j++) for (let i = 0; i < seg; i++) {
-            const a = j * V + i, b = a + 1, c = a + V, d = c + 1;
-            tri(a, c, b); tri(b, c, d);
-        }
-        const s0 = skirtStart, s1 = s0 + V, s2 = s1 + V, s3 = s2 + V;
-        for (let i = 0; i < seg; i++) {
-            // top edge (j=0) faces -z
-            tri(i, i + 1, s0 + i); tri(i + 1, s0 + i + 1, s0 + i);
-            // bottom edge (j=seg)
-            const b0 = seg * V + i;
-            tri(b0, s1 + i, b0 + 1); tri(b0 + 1, s1 + i, s1 + i + 1);
-            // left edge (i=0)
-            const l0 = i * V, l1 = (i + 1) * V;
-            tri(l0, s2 + i, l1); tri(l1, s2 + i, s2 + i + 1);
-            // right edge (i=seg)
-            const r0 = i * V + seg, r1 = (i + 1) * V + seg;
-            tri(r0, r1, s3 + i); tri(r1, s3 + i + 1, s3 + i);
-        }
+    // the BufferGeometry for a tile's arrays (from tileJob, here or in a worker)
+    tileGeometry(a) {
         const geo = new THREE.BufferGeometry();
-        geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-        geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
-        geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+        geo.setAttribute('position', new THREE.BufferAttribute(a.pos, 3));
+        geo.setAttribute('normal', new THREE.BufferAttribute(a.nor, 3));
+        geo.setAttribute('color', new THREE.BufferAttribute(a.col, 3));
         // LOD morph source (see morphFrom); by default no morph
-        const mo = new Float32Array(vCount * 4);
-        for (let q = 0; q < vCount; q++) { mo[q * 4] = pos[q * 3 + 1]; mo[q * 4 + 1] = nor[q * 3]; mo[q * 4 + 2] = nor[q * 3 + 2]; mo[q * 4 + 3] = -1e4; }
-        geo.setAttribute('morph', new THREE.BufferAttribute(mo, 4));
-        geo.setAttribute('hTrue', new THREE.BufferAttribute(ht, 1));
-        geo.setIndex(new THREE.BufferAttribute(idx, 1));
-        geo.computeBoundingSphere();
-        geo.userData = { V, step, x0, z0 };
+        geo.setAttribute('morph', new THREE.BufferAttribute(a.mo, 4));
+        geo.setAttribute('hTrue', new THREE.BufferAttribute(a.ht, 1));
+        geo.setIndex(new THREE.BufferAttribute(a.idx, 1));
+        geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(a.sphere[0], a.sphere[1], a.sphere[2]), a.sphere[3]);
+        geo.userData = { V: a.V, step: a.step, x0: a.x0, z0: a.z0 };
         return geo;
     }
 
-    colorAt(x, h, z, ny, out, o) {
-        const n = fbm(x * 0.0021, z * 0.0021, 2) * 0.5 + 0.5;
-        const forest = smoothstep(0.02, 0.2, fbm(x * 0.0006 + 40, z * 0.0006 - 12, 3));
-        const slope = 1 - ny;
-        let r, g, b;
-        {
-            // lowland grass -> forest
-            r = lerp(0.33, 0.44, n); g = lerp(0.44, 0.49, n); b = lerp(0.2, 0.25, n);
-            r = lerp(r, 0.17, forest * 0.8); g = lerp(g, 0.26, forest * 0.8); b = lerp(b, 0.13, forest * 0.8);
-            // alpine meadow / brown highland
-            const hi = smoothstep(350, 800, h);
-            r = lerp(r, 0.42 + n * 0.08, hi); g = lerp(g, 0.39 + n * 0.06, hi); b = lerp(b, 0.3, hi);
-            // rock on steep slopes
-            const rock = smoothstep(0.28, 0.5, slope + (h > 600 ? 0.1 : 0));
-            r = lerp(r, 0.44 + n * 0.1, rock); g = lerp(g, 0.42 + n * 0.08, rock); b = lerp(b, 0.4 + n * 0.06, rock);
-            // snow
-            const snow = smoothstep(1150, 1450, h + n * 180) * (1 - smoothstep(0.45, 0.7, slope));
-            r = lerp(r, 0.95, snow); g = lerp(g, 0.96, snow); b = lerp(b, 1.0, snow);
-        }
-        // base concrete aprons
-        for (const base of BASES) {
-            const d = Math.hypot(x - base.x, z - base.z);
-            if (d < base.r * 1.05) {
-                const t = smoothstep(base.r * 1.05, base.r * 0.9, d) * 0.35;
-                r = lerp(r, 0.42, t); g = lerp(g, 0.46, t); b = lerp(b, 0.3, t);
+    // ── Terrain workers ──
+    // Tiles are built off the main thread (terrainworker.js); the old mesh stays up until the new one arrives.
+    // Without module workers everything runs here, time-sliced, as before.
+    initTerrainWorkers() {
+        this.workers = [];
+        this.inflight = new Map(); // tile key → { seg, gen } being built
+        this.readyTiles = [];      // results waiting to be put in (updateTerrain)
+        this.terrainGen = 0;       // bumped when the road / town grading changes: older results are stale
+        this.jobId = 0;
+        if (typeof Worker === 'undefined' || typeof window === 'undefined') return;
+        const n = Math.max(1, Math.min(3, (navigator.hardwareConcurrency || 4) - 2));
+        try {
+            for (let i = 0; i < n; i++) {
+                const w = new Worker(new URL('./terrainworker.js', import.meta.url), { type: 'module' });
+                w.busy = 0;
+                w.onmessage = (e) => { w.busy--; this.readyTiles.push(e.data); };
+                w.onerror = (e) => { console.warn('terrain worker failed, building tiles on the main thread', e.message || e); this.stopTerrainWorkers(); };
+                this.workers.push(w);
             }
-        }
-        // convert sRGB-ish authored colours into linear for the renderer
-        out[o] = r * r; out[o + 1] = g * g; out[o + 2] = b * b;
+        } catch (e) { this.stopTerrainWorkers(); }
+        if (this.groundConform) this.postGround();
     }
+
+    stopTerrainWorkers() {
+        for (const w of this.workers || []) w.terminate();
+        this.workers = [];
+        if (this.inflight) this.inflight.clear();
+    }
+
+    // the road / town grading data (RoadGround.packed(): plain arrays and maps) for every worker
+    postGround() {
+        if (!this.workers || !this.workers.length) return;
+        const ground = this.groundConform ? this.groundConform.packed() : null;
+        for (const w of this.workers) w.postMessage({ type: 'ground', ground });
+    }
+
+    // hand a tile job to the least busy worker (false: all are full)
+    dispatchTile(j) {
+        let best = null;
+        for (const w of this.workers) if (w.busy < 2 && (!best || w.busy < best.busy)) best = w;
+        if (!best) return false;
+        best.busy++;
+        this.inflight.set(j.key, { seg: j.seg, gen: this.terrainGen });
+        best.postMessage({ type: 'build', id: ++this.jobId, tx: j.tx, tz: j.tz, seg: j.seg, T: this.TILE, gen: this.terrainGen });
+        return true;
+    }
+
+    colorAt(x, h, z, ny, out, o) { groundColorAt(x, h, z, ny, out, o); }
 
     tileKey(tx, tz) { return tx + ',' + tz; }
 
     updateTerrain(focus, force = false) {
+        if (!this.workers) this.initTerrainWorkers();
         const T = this.TILE;
         const ctx = Math.floor(focus.x / T), ctz = Math.floor(focus.z / T);
         const R = this.VIEW_TILES;
@@ -1124,18 +1047,44 @@ export class World {
         if (P && !jobs.some(j => j.kind === P.job.kind && j.key === P.job.key && j.seg === P.job.seg)) this.pendingJob = null;
         if (force) {
             this.pendingJob = null;
+            this.readyTiles.length = 0; this.inflight.clear(); // anything still being built comes back stale
+            this.terrainGen++;
             for (const j of jobs) if (this.jobNeeded(j)) this.finishJob(j, runJob(this.startJob(j)), true);
             // ground that just got close enough for trees
             for (const [key, t] of this.tiles) if (t.seg >= 48 && !t.treesDone) { const [tx, tz] = key.split(',').map(Number); this.finishJob({ kind: 'trees', key, tx, tz }, runJob(this.treesJob(tx, tz))); }
             return;
         }
-        // time-sliced: ~4 ms of terrain work per frame, resumed next frame
-        const end = performance.now() + 4;
+        const workers = this.workers.length > 0;
+        // main-thread budget per frame: with workers only tree jobs and putting finished tiles in are left here
+        const t0 = performance.now(), end = t0 + (workers ? 2.5 : 4);
+        if (workers) {
+            // tiles the workers have finished: put in the ones still wanted at that resolution (≈0.3 ms each)
+            if (this.readyTiles.length) {
+                const want = new Map();
+                for (const j of jobs) if (j.kind === 'tile') want.set(j.key, j);
+                while (this.readyTiles.length && performance.now() < t0 + 1.5) {
+                    const r = this.readyTiles.shift(), a = r.tile, key = this.tileKey(a.tx, a.tz), inf = this.inflight.get(key);
+                    if (inf && inf.seg === a.seg && inf.gen === r.gen) this.inflight.delete(key);
+                    const j = want.get(key);
+                    if (r.gen !== this.terrainGen || !j || j.seg !== a.seg || !this.jobNeeded(j)) continue; // stale or no longer wanted
+                    this.finishJob(j, this.tileGeometry(a));
+                }
+            }
+            // start the next tile builds (nearest first) while the workers have room
+            for (const j of jobs) {
+                if (j.kind !== 'tile') continue;
+                const inf = this.inflight.get(j.key);
+                if (inf && inf.seg === j.seg && inf.gen === this.terrainGen) continue; // on its way
+                if (!this.dispatchTile(j)) break;
+            }
+        }
+        // time-sliced here: tree jobs (and tile jobs without workers), resumed next frame
         let next = 0;
         while (performance.now() < end) {
             if (!this.pendingJob) {
                 const j = jobs[next++];
                 if (!j) break;
+                if (workers && j.kind === 'tile') continue;
                 if (!this.jobNeeded(j)) continue; // done earlier this frame
                 this.pendingJob = { job: j, it: this.startJob(j) };
             }
@@ -1270,6 +1219,8 @@ export class World {
     setGroundConform(g) {
         this.groundConform = g;
         for (const t of this.tiles.values()) t.seg = -1; // updateTerrain rebuilds them (time-sliced)
+        // the workers get their own copy; tiles they were building without it come back stale
+        if (this.workers) { this.terrainGen++; this.inflight.clear(); this.postGround(); }
     }
 
     // updateTerrain has rebuilt each tile's set
