@@ -36,17 +36,17 @@ const NO_HIT = 60000;                // "no cloud" / "sky" distance (fits a half
 // per weather: coverage threshold on the weather map (lower = more cloud), cloud base, tallest tops above
 // the base, base altitude variation, deck amount (0 = none)
 const WEATHER = {
-    clear:  { thr: 0.6, base: 1300, thick: 850, baseVar: 160, deck: 0 },
-    cloudy: { thr: 0.4, base: 1250, thick: 1150, baseVar: 200, deck: 0 },
-    rain:   { thr: 0.34, base: 1050, thick: 1250, baseVar: 160, deck: 0.62 },
-    storm:  { thr: 0.3, base: 950, thick: 2500, baseVar: 160, deck: 0.85 },
+    clear:  { thr: 0.56, base: 1300, thick: 560, baseVar: 160, deck: 0 },
+    cloudy: { thr: 0.42, base: 1250, thick: 800, baseVar: 200, deck: 0 },
+    rain:   { thr: 0.36, base: 1050, thick: 1000, baseVar: 160, deck: 0.62 },
+    storm:  { thr: 0.3, base: 950, thick: 2200, baseVar: 160, deck: 0.85 },
 };
 
 const QUALITY = {
     // scale: cloud buffer size relative to the CSS pixel size; steps: primary march; light: light march
     high:   { scale: 0.5, steps: 112, light: 5, detail: 1 },
     medium: { scale: 0.42, steps: 88, light: 4, detail: 1 },
-    low:    { scale: 0.32, steps: 60, light: 3, detail: 0 },
+    low:    { scale: 0.28, steps: 56, light: 3, detail: 0 },
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -154,9 +154,9 @@ export function makeBaseNoise(N = BASE_RES) {
     const R = new Float32Array(N * N * N), G = new Float32Array(N * N * N);
     for (let z = 0, i = 0; z < N; z++) for (let y = 0; y < N; y++) for (let x = 0; x < N; x++, i++) {
         const u = (x + 0.5) / N, v = (y + 0.5) / N, w = (z + 0.5) / N;
-        const wf = (1 - worley3(w4, 4, u, v, w)) * 0.55 + (1 - worley3(w8, 8, u, v, w)) * 0.3 + (1 - worley3(w16, 16, u, v, w)) * 0.15;
+        const wf = (1 - worley3(w4, 4, u, v, w)) * 0.45 + (1 - worley3(w8, 8, u, v, w)) * 0.33 + (1 - worley3(w16, 16, u, v, w)) * 0.22;
         const pn = p4(u, v, w) + p8(u, v, w) * 0.5;
-        R[i] = wf + pn * 0.12;
+        R[i] = wf + pn * 0.18;
         G[i] = p2(u, v, w);
     }
     const out = new Float32Array(N * N * N * 2);
@@ -185,7 +185,7 @@ export function makeWeatherMap(N = WEATHER_RES) {
     const octaves = [
         { cell: 2048, rMin: 0.3, rMax: 0.62, amp: 1, seed: 41 },
         { cell: 1024, rMin: 0.3, rMax: 0.6, amp: 0.85, seed: 42 },
-        { cell: 512, rMin: 0.32, rMax: 0.55, amp: 0.62, seed: 43 },
+        { cell: 512, rMin: 0.32, rMax: 0.55, amp: 0.55, seed: 43 },
     ].map(o => {
         // per cell: x, z, 1/R², amplitude, height, cos/sx, sin/sx, cos, sin
         const P = S / o.cell, pts = new Float32Array(P * P * 9);
@@ -201,7 +201,7 @@ export function makeWeatherMap(N = WEATHER_RES) {
         }
         return { ...o, P, pts };
     });
-    const warpX = perlin2(10, 51), warpZ = perlin2(10, 52), region = perlin2(3, 53), lumps = perlin2(48, 54);
+    const warpX = perlin2(10, 51), warpZ = perlin2(10, 52), region = perlin2(3, 53), lumps = perlin2(48, 54), lumps2 = perlin2(112, 59);
     const d4 = perlin2(4, 55), d12 = perlin2(12, 56), d32 = perlin2(32, 57), baseN = perlin2(3, 58);
     const out = new Float32Array(N * N * 4);
     for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
@@ -227,7 +227,7 @@ export function makeWeatherMap(N = WEATHER_RES) {
         }
         // regional variation: fields of cloud and clearer areas, and lumpy outlines
         pot *= 0.82 + 0.3 * region(u, v);
-        pot += lumps(u, v) * 0.05;
+        pot += lumps(u, v) * 0.07 + lumps2(u, v) * 0.04;
         const k = (y * N + x) * 4;
         out[k] = sat(pot);
         out[k + 1] = sat(hw > 0 ? hs / hw : 0.5);
@@ -249,6 +249,7 @@ const FIELD_GLSL = /* glsl */`
     uniform vec4 cu;     // cumulus: coverage threshold, base altitude, tallest tops above the base, base variation
     uniform vec4 dk;     // deck: amount (0 = none), base altitude, thickness
     uniform vec2 slab;   // altitudes that can hold any cloud
+    float pixFoot;       // metres one low-res pixel covers at the current sample (set by the march)
     #define WEATHER_SIZE ${WEATHER_SIZE.toFixed(1)}
     #define BASE_SIZE ${BASE_SIZE.toFixed(1)}
     #define DETAIL_SIZE ${DETAIL_SIZE.toFixed(1)}
@@ -280,7 +281,7 @@ const FIELD_GLSL = /* glsl */`
         float cov = clamp((wm.r - cu.x) / (1.0 - cu.x), 0.0, 1.0);
         float h = p.y - (cu.y + (wm.a - 0.5) * cu.w);
         float y = h / (cu.z * wm.g);
-        float c = pow(cov, 0.7);
+        float c = smoothstep(0.0, 0.6, cov);
         hf = clamp(y / max(sqrt(c), 0.05), 0.0, 1.0);
         return min(c - y * y, h * 0.004);
     }
@@ -305,19 +306,23 @@ const FIELD_GLSL = /* glsl */`
         float s = cumulusShape(p, wm, hc), sd = deckShape(p, wm, hd);
         amb = hc;
         if (max(s, sd) <= 0.0) return 0.0;
-        float billow = textureLod(tBase, (p - wind) / BASE_SIZE, lod).r; // 1 = solid
-        // cumulus: billowy sides, deeper cauliflower heads on top, only a little raggedness at the flat base,
-        // and thin fringes (little cover) mostly eaten away so clouds don't stand on a wide brim
+        vec2 n = textureLod(tBase, (p - wind) / BASE_SIZE, lod).rg;
+        float billow = n.r; // 1 = solid
+        // cumulus: billowy sides, deeper cauliflower heads on top (how deep varies from cloud to cloud), only a
+        // little raggedness at the flat base, and thin fringes (little cover) mostly eaten away so clouds don't
+        // stand on a wide brim
         float cov = (wm.r - cu.x) / (1.0 - cu.x);
-        s -= (1.0 - billow) * (mix(0.08, 0.3, smoothstep(0.0, 0.35, hc)) + 0.12 * (1.0 - smoothstep(0.0, 0.3, cov)));
+        s -= (1.0 - billow) * (mix(0.1, 0.5, smoothstep(0.0, 0.5, hc)) * (0.65 + 0.7 * n.g) + 0.12 * (1.0 - smoothstep(0.0, 0.3, cov)));
         // deck: a ragged base and a lumpy top
         sd -= (1.0 - billow) * 0.38;
         if (sd > s) { s = sd; amb = hd; }
         float e = edge * ${EDGE_SCALE};
         #if DETAIL
-        if (detail && s > 0.0 && s < e + 0.05) {
-            float nd = textureLod(tDetail, (p - wind * 1.3) / DETAIL_SIZE, 0.0).r;
-            s -= (1.0 - nd) * 0.05 * mix(0.35, 1.0, smoothstep(0.0, 0.3, amb));
+        if (detail && s > 0.0 && s < e + 0.14) {
+            // (mip-mapped by the pixel's footprint: finer than a pixel it only makes fur)
+            float ld = max(0.0, log2(pixFoot / ${(DETAIL_SIZE / DETAIL_RES).toFixed(2)}));
+            float nd = textureLod(tDetail, (p - wind * 1.3) / DETAIL_SIZE, ld).r;
+            s -= (1.0 - nd) * mix(0.03, 0.14, smoothstep(0.1, 0.6, amb)) * (1.0 - smoothstep(1.0, 3.0, ld));
         }
         #endif
         return clamp(s / e, 0.0, 1.0);
@@ -329,7 +334,7 @@ const TRI_VERT = /* glsl */`
 const marchFrag = (FOG_GLSL) => /* glsl */`
     precision highp float;
     uniform sampler2D tDepth;
-    uniform float hasDepth, camNear, camFar, maxDist, sunScale, frame;
+    uniform float hasDepth, camNear, camFar, maxDist, sunScale, frame, pixAngle, flash;
     uniform mat4 projInv, camWorld;
     uniform vec2 lowRes;
     uniform vec3 camPos, sunDir, litColor, shadowColor, fogColor;
@@ -409,8 +414,9 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
         float mu = dot(rd, sunDir);
         float ph0 = phase(mu, 1.0), ph1 = phase(mu, 0.5), ph2 = phase(mu, 0.25);
         // interleaved gradient noise: a per-pixel start offset turns step banding into fine grain
-        // (a different offset every frame, which the resolve pass averages over time)
-        float jit = rand3(frame, 0.0).x;
+        // (interleaved gradient noise, shifted every frame: evenly spread offsets that the resolve pass
+        // averages into a smooth result faster than white noise would)
+        float jit = fract(52.9829189 * fract(dot(gl_FragCoord.xy + frame * 5.588238, vec2(0.06711056, 0.00583715))));
         float t = t0 + stepAt(t0) * jit;
         float T = 1.0, entry = NO_HIT, tw = 0.0, aw = 0.0;
         vec3 C = vec3(0.0);
@@ -423,6 +429,7 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
             // (whole steps only: a skip to the estimated surface would line every ray up there and undo the jitter)
             if (gap > 0.0) { t += dt * clamp(floor(gap / dt), 1.0, 5.0); continue; }
             float lod = max(0.0, log2(dt / ${(BASE_SIZE / BASE_RES).toFixed(1)}));
+            pixFoot = t * pixAngle * 2.0;
             float amb;
             float den = cloudDensity(p, weatherSmooth(p), lod, max(${EDGE.toFixed(1)}, dt * 0.5), t < 5000.0, amb);
             if (den > 0.0) {
@@ -431,9 +438,10 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
                 float od = lightDepth(p, lod, jit);
                 // sun: single scattering plus two weaker, less attenuated, flatter octaves standing in for the
                 // multiple scattering that makes the sunlit side of a thick cloud so bright
-                float sun = exp(-od) * ph0 + 0.5 * exp(-od * 0.35) * ph1 + 0.25 * exp(-od * 0.12) * ph2;
+                float sun = exp(-od) * ph0 + 0.45 * exp(-od * 0.35) * ph1 + 0.18 * exp(-od * 0.12) * ph2;
                 sun *= 1.0 - dk.x * 0.75 * step(p.y, dk.y); // under the rain deck the sun is mostly gone
-                vec3 S = litColor * (sun * sunScale) + shadowColor * mix(0.35, 0.8, sqrt(amb));
+                vec3 S = litColor * (sun * sunScale) + shadowColor * mix(0.28, 0.8, sqrt(amb));
+                S += vec3(0.75, 0.8, 1.0) * (flash * (1.6 - amb));    // lightning inside the cloud
                 C += T * a * S;
                 tw += T * a * t; aw += T * a;
                 if (entry == NO_HIT && 1.0 - T * (1.0 - a) > 0.03) entry = t;
@@ -464,11 +472,14 @@ const RESOLVE_FRAG = /* glsl */`
     void main() {
         ivec2 ip = ivec2(gl_FragCoord.xy), mx = ivec2(lowRes) - 1;
         vec4 c = texelFetch(tCur, ip, 0);
-        vec4 lo = c, hi = c;
+        vec4 lo = c, hi = c, sum = vec4(0.0);
         for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
             vec4 v = texelFetch(tCur, clamp(ip + ivec2(x, y), ivec2(0), mx), 0);
             lo = min(lo, v); hi = max(hi, v);
+            sum += v * ((x == 0 ? 2.0 : 1.0) * (y == 0 ? 2.0 : 1.0));
         }
+        // a light tent filter on this frame's grain before it goes into the history
+        c = mix(c, sum / 16.0, 0.6);
         vec2 uv = gl_FragCoord.xy / lowRes;
         vec4 vp = projInv * vec4(uv * 2.0 - 1.0, 0.5, 1.0);
         vec3 rd = normalize(mat3(camWorld) * (vp.xyz / vp.w));
@@ -498,6 +509,8 @@ const COMPOSITE_FRAG = /* glsl */`
     varying vec3 vRay;
     void main() {
         vec2 uv = gl_FragCoord.xy / fullRes;
+        vec4 col = texture2D(tCloud, uv);
+        if (col.a < 0.002) discard; // no cloud in any of the four texels around this pixel
         vec2 st = uv * lowRes - 0.5;
         ivec2 i0 = ivec2(floor(st)), mx = ivec2(lowRes) - 1;
         vec2 f = st - floor(st);
@@ -509,10 +522,7 @@ const COMPOSITE_FRAG = /* glsl */`
         // speak for the pixels around it: take the others' cloud and let the depth test cut it at the edge
         float lmax = max(max(lim.x, lim.y), max(lim.z, lim.w));
         vec4 keep = step(lmax * 0.6, lim);
-        vec4 col;
-        if (keep.x + keep.y + keep.z + keep.w > 3.5) {
-            col = texture2D(tCloud, uv);
-        } else {
+        if (keep.x + keep.y + keep.z + keep.w < 3.5) {
             vec4 w = vec4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y) * keep;
             w /= max(dot(w, vec4(1.0)), 1e-5);
             col = texelFetch(tCloud, a, 0) * w.x + texelFetch(tCloud, b, 0) * w.y + texelFetch(tCloud, c, 0) * w.z + texelFetch(tCloud, d, 0) * w.w;
@@ -589,7 +599,7 @@ export class Clouds {
             defines: {},
             uniforms: {
                 ...this.fieldU,
-                tDepth: { value: null }, hasDepth: { value: 0 }, camNear: { value: 1 }, camFar: { value: 1000 }, maxDist: { value: 18000 }, sunScale: { value: 0.75 }, frame: { value: 0 },
+                tDepth: { value: null }, hasDepth: { value: 0 }, camNear: { value: 1 }, camFar: { value: 1000 }, maxDist: { value: 18000 }, sunScale: { value: 0.8 }, frame: { value: 0 }, pixAngle: { value: 0.0025 }, flash: { value: 0 },
                 projInv: { value: new THREE.Matrix4() }, camWorld: { value: new THREE.Matrix4() }, lowRes: { value: new THREE.Vector2(4, 4) },
                 camPos: { value: new THREE.Vector3() }, sunDir: { value: new THREE.Vector3(0, 1, 0) },
                 litColor: { value: new THREE.Color(1, 1, 1) }, shadowColor: { value: new THREE.Color(0.5, 0.55, 0.6) }, fogColor: { value: new THREE.Color() },
@@ -640,10 +650,22 @@ export class Clouds {
 
         this.setWeather('clear', 0);
         this.setQuality('high');
+        this.compile();
+    }
+
+    // compile the offscreen passes now rather than on the first frame that shows a cloud
+    compile() {
+        try { this.renderer.compile(this.marchScene, this.marchCam); this.renderer.compile(this.resolveScene, this.marchCam); } catch (e) { /* no GL (tests) */ }
     }
 
     get visible() { return this.mesh.visible; }
     set visible(v) { this.mesh.visible = v; }
+    // lightning (0..1): a flash lights the clouds from inside; the history would smear it, so it resets
+    get flash() { return this.marchMat.uniforms.flash.value; }
+    set flash(f) {
+        const u = this.marchMat.uniforms.flash;
+        if (f !== u.value) { if (f > u.value) this.resetHistory = true; u.value = f; }
+    }
 
     setQuality(q) {
         const Q = QUALITY[q] || QUALITY.high;
@@ -652,7 +674,7 @@ export class Clouds {
         const step0 = 680 * (ratio - 1) / (Math.pow(ratio, Q.light) - 1); // the light march reaches ~680 m
         const d = { MAX_STEPS: Q.steps, LIGHT_STEPS: Q.light, LIGHT_STEP0: step0.toFixed(2), LIGHT_RATIO: ratio.toFixed(2), DETAIL: Q.detail };
         const m = this.marchMat;
-        if (JSON.stringify(m.defines) !== JSON.stringify(d)) { m.defines = d; m.needsUpdate = true; }
+        if (JSON.stringify(m.defines) !== JSON.stringify(d)) { m.defines = d; m.needsUpdate = true; if (this.resolveScene) this.compile(); }
     }
 
     // weather: 'clear' | 'cloudy' | 'rain' | 'storm'
@@ -673,6 +695,8 @@ export class Clouds {
         const u = this.marchMat.uniforms;
         u.litColor.value.copy(lit).multiplyScalar(1 - overcast * 0.4);
         u.shadowColor.value.copy(shadow);
+        // the HUD's white-out should be as bright as the cloud around you (dim at dusk, faint at night)
+        this.whiteBright = Math.min(1, 0.3 * shadow.r + 0.59 * shadow.g + 0.11 * shadow.b + 0.6 * (0.3 * lit.r + 0.59 * lit.g + 0.11 * lit.b));
         u.sunDir.value.copy(sunDir).normalize();
         this.resetHistory = true;
     }
@@ -707,6 +731,7 @@ export class Clouds {
         u.camPos.value.setFromMatrixPosition(camera.matrixWorld);
         u.camNear.value = camera.near; u.camFar.value = camera.far;
         u.lowRes.value.set(lw, lh);
+        u.pixAngle.value = 2 / (camera.projectionMatrix.elements[5] * lh); // radians per low-res pixel
         const c = this.compMat.uniforms;
         c.lowRes.value.set(lw, lh); c.fullRes.value.set(w, h);
         c.camNear.value = camera.near;
@@ -716,7 +741,7 @@ export class Clouds {
         // history: reset after a jump (a respawn, a camera cut) or a change of weather / time of day
         const R = this.resolveMat.uniforms;
         if (u.camPos.value.distanceToSquared(this.prevCamPos) > 400 * 400) this.resetHistory = true;
-        R.blend.value = this.resetHistory ? 1 : 0.12;
+        R.blend.value = this.resetHistory ? 1 : u.flash.value > 0.01 ? 0.5 : 0.12;
         this.resetHistory = false;
         R.projInv.value.copy(camera.projectionMatrixInverse);
         R.camWorld.value.copy(camera.matrixWorld);
@@ -748,7 +773,7 @@ export class Clouds {
         }
         return out;
     }
-    baseAt(x, y, z) {
+    baseAt(x, y, z, out) {
         const N = BASE_RES, D = this.baseData;
         const u = ((x - this.windOff.x) / BASE_SIZE) * N - 0.5, v = ((y - this.windOff.y) / BASE_SIZE) * N - 0.5, w = ((z - this.windOff.z) / BASE_SIZE) * N - 0.5;
         const i = Math.floor(u), j = Math.floor(v), k = Math.floor(w), fu = u - i, fv = v - j, fw = w - k;
@@ -758,8 +783,15 @@ export class Clouds {
             const o = (((((k + dz) % N + N) % N) * N + (((j + dy) % N + N) % N)) * N + (((i + dx) % N + N) % N)) * 2;
             r += D[o] * wt; g += D[o + 1] * wt;
         }
+        out[0] = r; out[1] = g;
         return r;
     }
+    // 0..1: how much the HUD should white out with the camera at p. The volume already fogs the view from
+    // inside a cloud, so this only adds the last bit of milkiness (and less of it when the cloud is dark).
+    whiteoutAt(p) {
+        return this.densityAt(p) * 0.7 * (this.whiteBright ?? 1);
+    }
+
     // 0..1: cloud density at a world point (the same field the shader marches, minus the finest detail)
     densityAt(p) {
         if (!this.mesh.visible) return 0;
@@ -768,15 +800,15 @@ export class Clouds {
         const wm = this.weatherAt(p.x, p.z, _wm);
         const cov = sat((wm[0] - cu.x) / (1 - cu.x));
         const h = p.y - (cu.y + (wm[3] - 0.5) * cu.w), y = h / (cu.z * wm[1]);
-        const cp = Math.pow(cov, 0.7), hc = sat(y / Math.max(Math.sqrt(cp), 0.05));
+        const cq = sat(cov / 0.6), cp = cq * cq * (3 - 2 * cq), hc = sat(y / Math.max(Math.sqrt(cp), 0.05));
         let s = Math.min(cp - y * y, h * 0.004);
         const c = dk.x > 0 ? sat((wm[2] - (1 - dk.x)) / 0.35) : 0, cover = c * c * (3 - 2 * c);
         const hdk = p.y - dk.y;
         let sd = cover > 0 ? Math.min(hdk + 90, dk.z * cover - hdk) * 0.002 : -1;
         if (Math.max(s, sd) <= 0) return 0;
-        const billow = this.baseAt(p.x, p.y, p.z);
-        const k = sat(hc / 0.35), kc = sat(cov / 0.3);
-        s -= (1 - billow) * (0.08 + 0.22 * k * k * (3 - 2 * k) + 0.12 * (1 - kc * kc * (3 - 2 * kc)));
+        const billow = this.baseAt(p.x, p.y, p.z, _n);
+        const k = sat(hc / 0.5), kc = sat(cov / 0.3);
+        s -= (1 - billow) * ((0.1 + 0.4 * k * k * (3 - 2 * k)) * (0.65 + 0.7 * _n[1]) + 0.12 * (1 - kc * kc * (3 - 2 * kc)));
         sd -= (1 - billow) * 0.38;
         return sat(Math.max(s, sd) / (EDGE * EDGE_SCALE));
     }
@@ -796,4 +828,4 @@ function toHalf(f) {
     for (let i = 0; i < f.length; i++) out[i] = THREE.DataUtils.toHalfFloat(f[i]);
     return out;
 }
-const _wm = [0, 0, 0, 0];
+const _wm = [0, 0, 0, 0], _n = [0, 0];

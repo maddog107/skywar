@@ -432,11 +432,13 @@ export class World {
         }
         const f = this.flash;
         this.hemi.intensity = this.baseHemi + f * 3;
+        this.clouds.flash = f; // lightning lights the clouds up from inside
         this.skyMat.uniforms.zenith.value.copy(this.palette.zenith).lerp(new THREE.Color(0.8, 0.82, 0.95), f * 0.6);
     }
 
     clearFlash() {
         this.flash = 0;
+        this.clouds.flash = 0;
         this.bolt.visible = false;
         if (this.baseHemi != null) this.hemi.intensity = this.baseHemi;
         if (this.palette) this.skyMat.uniforms.zenith.value.copy(this.palette.zenith);
@@ -1741,6 +1743,6 @@ export class World {
 
     // Returns 0..1: how deep inside a cloud a point is (for the whiteout effect)
     cloudDensityAt(p) {
-        return this.clouds.densityAt(p);
+        return this.clouds.whiteoutAt(p);
     }
 }
