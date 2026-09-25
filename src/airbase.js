@@ -13,12 +13,12 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createAircraftModel } from './models.js';
 import { AIRCRAFT } from './config.js';
 import { propInstance, propSize, hasProp } from './props.js';
-import { makeRadialTexture, clamp, rand, freezeStatic } from './util.js';
+import { makeRadialTexture, clamp, rand, freezeStatic, offsetUnits } from './util.js';
 import { roadMaterial } from './roads.js';
 import { registerAirTarget, Downed, AIR } from './softtargets.js';
 import { WORLD_BUILDINGS } from './buildings.js';
 
-const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler(0, 0, 0, 'YXZ'), _v3 = new THREE.Vector3();
+const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler(0, 0, 0, "YXZ"), _v3 = new THREE.Vector3(), _v4 = new THREE.Vector3();
 
 const MAT = {
     concrete: new THREE.MeshStandardMaterial({ color: 0xb9b5ab, roughness: 0.9 }),
@@ -56,6 +56,35 @@ function canvasTex(w, h, draw, repeat = false) {
     if (repeat) { t.wrapS = t.wrapT = THREE.RepeatWrapping; }
     t.anisotropy = 4;
     return t;
+}
+
+// Merge a group's meshes into one mesh per material (in the group's own space): a checkpoint or a control tower
+// is a few draw calls instead of dozens. `skip`: objects (and everything under them) left as they are.
+function mergeStatic(group, skip = []) {
+    group.updateMatrixWorld(true);
+    const inv = new THREE.Matrix4().copy(group.matrixWorld).invert(), rel = new THREE.Matrix4();
+    const by = new Map(), gone = [];
+    const skipped = (o) => { for (let q = o; q && q !== group; q = q.parent) if (skip.includes(q)) return true; return false; };
+    group.traverse(o => {
+        if (!o.isMesh || o.isInstancedMesh || Array.isArray(o.material) || skipped(o)) return;
+        const keep = ['position', 'normal'].concat(o.material.map ? ['uv'] : []);
+        if (keep.some(k => !o.geometry.attributes[k])) return;
+        const g = o.geometry.clone().applyMatrix4(rel.multiplyMatrices(inv, o.matrixWorld));
+        for (const k of Object.keys(g.attributes)) if (!keep.includes(k)) g.deleteAttribute(k);
+        if (!by.has(o.material)) by.set(o.material, { geos: [], shadow: false });
+        const e = by.get(o.material);
+        e.geos.push(g.index ? g.toNonIndexed() : g);
+        e.shadow = e.shadow || o.castShadow;
+        gone.push(o);
+    });
+    for (const o of gone) o.parent.remove(o);
+    for (const [mat, { geos, shadow }] of by) {
+        try {
+            const m = new THREE.Mesh(mergeGeometries(geos), mat);
+            m.castShadow = shadow; m.receiveShadow = true;
+            group.add(m);
+        } catch (e) { /* odd attribute sets: leave it out */ }
+    }
 }
 
 // gear geometry is shared between every parked / taxiing aircraft of the same size (never disposed)
@@ -181,6 +210,13 @@ class Heli {
         const p = this.curve.getPointAt(this.u, _v);
         const ground = Math.max(terrainHeight(p.x, p.z), 0);
         p.y = Math.max(p.y, ground + this.alt * 0.7);
+        // keep well clear of towers and tall buildings, here and a little way ahead
+        const B = WORLD_BUILDINGS.current;
+        if (B) {
+            const ahead = this.curve.getPointAt((this.u + 250 / this.len) % 1, _v4);
+            const top = Math.max(B.topAt(p.x, p.z, 60), B.topAt(ahead.x, ahead.z, 60));
+            if (top > p.y - 45) p.y = top + 45;
+        }
         this.mesh.position.lerp(p, this.prevYaw === null ? 1 : Math.min(1, dt * 3));
         const t = this.curve.getTangentAt(this.u, _v2);
         const yaw = Math.atan2(-t.x, -t.z);
@@ -341,6 +377,7 @@ export class Airbases {
         posts.forEach((p, i) => inst.setMatrixAt(i, m.makeTranslation(p[0], p[1], p[2])));
         inst.computeBoundingSphere();
         g.add(inst);
+        this.near(b, fence, inst);
         const wg = new THREE.BufferGeometry();
         wg.setAttribute('position', new THREE.Float32BufferAttribute(wire, 3));
         // lines are unlit, so the wire is darkened by hand at night (see setNight)
@@ -348,6 +385,7 @@ export class Airbases {
         const wl = new THREE.LineSegments(wg, wireMat);
         wl.frustumCulled = false;
         g.add(wl);
+        this.near(b, wl);
     }
 
     buildGate(b, g, info, signText = null) {
@@ -359,7 +397,6 @@ export class Airbases {
         g.add(gate);
         // guard booth on the island between the lanes... well, beside the road
         const booth = new THREE.Group();
-        const gParts = [booth];
         box(3.4, 2.6, 3.4, MAT.white, 0, 0.2, 0, booth);
         box(3.5, 1.0, 3.5, MAT.glass, 0, 1.3, 0, booth);
         box(4.4, 0.3, 4.4, MAT.darkConcrete, 0, 2.8, 0, booth);
@@ -367,8 +404,8 @@ export class Airbases {
         booth.position.set(6, 0, -12);
         gate.add(booth);
         // gate canopy over both lanes
-        for (const z of [-10, 10]) for (const x of [-4, 16]) gParts.push(cyl(0.25, 0.25, 6, MAT.steel, x, 0, z, gate, 8));
-        gParts.push(box(22, 0.8, 22, MAT.white, 6, 6, 0, gate));
+        for (const z of [-10, 10]) for (const x of [-4, 16]) cyl(0.25, 0.25, 6, MAT.steel, x, 0, z, gate, 8);
+        box(22, 0.8, 22, MAT.white, 6, 6, 0, gate);
         const signTex = canvasTex(512, 64, (ctx, w, h) => {
             ctx.fillStyle = '#1d2b1a'; ctx.fillRect(0, 0, w, h);
             ctx.fillStyle = '#f2f2e6'; ctx.font = 'bold 40px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -377,9 +414,8 @@ export class Airbases {
         const sign = new THREE.Mesh(new THREE.PlaneGeometry(20, 2.4), new THREE.MeshStandardMaterial({ map: signTex, roughness: 0.7 }));
         sign.rotation.y = Math.PI / 2; sign.position.set(17.05, 6.4, 0);
         gate.add(sign);
-        gParts.push(sign);
         // the checkpoint: guard booth and the canopy over the lanes (you can fly under it, not through it)
-        this.solid(b, 'booth', gParts, [{ lx: gx + 6, lz: gz - 12, y0: y, y1: y + 3.1, w: 4.4, d: 4.4 }, { lx: gx + 6, lz: gz, y0: y + 5.9, y1: y + 6.9, w: 22.4, d: 22.4 }]);
+        this.solid(b, 'booth', [gate], [{ lx: gx + 6, lz: gz - 12, y0: y, y1: y + 3.1, w: 4.4, d: 4.4 }, { lx: gx + 6, lz: gz, y0: y + 5.9, y1: y + 6.9, w: 22.4, d: 22.4 }]);
         // boom barriers (one per lane) that lift for traffic
         const armTex = canvasTex(256, 16, (ctx, w, h) => { for (let i = 0; i < 8; i++) { ctx.fillStyle = i % 2 ? '#f4f4f0' : '#d0201a'; ctx.fillRect(i * 32, 0, 32, h); } });
         const armMat = new THREE.MeshStandardMaterial({ map: armTex, roughness: 0.6 });
@@ -433,6 +469,9 @@ export class Airbases {
             this.floods.push(this.glow(gate, new THREE.Vector3(22, 8.9, z), 0xfff1c8, 14));
         }
         info.gatePos = (() => { const w = baseToWorld(b, gx, gz); return new THREE.Vector3(w.x, b.h + y, w.z); })();
+        // dozens of little meshes → one per material (the barrier arms and the flag move, so they stay apart)
+        mergeStatic(gate, [...info.arms.map(a => a.pivot), flag]);
+        this.near(b, gate);
     }
 
     // Two-lane road from outside the gate, through the checkpoint, onto the apron
@@ -471,6 +510,7 @@ export class Airbases {
         lot.rotation.x = -Math.PI / 2; lot.position.set(480, this.hAt(b, 480, z + 40) + 0.2, z + 40);
         lot.receiveShadow = true;
         g.add(lot);
+        this.near(b, lot);
     }
 
     glow(parent, pos, color, size) {
@@ -502,7 +542,9 @@ export class Airbases {
         info.cabLight = cab;
         const beacon = this.glow(t, new THREE.Vector3(-6, cabY + 15.4, 0), 0x6dff8a, 7);
         this.beacons.push(beacon);
+        mergeStatic(t);
         g.add(t);
+        if (b) this.far(b, t);
         // ops building, the shaft, and the glass cab on top: three boxes, so you can fly past the shaft
         if (b) beacon.userData.rec = info.towerRec = this.solid(b, 'atc', [t], [
             { lx: x, lz: z, y0: 0, y1: 8.6, w: 26.4, d: 14.4 },
@@ -524,11 +566,17 @@ export class Airbases {
         r.add(head);
         g.add(r);
         info.radar = head;
+        if (b) this.near(b, r);
         if (b) this.solid(b, 'radar', [r], [{ lx: x, lz: z, y0: 0, y1: 10.5, w: 3.6, d: 3.6 }, { lx: x, lz: z, y0: 9, y1: 13.5, w: 9.4, d: 9.4 }]);
     }
 
     // Dorm blocks outside the fence by the gate road (the Ready Room start)
     buildBarracks(b, g) {
+        const before = g.children.length;
+        this.buildBarracksParts(b, g);
+        this.near(b, ...g.children.slice(before));
+    }
+    buildBarracksParts(b, g) {
         const bx = 700, bz = -225;
         const wall = new THREE.MeshStandardMaterial({ color: 0xc9b99a, roughness: 0.9 });
         const roof = new THREE.MeshStandardMaterial({ color: 0x4d5a3e, roughness: 0.8 });
@@ -577,6 +625,8 @@ export class Airbases {
         w.add(sock);
         g.add(w);
         info.sock = sock;
+        const base = this.bases.length < BASES.length ? BASES[this.bases.length] : null;
+        if (base) this.near(base, w);
     }
 
     buildHelipad(b, g, info) {
@@ -592,6 +642,7 @@ export class Airbases {
             pad.rotation.x = -Math.PI / 2; pad.position.set(x, 0.12, z);
             pad.receiveShadow = true;
             g.add(pad);
+            this.near(b, pad);
             const hid = b.friendly || Math.random() < 0.5 ? 'heli_military' : 'heli_civil';
             const h = makeHelicopter(hid);
             h.position.set(x, 0.1, z);
@@ -669,9 +720,13 @@ export class Airbases {
         if (!map.has(b)) map.set(b, []);
         return map.get(b);
     }
+    // small things (fence, checkpoint, radar, windsock, pads, signs, lots) are only drawn within ~7 km of a base,
+    // the big ones (towers, hangars, terminals) within ~16 km
+    near(b, ...objs) { const m = this._near || (this._near = new Map()); if (!m.has(b)) m.set(b, []); m.get(b).push(...objs); }
+    far(b, ...objs) { const m = this._far || (this._far = new Map()); if (!m.has(b)) m.set(b, []); m.get(b).push(...objs); }
 
     pave(g, x, z, w, d, color = 0x7d8083, y = 0.08, rot = 0) {
-        const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshStandardMaterial({ color, roughness: 0.95, polygonOffset: true, polygonOffsetFactor: -1 }));
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshStandardMaterial({ color, roughness: 0.95, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: offsetUnits(-2) }));
         m.rotation.x = -Math.PI / 2; m.rotation.z = rot;
         m.position.set(x, y, z);
         m.receiveShadow = true;
@@ -718,6 +773,7 @@ export class Airbases {
         const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.7, side: THREE.DoubleSide }));
         m.position.set(x, y, z); m.rotation.y = rotY;
         g.add(m);
+        return m;
     }
 
     // ── MCAS Miramar: parallel runways 32L/32R + crosswind 09/27, a vast flight line, hangars, the base ──
@@ -725,8 +781,9 @@ export class Airbases {
         const TAXI = 0x6f7275, APRON = 0x7c7e7b;
         // parallel taxiway and connectors
         this.pave(g, -60, -100, 24, 3500, TAXI);
-        for (const z of [-1500, -800, 0, 800, 1500]) this.pave(g, -140, z, 170, 22, TAXI);
-        for (const z of [-1700, 1700]) this.pave(g, -370, z, 320, 22, TAXI);
+        // connectors sit a touch above the taxiway they join, so the overlap doesn't flicker
+        for (const z of [-1500, -800, 0, 800, 1500]) this.pave(g, -140, z, 170, 22, TAXI, 0.11);
+        for (const z of [-1700, 1700]) this.pave(g, -370, z, 320, 22, TAXI, 0.11);
         // the flight line
         this.pave(g, 310, -150, 640, 2700, APRON, 0.07);
         // rows of parked aircraft, noses toward the taxiway
@@ -743,6 +800,7 @@ export class Airbases {
         // hangars along the back of the flight line
         for (let k = 0; k < 9; k++) {
             const hz = -1350 + k * 280, hm = this.hangar(g, 700, hz, 30, 70);
+            this.far(b, hm);
             this.solid(b, 'hangar', [hm], [{ lx: 700, lz: hz, y0: 0, y1: 18, w: 60, d: 70 }, { lx: 700, lz: hz, y0: 18, y1: 26, w: 48, d: 70 }, { lx: 700, lz: hz, y0: 26, y1: 30, w: 30, d: 70 }]);
         }
         // the base itself: offices, barracks, workshops
@@ -761,14 +819,14 @@ export class Airbases {
         this.buildTower(g, info, 640, -1650, b);
         this.buildRadar(g, info, 560, -1900, b);
         this.buildWindsock(g, info, -700, -1650);
-        this.signBoard(g, 'MCAS MIRAMAR', 780, 3, b.gate.lz + 30, Math.PI / 2, 18, 2.6);
+        this.near(b, this.signBoard(g, 'MCAS MIRAMAR', 780, 3, b.gate.lz + 30, Math.PI / 2, 18, 2.6));
     }
 
     // ── Harbor International: one long runway, a parallel taxiway, two terminals with airliners at the gates ──
     buildCivil(b, g, info) {
         const TAXI = 0x6f7275, RAMP = 0x7a7c7b;
         this.pave(g, 180, 0, 24, 2900, TAXI);
-        for (const z of [-1400, -700, 0, 700, 1400]) this.pave(g, 90, z, 180, 22, TAXI);
+        for (const z of [-1400, -700, 0, 700, 1400]) this.pave(g, 90, z, 180, 22, TAXI, 0.11);
         this.pave(g, 335, -150, 270, 2300, RAMP, 0.07);
         const glass = this._termGlass || (this._termGlass = makeBuildingMaterial('tower'));
         this.buildingMats = this.buildingMats || [];
@@ -785,6 +843,7 @@ export class Airbases {
         termItems.forEach(([x, z, w, d, h], i) => { tm.setMatrixAt(i, m.compose(p.set(x, this.hAt(b, x, z) - 0.3, z), q, sc.set(w, h, d))); tm.setColorAt(i, c.setHex(i === 3 ? 0x9a9d9f : 0xb9c4cc)); });
         tm.castShadow = tm.receiveShadow = true; tm.computeBoundingSphere();
         g.add(tm);
+        this.far(b, tm);
         // curved white roofs over the terminals
         const roofs = [];
         for (const [x, z, w, d, h] of termItems.slice(0, 2)) {
@@ -793,6 +852,7 @@ export class Airbases {
             roof.castShadow = true;
             g.add(roof);
             roofs.push(roof);
+            this.far(b, roof);
         }
         const names = ['TERMINAL 1', 'TERMINAL 2', 'TERMINAL 2 PIER', 'PARKING GARAGE'];
         termItems.forEach(([x, z, w, d, h], i) => {
@@ -811,6 +871,7 @@ export class Airbases {
         all.forEach(([x, z], i) => bim.setMatrixAt(i, m.compose(p.set(x + 58, this.hAt(b, x, z), z - 8), q.identity(), sc.set(1, 1, 1))));
         bim.castShadow = true; bim.computeBoundingSphere();
         g.add(bim);
+        this.near(b, bim);
         all.forEach(([x, z], i) => { const y = this.hAt(b, x, z); this.solid(b, 'jetbridge', [{ im: bim, i }], [{ lx: x + 58, lz: z - 8, y0: y + 4, y1: y + 7, w: 28, d: 3.4 }]); });
         const big = all.filter((_, i) => i % 5 === 2), small = all.filter((_, i) => i % 5 !== 2);
         this.fleet(b, g, 'b737', small);
@@ -822,7 +883,7 @@ export class Airbases {
         this.buildAccessRoad(b, g, [[[b.gate.lx + 75, b.gate.lz], [620, b.gate.lz]], [[620, -1150], [620, 750]]]);
         this.buildTower(g, info, 640, 950, b);
         this.buildWindsock(g, info, -120, -1300);
-        this.signBoard(g, 'HARBOR INTERNATIONAL AIRPORT', b.gate.lx - 10, 5, b.gate.lz - 16, Math.PI / 2, 26, 3.2, '#12324a');
+        this.near(b, this.signBoard(g, 'HARBOR INTERNATIONAL AIRPORT', b.gate.lx - 10, 5, b.gate.lz - 16, Math.PI / 2, 26, 3.2, '#12324a'));
         info.gatePos = null;
     }
 
@@ -874,7 +935,7 @@ export class Airbases {
     update(dt, traffic, wind, cam) {
         this.time += dt;
         const t = this.time;
-        if (cam) for (const [map, R, kr] of [[this._heavy, 11000, 0], [this._heavyAc, 4000, 0.5]]) if (map) for (const [b, list] of map) {
+        if (cam) for (const [map, R, kr] of [[this._heavy, 11000, 0], [this._heavyAc, 4000, 0.5], [this._near, 7000, 0.5], [this._far, 16000, 0.5]]) if (map) for (const [b, list] of map) {
             const near = (cam.x - b.x) ** 2 + (cam.z - b.z) ** 2 < (R + b.r * kr) ** 2;
             if (list.near !== near) { list.near = near; for (const o of list) o.visible = near; }
         }

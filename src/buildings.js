@@ -251,7 +251,7 @@ export class Buildings {
             } else {
                 pt.obj.updateWorldMatrix(true, true);
                 pt.meshes = [];
-                pt.obj.traverse(o => { if (o.isMesh || o.isSprite || o.isLine || o.isPoints) pt.meshes.push({ o, base: o.matrixWorld.clone(), auto: o.matrixWorldAutoUpdate, vis: o.visible }); });
+                pt.obj.traverse(o => { if (o.isMesh || o.isSprite || o.isLine || o.isPoints) pt.meshes.push({ o, base: o.matrixWorld.clone(), auto: o.matrixWorldAutoUpdate }); });
                 for (const q of pt.meshes) q.o.matrixWorldAutoUpdate = false;
             }
         }
@@ -292,7 +292,9 @@ export class Buildings {
                     pt.im.setMatrixAt(pt.i, M);
                     pt.im.instanceMatrix.needsUpdate = true;
                 } else for (const q of pt.meshes) {
-                    if (done) q.o.visible = false;
+                    // gone: squashed to nothing rather than hidden, so distance culling (which toggles .visible)
+                    // can't bring it back
+                    if (done) q.o.matrixWorld.copy(HIDDEN);
                     else q.o.matrixWorld.multiplyMatrices(_m2, q.base);
                 }
             }
@@ -399,7 +401,7 @@ export class Buildings {
                     if (pt.base) { pt.im.setMatrixAt(pt.i, pt.base); pt.im.instanceMatrix.needsUpdate = true; }
                     if (pt.col) { pt.im.setColorAt(pt.i, pt.col); pt.im.instanceColor.needsUpdate = true; }
                 } else if (pt.meshes) {
-                    for (const q of pt.meshes) { q.o.matrixWorld.copy(q.base); q.o.matrixWorldAutoUpdate = q.auto; q.o.visible = q.vis; }
+                    for (const q of pt.meshes) { q.o.matrixWorld.copy(q.base); q.o.matrixWorldAutoUpdate = q.auto; }
                     pt.meshes = null;
                 }
             }
