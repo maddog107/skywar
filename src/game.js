@@ -17,7 +17,7 @@ import { RingCourse } from './rings.js';
 import { GroundStart } from './groundstart.js';
 import { HEIST_JET } from './heist.js';
 import { updateCharacters } from './character.js';
-import { AIR_TARGETS } from './softtargets.js';
+import { AIR_TARGETS, AIR } from './softtargets.js';
 import { readStick, rampAxis, expo, STICK_EXPO } from './input.js';
 import { clamp, damp, lerp, rand, pick, formatTime, G } from './util.js';
 import { BASES, RUNWAY, terrainHeight, isOnRunway, baseToWorld } from './world.js';
@@ -109,6 +109,7 @@ export class Game {
 
     // ═════════════ Setup ═════════════
     start(opts) {
+        AIR.game = this;
         this.cleanup();
         this.lastEjectPress = -9;
         this.autopilot.warnT = -9; this.autopilot.override = 0;

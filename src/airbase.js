@@ -15,7 +15,7 @@ import { AIRCRAFT } from './config.js';
 import { propInstance, propSize, hasProp } from './props.js';
 import { makeRadialTexture, clamp, rand, freezeStatic } from './util.js';
 import { roadMaterial } from './roads.js';
-import { registerAirTarget, Downed } from './softtargets.js';
+import { registerAirTarget, Downed, AIR } from './softtargets.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler(0, 0, 0, 'YXZ'), _v3 = new THREE.Vector3();
 
@@ -149,6 +149,8 @@ class Heli {
         registerAirTarget(this);
     }
     get pos() { return this.mesh.position; }
+
+    damage(amount, source) { if (AIR.game) this.hit(amount, AIR.game, source); }
 
     // shootable (softtargets.js): smoking when hurt, down it comes at zero
     hit(amount, game, source) {

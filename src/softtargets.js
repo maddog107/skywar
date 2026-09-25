@@ -10,6 +10,7 @@ import { terrainHeight } from './world.js';
 import { rand } from './util.js';
 
 export const AIR_TARGETS = [];
+export const AIR = { game: null }; // the running game (set by Game.start) for aircraft-style damage() calls
 export function registerAirTarget(t) { if (!AIR_TARGETS.includes(t)) AIR_TARGETS.push(t); }
 export function unregisterAirTarget(t) { const i = AIR_TARGETS.indexOf(t); if (i >= 0) AIR_TARGETS.splice(i, 1); }
 

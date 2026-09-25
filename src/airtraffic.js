@@ -10,7 +10,7 @@ import { BASES, runwayInfo, runwayNumbers, baseToWorld, worldToBase, terrainHeig
 import { makeParkedModel } from './airbase.js';
 import { makeRadialTexture, clamp, rand, lerp } from './util.js';
 import { AIRCRAFT } from './config.js';
-import { registerAirTarget, unregisterAirTarget, Downed } from './softtargets.js';
+import { registerAirTarget, unregisterAirTarget, Downed, AIR } from './softtargets.js';
 
 const GS = 3 * Math.PI / 180;
 const PERF = {
@@ -113,6 +113,9 @@ class Flight {
         this.pos.z += -Math.cos(this.yaw) * this.speed * dt;
         return Math.hypot(dx, dz);
     }
+
+    // same call shape as Aircraft.damage, so missiles and lock logic can treat it like any aircraft
+    damage(amount, source) { if (AIR.game) this.hit(amount, AIR.game, source); }
 
     hit(amount, game, source) {
         if (!this.alive || amount <= 0) return;
