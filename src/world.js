@@ -5,6 +5,107 @@ import * as THREE from 'three';
 import { fbm, ridged, smoothstep, lerp, clamp, mulberry32, DEG, makeRadialTexture, freezeStatic } from './util.js';
 import { TIMES } from './config.js';
 
+// ═══════════════════════════════════════════════════════════════
+// Global shader patches (applied once at import, before anything compiles)
+// ═══════════════════════════════════════════════════════════════
+// Aerial perspective for every built-in material: exp² haze whose density thins out with altitude (clear
+// air when you look down from height, hazy valleys and horizons), a low mist layer that pools over lakes
+// and lowlands (denser at dawn, dusk and in rain), warm in-scatter toward the sun that matches the sky's
+// horizon glow, and a fade to the horizon colour before the streamed terrain runs out.
+// The parameters live in typed arrays that every material's uniforms point at: UniformsUtils.clone copies
+// Colors and Vectors but keeps typed arrays by reference, so one write updates the whole scene.
+export const SKY_FOG = {
+    a: new Float32Array([0.00006, 1 / 1500, 13000, 18000]), // haze density at sea level, 1/scale height, edge fade start, end (m)
+    b: new Float32Array([0, 1, 0, 0.25]),                    // sun direction (world), glow strength at the horizon
+    c: new Float32Array([1, 0.8, 0.6, 0]),                   // glow colour (linear)
+    d: new Float32Array([0, 1 / 70, 1.1, 0]),                // mist density at sea level, 1/scale height, mist brightness
+};
+export const FOG_GLSL = /* glsl */`
+    uniform vec4 skyFogA, skyFogB, skyFogC, skyFogD;
+    // optical depth of an exponential height layer along a ray from height y0 to y1 of length L
+    float skyFogLayer(float dens, float k, float y0, float y1, float L) {
+        float e0 = exp(-k * max(y0, 0.0)), e1 = exp(-k * max(y1, 0.0));
+        float dk = k * (y1 - y0);
+        return dens * L * (abs(dk) > 1e-4 ? (e0 - e1) / dk : e0);
+    }
+    // ray: camera -> point, world space. x: fog amount, y: how much of it is low mist
+    vec2 skyFogAmount(vec3 ray, float camY) {
+        float L = length(ray);
+        float haze = skyFogLayer(skyFogA.x, skyFogA.y, camY, camY + ray.y, L);
+        float mist = skyFogLayer(skyFogD.x, skyFogD.y, camY, camY + ray.y, L);
+        float tau = haze + mist;
+        float f = 1.0 - exp(-tau * tau);
+        f = max(f, smoothstep(skyFogA.z, skyFogA.w, length(ray.xz)));
+        return vec2(f, mist / max(tau, 1e-6));
+    }
+    vec3 skyFogColor(vec3 base, vec3 ray, float mistShare) {
+        float sd = max(dot(normalize(ray), skyFogB.xyz), 0.0);
+        vec3 c = base + skyFogC.rgb * (pow(sd, 6.0) * skyFogB.w);
+        return mix(c, base * skyFogD.z + skyFogC.rgb * (pow(sd, 3.0) * skyFogB.w * 0.6), mistShare * 0.7);
+    }`;
+function patchFogChunks() {
+    const C = THREE.ShaderChunk;
+    C.fog_pars_vertex = '#ifdef USE_FOG\n\tvarying float vFogDepth;\n\tvarying vec3 vFogPos;\n#endif';
+    C.fog_vertex = '#ifdef USE_FOG\n\tvFogDepth = - mvPosition.z;\n\tvFogPos = mvPosition.xyz;\n#endif';
+    C.fog_pars_fragment = `#ifdef USE_FOG
+        uniform vec3 fogColor;
+        varying float vFogDepth;
+        varying vec3 vFogPos;
+        ${FOG_GLSL}
+    #endif`;
+    C.fog_fragment = `#ifdef USE_FOG
+        vec3 fogRay = ( vec4( vFogPos, 0.0 ) * viewMatrix ).xyz; // view -> world direction (rigid view matrix)
+        vec2 fogAmt = skyFogAmount( fogRay, cameraPosition.y );
+        gl_FragColor.rgb = mix( gl_FragColor.rgb, skyFogColor( fogColor, fogRay, fogAmt.y ), fogAmt.x );
+    #endif`;
+    for (const k in THREE.ShaderLib) {
+        const u = THREE.ShaderLib[k].uniforms;
+        if (u && u.fogColor) { u.skyFogA = { value: SKY_FOG.a }; u.skyFogB = { value: SKY_FOG.b }; u.skyFogC = { value: SKY_FOG.c }; u.skyFogD = { value: SKY_FOG.d }; }
+    }
+}
+
+// Two-cascade sun shadows: directional light 0 (the sun) keeps its sharp ±70 m map around the jet; light 1
+// carries no light, only a wide, coarse map of the ground ahead of the camera. Light 0 reads the near map
+// inside its box and blends to the far map outside it, so hangars, houses and trees kilometres away still sit
+// on their shadows. Materials may #define SHADOW_FADE(s) to post-process the sun's shadow term.
+function patchCascadeShadows() {
+    const src = THREE.ShaderChunk.lights_fragment_begin;
+    const start = src.indexOf('#if ( NUM_DIR_LIGHTS > 0 ) && defined( RE_Direct )');
+    const end = src.indexOf('#if ( NUM_RECT_AREA_LIGHTS > 0 )');
+    const line = 'directLight.color *= ( directLight.visible && receiveShadow ) ? getShadow( directionalShadowMap[ i ], directionalLightShadow.shadowMapSize, directionalLightShadow.shadowIntensity, directionalLightShadow.shadowBias, directionalLightShadow.shadowRadius, vDirectionalShadowCoord[ i ] ) : 1.0;';
+    const re = 'RE_Direct( directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight );';
+    if (start < 0 || end < start) return false;
+    let block = src.slice(start, end);
+    if (!block.includes(line) || !block.includes(re)) return false; // three.js changed: keep single shadows
+    const args = (k) => `directionalShadowMap[ ${k} ], directionalLightShadows[ ${k} ].shadowMapSize, directionalLightShadows[ ${k} ].shadowIntensity, directionalLightShadows[ ${k} ].shadowBias, directionalLightShadows[ ${k} ].shadowRadius, vDirectionalShadowCoord[ ${k} ]`;
+    block = block.replace(line, `
+        #if ( UNROLLED_LOOP_INDEX == 0 ) && ( NUM_DIR_LIGHT_SHADOWS == 2 )
+            vec3 csmNear = vDirectionalShadowCoord[ 0 ].xyz / vDirectionalShadowCoord[ 0 ].w;
+            vec2 csmEdge = min( csmNear.xy, 1.0 - csmNear.xy );
+            float csmW = smoothstep( 0.0, 0.15, min( csmEdge.x, csmEdge.y ) );
+            float csmS = 1.0;
+            if ( csmW > 0.0 ) csmS = getShadow( ${args(0)} );
+            if ( csmW < 1.0 ) {
+                vec3 csmFar = vDirectionalShadowCoord[ 1 ].xyz / vDirectionalShadowCoord[ 1 ].w;
+                vec2 csmEdge1 = min( csmFar.xy, 1.0 - csmFar.xy );
+                float csmS1 = mix( 1.0, getShadow( ${args(1)} ), smoothstep( 0.0, 0.08, min( csmEdge1.x, csmEdge1.y ) ) );
+                csmS = mix( csmS1, csmS, csmW );
+            }
+            directLight.color *= ( directLight.visible && receiveShadow ) ? SHADOW_FADE( csmS ) : 1.0;
+        #elif ( UNROLLED_LOOP_INDEX == 1 ) && ( NUM_DIR_LIGHT_SHADOWS == 2 )
+            // light 1 only holds the far cascade's map (read by light 0 above)
+        #else
+            ${line.replace('? getShadow(', '? SHADOW_FADE( getShadow(').replace(') : 1.0;', ') ) : 1.0;')}
+        #endif`)
+        .replace(re, `#if !( ( UNROLLED_LOOP_INDEX == 1 ) && ( NUM_DIR_LIGHT_SHADOWS == 2 ) )
+            ${re}
+        #endif`);
+    THREE.ShaderChunk.lights_fragment_begin = '#ifndef SHADOW_FADE\n#define SHADOW_FADE( s ) ( s )\n#endif\n' + src.slice(0, start) + block + src.slice(end);
+    return true;
+}
+patchFogChunks();
+export const CASCADES = patchCascadeShadows();
+
 // ── Airbases (terrain is flattened around them) ──
 // Each base lists its runways in base-local metres (lx across, lz along; rot = extra rotation).
 // layout picks the dressing: 'standard' (the original bases), 'miramar' (military, parallel runways),
@@ -113,15 +214,101 @@ export function isOnRunway(x, z) {
     return null;
 }
 
-// Directional-light shadows go through seaFade() (defined in the terrain shader)
-function seabedShadows(chunk) {
-    const a = '? getShadow( directionalShadowMap[ i ]', b = 'vDirectionalShadowCoord[ i ] ) : 1.0;';
-    if (!chunk.includes(a) || !chunk.includes(b)) return chunk; // three.js changed: leave shadows alone
-    return chunk.replace(a, '? seaFade( getShadow( directionalShadowMap[ i ]').replace(b, 'vDirectionalShadowCoord[ i ] ) ) : 1.0;');
-}
-
 // run a build generator (see World.tileGeometryJob) to completion
 function runJob(it) { let r; do { r = it.next(); } while (!r.done); return r.value; }
+
+// 2D gradient noise that tiles over the unit square with P cells per side (seamless textures), about -1..1
+const GRAD_X = new Float32Array(256), GRAD_Y = new Float32Array(256);
+for (let i = 0; i < 256; i++) { const a = (i / 256) * Math.PI * 2 + 0.37; GRAD_X[i] = Math.cos(a); GRAD_Y[i] = Math.sin(a); }
+function periodicNoise(u, v, P, seed) {
+    const x = u * P, y = v * P, x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+    const g = (ix, iy, dx, dy) => {
+        ix = ((ix % P) + P) % P; iy = ((iy % P) + P) % P;
+        let h = Math.imul(ix, 374761393) + Math.imul(iy, 668265263) + Math.imul(seed, 1442695041);
+        h = Math.imul(h ^ (h >>> 13), 1274126177); h = (h ^ (h >>> 16)) & 255;
+        return GRAD_X[h] * dx + GRAD_Y[h] * dy;
+    };
+    const sx = fx * fx * fx * (fx * (fx * 6 - 15) + 10), sy = fy * fy * fy * (fy * (fy * 6 - 15) + 10);
+    const a = g(x0, y0, fx, fy), b = g(x0 + 1, y0, fx - 1, fy), c = g(x0, y0 + 1, fx, fy - 1), d = g(x0 + 1, y0 + 1, fx - 1, fy - 1);
+    return (a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy) * 1.4;
+}
+
+const FAR_SHADOW = 1500; // half-size of the far shadow cascade (m)
+const CLOUD_AREA = 30000; // clouds wrap around the camera in a square this wide (m)
+const DECK_Y = 2400; // base of the overcast deck in rain and storms (m)
+// grass around the camera: a dense inner grid and a coarse outer one (cell size m, cells per side, blade scale);
+// ground data comes from tex x tex textures, texel metres apart, refilled once the camera has moved `recentre` m
+const GRASS = { layers: [{ cell: 0.5, n: 72, scale: 1 }, { cell: 1.5, n: 100, scale: 1.25 }], tex: 48, texel: 5, recentre: 20 };
+const _sx = new THREE.Vector3(), _sy = new THREE.Vector3(), _sc = new THREE.Vector3(), _fc = new THREE.Vector3(), _v1 = new THREE.Vector3();
+
+// ── Tree models ──
+// Every tree shape is built here, in one place, so they can be swapped for loaded models later. Contract:
+// non-indexed BufferGeometry with position / normal / color, trunk base at y = 0, roughly life size
+// (pine ~18 m, broadleaf ~12 m, bush ~2.5 m) before the per-instance scale of 0.6-1.5.
+export function makeTreeGeometries() {
+    const col = new THREE.Color();
+    // parts: { geo, color, ao: [y0, y1] (darker toward y0), radial: centre (soft blob normals) }
+    const bake = (parts) => {
+        const P = [], N = [], C = [];
+        for (const pt of parts) {
+            const g = pt.geo.index ? pt.geo.toNonIndexed() : pt.geo;
+            const p = g.attributes.position.array, n = g.attributes.normal.array;
+            col.set(pt.color);
+            for (let i = 0; i < p.length; i += 3) {
+                const x = p[i], y = p[i + 1], z = p[i + 2];
+                let nx = n[i], ny = n[i + 1], nz = n[i + 2];
+                if (pt.radial) {
+                    nx = x - pt.radial[0]; ny = (y - pt.radial[1]) * 1.4; nz = z - pt.radial[2];
+                    const l = Math.hypot(nx, ny, nz) || 1; nx /= l; ny /= l; nz /= l;
+                }
+                const ao = pt.ao ? lerp(0.5, 1.12, smoothstep(pt.ao[0], pt.ao[1], y)) : 1;
+                P.push(x, y, z); N.push(nx, ny, nz); C.push(col.r * ao, col.g * ao, col.b * ao);
+            }
+        }
+        const out = new THREE.BufferGeometry();
+        out.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+        out.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3));
+        out.setAttribute('color', new THREE.Float32BufferAttribute(C, 3));
+        out.computeBoundingSphere();
+        return out;
+    };
+    const trunk = (h, r0) => { const g = new THREE.CylinderGeometry(r0 * 0.6, r0, h, 6, 1, true); g.translate(0, h / 2, 0); return g; };
+    // a lumpy crown: a displaced icosphere (identical positions move alike, so it stays closed)
+    const crown = (rad, detail, cx, cy, cz, sy, seed) => {
+        const g = new THREE.IcosahedronGeometry(rad, detail);
+        const p = g.attributes.position;
+        for (let i = 0; i < p.count; i++) {
+            const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+            const k = 1 + 0.16 * Math.sin(x * 1.3 + y * 0.8 + seed) * Math.sin(z * 1.1 - y * 0.9 + seed * 2.0) + 0.08 * Math.sin(x * 2.9 - z * 2.3 + seed);
+            p.setXYZ(i, cx + x * k, cy + y * k * sy, cz + z * k);
+        }
+        return g;
+    };
+    const tiers = [[4.8, 8, 7.5], [3.9, 7, 11.5], [2.8, 6, 15.2], [1.6, 4, 18]];
+    const pine = bake([
+        { geo: trunk(6, 0.55), color: 0x4a3525 },
+        ...tiers.map(([r, h, y], i) => {
+            const c = new THREE.ConeGeometry(r, h, 8, 1, true);
+            c.translate(0, y, 0);
+            return { geo: c, color: i > 1 ? 0x2d5a34 : 0x234a2b, ao: [y - h / 2, y + h / 2] };
+        }),
+    ]);
+    const broadleaf = bake([
+        { geo: trunk(6.5, 0.5), color: 0x4f3a28 },
+        { geo: crown(4.6, 1, 0, 8.8, 0, 0.82, 1.3), color: 0x3a5f2a, ao: [5.2, 12.5], radial: [0, 8.8, 0] },
+        { geo: crown(2.6, 1, 1.9, 11.2, 0.6, 0.85, 4.1), color: 0x44692e, ao: [8.5, 13.5], radial: [1.9, 11.2, 0.6] },
+    ]);
+    const bush = bake([
+        { geo: crown(1.9, 0, 0, 1.3, 0, 0.62, 2.7), color: 0x465f2c, ao: [0.2, 2.6], radial: [0, 0.9, 0] },
+        { geo: crown(1.3, 0, 1.2, 1.0, 0.5, 0.7, 5.3), color: 0x557631, ao: [0.2, 2.2], radial: [1.2, 0.8, 0.5] },
+    ]);
+    return { pine, broadleaf, bush };
+}
+
+function disposeTrees(g) {
+    if (!g) return;
+    for (const m of g.isInstancedMesh ? [g] : g.children) m.dispose();
+}
 
 // ═══════════════════════════════════════════════════════════════
 export class World {
@@ -134,6 +321,9 @@ export class World {
         this.fogColor = new THREE.Color();
         this.tiles = new Map();
         this.buildQueue = [];
+        this.uTime = { value: 0 };                           // shared by terrain (foam, LOD morph) and trees (sway)
+        this.uWind = { value: new THREE.Vector3(1, 0.4, 0) }; // tree sway: wind direction (x, z) and strength (y)
+        this.terrainDetail = { value: 1 };                   // 0 on 'low' quality: no close-up ground detail
         this.detailTex = this.makeDetailTexture();
 
         this.initLights();
@@ -141,7 +331,9 @@ export class World {
         this.initTerrainMaterial();
         this.initWater();
         this.initClouds();
+        this.initOvercast();
         this.initTreeAssets();
+        this.initGrass();
         this.initBases();
         this.scene.fog = new THREE.FogExp2(0xbfd4e6, 0.00006);
         this.weather = 'clear';
@@ -159,14 +351,20 @@ export class World {
     applyWeather(P) {
         const w = this.weather;
         const k = w === 'cloudy' ? 0.35 : w === 'rain' ? 0.7 : w === 'storm' ? 1 : 0;
+        // cloud cover: the share of cloud clusters shown, and how big their puffs grow
+        P.coverage = w === 'cloudy' ? 0.85 : w === 'rain' || w === 'storm' ? 1 : 0.5;
+        P.grow = w === 'cloudy' ? 1.15 : w === 'rain' ? 1.3 : w === 'storm' ? 1.4 : 1;
+        P.overcast = w === 'rain' ? 0.6 : w === 'storm' ? 0.85 : 0;
         if (!k) return;
         const grey = new THREE.Color(0x6f7780), dark = new THREE.Color(0x3a4048);
         P.zenith.lerp(dark, 0.55 * k);
         P.horizon.lerp(grey, 0.6 * k);
         P.glow.lerp(grey, 0.8 * k);
+        P.belt.multiplyScalar(1 - k);
         P.sunI *= 1 - 0.65 * k;
-        P.hemiI *= 1 - 0.25 * k;
+        P.hemiI *= 1 + 0.3 * k; // diffuse sky light takes over from the hidden sun
         P.fogDensity *= 1 + 1.8 * k;
+        P.mist = P.mist * (1 + k) + 0.00015 * k; P.mistH += 40 * k;
         P.clouds.lerp(new THREE.Color(0x9aa2ab), 0.7 * k);
         P.cloudShadow.lerp(new THREE.Color(0x3c434c), 0.8 * k);
         P.water.lerp(new THREE.Color(0x1d2a33), 0.6 * k);
@@ -274,24 +472,30 @@ export class World {
         const night = key === 'night';
         const low = smoothstep(25, 2, t.elevation);
 
+        // hemi + environment map both add sky light: the environment carries most of it (and the jets'
+        // reflections), the hemisphere light only a little, so shadowed sides stay darker than sunlit ones
         const P = {
-            zenith: new THREE.Color(0x1d5fb8), horizon: new THREE.Color(0xa9c9e6), sun: new THREE.Color(0xfff3e0),
-            sunI: 3.2, hemiSky: new THREE.Color(0x9cc4ec), hemiGround: new THREE.Color(0x4a5a3a), hemiI: 1.1,
-            fogDensity: 0.000055, glow: new THREE.Color(0xffe0b0), clouds: new THREE.Color(0xffffff), cloudShadow: new THREE.Color(0x9aa8ba),
-            water: new THREE.Color(0x15506e),
+            zenith: new THREE.Color(0x2463b4), horizon: new THREE.Color(0xb3cde4), sun: new THREE.Color(0xfff1dc),
+            sunI: 3.3, hemiSky: new THREE.Color(0x9cc0e4), hemiGround: new THREE.Color(0x5a5236), hemiI: 0.5, envI: 0.62,
+            fogDensity: 0.000062, glow: new THREE.Color(0xffe2b8), belt: new THREE.Color(0x000000),
+            clouds: new THREE.Color(0xffffff), cloudShadow: new THREE.Color(0x8e9db2),
+            water: new THREE.Color(0x14506c), mist: 0.00012, mistH: 60, haze: 1500,
         };
         if (key === 'dawn') {
-            P.zenith.set(0x2b4f86); P.horizon.set(0xf2b88a); P.sun.set(0xffb070); P.sunI = 2.4;
-            P.hemiSky.set(0x8aa4cc); P.hemiGround.set(0x4b3f33); P.hemiI = 0.8; P.glow.set(0xff9a50);
-            P.clouds.set(0xffd6b8); P.cloudShadow.set(0x7c7390); P.fogDensity = 0.00007; P.water.set(0x183248);
+            P.zenith.set(0x2d4f88); P.horizon.set(0xc8b4b4); P.sun.set(0xffb070); P.sunI = 2.5;
+            P.hemiSky.set(0x8aa4cc); P.hemiGround.set(0x4b3f33); P.hemiI = 0.45; P.envI = 0.55; P.glow.set(0xff9a50); P.belt.set(0x3a2436);
+            P.clouds.set(0xffd2b0); P.cloudShadow.set(0x6f6a88); P.fogDensity = 0.00007; P.water.set(0x183248);
+            P.mist = 0.0005; P.mistH = 80;
         } else if (key === 'dusk') {
-            P.zenith.set(0x1f3368); P.horizon.set(0xf08a4b); P.sun.set(0xff8a3c); P.sunI = 2.2;
-            P.hemiSky.set(0x7f7fb0); P.hemiGround.set(0x40302a); P.hemiI = 0.75; P.glow.set(0xff6a20);
-            P.clouds.set(0xffb38a); P.cloudShadow.set(0x6a5577); P.fogDensity = 0.00007; P.water.set(0x1a2a40);
+            P.zenith.set(0x213670); P.horizon.set(0xb49aa2); P.sun.set(0xff8a3c); P.sunI = 2.3;
+            P.hemiSky.set(0x7f7fb0); P.hemiGround.set(0x40302a); P.hemiI = 0.42; P.envI = 0.55; P.glow.set(0xff6a20); P.belt.set(0x40263c);
+            P.clouds.set(0xffb088); P.cloudShadow.set(0x62506e); P.fogDensity = 0.00007; P.water.set(0x1a2a40);
+            P.mist = 0.00045; P.mistH = 70;
         } else if (night) {
             P.zenith.set(0x02050d); P.horizon.set(0x0f1a2e); P.sun.set(0x9fb6e0); P.sunI = 0.35;
-            P.hemiSky.set(0x33456b); P.hemiGround.set(0x10141a); P.hemiI = 0.35; P.glow.set(0x3a4a70);
+            P.hemiSky.set(0x33456b); P.hemiGround.set(0x10141a); P.hemiI = 0.3; P.envI = 0.6; P.glow.set(0x3a4a70);
             P.clouds.set(0x39455e); P.cloudShadow.set(0x161c28); P.fogDensity = 0.00008; P.water.set(0x040b14);
+            P.mist = 0.0004; P.mistH = 70;
             // moonlight comes from high up
             this.sunDir.set(0.35, 0.6, -0.4).normalize();
         }
@@ -301,6 +505,14 @@ export class World {
         this.scene.fog.color.copy(P.horizon);
         this.scene.fog.density = P.fogDensity;
         this.scene.background = P.horizon;
+        // shared aerial-perspective parameters (see FOG_GLSL)
+        const skyGlowDir = night ? _v1.set(-0.3, 0.45, -0.85).normalize() : this.sunDir;
+        SKY_FOG.a[0] = P.fogDensity; SKY_FOG.a[1] = 1 / P.haze;
+        SKY_FOG.b[0] = skyGlowDir.x; SKY_FOG.b[1] = skyGlowDir.y; SKY_FOG.b[2] = skyGlowDir.z;
+        SKY_FOG.b[3] = (0.25 + low * 0.9) * (1 - (P.overcast || 0) * 0.6);
+        SKY_FOG.c[0] = P.glow.r; SKY_FOG.c[1] = P.glow.g; SKY_FOG.c[2] = P.glow.b;
+        SKY_FOG.d[0] = P.mist; SKY_FOG.d[1] = 1 / P.mistH; SKY_FOG.d[2] = night ? 1.25 : 1.12;
+        this.setFogEdge();
 
         this.sun.color.copy(P.sun);
         this.sun.intensity = P.sunI;
@@ -314,25 +526,43 @@ export class World {
         su.horizon.value.copy(P.horizon);
         su.sunColor.value.copy(P.sun);
         su.glowColor.value.copy(P.glow);
-        su.sunDir.value.copy(night ? new THREE.Vector3(-0.3, 0.45, -0.85).normalize() : this.sunDir);
+        su.beltColor.value.copy(P.belt);
+        su.sunDir.value.copy(skyGlowDir);
         su.night.value = night ? 1 : 0;
         su.lowSun.value = low;
-        this.stars.visible = night;
+        su.overcast.value = P.overcast || 0;
+        this.stars.visible = night && (P.overcast || 0) < 0.6;
 
         const wu = this.waterMat.uniforms;
         wu.deepColor.value.copy(P.water);
         wu.skyColor.value.copy(P.zenith);
         wu.horizonColor.value.copy(P.horizon);
-        wu.sunColor.value.copy(P.sun).multiplyScalar(night ? 0.4 : 1); // a moon glint on the water at night
+        wu.sunColor.value.copy(P.sun).multiplyScalar((night ? 0.4 : 1) * (1 - (P.overcast || 0) * 0.85)); // a moon glint on the water at night
         wu.sunDir.value.copy(this.sunDir);
 
         const cu = this.cloudMat.uniforms;
-        cu.litColor.value.copy(P.clouds);
+        cu.litColor.value.copy(P.clouds).multiplyScalar(1 - (P.overcast || 0) * 0.4);
         cu.shadowColor.value.copy(P.cloudShadow);
         cu.sunDir.value.copy(this.sunDir);
+        cu.sunColor.value.copy(P.sun).multiplyScalar(night ? 0.3 : 1);
+        cu.coverage.value = P.coverage ?? 0.5;
+        cu.grow.value = P.grow ?? 1;
+        // rain and storms: a grey overcast deck; the high clouds above it are hidden and sun shadows go soft
+        this.overcast = P.overcast || 0;
+        cu.hideHigh.value = this.overcast > 0.3 ? 1 : 0;
+        const du = this.deckMat.uniforms;
+        du.amount.value = this.overcast;
+        du.litColor.value.copy(P.clouds);
+        du.shadowColor.value.copy(P.cloudShadow);
+        du.sunDir.value.copy(this.sunDir);
+        this.deck.visible = this.overcast > 0;
+        this.sun.shadow.intensity = this.sunFar.shadow.intensity = 1 - this.overcast * 0.6;
+        this.cloudCoverage = cu.coverage.value;
+        this.cloudGrow = cu.grow.value;
 
         this.terrainMat.emissive = new THREE.Color(night ? 0x020306 : 0x000000);
         this.terrainDesat.value = night ? 0.45 : 0; // moonlight washes the colour out of grass and sand
+        this.envI = P.envI;
         this.baseLights.forEach(l => (l.visible = night || key === 'dusk'));
         if (this.towns) this.towns.setNight(night || key === 'dusk');
         if (this.airbases) this.airbases.setNight(night || key === 'dusk');
@@ -362,8 +592,14 @@ export class World {
         if (this.envRT) this.envRT.dispose();
         this.envRT = rt;
         this.scene.environment = rt.texture;
-        this.scene.environmentIntensity = this.timeKey === 'night' ? 0.6 : 1.0;
+        this.scene.environmentIntensity = this.envI ?? 1;
         pmrem.dispose();
+    }
+
+    // the haze thickens to the horizon colour before the streamed terrain runs out (VIEW_TILES changes with quality)
+    setFogEdge() {
+        const end = (this.VIEW_TILES - 0.3) * this.TILE;
+        SKY_FOG.a[2] = end * 0.7; SKY_FOG.a[3] = end;
     }
 
     initLights() {
@@ -377,8 +613,60 @@ export class World {
         this.sun.shadow.normalBias = 0.05;
         this.scene.add(this.sun);
         this.scene.add(this.sun.target);
+        // Far shadow cascade (see patchCascadeShadows): no light of its own, just a wide map ahead of the camera.
+        // Added after the sun so it sorts second among the shadow casters.
+        this.sunFar = new THREE.DirectionalLight(0xffffff, 0);
+        this.sunFar.castShadow = CASCADES;
+        this.sunFar.visible = CASCADES;
+        const fc = this.sunFar.shadow.camera;
+        fc.left = -FAR_SHADOW; fc.right = FAR_SHADOW; fc.top = FAR_SHADOW; fc.bottom = -FAR_SHADOW; fc.near = 10; fc.far = 7000;
+        this.sunFar.shadow.mapSize.set(2048, 2048);
+        this.sunFar.shadow.radius = 1.6;
+        this.sunFar.shadow.bias = -0.0003;
+        this.sunFar.shadow.normalBias = 1.2;
+        this.scene.add(this.sunFar);
+        this.scene.add(this.sunFar.target);
+        this.farShadowFrame = 0;
         this.hemi = new THREE.HemisphereLight(0x9cc4ec, 0x4a5a3a, 1);
         this.scene.add(this.hemi);
+    }
+
+    // Quality presets (main.js): 'low' turns every extra off and must stay at least as fast as before
+    setQuality(q) {
+        this.quality = q;
+        const low = q === 'low';
+        this.sun.castShadow = !low;
+        const far = CASCADES && !low;
+        this.sunFar.visible = this.sunFar.castShadow = far;
+        const size = q === 'high' ? 2048 : 1024;
+        if (this.sunFar.shadow.mapSize.x !== size) {
+            this.sunFar.shadow.mapSize.set(size, size);
+            if (this.sunFar.shadow.map) { this.sunFar.shadow.map.dispose(); this.sunFar.shadow.map = null; }
+        }
+        this.treeShadows = !low;
+        for (const t of this.tiles.values()) if (t.trees) for (const m of t.trees.children) m.castShadow = this.treeShadows && m.geometry !== this.treeGeos.bush;
+        this.terrainDetail.value = low ? 0 : 1;
+        // 'low' compiles the terrain without close-up detail, bump, rock strata and surf
+        if (('TERRAIN_LOW' in this.terrainMat.defines) !== low) {
+            if (low) this.terrainMat.defines.TERRAIN_LOW = ''; else delete this.terrainMat.defines.TERRAIN_LOW;
+            this.terrainMat.needsUpdate = true;
+        }
+        this.grassOn = q === 'high';
+        this.setFogEdge();
+    }
+
+    // Aim a shadow camera at `centre`, snapped to its own texel grid so shadow edges don't crawl as it moves
+    aimShadow(light, centre, halfSize, back) {
+        const s = this.sunDir, t = light.shadow.mapSize.x;
+        const texel = (2 * halfSize) / t;
+        _sx.set(0, 1, 0).cross(s);
+        if (_sx.lengthSq() < 1e-6) _sx.set(1, 0, 0);
+        _sx.normalize();
+        _sy.crossVectors(s, _sx);
+        const u = Math.round(centre.dot(_sx) / texel) * texel, v = Math.round(centre.dot(_sy) / texel) * texel, w = centre.dot(s);
+        _sc.copy(_sx).multiplyScalar(u).addScaledVector(_sy, v).addScaledVector(s, w);
+        light.target.position.copy(_sc);
+        light.position.copy(_sc).addScaledVector(s, back);
     }
 
     // ── Sky dome ──
@@ -387,9 +675,10 @@ export class World {
             side: THREE.BackSide, depthWrite: false, fog: false,
             uniforms: {
                 zenith: { value: new THREE.Color() }, horizon: { value: new THREE.Color() },
-                sunColor: { value: new THREE.Color() }, glowColor: { value: new THREE.Color() },
+                sunColor: { value: new THREE.Color() }, glowColor: { value: new THREE.Color() }, beltColor: { value: new THREE.Color() },
                 sunDir: { value: new THREE.Vector3(0, 1, 0) }, camPos: { value: new THREE.Vector3() },
-                night: { value: 0 }, lowSun: { value: 0 }, domeCentered: { value: 0 },
+                night: { value: 0 }, lowSun: { value: 0 }, domeCentered: { value: 0 }, overcast: { value: 0 },
+                skyFogA: { value: SKY_FOG.a }, skyFogB: { value: SKY_FOG.b }, skyFogC: { value: SKY_FOG.c }, skyFogD: { value: SKY_FOG.d },
             },
             vertexShader: /* glsl */`
                 varying vec3 vWorld;
@@ -405,24 +694,48 @@ export class World {
                     #endif
                 }`,
             fragmentShader: /* glsl */`
-                uniform vec3 zenith, horizon, sunColor, glowColor, sunDir, camPos;
-                uniform float night, lowSun, domeCentered;
+                uniform vec3 zenith, horizon, sunColor, glowColor, beltColor, sunDir, camPos;
+                uniform float night, lowSun, domeCentered, overcast;
                 varying vec3 vWorld;
+                ${FOG_GLSL}
+                float hash13(vec3 p) { p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
+                float vnoise(vec3 p) {
+                    vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+                    return mix(mix(mix(hash13(i), hash13(i + vec3(1, 0, 0)), f.x), mix(hash13(i + vec3(0, 1, 0)), hash13(i + vec3(1, 1, 0)), f.x), f.y),
+                               mix(mix(hash13(i + vec3(0, 0, 1)), hash13(i + vec3(1, 0, 1)), f.x), mix(hash13(i + vec3(0, 1, 1)), hash13(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+                }
                 void main() {
                     vec3 dir = normalize(vWorld - camPos);
                     float h = dir.y;
                     float up = clamp(h, 0.0, 1.0);
-                    vec3 col = mix(horizon, zenith, pow(up, 0.45));
-                    // below horizon: hazy fade
-                    col = mix(col, horizon * 0.9, smoothstep(0.0, -0.25, h));
-                    float sd = max(dot(dir, normalize(sunDir)), 0.0);
-                    // broad warm glow around the sun, stronger near the horizon at dawn/dusk
-                    float horizonBand = exp(-abs(h) * 6.0);
-                    col += glowColor * pow(sd, 6.0) * (0.25 + lowSun * 0.9 * horizonBand);
-                    col += sunColor * pow(sd, 90.0) * 0.6;
+                    // deeper blue overhead, a pale band just above the horizon
+                    vec3 col = mix(horizon, zenith, pow(up, 0.5));
+                    vec3 sd3 = normalize(sunDir);
+                    float sdr = dot(dir, sd3), sd = max(sdr, 0.0);
+                    // warm glow around the sun; at the horizon it equals the fog's in-scatter (skyFogColor), so the
+                    // hazy terrain edge melts into the sky
+                    col += glowColor * pow(sd, 6.0) * (0.25 + lowSun * 0.9 * exp(-up * 6.0)) * (1.0 - overcast * 0.6);
+                    // dawn/dusk: the pink "belt of Venus" above the horizon opposite the sun
+                    col += beltColor * lowSun * pow(max(-sdr, 0.0), 1.5) * exp(-abs(up - 0.08) * 14.0) * (1.0 - night);
+                    col += sunColor * (pow(sd, 90.0) * 0.6 + pow(sd, 1200.0) * 2.5) * (1.0 - night * 0.8) * (1.0 - overcast * 0.8);
+                    // below the horizon: the same colour the fog gives distant ground and sea
+                    if (h < 0.0) col = mix(col, skyFogColor(horizon, vec3(dir.x, 0.0, dir.z), 0.0), smoothstep(0.0, -0.04, h));
                     // sun / moon disc
-                    float disc = smoothstep(0.99955, 0.99975, sd);
-                    col += sunColor * disc * mix(18.0, 2.5, night);
+                    float disc = smoothstep(0.99955, 0.99975, sd) * (1.0 - overcast * 0.9);
+                    if (night > 0.5) {
+                        // Milky Way: a faint, mottled band across the night sky
+                        vec3 pole = normalize(vec3(0.35, 0.5, 0.79));
+                        float band = exp(-pow(dot(dir, pole) * 5.0, 2.0));
+                        float n = vnoise(dir * 9.0) * 0.6 + vnoise(dir * 23.0) * 0.4;
+                        col += vec3(0.020, 0.022, 0.030) * band * smoothstep(0.3, 0.8, n) * smoothstep(0.0, 0.25, h);
+                        // moon: limb darkened, with darker maria
+                        if (disc > 0.0) {
+                            vec3 t1 = normalize(cross(sd3, vec3(0.0, 1.0, 0.0))), t2 = cross(t1, sd3);
+                            vec2 q = vec2(dot(dir, t1), dot(dir, t2)) / 0.028;
+                            float maria = smoothstep(0.45, 0.7, vnoise(vec3(q * 2.3, 1.7)) * 0.7 + vnoise(vec3(q * 5.1, 4.2)) * 0.3);
+                            col += sunColor * disc * 2.6 * (1.0 - 0.35 * maria) * (0.75 + 0.25 * sqrt(max(1.0 - dot(q, q), 0.0)));
+                        }
+                    } else col += sunColor * disc * 18.0;
                     gl_FragColor = vec4(col, 1.0);
                     #include <tonemapping_fragment>
                     #include <colorspace_fragment>
@@ -433,18 +746,48 @@ export class World {
         this.skyDome.renderOrder = -10;
         this.scene.add(this.skyDome);
 
-        // Stars
+        // Stars: varied brightness and colour, a slow twinkle, fading into the horizon haze
         const starGeo = new THREE.BufferGeometry();
-        const r = mulberry32(99), pos = [];
-        for (let i = 0; i < 2500; i++) {
+        const r = mulberry32(99), pos = [], mag = [];
+        for (let i = 0; i < 3200; i++) {
             const u = r() * 2 - 1, th = r() * Math.PI * 2;
-            const y = Math.abs(u) * 0.95 + 0.05, s = Math.sqrt(1 - y * y);
+            const y = Math.abs(u) * 0.97 + 0.03, s = Math.sqrt(1 - y * y);
             pos.push(Math.cos(th) * s * 38000, y * 38000, Math.sin(th) * s * 38000);
+            mag.push(Math.pow(r(), 3.5), r(), r());
         }
         starGeo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-        this.stars = new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0xffffff, size: 1.6, sizeAttenuation: false, fog: false, transparent: true, opacity: 0.85 }));
+        starGeo.setAttribute('mag', new THREE.Float32BufferAttribute(mag, 3));
+        this.starMat = new THREE.ShaderMaterial({
+            transparent: true, depthWrite: false, fog: false, blending: THREE.AdditiveBlending,
+            uniforms: { time: { value: 0 }, pr: { value: 1 } },
+            vertexShader: /* glsl */`
+                attribute vec3 mag; uniform float time, pr; varying vec3 vCol;
+                void main() {
+                    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+                    gl_Position = projectionMatrix * mv;
+                    #ifdef USE_REVERSED_DEPTH_BUFFER
+                    gl_Position.z = 0.0;
+                    #else
+                    gl_Position.z = gl_Position.w;
+                    #endif
+                    float b = mag.x;
+                    float tw = 0.8 + 0.2 * sin(time * (1.5 + mag.y * 3.0) + mag.z * 40.0);
+                    float horizon = smoothstep(0.02, 0.2, normalize(position).y);
+                    vCol = mix(vec3(0.75, 0.82, 1.0), vec3(1.0, 0.88, 0.72), mag.z) * (0.25 + 1.6 * b) * tw * horizon;
+                    gl_PointSize = (1.2 + 1.8 * b) * pr;
+                }`,
+            fragmentShader: /* glsl */`
+                varying vec3 vCol;
+                void main() {
+                    vec2 c = gl_PointCoord - 0.5;
+                    float a = smoothstep(0.5, 0.15, length(c));
+                    gl_FragColor = vec4(vCol * a, 1.0);
+                }`,
+        });
+        this.stars = new THREE.Points(starGeo, this.starMat);
         this.stars.frustumCulled = false;
         this.stars.visible = false;
+        this.stars.renderOrder = -9;
         this.scene.add(this.stars);
     }
 
@@ -472,33 +815,158 @@ export class World {
     }
 
     // ── Terrain ──
+    // Ground shading. Vertex colours carry the broad land cover; the shader adds, per pixel:
+    //  - broad light/dark and lush/dry variation, so fields aren't one flat green
+    //  - the beach: a narrow band of sand just above the waterline, wet and darker at the water's edge, with
+    //    surf foam on the waterline itself (per pixel, so it stays sharp at every terrain LOD)
+    //  - close up (fading out by ~800 m): tiled grass / rock / sand detail and a matching bump
+    //  - rock strata on steep faces, projected on the slope instead of stretched from above
+    //  - a short morph when a tile switches resolution, so mountain silhouettes slide instead of popping
     initTerrainMaterial() {
         this.terrainMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.93, metalness: 0 });
+        this.terrainMat.envMapIntensity = 0.8;
         const detail = this.detailTex;
+        this.groundTex = this.makeGroundTexture();
         this.terrainDesat = { value: 0 };
         this.terrainMat.onBeforeCompile = (shader) => {
             shader.uniforms.detailMap = { value: detail };
+            shader.uniforms.groundMap = { value: this.groundTex };
             shader.uniforms.uDesat = this.terrainDesat;
+            shader.uniforms.uTime = this.uTime;
+            shader.uniforms.uDetail = this.terrainDetail;
             shader.vertexShader = shader.vertexShader
-                .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;')
-                .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(position, 1.0)).xyz;');
+                .replace('#include <common>', `#include <common>
+                    attribute vec4 morph; // previous LOD: height, normal x, normal z, start time
+                    uniform float uTime;
+                    varying vec3 vWPos, vWN;`)
+                .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
+                    float mk = clamp((uTime - morph.w) * 0.7, 0.0, 1.0);
+                    mk = mk * mk * (3.0 - 2.0 * mk);
+                    vec3 prevN = vec3(morph.y, sqrt(max(1.0 - morph.y * morph.y - morph.z * morph.z, 0.0)), morph.z);
+                    objectNormal = normalize(mix(prevN, objectNormal, mk));
+                    vWN = objectNormal;`)
+                .replace('#include <begin_vertex>', `#include <begin_vertex>
+                    transformed.y = mix(morph.x, transformed.y, mk);
+                    vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`);
             shader.fragmentShader = shader.fragmentShader
                 .replace('#include <common>', `#include <common>
-                    varying vec3 vWPos;
-                    uniform sampler2D detailMap;
-                    uniform float uDesat;
+                    varying vec3 vWPos, vWN;
+                    uniform sampler2D detailMap, groundMap;
+                    uniform float uDesat, uTime, uDetail;
                     // the sea bed doesn't get shadows (a ship's shadow would show through the water)
-                    float seaFade(float s) { return mix(s, 1.0, smoothstep(-0.5, -4.0, vWPos.y)); }`)
-                .replace('#include <lights_fragment_begin>', seabedShadows(THREE.ShaderChunk.lights_fragment_begin))
+                    float seaFade(float s) { return mix(s, 1.0, smoothstep(-0.5, -4.0, vWPos.y)); }
+                    #define SHADOW_FADE( s ) seaFade( s )
+                    // bump from a height (m) that varies per pixel (Mikkelsen's surface gradient, unnormalised)
+                    vec3 terrBump(vec3 pos, vec3 n, vec2 dH) {
+                        vec3 dpx = dFdx(pos), dpy = dFdy(pos);
+                        vec3 r1 = cross(dpy, n), r2 = cross(n, dpx);
+                        float det = dot(dpx, r1);
+                        return normalize(abs(det) * n - sign(det) * (dH.x * r1 + dH.y * r2));
+                    }`)
                 .replace('#include <color_fragment>', `#include <color_fragment>
-                    float d1 = texture2D(detailMap, vWPos.xz / 38.0).r;
-                    float d2 = texture2D(detailMap, vWPos.xz / 460.0).r;
-                    float d3 = texture2D(detailMap, vWPos.xz / 3100.0).r;
-                    diffuseColor.rgb *= mix(0.72, 1.22, d1) * mix(0.82, 1.16, d2) * mix(0.85, 1.12, d3);
-                    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11))), uDesat);`);
+                    vec3 tN = normalize(vWN);
+                    float tSlope = 1.0 - tN.y, tH = vWPos.y;
+                    float tDist = length(vWPos - cameraPosition);
+                    vec2 wxz = vWPos.xz;
+                    vec3 pdx = dFdx(vWPos), pdy = dFdy(vWPos);
+                    vec3 vcol = diffuseColor.rgb;
+                    // broad variation
+                    float d2 = texture2D(detailMap, wxz / 460.0).r;
+                    float d3 = texture2D(detailMap, wxz / 3100.0).r;
+                    float dm = texture2D(detailMap, wxz / 1300.0 + 0.37).r;
+                    vec4 gm = texture2D(groundMap, wxz / 150.0);
+                    diffuseColor.rgb *= mix(0.84, 1.14, d2) * mix(0.86, 1.1, d3) * mix(0.92, 1.08, gm.r);
+                    // cover weights
+                    float rockW = smoothstep(0.22, 0.4, tSlope);
+                    float snowW = smoothstep(0.35, 0.7, min(min(vcol.r, vcol.g), vcol.b)) * (1.0 - rockW);
+                    float grassW = (1.0 - rockW) * (1.0 - snowW) * smoothstep(-2.0, 1.0, tH);
+                    // lush / dry meadow patches
+                    diffuseColor.rgb *= mix(vec3(1.0), mix(vec3(1.12, 1.05, 0.74), vec3(0.86, 1.0, 1.05), smoothstep(0.3, 0.7, dm)), grassW * 0.85);
+                    // rock strata on steep faces, from the side
+                    float sideX = abs(tN.x) / (abs(tN.x) + abs(tN.z) + 1e-4);
+                    #ifndef TERRAIN_LOW
+                    if (rockW > 0.0) {
+                        float st = mix(textureGrad(groundMap, vWPos.xy / 90.0, pdx.xy / 90.0, pdy.xy / 90.0).g,
+                                       textureGrad(groundMap, vWPos.zy / 90.0, pdx.zy / 90.0, pdy.zy / 90.0).g, sideX);
+                        diffuseColor.rgb *= mix(1.0, mix(0.72, 1.2, st), rockW);
+                    }
+                    #endif
+                    // beach: a narrow sand band above the waterline, wet at the water's edge
+                    float edgeN = (gm.a - 0.5) * 2.0;
+                    float sandW = (1.0 - smoothstep(1.7, 3.3, tH + edgeN * 1.3)) * smoothstep(-5.0, -1.6, tH) * (1.0 - smoothstep(0.035, 0.1, tSlope));
+                    vec3 sandC = vec3(0.55, 0.47, 0.29) * mix(1.0, 0.6, 1.0 - smoothstep(0.7, 1.5, tH + edgeN * 0.3));
+                    diffuseColor.rgb = mix(diffuseColor.rgb, sandC * mix(0.92, 1.08, d2), sandW);
+                    grassW *= 1.0 - sandW;
+                    // surf on the waterline (the drawn shore steps from -1.5 m to +0.6 m there)
+                    float foamBand = smoothstep(-1.4, -0.6, tH) * (1.0 - smoothstep(0.25, 0.9, tH)) * (1.0 - smoothstep(1500.0, 5000.0, tDist));
+                    #ifndef TERRAIN_LOW
+                    if (foamBand > 0.0) {
+                        vec2 fuv = wxz / 21.0 + vec2(uTime * 0.011, uTime * 0.007);
+                        float fn = textureGrad(groundMap, fuv, pdx.xz / 21.0, pdy.xz / 21.0).a;
+                        float swash = sin(uTime * 0.8 + fn * 8.0 + dot(wxz, vec2(0.021, 0.017)));
+                        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.82, 0.85, 0.86), foamBand * smoothstep(0.35, 0.75, fn + swash * 0.22) * 0.85);
+                    }
+                    #endif
+                    // close-up detail
+                    float nearF = uDetail * (1.0 - smoothstep(350.0, 800.0, tDist));
+                    float tBump = 0.0;
+                    #ifndef TERRAIN_LOW
+                    if (nearF > 0.0) {
+                        vec4 g1 = textureGrad(groundMap, wxz / 9.0, pdx.xz / 9.0, pdy.xz / 9.0);
+                        vec4 g2 = textureGrad(groundMap, wxz / 37.0, pdx.xz / 37.0, pdy.xz / 37.0);
+                        float rk = mix(textureGrad(groundMap, vWPos.xy / 11.0, pdx.xy / 11.0, pdy.xy / 11.0).g,
+                                       textureGrad(groundMap, vWPos.zy / 11.0, pdx.zy / 11.0, pdy.zy / 11.0).g, sideX);
+                        float gr = g1.r * 0.65 + g2.r * 0.35;
+                        float wr = rockW, ws = sandW, wn = snowW * (1.0 - sandW), wg = max(1.0 - wr - ws - wn, 0.0);
+                        float det = (gr * wg + rk * wr + g1.b * ws + g2.b * wn) / max(wg + wr + ws + wn, 1e-3);
+                        float amp = 0.36 * wg + 0.42 * wr + 0.18 * ws + 0.1 * wn;
+                        diffuseColor.rgb *= mix(1.0, 1.0 + (det - 0.5) * 2.0 * amp, nearF);
+                        // bump only where a texel is no bigger than a pixel: magnified, its slope steps texel by texel
+                        float magF = smoothstep(0.006, 0.02, length(pdx) + length(pdy));
+                        tBump = (det - 0.5) * nearF * magF * (0.09 * wg + 0.35 * wr + 0.03 * ws + 0.05 * wn);
+                    }
+                    #endif
+                    vec2 tdH = vec2(dFdx(tBump), dFdy(tBump));
+                    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11))), uDesat);`)
+                .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+                    #ifndef TERRAIN_LOW
+                    normal = terrBump(-vViewPosition, normal, tdH);
+                    #endif`);
         };
         this.TILE = 2048;
         this.VIEW_TILES = 9;
+    }
+
+    // Tileable ground detail (512², repeats seamlessly): r = grass, g = rock, b = sand grain, a = soft noise
+    makeGroundTexture() {
+        const S = 512, data = new Uint8Array(S * S * 4);
+        const pn = periodicNoise;
+        for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+            const u = x / S, v = y / S;
+            // grass: clumpy mottling with fine blades
+            const clump = pn(u, v, 16, 11) * 0.55 + pn(u, v, 32, 12) * 0.3 + pn(u, v, 128, 13) * 0.35 + pn(u, v, 256, 14) * 0.25;
+            // rock: ridged cracks over lumpy layers
+            const lay = pn(u, v, 8, 21) * 0.5 + pn(u, v, 24, 22) * 0.3;
+            const crack = 1 - Math.abs(pn(u, v, 20, 23)), crack2 = 1 - Math.abs(pn(u, v, 48, 24));
+            const rock = lay + Math.pow(crack, 6) * -0.5 + Math.pow(crack2, 8) * -0.3 + pn(u, v, 128, 25) * 0.15;
+            // sand: fine grain and soft ripples
+            const rip = Math.sin((u * 30 + pn(u, v, 8, 31) * 1.2) * Math.PI * 2) * 0.2;
+            const sand = rip + pn(u, v, 256, 32) * 0.35 + pn(u, v, 64, 33) * 0.2;
+            const soft = pn(u, v, 4, 41) * 0.6 + pn(u, v, 8, 42) * 0.3 + pn(u, v, 16, 43) * 0.15;
+            const k = (y * S + x) * 4;
+            data[k] = clamp(clump * 0.75 + 0.5, 0, 1) * 255;
+            data[k + 1] = clamp(rock * 0.8 + 0.55, 0, 1) * 255;
+            data[k + 2] = clamp(sand * 0.8 + 0.5, 0, 1) * 255;
+            data[k + 3] = clamp(soft * 0.9 + 0.5, 0, 1) * 255;
+        }
+        const tex = new THREE.DataTexture(data, S, S, THREE.RGBAFormat);
+        tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+        tex.magFilter = THREE.LinearFilter;
+        tex.minFilter = THREE.LinearMipmapLinearFilter;
+        tex.generateMipmaps = true;
+        tex.anisotropy = 8;
+        tex.needsUpdate = true;
+        return tex;
     }
 
     // Tile resolution by distance (in tiles). The far rings used to be very coarse (a vertex every
@@ -579,8 +1047,13 @@ export class World {
         geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
         geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
         geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+        // LOD morph source (see morphFrom); by default no morph
+        const mo = new Float32Array(vCount * 4);
+        for (let q = 0; q < vCount; q++) { mo[q * 4] = pos[q * 3 + 1]; mo[q * 4 + 1] = nor[q * 3]; mo[q * 4 + 2] = nor[q * 3 + 2]; mo[q * 4 + 3] = -1e4; }
+        geo.setAttribute('morph', new THREE.BufferAttribute(mo, 4));
         geo.setIndex(new THREE.BufferAttribute(idx, 1));
         geo.computeBoundingSphere();
+        geo.userData = { V, step, x0, z0 };
         return geo;
     }
 
@@ -592,12 +1065,10 @@ export class World {
         if (h < -2) {
             const t = smoothstep(-2, -60, h);
             r = lerp(0.62, 0.2, t); g = lerp(0.58, 0.36, t); b = lerp(0.42, 0.38, t);
-        } else if (h < 7) {
-            r = 0.76; g = 0.70; b = 0.52;
         } else {
             // lowland grass -> forest
-            r = lerp(0.3, 0.42, n); g = lerp(0.46, 0.52, n); b = lerp(0.16, 0.22, n);
-            r = lerp(r, 0.1, forest * 0.85); g = lerp(g, 0.24, forest * 0.85); b = lerp(b, 0.1, forest * 0.85);
+            r = lerp(0.33, 0.44, n); g = lerp(0.44, 0.49, n); b = lerp(0.2, 0.25, n);
+            r = lerp(r, 0.17, forest * 0.8); g = lerp(g, 0.26, forest * 0.8); b = lerp(b, 0.13, forest * 0.8);
             // alpine meadow / brown highland
             const hi = smoothstep(350, 800, h);
             r = lerp(r, 0.42 + n * 0.08, hi); g = lerp(g, 0.39 + n * 0.06, hi); b = lerp(b, 0.3, hi);
@@ -607,9 +1078,6 @@ export class World {
             // snow
             const snow = smoothstep(1150, 1450, h + n * 180) * (1 - smoothstep(0.45, 0.7, slope));
             r = lerp(r, 0.95, snow); g = lerp(g, 0.96, snow); b = lerp(b, 1.0, snow);
-            // beach blend
-            const beach = smoothstep(14, 6, h);
-            r = lerp(r, 0.76, beach); g = lerp(g, 0.70, beach); b = lerp(b, 0.52, beach);
         }
         // base concrete aprons
         for (const base of BASES) {
@@ -650,7 +1118,7 @@ export class World {
         for (const [key, t] of this.tiles) {
             if (!wanted.has(key)) {
                 this.scene.remove(t.mesh); t.mesh.geometry.dispose();
-                if (t.trees) { this.scene.remove(t.trees); t.trees.dispose(); }
+                if (t.trees) { this.scene.remove(t.trees); disposeTrees(t.trees); }
                 this.tiles.delete(key);
             }
         }
@@ -661,7 +1129,7 @@ export class World {
         if (P && !jobs.some(j => j.kind === P.job.kind && j.key === P.job.key && j.seg === P.job.seg)) this.pendingJob = null;
         if (force) {
             this.pendingJob = null;
-            for (const j of jobs) if (this.jobNeeded(j)) this.finishJob(j, runJob(this.startJob(j)));
+            for (const j of jobs) if (this.jobNeeded(j)) this.finishJob(j, runJob(this.startJob(j)), true);
             // ground that just got close enough for trees
             for (const [key, t] of this.tiles) if (t.seg >= 48 && !t.treesDone) { const [tx, tz] = key.split(',').map(Number); this.finishJob({ kind: 'trees', key, tx, tz }, runJob(this.treesJob(tx, tz))); }
             return;
@@ -692,17 +1160,19 @@ export class World {
 
     startJob(j) { return j.kind === 'trees' ? this.treesJob(j.tx, j.tz) : this.tileGeometryJob(j.tx, j.tz, j.seg); }
 
-    finishJob(j, result) {
+    finishJob(j, result, instant = false) {
         let t = this.tiles.get(j.key);
         if (j.kind === 'trees') {
-            if (!t) { if (result) result.dispose(); return; }
-            if (t.trees) { this.scene.remove(t.trees); t.trees.dispose(); }
+            if (!t) { disposeTrees(result); return; }
+            if (t.trees) { this.scene.remove(t.trees); disposeTrees(t.trees); }
             t.trees = result; t.treesDone = true;
             if (result) this.scene.add(result);
             return;
         }
         const geo = result;
         if (t) {
+            // the new resolution grows out of the old surface instead of popping (vertex shader morph)
+            if (!instant) this.morphFrom(geo, t.mesh.geometry, this.time);
             t.mesh.geometry.dispose();
             t.mesh.geometry = geo;
             t.seg = j.seg;
@@ -717,40 +1187,81 @@ export class World {
         }
         // trees only on close tiles: far ones drop theirs
         if (j.seg < 48 && (t.trees || t.treesDone)) {
-            if (t.trees) { this.scene.remove(t.trees); t.trees.dispose(); }
+            if (t.trees) { this.scene.remove(t.trees); disposeTrees(t.trees); }
             t.trees = null; t.treesDone = false;
         }
     }
 
+    // Fill geo's morph attribute with the old tile's surface (bilinear) at each new vertex, starting now
+    morphFrom(geo, old, start) {
+        const o = old.userData, n = geo.userData;
+        if (!o || o.V === undefined || !geo.attributes.morph) return;
+        const op = old.attributes.position.array, on = old.attributes.normal.array;
+        const np = geo.attributes.position.array, mo = geo.attributes.morph.array;
+        const OV = o.V, V = n.V, count = np.length / 3;
+        for (let k = 0; k < count; k++) {
+            const x = np[k * 3], z = np[k * 3 + 2];
+            const fi = clamp((x - o.x0) / o.step, 0, OV - 1.0001), fj = clamp((z - o.z0) / o.step, 0, OV - 1.0001);
+            const i0 = Math.floor(fi), j0 = Math.floor(fj), a = fi - i0, b = fj - j0;
+            const k00 = (j0 * OV + i0) * 3, k10 = k00 + 3, k01 = k00 + OV * 3, k11 = k01 + 3;
+            const w00 = (1 - a) * (1 - b), w10 = a * (1 - b), w01 = (1 - a) * b, w11 = a * b;
+            let y = op[k00 + 1] * w00 + op[k10 + 1] * w10 + op[k01 + 1] * w01 + op[k11 + 1] * w11;
+            if (k >= V * V) { // skirt vertex: keep its drop below the edge
+                const i = Math.round((x - n.x0) / n.step), jj = Math.round((z - n.z0) / n.step);
+                y -= np[(jj * V + i) * 3 + 1] - np[k * 3 + 1];
+            }
+            mo[k * 4] = y;
+            mo[k * 4 + 1] = on[k00] * w00 + on[k10] * w10 + on[k01] * w01 + on[k11] * w11;
+            mo[k * 4 + 2] = on[k00 + 2] * w00 + on[k10 + 2] * w10 + on[k01 + 2] * w01 + on[k11 + 2] * w11;
+            mo[k * 4 + 3] = start;
+        }
+        geo.attributes.morph.needsUpdate = true;
+    }
+
     // ── Trees ──
+    // Shapes come from makeTreeGeometries() (module level). Forest tiles mix pines, broadleaf trees and bushes,
+    // each tinted per instance; they sway in the wind and dither out with distance instead of popping.
     initTreeAssets() {
-        const cone = new THREE.ConeGeometry(4.2, 14, 6, 1);
-        cone.translate(0, 11, 0);
-        const cone2 = new THREE.ConeGeometry(3.2, 9, 6, 1);
-        cone2.translate(0, 16, 0);
-        const trunk = new THREE.CylinderGeometry(0.6, 0.8, 5, 5);
-        trunk.translate(0, 2.5, 0);
-        const merge = (geos, colors) => {
-            const positions = [], normals = [], cols = [];
-            geos.forEach((g, gi) => {
-                const ng = g.toNonIndexed();
-                ng.computeVertexNormals();
-                const p = ng.attributes.position.array, n = ng.attributes.normal.array;
-                const c = new THREE.Color(colors[gi]);
-                for (let i = 0; i < p.length; i += 3) {
-                    positions.push(p[i], p[i + 1], p[i + 2]);
-                    normals.push(n[i], n[i + 1], n[i + 2]);
-                    cols.push(c.r, c.g, c.b);
-                }
-            });
-            const out = new THREE.BufferGeometry();
-            out.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-            out.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
-            out.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
-            return out;
+        this.treeGeos = makeTreeGeometries();
+        this.forestMat = this.makeTreeMaterial(3100, 4200);
+        // towns.js plants park and street trees with treeGeo / treeMat (their meshes are culled at 12 km)
+        this.treeGeo = this.treeGeos.broadleaf;
+        this.treeMat = this.makeTreeMaterial(9000, 11500);
+        this.treeShadows = true;
+    }
+
+    makeTreeMaterial(fadeNear, fadeFar) {
+        const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 });
+        m.onBeforeCompile = (sh) => {
+            sh.uniforms.uTime = this.uTime;
+            sh.uniforms.uWind = this.uWind;
+            sh.uniforms.uFade = { value: new THREE.Vector2(fadeNear, fadeFar) };
+            sh.vertexShader = sh.vertexShader
+                .replace('#include <common>', '#include <common>\nuniform float uTime; uniform vec3 uWind;')
+                .replace('#include <begin_vertex>', `#include <begin_vertex>
+                    #ifdef USE_INSTANCING
+                    {   // sway: bends more toward the top, gusts roll across the forest, each tree in its own phase
+                        vec3 tp = instanceMatrix[3].xyz;
+                        float ph = dot(tp.xz, vec2(0.071, 0.053));
+                        float gust = 0.55 + 0.45 * sin(uTime * 0.37 - dot(tp.xz, vec2(0.004, 0.003)));
+                        float bend = uWind.y * 0.0016 * position.y * position.y;
+                        vec3 wd = vec3(uWind.x, 0.0, uWind.z);
+                        vec3 disp = wd * bend * (0.55 * gust + 0.25 * sin(uTime * 1.7 + ph)) + vec3(-wd.z, 0.0, wd.x) * bend * 0.18 * sin(uTime * 2.9 + ph * 1.9);
+                        mat3 im = mat3(instanceMatrix);
+                        transformed += transpose(im) * disp / max(dot(im[0], im[0]), 1e-4);
+                    }
+                    #endif`);
+            sh.fragmentShader = sh.fragmentShader
+                .replace('#include <common>', '#include <common>\nuniform vec2 uFade;')
+                .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
+                    {   // dithered fade with distance, so trees never pop in or out with the terrain tiles
+                        float fadeF = 1.0 - smoothstep(uFade.x, uFade.y, length(vViewPosition));
+                        float dn = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+                        if (dn > fadeF) discard;
+                    }`);
         };
-        this.treeGeo = merge([trunk, cone, cone2], [0x4a3525, 0x1f4a26, 0x28592d]);
-        this.treeMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, flatShading: true });
+        m.customProgramCacheKey = () => 'tree:' + fadeNear + ':' + fadeFar;
+        return m;
     }
 
     // Rebuild tree tiles (after towns/roads exist, so no trees grow on them): the old trees stay up until
@@ -771,10 +1282,11 @@ export class World {
     *treesJob(tx, tz) {
         const T = this.TILE;
         const r = mulberry32((tx * 73856093) ^ (tz * 19349663));
-        const mats = [];
+        const lists = [[], [], []]; // pine, broadleaf, bush: { m: Matrix4, c: Color }
+        let total = 0;
         const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3();
         const up = new THREE.Vector3(0, 1, 0);
-        for (let i = 0; i < 1400 && mats.length < 650; i++) {
+        for (let i = 0; i < 1400 && total < 650; i++) {
             if ((i & 63) === 63) yield;
             const x = (tx + r()) * T, z = (tz + r()) * T;
             const forest = fbm(x * 0.0006 + 40, z * 0.0006 - 12, 3);
@@ -788,19 +1300,197 @@ export class World {
             const e = 8;
             const slope = Math.abs(terrainHeight(x + e, z) - h) + Math.abs(terrainHeight(x, z + e) - h);
             if (slope > 7) continue;
-            const sc = 0.7 + r() * 0.8;
+            // pines take over higher up, bushes fill the thin edges of the forest
+            const pineP = 0.4 + 0.55 * smoothstep(120, 520, h);
+            const bushP = forest < 0.12 ? 0.4 : 0.12;
+            const u = r();
+            const kind = u < bushP ? 2 : u < bushP + (1 - bushP) * pineP ? 0 : 1;
+            const sc = kind === 2 ? 0.6 + r() * 0.8 : 0.7 + r() * 0.8;
             q.setFromAxisAngle(up, r() * 6.28);
             s.set(sc, sc * (0.85 + r() * 0.4), sc);
-            p.set(x, h - 1, z);
-            mats.push(m.compose(p, q, s).clone());
+            p.set(x, h - (kind === 2 ? 0.4 : 1), z);
+            // per-tree tint: brightness and a little yellowing
+            const v = 0.78 + r() * 0.42, yl = r() * (kind === 0 ? 0.12 : 0.3);
+            lists[kind].push({ m: m.compose(p, q, s).clone(), c: new THREE.Color(v * (1 + yl * 0.7), v * (1 + yl * 0.3), v * (1 - yl * 0.5)) });
+            total++;
         }
-        if (!mats.length) return null;
-        const inst = new THREE.InstancedMesh(this.treeGeo, this.treeMat, mats.length);
-        mats.forEach((mm, i) => inst.setMatrixAt(i, mm));
-        inst.castShadow = false;
-        inst.receiveShadow = true;
-        inst.computeBoundingSphere();
-        return inst;
+        if (!total) return null;
+        const g = new THREE.Group();
+        const geos = [this.treeGeos.pine, this.treeGeos.broadleaf, this.treeGeos.bush];
+        lists.forEach((list, k) => {
+            if (!list.length) return;
+            const inst = new THREE.InstancedMesh(geos[k], this.forestMat, list.length);
+            list.forEach((o, i) => { inst.setMatrixAt(i, o.m); inst.setColorAt(i, o.c); });
+            inst.castShadow = !!this.treeShadows && k !== 2;
+            inst.receiveShadow = true;
+            inst.computeBoundingSphere();
+            inst.matrixAutoUpdate = false;
+            g.add(inst);
+        });
+        g.matrixAutoUpdate = false;
+        return g;
+    }
+
+    // ── Grass: clumps of blades in a ring around the camera when it is low (on foot, taxiing, low passes) ──
+    // Two toroidal grids of instances follow the camera (a dense one close in, a coarser one out to ~90 m);
+    // the vertex shader places each clump on its world cell, so blades stay put as the camera moves. Ground
+    // height (the drawn terrain), a grass mask (no grass on water, sand, rock, snow, roads, buildings or
+    // airfields) and the ground colour come from small textures around the camera, refreshed as it moves.
+    initGrass() {
+        const G = GRASS;
+        const blades = [];
+        const r = mulberry32(51);
+        for (let b = 0; b < 7; b++) {
+            const a = r() * Math.PI * 2, d = Math.sqrt(r()) * 0.4, h = 0.3 + r() * 0.4, w = 0.022 + r() * 0.02, lean = (r() - 0.5) * 0.6, rot = r() * Math.PI;
+            const cx = Math.cos(a) * d, cz = Math.sin(a) * d, ux = Math.cos(rot) * w, uz = Math.sin(rot) * w;
+            const tx = cx + Math.cos(rot + 1.57) * lean * h, tz = cz + Math.sin(rot + 1.57) * lean * h;
+            blades.push(cx - ux, 0, cz - uz, cx + ux, 0, cz + uz, tx, h, tz);
+        }
+        const geo = new THREE.InstancedBufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(blades, 3));
+        geo.setAttribute('normal', new THREE.Float32BufferAttribute(new Array(blades.length).fill(0).map((v, i) => (i % 3 === 1 ? 1 : 0)), 3));
+        const cells = [];
+        G.layers.forEach((L, li) => { for (let j = 0; j < L.n; j++) for (let i = 0; i < L.n; i++) cells.push(i, j, li); });
+        geo.setAttribute('gi', new THREE.InstancedBufferAttribute(new Float32Array(cells), 3));
+        geo.instanceCount = cells.length / 3;
+        const S = G.tex;
+        this.grassH = new THREE.DataTexture(new Float32Array(S * S * 4), S, S, THREE.RGBAFormat, THREE.FloatType);
+        this.grassC = new THREE.DataTexture(new Float32Array(S * S * 4), S, S, THREE.RGBAFormat, THREE.FloatType);
+        this.grassU = {
+            grassH: { value: this.grassH }, grassC: { value: this.grassC }, grassO: { value: new THREE.Vector3(1e9, 0, 1e9) },
+            grassFade: { value: 0 }, detailMap: { value: this.detailTex },
+        };
+        const mat = new THREE.MeshStandardMaterial({ roughness: 0.95, side: THREE.DoubleSide });
+        mat.onBeforeCompile = (sh) => {
+            Object.assign(sh.uniforms, this.grassU, { uTime: this.uTime, uWind: this.uWind });
+            sh.vertexShader = sh.vertexShader
+                .replace('#include <common>', `#include <common>
+                    attribute vec3 gi;
+                    uniform sampler2D grassH, grassC, detailMap;
+                    uniform vec3 grassO; // texture origin x, z and texel size (m)
+                    uniform float grassFade, uTime;
+                    uniform vec3 uWind;
+                    varying vec3 vGrassCol; varying float vGrassY;
+                    float gHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+                    vec4 gTex(sampler2D t, vec2 xz) { // manual bilinear (float textures)
+                        vec2 f = (xz - grassO.xz) / grassO.y - 0.5;
+                        ivec2 i = ivec2(floor(f)); vec2 w = fract(f);
+                        ivec2 m = ivec2(${S - 1});
+                        vec4 a = texelFetch(t, clamp(i, ivec2(0), m), 0), b = texelFetch(t, clamp(i + ivec2(1, 0), ivec2(0), m), 0);
+                        vec4 c = texelFetch(t, clamp(i + ivec2(0, 1), ivec2(0), m), 0), d = texelFetch(t, clamp(i + ivec2(1, 1), ivec2(0), m), 0);
+                        return mix(mix(a, b, w.x), mix(c, d, w.x), w.y);
+                    }`)
+                .replace('#include <begin_vertex>', `#include <begin_vertex>
+                    {
+                        vec4 L = gi.z < 0.5 ? vec4(${G.layers[0].cell.toFixed(2)}, ${G.layers[0].n.toFixed(1)}, ${G.layers[0].scale.toFixed(2)}, 0.0)
+                                            : vec4(${G.layers[1].cell.toFixed(2)}, ${G.layers[1].n.toFixed(1)}, ${G.layers[1].scale.toFixed(2)}, 1.0);
+                        vec2 camCell = floor(cameraPosition.xz / L.x);
+                        vec2 wc = camCell + mod(gi.xy - camCell, L.y) - floor(L.y * 0.5);
+                        vec2 xz = (wc + vec2(gHash(wc), gHash(wc + 17.31))) * L.x;
+                        vec4 hm = gTex(grassH, xz);
+                        float dist = length(xz - cameraPosition.xz);
+                        float outer = L.y * 0.5 * L.x;
+                        // the coarse layer thins out where the dense one takes over, both fade at their edge
+                        float s = hm.g * grassFade * (1.0 - smoothstep(outer * 0.6, outer * 0.95, dist));
+                        if (L.w > 0.5) s *= smoothstep(${(G.layers[0].cell * G.layers[0].n * 0.3).toFixed(1)}, ${(G.layers[0].cell * G.layers[0].n * 0.45).toFixed(1)}, dist);
+                        s *= L.z * (0.7 + 0.6 * gHash(wc + 3.7));
+                        float ang = gHash(wc + 9.1) * 6.2832;
+                        vec2 cs = vec2(cos(ang), sin(ang));
+                        vec3 p = vec3(position.x * cs.x - position.z * cs.y, position.y, position.x * cs.y + position.z * cs.x) * s;
+                        // wind: tips bend with the gusts
+                        float bend = p.y * p.y * (0.25 + 0.2 * uWind.y) * (0.6 + 0.4 * sin(uTime * 2.3 + dot(xz, vec2(0.21, 0.17))));
+                        p.xz += vec2(uWind.x, uWind.z) * bend;
+                        transformed = vec3(xz.x, hm.r - 0.05, xz.y) + p;
+                        vGrassY = position.y / 0.7;
+                        // the ground's own colour and broad variation, so the grass matches the terrain under it
+                        vec3 gc = gTex(grassC, xz).rgb;
+                        gc *= mix(0.84, 1.14, texture2D(detailMap, xz / 460.0).r) * mix(0.86, 1.1, texture2D(detailMap, xz / 3100.0).r);
+                        gc *= mix(vec3(1.12, 1.05, 0.74), vec3(0.86, 1.0, 1.05), smoothstep(0.3, 0.7, texture2D(detailMap, xz / 1300.0 + 0.37).r)) * 0.85 + 0.15;
+                        vGrassCol = gc * (0.85 + 0.3 * gHash(wc + 5.3));
+                    }`);
+            sh.fragmentShader = sh.fragmentShader
+                .replace('#include <common>', '#include <common>\nvarying vec3 vGrassCol; varying float vGrassY;')
+                .replace('#include <color_fragment>', `#include <color_fragment>
+                    diffuseColor.rgb *= vGrassCol * mix(0.6, 1.25, vGrassY);`)
+                .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
+                    normal = normalize(vNormal);`);
+        };
+        mat.customProgramCacheKey = () => 'grass';
+        this.grass = new THREE.Mesh(geo, mat);
+        this.grass.frustumCulled = false;
+        this.grass.receiveShadow = true;
+        this.grass.visible = false;
+        this.grassOn = true;
+        this.scene.add(this.grass);
+        this.grassCentre = new THREE.Vector2(1e9, 1e9);
+    }
+
+    // Height and up-normal of the terrain as drawn (the tile mesh under x, z), which differs from
+    // terrainHeight() by up to a metre or so between vertices; falls back to the true height off the tiles
+    drawnSample(x, z, out) {
+        const T = this.TILE, t = this.tiles.get(this.tileKey(Math.floor(x / T), Math.floor(z / T)));
+        if (!t || !t.mesh.geometry.userData.V) { out.h = terrainHeight(x, z); out.ny = 1; return out; }
+        const g = t.mesh.geometry, u = g.userData, p = g.attributes.position.array, n = g.attributes.normal.array, V = u.V;
+        const fx = clamp((x - u.x0) / u.step, 0, V - 1.0001), fz = clamp((z - u.z0) / u.step, 0, V - 1.0001);
+        const i = Math.floor(fx), j = Math.floor(fz), a = fx - i, b = fz - j;
+        const ka = (j * V + i) * 3, kb = ka + 3, kc = ka + V * 3, kd = kc + 3;
+        // the same diagonal split as the tile's triangles
+        out.h = a + b <= 1 ? p[ka + 1] + (p[kb + 1] - p[ka + 1]) * a + (p[kc + 1] - p[ka + 1]) * b
+            : p[kd + 1] + (p[kc + 1] - p[kd + 1]) * (1 - a) + (p[kb + 1] - p[kd + 1]) * (1 - b);
+        out.ny = (n[ka + 1] * (1 - a) + n[kb + 1] * a) * (1 - b) + (n[kc + 1] * (1 - a) + n[kd + 1] * a) * b;
+        return out;
+    }
+
+    updateGrass(camera, dt) {
+        const cam = camera.position;
+        const agl = cam.y - Math.max(terrainHeight(cam.x, cam.z), 0);
+        // camera speed: no grass on fast, low passes (it would only shimmer)
+        if (dt > 0) this.grassSpeed = lerp(this.grassSpeed || 0, cam.distanceTo(this.grassLastCam || cam) / dt, 0.2);
+        (this.grassLastCam || (this.grassLastCam = new THREE.Vector3())).copy(cam);
+        const want = this.grassOn ? (1 - smoothstep(70, 130, agl)) * (1 - smoothstep(60, 110, this.grassSpeed || 0)) : 0;
+        this.grassU.grassFade.value = want;
+        this.grass.visible = want > 0.01 && this.grassReady;
+        if (want <= 0.01) return;
+        // refill the height / mask / colour textures around the camera (time-sliced, ~1 ms a frame)
+        if (!this.grassJob && Math.hypot(cam.x - this.grassCentre.x, cam.z - this.grassCentre.y) > GRASS.recentre) this.grassJob = this.grassFill(cam.x, cam.z);
+        if (this.grassJob) {
+            const end = performance.now() + (this.grassReady ? 1 : 8);
+            let r;
+            do { r = this.grassJob.next(); } while (!r.done && performance.now() < end);
+            if (r.done) this.grassJob = null;
+        }
+    }
+
+    *grassFill(cx, cz) {
+        const S = GRASS.tex, st = GRASS.texel;
+        const H = this.grassStageH || (this.grassStageH = new Float32Array(S * S * 4));
+        const C = this.grassStageC || (this.grassStageC = new Float32Array(S * S * 4));
+        const ox = Math.round(cx / st) * st - (S / 2) * st, oz = Math.round(cz / st) * st - (S / 2) * st;
+        const col = [0, 0, 0], ds = { h: 0, ny: 1 };
+        for (let j = 0; j < S; j++) {
+            for (let i = 0; i < S; i++) {
+                const x = ox + (i + 0.5) * st, z = oz + (j + 0.5) * st, k = (j * S + i) * 4;
+                this.drawnSample(x, z, ds);
+                const h = ds.h, ny = ds.ny;
+                // no grass on sand, water, rock, snow, roads, buildings or inside airfield fences
+                let m = smoothstep(2.8, 4.5, h) * (1 - smoothstep(900, 1150, h)) * smoothstep(0.86, 0.95, ny);
+                if (m > 0 && this.towns && this.towns.blocked(x, z)) m = 0;
+                if (m > 0) for (const b of BASES) {
+                    if (Math.abs(x - b.x) > b.r * 2 || Math.abs(z - b.z) > b.r * 2) continue;
+                    const l = worldToBase(b, x, z), f = fenceOf(b);
+                    if (l.lx > f.x0 - 10 && l.lx < f.x1 + 10 && l.lz > f.z0 - 10 && l.lz < f.z1 + 10) m = 0;
+                }
+                H[k] = h; H[k + 1] = m;
+                this.colorAt(x, h, z, ny, col, 0);
+                C[k] = col[0]; C[k + 1] = col[1]; C[k + 2] = col[2];
+            }
+            yield;
+        }
+        this.grassH.image.data.set(H); this.grassC.image.data.set(C);
+        this.grassH.needsUpdate = this.grassC.needsUpdate = true;
+        this.grassU.grassO.value.set(ox, st, oz);
+        this.grassCentre.set(cx, cz);
+        this.grassReady = true;
     }
 
     // ── Ocean ──
@@ -810,7 +1500,8 @@ export class World {
             uniforms: {
                 time: { value: 0 }, sunDir: { value: new THREE.Vector3() }, sunColor: { value: new THREE.Color() },
                 skyColor: { value: new THREE.Color() }, horizonColor: { value: new THREE.Color() }, deepColor: { value: new THREE.Color() },
-                fogColor: { value: new THREE.Color() }, fogDensity: { value: 0 }, detailMap: { value: this.detailTex },
+                fogColor: { value: new THREE.Color() }, detailMap: { value: this.detailTex },
+                skyFogA: { value: SKY_FOG.a }, skyFogB: { value: SKY_FOG.b }, skyFogC: { value: SKY_FOG.c }, skyFogD: { value: SKY_FOG.d },
             },
             vertexShader: /* glsl */`
                 varying vec3 vWPos;
@@ -820,10 +1511,11 @@ export class World {
                     gl_Position = projectionMatrix * viewMatrix * wp;
                 }`,
             fragmentShader: /* glsl */`
-                uniform float time, fogDensity;
+                uniform float time;
                 uniform vec3 sunDir, sunColor, skyColor, horizonColor, deepColor, fogColor;
                 uniform sampler2D detailMap;
                 varying vec3 vWPos;
+                ${FOG_GLSL}
                 void main() {
                     vec2 p = vWPos.xz;
                     float dist = length(cameraPosition - vWPos);
@@ -857,9 +1549,10 @@ export class World {
                     float wide = smoothstep(200.0, 5000.0, dist);
                     col += sunColor * (pow(sd, mix(900.0, 150.0, wide)) * mix(14.0, 3.0, wide) + pow(sd, 80.0) * 0.35);
                     float alpha = mix(0.72, 0.97, clamp(fres * 2.0 + smoothstep(200.0, 3000.0, dist), 0.0, 1.0));
-                    float fogF = 1.0 - exp(-pow(fogDensity * dist, 2.0));
-                    col = mix(col, fogColor, fogF);
-                    alpha = mix(alpha, 1.0, fogF);
+                    vec3 ray = vWPos - cameraPosition;
+                    vec2 fg = skyFogAmount(ray, cameraPosition.y);
+                    col = mix(col, skyFogColor(fogColor, ray, fg.y), fg.x);
+                    alpha = mix(alpha, 1.0, fg.x);
                     gl_FragColor = vec4(col, alpha);
                     #include <tonemapping_fragment>
                     #include <colorspace_fragment>
@@ -873,22 +1566,33 @@ export class World {
         this.scene.add(this.water);
     }
 
-    // ── Clouds: one instanced draw call, billboarded and wrapped in the shader ──
+    // ── Clouds: one instanced draw call ──
+    // Cumulus clusters of a few large, soft puffs. Each puff is a camera-facing quad whose texture carries a
+    // cauliflower-shaped silhouette plus a normal map, so it is lit per pixel from the sun's direction; pixels
+    // below the cluster's base altitude fade out, which gives every cloud a flat, darker underside. Puffs are
+    // wrapped around the camera in the shader and depth-sorted on the CPU every few frames.
     initClouds() {
         const r = mulberry32(4242);
         const puffs = [];
-        const CLUSTERS = 120, AREA = 30000;
+        const CLUSTERS = 120, AREA = CLOUD_AREA;
         for (let c = 0; c < CLUSTERS; c++) {
             const cx = (r() - 0.5) * AREA, cz = (r() - 0.5) * AREA;
-            const layer = r();
-            const cy = layer < 0.7 ? 1300 + r() * 700 : 2800 + r() * 900;
-            const n = 8 + Math.floor(r() * 14);
-            const spread = 350 + r() * 600;
+            const high = r() < 0.18;                     // a few thin, high clouds
+            const base = high ? 2900 + r() * 800 : 1250 + r() * 600;
+            const R = high ? 700 + r() * 900 : 320 + r() * 560;   // footprint radius
+            const tall = high ? 0.12 : 0.35 + r() * 0.55;         // how much it towers, relative to R
+            const rank = r();                                     // lower ranks show first as cover increases
+            const n = high ? 4 + Math.floor(r() * 3) : 5 + Math.floor(r() * 6);
+            const ang = r() * Math.PI, stretch = 1 + r() * 0.9;
+            const ca = Math.cos(ang), sa = Math.sin(ang);
+            const top = base + tall * R * 1.3 + (high ? 250 : 420);
             for (let i = 0; i < n; i++) {
-                const ox = (r() - 0.5) * spread * 2, oz = (r() - 0.5) * spread;
-                const oy = r() * 140 * (1 - Math.abs(ox) / (spread * 1.2));
-                const size = 180 + r() * 260;
-                puffs.push({ x: cx + ox, y: cy + oy, z: cz + oz, size, shade: clamp(0.35 + oy / 160 + r() * 0.25, 0, 1), rot: r() * 6.28 });
+                const a = r() * Math.PI * 2, d = i === 0 ? 0 : Math.sqrt(0.15 + 0.85 * r()) * R;
+                const lx = Math.cos(a) * d * stretch, lz = Math.sin(a) * d;
+                const k = 1 - d / (R * 1.05); // 1 in the middle of the cluster
+                const size = (high ? 1000 : 560) * (0.55 + 0.45 * k + r() * 0.3);
+                const y = base + size * (high ? 0.12 : 0.15) + k * tall * R * 0.9 + r() * 30;
+                puffs.push({ x: cx + lx * ca - lz * sa, y, z: cz + lx * sa + lz * ca, size, base, top, rank, cell: Math.floor(r() * 8) + (high ? 8 : 0), high, a: high ? 0.55 : 1 });
             }
         }
         const base = new THREE.PlaneGeometry(1, 1);
@@ -896,57 +1600,87 @@ export class World {
         geo.index = base.index;
         geo.setAttribute('position', base.attributes.position);
         geo.setAttribute('uv', base.attributes.uv);
-        const off = new Float32Array(puffs.length * 3), sz = new Float32Array(puffs.length), sh = new Float32Array(puffs.length), rt = new Float32Array(puffs.length);
-        puffs.forEach((p, i) => { off[i * 3] = p.x; off[i * 3 + 1] = p.y; off[i * 3 + 2] = p.z; sz[i] = p.size; sh[i] = p.shade; rt[i] = p.rot; });
-        geo.setAttribute('offset', new THREE.InstancedBufferAttribute(off, 3));
-        geo.setAttribute('size', new THREE.InstancedBufferAttribute(sz, 1));
-        geo.setAttribute('shade', new THREE.InstancedBufferAttribute(sh, 1));
-        geo.setAttribute('rot', new THREE.InstancedBufferAttribute(rt, 1));
-        geo.instanceCount = puffs.length;
+        const N = puffs.length;
+        this.cloudA = new THREE.InstancedBufferAttribute(new Float32Array(N * 4), 4); // x, y, z, size
+        this.cloudB = new THREE.InstancedBufferAttribute(new Float32Array(N * 4), 4); // base, top, cell, rank
+        this.cloudC = new THREE.InstancedBufferAttribute(new Float32Array(N), 1);     // opacity
+        for (const at of [this.cloudA, this.cloudB, this.cloudC]) at.setUsage(THREE.DynamicDrawUsage);
+        geo.setAttribute('puffA', this.cloudA);
+        geo.setAttribute('puffB', this.cloudB);
+        geo.setAttribute('puffC', this.cloudC);
+        geo.instanceCount = N;
+        this.cloudPuffs = puffs;
+        this.cloudOrder = puffs.map((p, i) => i);
+        this.cloudDist = new Float32Array(N);
+        this.cloudSortPos = new THREE.Vector3(1e9, 0, 0);
+        this.cloudSortT = 0;
 
-        const tex = this.makeCloudTexture();
         this.cloudMat = new THREE.ShaderMaterial({
             transparent: true, depthWrite: false, fog: false,
             uniforms: {
-                map: { value: tex }, camPos: { value: new THREE.Vector3() }, wind: { value: new THREE.Vector2() },
+                map: { value: this.makeCloudTexture() }, camPos: { value: new THREE.Vector3() }, wind: { value: new THREE.Vector2() },
                 litColor: { value: new THREE.Color(1, 1, 1) }, shadowColor: { value: new THREE.Color(0.6, 0.65, 0.7) },
-                sunDir: { value: new THREE.Vector3(0, 1, 0) }, fogColor: { value: new THREE.Color() }, fogDensity: { value: 0 },
-                area: { value: AREA },
+                sunColor: { value: new THREE.Color(1, 1, 1) }, sunDir: { value: new THREE.Vector3(0, 1, 0) }, fogColor: { value: new THREE.Color() },
+                area: { value: AREA }, coverage: { value: 0.5 }, grow: { value: 1 }, hideHigh: { value: 0 },
+                skyFogA: { value: SKY_FOG.a }, skyFogB: { value: SKY_FOG.b }, skyFogC: { value: SKY_FOG.c }, skyFogD: { value: SKY_FOG.d },
             },
             vertexShader: /* glsl */`
-                attribute vec3 offset; attribute float size; attribute float shade; attribute float rot;
-                uniform vec3 camPos; uniform vec2 wind; uniform float area;
-                varying vec2 vUv; varying float vShade; varying float vDist; varying float vSize; varying float vSunSide;
-                uniform vec3 sunDir;
+                attribute vec4 puffA, puffB; attribute float puffC;
+                uniform vec3 camPos; uniform vec2 wind; uniform float area, coverage, grow, hideHigh;
+                varying vec2 vUv; varying vec3 vRight, vUp, vToCam, vRay; varying float vHgt, vCut, vAlpha, vFlip;
                 void main() {
-                    vec3 o = offset;
+                    float size = puffA.w * grow;
+                    vec3 o = puffA.xyz;
                     o.xz += wind;
                     o.xz = camPos.xz + mod(o.xz - camPos.xz + area * 0.5, area) - area * 0.5;
-                    vec4 mv = viewMatrix * vec4(o, 1.0);
-                    float c = cos(rot), s = sin(rot);
-                    vec2 q = vec2(c * position.x - s * position.y, s * position.x + c * position.y);
-                    mv.xy += q * size;
-                    vUv = uv; vShade = shade; vDist = length(mv.xyz); vSize = size;
-                    vec3 toCam = normalize(camPos - o);
-                    vSunSide = dot(toCam, sunDir);
-                    gl_Position = projectionMatrix * mv;
+                    float dist = length(o - camPos);
+                    // hidden by the weather, or so close the camera is inside it: collapse the quad
+                    // hidden by the weather (high ones are above the overcast deck), or so close the camera is inside it
+                    if (puffB.w > coverage || (hideHigh > 0.5 && puffB.z > 7.5) || dist < size * 0.12) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+                    vRight = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
+                    vUp = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
+                    vec2 q = position.xy * vec2(1.25, 1.0) * size;
+                    vec3 wp = o + vRight * q.x + vUp * q.y;
+                    vToCam = normalize(camPos - o);
+                    vRay = wp - camPos;
+                    // atlas: 4 shapes, each also mirrored
+                    float cellId = mod(puffB.z, 8.0), cell = mod(cellId, 4.0);
+                    vFlip = step(3.5, cellId);
+                    vec2 uv0 = vec2(mix(uv.x, 1.0 - uv.x, vFlip), uv.y);
+                    vUv = (vec2(mod(cell, 2.0), floor(cell / 2.0)) + uv0) * 0.5;
+                    vHgt = (wp.y - puffB.x) / max(puffB.y - puffB.x, 1.0);
+                    vCut = (wp.y - puffB.x) / (size * 0.08);
+                    // fade in from the edge of the wrap area and out as the camera gets close
+                    vAlpha = puffC * smoothstep(size * 0.15, size * 0.6, dist) * (1.0 - smoothstep(area * 0.42, area * 0.5, length(o.xz - camPos.xz)));
+                    gl_Position = projectionMatrix * viewMatrix * vec4(wp, 1.0);
                 }`,
             fragmentShader: /* glsl */`
-                uniform sampler2D map; uniform vec3 litColor, shadowColor, fogColor; uniform float fogDensity;
-                varying vec2 vUv; varying float vShade; varying float vDist; varying float vSize; varying float vSunSide;
+                uniform sampler2D map; uniform vec3 litColor, shadowColor, sunColor, sunDir, fogColor, camPos;
+                varying vec2 vUv; varying vec3 vRight, vUp, vToCam, vRay; varying float vHgt, vCut, vAlpha, vFlip;
+                ${FOG_GLSL}
                 void main() {
                     vec4 t = texture2D(map, vUv);
-                    float a = t.a * 0.78;
-                    // fade when the camera is inside the puff so we don't see hard clipping
-                    a *= smoothstep(vSize * 0.15, vSize * 0.9, vDist);
-                    if (a < 0.01) discard;
-                    float light = clamp(vShade * 0.75 + t.r * 0.35 + (1.0 - vSunSide) * 0.08, 0.0, 1.0);
-                    vec3 col = mix(shadowColor, litColor, light);
-                    // silver lining when looking toward the sun
-                    col += litColor * pow(max(-vSunSide, 0.0), 6.0) * (1.0 - t.a) * 0.9;
-                    float fogF = 1.0 - exp(-pow(fogDensity * 0.7 * vDist, 2.0));
-                    col = mix(col, fogColor, fogF);
-                    gl_FragColor = vec4(col, a * (1.0 - fogF * 0.6));
+                    // soft, flat cloud base
+                    float a = t.a * vAlpha * smoothstep(0.0, 1.0, vCut);
+                    if (a < 0.004) discard;
+                    vec2 nxy = t.rg * 2.0 - 1.0;
+                    nxy.x *= 1.0 - 2.0 * vFlip;
+                    vec3 N = normalize(vRight * nxy.x + vUp * nxy.y + vToCam * sqrt(max(1.0 - dot(nxy, nxy), 0.0)));
+                    vec3 L = normalize(sunDir);
+                    float ndl = dot(N, L);
+                    float hgt = clamp(vHgt, 0.0, 1.0);
+                    // wrapped diffuse (clouds scatter light all round), self-shadowed toward the flat grey base
+                    float lit = clamp(ndl * 0.5 + 0.55, 0.0, 1.0) * mix(0.3, 1.0, smoothstep(0.0, 0.8, hgt)) * mix(1.0, 0.85, t.b);
+                    vec3 col = mix(shadowColor, litColor * 1.15, lit);
+                    // sky light on the tops
+                    col += shadowColor * 0.12 * max(N.y, 0.0);
+                    // light through thin edges when looking toward the sun (silver lining)
+                    vec3 V = normalize(vRay);
+                    float fwd = pow(max(dot(V, L), 0.0), 16.0);
+                    col += sunColor * fwd * (1.0 - t.b) * (1.0 - t.b) * 0.7;
+                    vec2 fog = skyFogAmount(vRay, camPos.y);
+                    col = mix(col, skyFogColor(fogColor, vRay, fog.y), fog.x);
+                    gl_FragColor = vec4(col, a * (1.0 - fog.x * 0.55));
                     #include <tonemapping_fragment>
                     #include <colorspace_fragment>
                 }`,
@@ -955,27 +1689,146 @@ export class World {
         this.clouds.frustumCulled = false;
         this.clouds.renderOrder = 5;
         this.scene.add(this.clouds);
-        this.cloudPuffs = puffs;
+        this.writeClouds();
     }
 
+    // Overcast deck for rain and storms: one big quad following the camera at DECK_Y, broken up with noise,
+    // a dark ragged ceiling from below and a sunlit cloud sea from above
+    initOvercast() {
+        const geo = new THREE.PlaneGeometry(1, 1);
+        geo.rotateX(-Math.PI / 2);
+        this.deckMat = new THREE.ShaderMaterial({
+            transparent: true, depthWrite: false, fog: false, side: THREE.DoubleSide,
+            uniforms: {
+                groundMap: { value: this.groundTex }, wind: { value: new THREE.Vector2() }, amount: { value: 0 },
+                litColor: { value: new THREE.Color() }, shadowColor: { value: new THREE.Color() }, sunDir: { value: new THREE.Vector3(0, 1, 0) },
+                camPos: { value: new THREE.Vector3() }, fogColor: { value: new THREE.Color() },
+                skyFogA: { value: SKY_FOG.a }, skyFogB: { value: SKY_FOG.b }, skyFogC: { value: SKY_FOG.c }, skyFogD: { value: SKY_FOG.d },
+            },
+            vertexShader: /* glsl */`
+                varying vec3 vWPos;
+                void main() {
+                    vec4 wp = modelMatrix * vec4(position, 1.0);
+                    vWPos = wp.xyz;
+                    gl_Position = projectionMatrix * viewMatrix * wp;
+                }`,
+            fragmentShader: /* glsl */`
+                uniform sampler2D groundMap; uniform vec2 wind; uniform float amount;
+                uniform vec3 litColor, shadowColor, sunDir, camPos, fogColor;
+                varying vec3 vWPos;
+                ${FOG_GLSL}
+                void main() {
+                    vec2 p = vWPos.xz - wind;
+                    float n = texture2D(groundMap, p / 21000.0).a * 0.5 + texture2D(groundMap, p / 7300.0 + 0.31).a * 0.32 + texture2D(groundMap, p / 2300.0 + 0.67).a * 0.18;
+                    float cover = smoothstep(1.0 - amount, 1.35 - amount, n);
+                    vec3 ray = vWPos - camPos;
+                    float below = step(camPos.y, vWPos.y);
+                    // from below: grey, darker where thick; from above: lit tops
+                    vec3 under = shadowColor * mix(1.05, 0.55, smoothstep(0.35, 0.85, n));
+                    vec3 over = mix(shadowColor, litColor * 1.1, 0.55 + 0.45 * max(normalize(sunDir).y, 0.0)) * mix(0.72, 1.06, smoothstep(0.3, 0.8, n));
+                    vec3 col = mix(over, under, below);
+                    // thin out when the camera is at the deck's height (the whiteout takes over)
+                    float a = cover * smoothstep(40.0, 260.0, abs(ray.y)) * (1.0 - smoothstep(skyFogA.z * 0.8, skyFogA.w, length(ray.xz)));
+                    vec2 fg = skyFogAmount(ray, camPos.y);
+                    col = mix(col, skyFogColor(fogColor, ray, fg.y), fg.x);
+                    gl_FragColor = vec4(col, a);
+                    #include <tonemapping_fragment>
+                    #include <colorspace_fragment>
+                }`,
+        });
+        this.deck = new THREE.Mesh(geo, this.deckMat);
+        this.deck.scale.set(64000, 1, 64000);
+        this.deck.frustumCulled = false;
+        this.deck.renderOrder = 4;
+        this.deck.visible = false;
+        this.scene.add(this.deck);
+        this.overcast = 0;
+    }
+
+    // wrapped world position of a puff relative to the camera (the shader does the same)
+    cloudWrap(p, cam, out) {
+        const A = CLOUD_AREA;
+        let dx = p.x + this.windOffset.x - cam.x, dz = p.z + this.windOffset.y - cam.z;
+        dx = ((dx + A * 0.5) % A + A) % A - A * 0.5;
+        dz = ((dz + A * 0.5) % A + A) % A - A * 0.5;
+        return out.set(cam.x + dx, p.y, cam.z + dz);
+    }
+
+    // far puffs first (the one draw call blends them back to front)
+    sortClouds(cam) {
+        const P = this.cloudPuffs, D = this.cloudDist, O = this.cloudOrder;
+        for (let i = 0; i < P.length; i++) { this.cloudWrap(P[i], cam, _v1); D[i] = _v1.distanceToSquared(cam); }
+        O.sort((a, b) => D[b] - D[a]);
+        this.writeClouds();
+        this.cloudSortPos.copy(cam);
+    }
+
+    writeClouds() {
+        const A = this.cloudA.array, B = this.cloudB.array, C = this.cloudC.array;
+        this.cloudOrder.forEach((pi, i) => {
+            const p = this.cloudPuffs[pi];
+            A[i * 4] = p.x; A[i * 4 + 1] = p.y; A[i * 4 + 2] = p.z; A[i * 4 + 3] = p.size;
+            B[i * 4] = p.base; B[i * 4 + 1] = p.top; B[i * 4 + 2] = p.cell; B[i * 4 + 3] = p.rank;
+            C[i] = p.a;
+        });
+        this.cloudA.needsUpdate = this.cloudB.needsUpdate = this.cloudC.needsUpdate = true;
+    }
+
+    // Atlas of 4 puff shapes (2x2). Each is a union of sphere caps (lobes) roughened with noise:
+    // rg = normal (x, y), b = thickness, a = coverage. A DataTexture, so the normals under transparent
+    // pixels survive (a canvas would premultiply them away).
     makeCloudTexture() {
-        const S = 128;
-        const c = document.createElement('canvas');
-        c.width = c.height = S;
-        const ctx = c.getContext('2d');
-        const img = ctx.createImageData(S, S);
-        for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
-            const dx = x / S - 0.5, dy = y / S - 0.5;
-            const d = Math.sqrt(dx * dx + dy * dy) * 2;
-            const n = fbm(x * 0.05, y * 0.05, 4) * 0.5 + 0.5;
-            const a = clamp((1 - d) * 1.4 - (1 - n) * 0.55, 0, 1);
-            const i = (y * S + x) * 4;
-            const lit = clamp(0.55 + (0.5 - y / S) * 0.9 + n * 0.2, 0, 1);
-            img.data[i] = img.data[i + 1] = img.data[i + 2] = lit * 255;
-            img.data[i + 3] = a * a * 255;
+        const S = 512, C = 256;
+        const data = new Uint8Array(S * S * 4);
+        const r = mulberry32(777);
+        const H = new Float32Array(C * C), Wd = new Float32Array(C * C);
+        for (let cell = 0; cell < 4; cell++) {
+            // lobes: a big central dome, smaller ones around and on top of it
+            const lobes = [{ x: 0, y: -0.05, r: 0.25 }];
+            const n = 10 + Math.floor(r() * 6);
+            for (let i = 0; i < n; i++) {
+                const a = r() * Math.PI * 2, d = 0.08 + r() * 0.2;
+                const lr = 0.06 + r() * 0.11;
+                let ly = Math.sin(a) * d * 0.75 + 0.02;
+                if (ly < -0.12) ly = -0.12 + (ly + 0.12) * 0.25; // few lobes hang below the middle
+                lobes.push({ x: Math.cos(a) * d * 1.2, y: ly, r: lr * (ly > 0.05 ? 1.1 : 0.9) });
+            }
+            // smooth union of the sphere caps: rounded joins instead of creases between lobes
+            const smax = (a, b, k) => { const q = Math.max(k - Math.abs(a - b), 0) / k; return Math.max(a, b) + q * q * k * 0.25; };
+            for (let j = 0; j < C; j++) for (let i = 0; i < C; i++) {
+                const x = i / C - 0.5, y = j / C - 0.5; // row 0 is the bottom (v = 0)
+                let h = -0.05;
+                for (const L of lobes) {
+                    const dx = x - L.x, dy = y - L.y, d2 = L.r * L.r - dx * dx - dy * dy;
+                    h = smax(h, d2 > 0 ? Math.sqrt(d2) : -Math.sqrt(-d2) * 0.5, 0.05);
+                }
+                // gently billowing surface, and wispy, eroded edges
+                const nz = fbm(i * 0.028 + cell * 17, j * 0.028 - cell * 5, 3);
+                h += nz * 0.022 * clamp(h * 10, 0, 1);
+                H[j * C + i] = h;
+                Wd[j * C + i] = fbm(i * 0.09 - cell * 9, j * 0.09 + cell * 3, 3) * 0.04 + fbm(i * 0.3, j * 0.3 + cell * 7, 2) * 0.012;
+            }
+            const ox = (cell % 2) * C, oy = Math.floor(cell / 2) * C;
+            for (let j = 0; j < C; j++) for (let i = 0; i < C; i++) {
+                const h = H[j * C + i];
+                const hx = (H[j * C + Math.min(i + 1, C - 1)] - H[j * C + Math.max(i - 1, 0)]) * C / 2;
+                const hy = (H[Math.min(j + 1, C - 1) * C + i] - H[Math.max(j - 1, 0) * C + i]) * C / 2;
+                // surface normal (-dh/dx, -dh/dy, 1), a little flattened so puffs don't read as balls
+                const l = Math.hypot(hx * 0.75, hy * 0.75, 1);
+                const edge = Math.min(i, j, C - 1 - i, C - 1 - j) / (C * 0.06); // keep mip levels inside the cell
+                const cov = clamp((h + Wd[j * C + i]) / 0.08, 0, 1) * clamp(edge, 0, 1);
+                const k = ((oy + j) * S + ox + i) * 4;
+                data[k] = (-hx * 0.75 / l * 0.5 + 0.5) * 255;
+                data[k + 1] = (-hy * 0.75 / l * 0.5 + 0.5) * 255;
+                data[k + 2] = clamp(h / 0.28, 0, 1) * 255;
+                data[k + 3] = cov * cov * (3 - 2 * cov) * 255;
+            }
         }
-        ctx.putImageData(img, 0, 0);
-        const tex = new THREE.CanvasTexture(c);
+        const tex = new THREE.DataTexture(data, S, S, THREE.RGBAFormat);
+        tex.magFilter = THREE.LinearFilter;
+        tex.minFilter = THREE.LinearMipmapLinearFilter;
+        tex.generateMipmaps = true;
+        tex.needsUpdate = true;
         return tex;
     }
 
@@ -1120,35 +1973,67 @@ export class World {
         this.skyMat.uniforms.camPos.value.copy(camera.position);
         this.water.position.set(Math.round(camera.position.x / 100) * 100, 0, Math.round(camera.position.z / 100) * 100);
         const fog = this.scene.fog;
+        const cam = camera.position;
+        this.uTime.value = this.time;
+        this.starMat.uniforms.time.value = this.time;
+        this.starMat.uniforms.pr.value = this.renderer.getPixelRatio();
         const wu = this.waterMat.uniforms;
         wu.time.value = this.time;
         wu.fogColor.value.copy(fog.color);
-        wu.fogDensity.value = fog.density;
         const cu = this.cloudMat.uniforms;
         this.windOffset.x += wind.x * dt * 0.6;
         this.windOffset.y += wind.z * dt * 0.6;
         cu.wind.value.copy(this.windOffset);
-        cu.camPos.value.copy(camera.position);
+        cu.camPos.value.copy(cam);
         cu.fogColor.value.copy(fog.color);
-        cu.fogDensity.value = fog.density;
-        // shadow camera follows the focus object
-        this.sun.position.copy(focus).addScaledVector(this.sunDir, 600);
-        this.sun.target.position.copy(focus);
+        // re-sort the cloud puffs now and then (they only drift slowly relative to each other)
+        this.cloudSortT -= dt;
+        if (this.cloudSortT <= 0 || cam.distanceToSquared(this.cloudSortPos) > 60 * 60) { this.sortClouds(cam); this.cloudSortT = 0.5; }
+        // trees sway with the wind, harder in a storm
+        const ws = Math.hypot(wind.x, wind.z), storm = this.weather === 'storm' ? 1 : this.weather === 'rain' ? 0.5 : 0;
+        this.uWind.value.set(ws > 0.1 ? wind.x / ws : 1, 0.35 + ws * 0.06 + storm * 0.9, ws > 0.1 ? wind.z / ws : 0);
+        // sun shadows: the sharp near map follows the focus object; the wide far map covers the ground ahead
+        this.aimShadow(this.sun, focus, 70, 600);
+        if (this.sunFar.visible && this.sunFar.castShadow) {
+            camera.getWorldDirection(_v1);
+            const hl = Math.hypot(_v1.x, _v1.z);
+            const agl = cam.y - Math.max(terrainHeight(cam.x, cam.z), 0);
+            let ahead = FAR_SHADOW * 0.65;
+            if (_v1.y < -0.02) ahead = Math.min(ahead, (agl / -_v1.y) * hl); // where the view ray meets the ground
+            _sc.set(cam.x, 0, cam.z);
+            if (hl > 0.01) { _sc.x += (_v1.x / hl) * ahead; _sc.z += (_v1.z / hl) * ahead; }
+            _sc.y = Math.max(terrainHeight(_sc.x, _sc.z), 0);
+            this.aimShadow(this.sunFar, _fc.copy(_sc), FAR_SHADOW, 4000);
+        }
+        this.updateGrass(camera, dt);
+        if (this.deck.visible) {
+            this.deck.position.set(cam.x, DECK_Y, cam.z);
+            const du = this.deckMat.uniforms;
+            du.wind.value.copy(this.windOffset);
+            du.camPos.value.copy(cam);
+            du.fogColor.value.copy(fog.color);
+            // seen from above, the deck draws over the clouds below it
+            this.deck.renderOrder = cam.y > DECK_Y ? 6 : 4;
+        }
         this.updateTerrain(focus);
     }
 
     // Returns 0..1: how deep inside a cloud a point is (for whiteout effect)
     cloudDensityAt(p) {
-        const AREA = 30000;
+        const cov = this.cloudCoverage ?? 0.5, grow = this.cloudGrow ?? 1;
         let best = 0;
         for (let i = 0; i < this.cloudPuffs.length; i += 1) {
             const c = this.cloudPuffs[i];
-            if (Math.abs(p.y - c.y) > c.size * 0.5) continue;
-            let dx = c.x + this.windOffset.x - p.x, dz = c.z + this.windOffset.y - p.z;
-            dx = ((dx + AREA * 0.5) % AREA + AREA) % AREA - AREA * 0.5;
-            dz = ((dz + AREA * 0.5) % AREA + AREA) % AREA - AREA * 0.5;
-            const d = Math.sqrt(dx * dx + dz * dz + (p.y - c.y) ** 2);
-            if (d < c.size * 0.45) best = Math.max(best, 1 - d / (c.size * 0.45));
+            if (c.rank > cov || p.y < c.base || (c.high && this.overcast > 0.3)) continue;
+            const R = c.size * grow * 0.42;
+            if (Math.abs(p.y - c.y) > R) continue;
+            this.cloudWrap(c, p, _v1);
+            const d = _v1.distanceTo(p);
+            if (d < R) best = Math.max(best, (1 - d / R) * c.a);
+        }
+        if (this.overcast > 0) {
+            const d = Math.abs(p.y - (DECK_Y + 90));
+            if (d < 110) best = Math.max(best, this.overcast * (1 - d / 110));
         }
         return best;
     }

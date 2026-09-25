@@ -109,7 +109,7 @@ function applyQuality() {
     smaa.enabled = q === 'high' && pr < 1.5;
     if (world) {
         world.VIEW_TILES = q === 'low' ? 6 : q === 'medium' ? 8 : 9;
-        world.sun.castShadow = q !== 'low';
+        world.setQuality(q); // shadow cascades, tree shadows, ground detail, fog edge
     }
     scene.traverse(o => { if (o.material) o.material.needsUpdate = true; });
 }
