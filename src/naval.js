@@ -10,6 +10,8 @@
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { ShipFX, seaMotion, SEA_MOTION, deckHeightAt, foamTexture } from './shipfx.js';
 import { terrainHeight } from './world.js';
 import { loft, createAircraftModel } from './models.js';
 import { rand, clamp, lerp, interceptTime } from './util.js';
@@ -22,6 +24,15 @@ const TYPES = {
     carrier: { name: 'CARRIER', L: 320, B: 76, deckY: 19, hp: 1300, score: 3000, speed: 12 },
     destroyer: { name: 'DESTROYER', L: 155, B: 20, deckY: 8, hp: 450, score: 1200, speed: 13 },
 };
+
+function inPoly(x, z, poly) {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const [xi, zi] = poly[i], [xj, zj] = poly[j];
+        if ((zi > z) !== (zj > z) && x < xi + (z - zi) / (zj - zi) * (xj - xi)) inside = !inside;
+    }
+    return inside;
+}
 
 // Find a spot of open ocean where a ship can circle
 export function findOcean(nearX, nearZ, minD, maxD, orbitR) {
@@ -101,7 +112,59 @@ function box(w, h, d, mat, x, y, z, parent) {
     return m;
 }
 
+// Ship models (tools/ships/*.py, models/ships/CREDITS.md). Loaded once at boot; if a file is missing the
+// procedural ship below is used instead.
+const SHIP_FILES = { carrier: 'models/ships/carrier.glb', destroyer: 'models/ships/destroyer.glb' };
+const shipGltf = {};
+export async function preloadShips() {
+    foamTexture(); // build the procedural foam texture now (~80 ms) rather than on the first sortie
+    const loader = new GLTFLoader();
+    await Promise.all(Object.entries(SHIP_FILES).map(async ([type, file]) => {
+        try { shipGltf[type] = await loader.loadAsync(file); } catch (e) { console.warn('[naval] ship model not loaded:', file, e && e.message); }
+    }));
+}
+
+// A ship from its glTF: static hull/superstructure, rotating radar(s) "radar"/"radar2", turrets "mount_<type>_<n>";
+// root extras.skywar = the layout (deck outline, waterline, parked aircraft…) written by the Blender script.
+function buildFromGltf(type, gltf) {
+    const g = new THREE.Group(), parts = {};
+    const root = gltf.scene.clone(true);
+    g.add(root);
+    let layout = null;
+    root.traverse(o => { if (!layout && o.userData && typeof o.userData.skywar === 'string') { try { layout = JSON.parse(o.userData.skywar); } catch (e) { /* ignore */ } } });
+    root.traverse(o => {
+        if (!o.isMesh) return;
+        o.castShadow = true; o.receiveShadow = true;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) {
+            if (!m) continue;
+            if (m.map) m.map.anisotropy = 16;
+            // painted steel in the open: the sky (and the sea's bounce) light the shaded sides a lot
+            m.envMapIntensity = m.name === 'Deck' ? 0.6 : 1.25;
+        }
+    });
+    const radar = root.getObjectByName('radar');
+    if (radar) { radar.name = 'ship:radar'; parts.radar = radar; }
+    const radar2 = root.getObjectByName('radar2');
+    if (radar2) { radar2.name = 'ship:radar2'; parts.radar2 = radar2; }
+    const mounts = [];
+    root.traverse(o => {
+        const m = /^mount_(ciws|sam|gun)_\d+$/.exec(o.name);
+        if (m) mounts.push({ type: m[1], p: o.position.clone(), turret: o });
+    });
+    // parked aircraft (kept clear of cat 1, the landing lane and the landing area)
+    for (const [kind, x, z, yaw] of (layout && layout.parked) || []) {
+        const { object } = createAircraftModel(kind);
+        object.position.set(x, (layout.deckY || TYPES[type].deckY) + 2.2, z);
+        object.rotation.y = yaw;
+        object.scale.setScalar(0.95);
+        g.add(object);
+    }
+    return { group: g, parts, mounts, layout };
+}
+
 function buildCarrier() {
+    if (shipGltf.carrier) return buildFromGltf('carrier', shipGltf.carrier);
     const T = TYPES.carrier, L = T.L, g = new THREE.Group(), parts = {};
     const hull = new THREE.Mesh(loft([
         [-L * 0.5, 2, 6, T.deckY * 0.45, 2.5], [-L * 0.44, 14, 13, T.deckY * 0.4, 3], [-L * 0.3, 20, 14, T.deckY * 0.35, 4],
@@ -154,6 +217,7 @@ function buildCarrier() {
 }
 
 function buildDestroyer() {
+    if (shipGltf.destroyer) return buildFromGltf('destroyer', shipGltf.destroyer);
     const T = TYPES.destroyer, L = T.L, g = new THREE.Group(), parts = {};
     const hull = new THREE.Mesh(loft([
         [-L * 0.5, 0.5, 2, T.deckY * 0.9, 2], [-L * 0.4, 6, 7, T.deckY * 0.5, 2.5], [-L * 0.1, 10, 8, T.deckY * 0.35, 3.5],
@@ -216,7 +280,7 @@ function addMount(g, m) {
 function mergeStatic(g) {
     g.updateMatrixWorld(true);
     const moving = new Set();
-    g.traverse(o => { if (o.name === 'ship:radar' || o.name.startsWith('ship:mount')) o.traverse(c => moving.add(c)); });
+    g.traverse(o => { if (o.name.startsWith('ship:radar') || o.name.startsWith('ship:mount')) o.traverse(c => moving.add(c)); });
     const byMat = new Map(), merged = [];
     g.traverse(o => {
         if (!o.isMesh || moving.has(o) || o.isSkinnedMesh || o.isInstancedMesh) return;
@@ -274,9 +338,13 @@ function makeShip(type) {
         mergeStatic(t.group);
     }
     const group = t.group.clone(true);
+    const parts = {};
     const radar = group.getObjectByName('ship:radar');
+    if (radar) parts.radar = radar;
+    const radar2 = group.getObjectByName('ship:radar2');
+    if (radar2) parts.radar2 = radar2;
     const mounts = t.mounts.map((m, i) => ({ type: m.type, p: m.p.clone(), turret: group.getObjectByName('ship:mount' + i), fireT: rand(0, 2), lockT: 0 }));
-    return { group, parts: radar ? { radar } : {}, mounts };
+    return { group, parts, mounts, layout: t.layout || null };
 }
 
 export class Ship {
@@ -304,7 +372,12 @@ export class Ship {
         this.mesh.rotation.order = 'YXZ'; // heading first, then pitch/roll about the ship's own axes
         this.parts = built.parts;
         this.mounts = built.mounts;
+        this.layout = built.layout;
+        this.motionT = Math.random() * 100;
+        this.motionSeed = Math.random() * 10;
+        this.motion = { heave: 0, pitch: 0, roll: 0 };
         this.game.scene.add(this.mesh);
+        if (naval.fx) naval.fx.add(this, this.layout);
         this.heading = 0;
         this.deckY = this.def.deckY;
         this.sinkT = 0;
@@ -332,13 +405,16 @@ export class Ship {
         this.heading = Math.atan2(-tx, -tz);
         const sink = this.alive ? 0 : Math.min(this.sinkT / 60, 1);
         const dmgFrac = 1 - Math.max(this.hp, 0) / this.maxHp;
-        const y = -sink * (this.def.deckY + 25) - dmgFrac * 1.5;
+        // gentle heave / pitch / roll with the sea (deckAt follows the tilted deck, so landings stay consistent)
+        this.motionT += dt;
+        const mo = seaMotion(this.motionT, this.motionSeed, SEA_MOTION[this.type] || SEA_MOTION.carrier, this.motion);
+        const y = -sink * (this.def.deckY + 25) - dmgFrac * 1.5 + mo.heave;
         if (dt > 0) this.vel.set((x - this.mesh.position.x) / dt, (y - this.mesh.position.y) / dt, (z - this.mesh.position.z) / dt);
         this.mesh.position.set(x, y, z);
         this.mesh.rotation.set(0, this.heading, 0);
         this.listAngle = damp01(this.listAngle || 0, (1 - Math.max(this.hp, 0) / this.maxHp) * 0.05, dt);
-        this.mesh.rotation.z = this.listAngle + sink * 0.28;
-        if (!this.alive) this.mesh.rotation.x = -sink * 0.08;
+        this.mesh.rotation.z = this.listAngle + sink * 0.28 + mo.roll;
+        this.mesh.rotation.x = mo.pitch - (this.alive ? 0 : sink * 0.08);
         this.deckY = this.def.deckY + y;
         this.center.set(x, y + this.def.deckY * 0.55, z);
     }
@@ -357,7 +433,20 @@ export class Ship {
         const { lx, lz } = this.toLocal(x, z);
         const B = this.type === 'carrier' ? this.def.B : this.def.B * 0.8;
         const off = this.type === 'carrier' ? -4 : 0;
-        return Math.abs(lx - off) < B / 2 - margin && Math.abs(lz) < this.def.L / 2 - margin;
+        if (!(Math.abs(lx - off) < B / 2 - margin && Math.abs(lz) < this.def.L / 2 - margin)) return false;
+        // the modelled flight deck (angled deck, elevators, island sponson), not just its bounding rectangle
+        const lay = this.layout;
+        if (lay && lay.deck && this.type === 'carrier') {
+            const sp = lay.islandSponson;
+            return inPoly(lx, lz, lay.deck) || (lay.elevators || []).some(p => inPoly(lx, lz, p)) ||
+                (!!sp && lx >= sp[0] && lx <= sp[1] && lz >= sp[2] && lz <= sp[3]);
+        }
+        return true;
+    }
+    // deck surface height at a world point (follows heave, pitch and roll)
+    deckHeight(x, z) {
+        const { lx, lz } = this.toLocal(x, z);
+        return deckHeightAt(this.mesh, this.def.deckY, lx, lz);
     }
     inWireZone(x, z) {
         const { lz } = this.toLocal(x, z);
@@ -368,7 +457,9 @@ export class Ship {
     hitTest(p) {
         const { lx, lz } = this.toLocal(p.x, p.z);
         const y = p.y - this.mesh.position.y;
-        const top = this.def.deckY + (Math.abs(lx - (this.def.B * 0.5 - 12)) < 8 && Math.abs(lz - this.def.L * 0.08) < 20 ? 30 : 2);
+        const isl = this.layout && this.layout.island;
+        const onIsland = isl ? lx > isl[0] && lx < isl[1] && lz > isl[2] && lz < isl[3] : Math.abs(lx - (this.def.B * 0.5 - 12)) < 8 && Math.abs(lz - this.def.L * 0.08) < 20;
+        const top = this.def.deckY + (onIsland ? 30 : 2);
         return Math.abs(lx) < this.def.B / 2 && Math.abs(lz) < this.def.L / 2 && y > -6 && y < top;
     }
 
@@ -424,16 +515,9 @@ export class Ship {
         if (!this.alive) this.sinkT += dt;
         this.place(dt);
         if (this.parts.radar) this.parts.radar.rotation.y += dt * 1.6;
+        if (this.parts.radar2) this.parts.radar2.rotation.y -= dt * 2.6;
         if (!this.alive && this.sinkT > 70) { this.remove(); return 'gone'; }
-        // wake & bow spray
-        this.wakeT -= dt;
-        if (this.wakeT <= 0 && this.alive) {
-            this.wakeT = 0.12;
-            const stern = this.toWorld(rand(-6, 6), 0.5, this.def.L * 0.5);
-            fx.smoke.emit(stern, _v.set(rand(-2, 2), 1, rand(-2, 2)), 6, 6, 26, [0.95, 0.97, 1], [0.9, 0.93, 0.96], 0.5, 0, 0.4, 0);
-            const bow = this.toWorld(rand(-3, 3), 1, -this.def.L * 0.5);
-            fx.smoke.emit(bow, _v.set(rand(-5, 5), 3, 0), 1.5, 3, 9, [1, 1, 1], [0.95, 0.95, 1], 0.5, 0, 1, -3);
-        }
+        // wake, bow wave, foam line and spray: shipfx.js (Naval.fx)
         // fires from battle damage
         if (this.fires) {
             const dmgFrac = this.alive ? 1 - this.hp / this.maxHp : 1;
@@ -533,6 +617,7 @@ export class Ship {
 
     remove() {
         this.game.scene.remove(this.mesh);
+        if (this.naval.fx) this.naval.fx.remove(this);
         this.gone = true;
     }
 }
@@ -544,6 +629,7 @@ export class Naval {
         this.homeCarrier = null;
         this._surf = { h: 0, ship: null, water: false, runway: null, hull: false };
         this.timers = new Set();
+        this.fx = new ShipFX(game.scene);
     }
 
     // setTimeout that's cancelled when the sortie ends (no explosions in the menu scene)
@@ -581,7 +667,7 @@ export class Naval {
             if (!s.onDeck(x, z)) continue;
             if (y < -10) continue;
             const r = this._surf;
-            r.h = s.deckY; r.ship = s.type === 'carrier' && s.alive ? s : null; r.water = false; r.runway = null;
+            r.h = s.deckHeight(x, z); r.ship = s.type === 'carrier' && s.alive ? s : null; r.water = false; r.runway = null;
             r.hull = y < s.deckY - 4 || s.type !== 'carrier' || !s.alive;
             if (r.hull) r.ship = null;
             return r;
@@ -598,10 +684,12 @@ export class Naval {
                 if (k >= 0) this.game.ground.targets.splice(k, 1);
             }
         }
+        this.fx.update(dt, this.game);
     }
 
     clear() {
         this.ships.forEach(s => s.remove());
+        this.fx.clear();
         this.ships = [];
         this.timers.forEach(clearTimeout);
         this.timers.clear();
