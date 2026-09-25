@@ -236,16 +236,14 @@ function periodicNoise(u, v, P, seed) {
 }
 
 const FAR_SHADOW = 1500; // half-size of the far shadow cascade (m)
-// grass around the camera: a dense inner grid and a coarse outer one (cell size m, cells per side, blade scale);
+// grass around the camera: a dense inner grid and a coarse outer one (cell size m, cells per side, plant scale);
 // ground data comes from tex x tex textures, texel metres apart, refilled once the camera has moved `recentre` m
 const GRASS = { layers: [{ cell: 0.5, n: 72, scale: 1 }, { cell: 1.5, n: 100, scale: 1.25 }], tex: 48, texel: 5, recentre: 20 };
 const _sx = new THREE.Vector3(), _sy = new THREE.Vector3(), _sc = new THREE.Vector3(), _fc = new THREE.Vector3(), _v1 = new THREE.Vector3();
 
-// a tile's trees: one impostor mesh (vegetation.js); older builds used a group of InstancedMeshes
+// a tile's trees: one instanced impostor mesh (vegetation.js)
 function disposeTrees(g) {
-    if (!g) return;
-    if (g.isMesh && !g.isInstancedMesh) { g.geometry.dispose(); return; }
-    for (const m of g.isInstancedMesh ? [g] : g.children) m.dispose();
+    if (g) g.geometry.dispose();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -755,7 +753,8 @@ export class World {
     //  - broad light/dark and lush/dry variation, so fields aren't one flat green
     //  - the beach: a narrow band of sand just above the waterline, wet and darker at the water's edge, with
     //    surf foam on the waterline itself (per pixel, so it stays sharp at every terrain LOD)
-    //  - close up (fading out by ~800 m): tiled grass / rock / sand detail and a matching bump
+    //  - close up (fading out by ~1 km): photo ground textures (meadow, dry grass, dirt, rock, sand, snow;
+    //    vegetation.js GROUND) blended by cover and slope, with their normal maps
     //  - rock strata on steep faces, projected on the slope instead of stretched from above
     //  - a short morph when a tile switches resolution, so mountain silhouettes slide instead of popping
     initTerrainMaterial() {
