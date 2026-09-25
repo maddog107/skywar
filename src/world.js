@@ -519,7 +519,10 @@ export class World {
         const N = seg + 3; // one extra ring on each side for normals
         const H = new Float32Array(N * N);
         for (let j = 0; j < N; j++) {
-            for (let i = 0; i < N; i++) H[j * N + i] = terrainHeight(x0 + (i - 1) * step, z0 + (j - 1) * step);
+            for (let i = 0; i < N; i++) {
+                const x = x0 + (i - 1) * step, z = z0 + (j - 1) * step, h = terrainHeight(x, z);
+                H[j * N + i] = this.groundConform ? this.groundConform.conform(x, z, h) : h;
+            }
             if ((j & 3) === 3) yield;
         }
         const V = seg + 1;
@@ -751,6 +754,12 @@ export class World {
     }
 
     // Rebuild tree tiles (after towns/roads exist, so no trees grow on them): the old trees stay up until
+    // Roads shape the drawn ground next to them (see RoadGround): rebuild every tile with it
+    setGroundConform(g) {
+        this.groundConform = g;
+        for (const t of this.tiles.values()) t.seg = -1; // updateTerrain rebuilds them (time-sliced)
+    }
+
     // updateTerrain has rebuilt each tile's set
     refreshTrees() {
         for (const t of this.tiles ? this.tiles.values() : []) t.treesDone = false;

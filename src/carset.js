@@ -7,6 +7,7 @@
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
 import { propParts } from './props.js';
+import { liftWithDistance } from './roads.js';
 
 export const CAR_TYPES = [
     { id: 'car_sedan', weight: 5, paint: 'Blue' },
@@ -28,7 +29,7 @@ function boxParts() {
 }
 
 export class CarSet {
-    constructor(parent, n, rng = Math.random, { castShadow = false, allowSpecial = true } = {}) {
+    constructor(parent, n, rng = Math.random, { castShadow = false, allowSpecial = true, onRoad = false } = {}) {
         this.n = n;
         const types = CAR_TYPES.filter(t => allowSpecial || t.paint);
         const total = types.reduce((a, t) => a + t.weight, 0);
@@ -53,8 +54,9 @@ export class CarSet {
             const list = [];
             for (const pt of parts) {
                 const isPaint = t.paint ? pt.material.name === t.paint : false;
-                const mat = isPaint ? pt.material.clone() : pt.material;
+                const mat = isPaint || onRoad ? pt.material.clone() : pt.material;
                 if (isPaint) mat.color.setRGB(1, 1, 1); // the instance colour is the paint
+                if (onRoad) liftWithDistance(mat); // ride with the road surface's distance lift
                 const im = new THREE.InstancedMesh(pt.geometry, mat, count);
                 im.frustumCulled = false;
                 im.castShadow = castShadow;

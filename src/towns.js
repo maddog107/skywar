@@ -12,7 +12,7 @@
 import * as THREE from 'three';
 import { terrainHeight, BASES, gateOf, baseToWorld } from './world.js';
 import { fbm, mulberry32, makeRadialTexture, offsetUnits, freezeStatic } from './util.js';
-import { buildRoads, roadMaterial, outsideBases, samplePath, liftWithDistance } from './roads.js';
+import { buildRoads, roadMaterial, outsideBases, samplePath, liftWithDistance, RoadGround } from './roads.js';
 import { mergeGeometries as mergeGeos } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Traffic } from './traffic.js';
 import { setBridgeNight } from './bridges.js';
@@ -122,12 +122,16 @@ export class Towns {
         this.buildPeople();
         this.buildRoadblocks(this.deadEnds);
         this.traffic = new Traffic(this.group, [...paths, ...this.streetPaths], this.dirtPaths, this);
+        for (const p of this.streetPaths) p.half = STREET_HALF;
+        for (const p of this.dirtPaths) p.half = 3.2;
+        this.ground = new RoadGround([...paths, ...this.streetPaths, ...this.dirtPaths]);
         this.time = 0;
         // nothing in a town moves as an object (cars and people are instances) except collapsing bridges
         freezeStatic(this.group, this.bridges.map(b => b.group));
         if (world) {
             world.blockTree = (x, z) => this.blocked(x, z) || this.towns.some(t => Math.hypot(x - t.x, z - t.z) < t.radius * 0.9);
             world.refreshTrees();
+            world.setGroundConform(this.ground);
         }
     }
 
@@ -237,7 +241,7 @@ export class Towns {
                 const rx = -tz, rz = tx;
                 const lx = P.x - rx * STREET_HALF, lz = P.z - rz * STREET_HALF, Rx = P.x + rx * STREET_HALF, Rz = P.z + rz * STREET_HALF;
                 const base = pos.length / 3;
-                pos.push(lx, Math.max(P.y - 0.1, terrainHeight(lx, lz) + 0.3), lz, Rx, Math.max(P.y - 0.1, terrainHeight(Rx, Rz) + 0.3), Rz);
+                pos.push(lx, P.y - 0.05, lz, Rx, P.y - 0.05, Rz); // level across; the ground is shaped to meet it
                 uv.push(0, P.s / 24, 1, P.s / 24);
                 if (prev !== null) idx.push(prev, prev + 1, base, prev + 1, base + 1, base);
                 prev = base;
@@ -294,7 +298,9 @@ export class Towns {
         const headGeo = new THREE.BoxGeometry(0.45, 1.3, 0.35);
         const lampGeo = new THREE.SphereGeometry(0.22, 8, 6);
         const signPoleGeo = new THREE.CylinderGeometry(0.05, 0.05, 2.3, 5); signPoleGeo.translate(0, 1.15, 0);
-        const signGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.04, 8); signGeo.rotateX(Math.PI / 2); signGeo.rotateZ(Math.PI / 8);
+        // octagon with a flat top edge (thetaStart), not spun in its own plane, so STOP reads level
+        const signGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.04, 8, 1, false, Math.PI / 8); signGeo.rotateX(Math.PI / 2);
+        { const uv = signGeo.attributes.uv; for (let i = 0; i < uv.count; i++) { const u = uv.getX(i) - 0.5, v = uv.getY(i) - 0.5; uv.setXY(i, 0.5 + v, 0.5 - u); } } // the cap UVs read sideways: turn them so STOP is upright
         const stopTex = canvasTex(128, 128, (ctx) => { ctx.fillStyle = '#c4161c'; ctx.fillRect(0, 0, 128, 128); ctx.fillStyle = '#fff'; ctx.font = 'bold 38px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('STOP', 64, 66); }, false);
         const darkMat = new THREE.MeshStandardMaterial({ color: 0x2a2d30, roughness: 0.6, metalness: 0.4 });
         const nL = Math.max(1, lights.length * 4), nS = Math.max(1, stops.length * 4);
@@ -318,7 +324,7 @@ export class Towns {
                 const rx = -fz, rz = fx;
                 const x = it.x - fx * 8 + rx * (STREET_HALF + 1.2), z = it.z - fz * 8 + rz * (STREET_HALF + 1.2);
                 const y = terrainHeight(x, z) - 0.1;
-                q.setFromAxisAngle(up, Math.atan2(-fx, -fz) + Math.PI); // face the oncoming drivers
+                q.setFromAxisAngle(up, Math.atan2(-fx, -fz)); // the plate (+Z) faces back along -f, toward the oncoming drivers
                 if (it.type === 'light') {
                     poles.add(m.compose(p.set(x, y, z), q, one));
                     heads.add(m.compose(p.set(x, y + 5.6, z), q, one));
@@ -327,7 +333,7 @@ export class Towns {
                     zebra.push({ x: it.x - fx * 11, z: it.z - fz * 11, rot: Math.atan2(fx, fz) });
                 } else {
                     sPoles.add(m.compose(p.set(x, y, z), q, one));
-                    signs.add(m.compose(p.set(x, y + 2.25, z), q, one));
+                    signs.add(m.compose(p.set(x - fx * 0.08, y + 2.25, z - fz * 0.08), q, one)); // plate in front of the post
                 }
             }
         }
@@ -771,7 +777,7 @@ export class Towns {
                 let tx = Q.x - O.x, tz = Q.z - O.z; const L = Math.hypot(tx, tz) || 1; tx /= L; tz /= L;
                 const lx = P.x + tz * HW, lz = P.z - tx * HW, Rx = P.x - tz * HW, Rz = P.z + tx * HW;
                 const base = pos.length / 3;
-                pos.push(lx, terrainHeight(lx, lz) + 0.25, lz, Rx, terrainHeight(Rx, Rz) + 0.25, Rz);
+                pos.push(lx, P.y - 0.05, lz, Rx, P.y - 0.05, Rz);
                 uv.push(0, P.s / 12, 1, P.s / 12);
                 if (prev !== null) idx.push(prev, prev + 1, base, prev + 1, base + 1, base);
                 prev = base;
@@ -783,7 +789,7 @@ export class Towns {
         g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
         g.setIndex(idx);
         g.computeVertexNormals();
-        const mesh = new THREE.Mesh(g, liftWithDistance(new THREE.MeshStandardMaterial({ map: tex, roughness: 1, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: offsetUnits(-4), side: THREE.DoubleSide }), 2.6));
+        const mesh = new THREE.Mesh(g, liftWithDistance(new THREE.MeshStandardMaterial({ map: tex, roughness: 1, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: offsetUnits(-4), side: THREE.DoubleSide })));
         mesh.receiveShadow = true;
         mesh.frustumCulled = false;
         this.group.add(mesh);

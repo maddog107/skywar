@@ -7,7 +7,7 @@
 //   • headlights and tail lights at night, dust behind the buggies
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
-import { samplePath, LANE } from './roads.js';
+import { samplePath, LANE, liftWithDistance } from './roads.js';
 import { rand, makeRadialTexture } from './util.js';
 import { propParts } from './props.js';
 import { CarSet, PAINTS } from './carset.js';
@@ -22,13 +22,13 @@ export class Traffic {
         this.roadLen = this.paths.reduce((a, p) => a + p.len, 0);
         this.count = Math.min(620, Math.floor(this.roadLen / 230));
         // real car models (instanced per type)
-        this.carSet = new CarSet(scene, this.count);
+        this.carSet = new CarSet(scene, this.count, Math.random, { onRoad: true });
         // dune buggies: the model's parts, instanced
         this.buggyCount = Math.min(60, dirtPaths.length * 3);
         this.buggyParts = [];
         const parts = this.buggyCount ? propParts('buggy') : null;
         if (parts) for (const pt of parts) {
-            const im = new THREE.InstancedMesh(pt.geometry, pt.material, this.buggyCount);
+            const im = new THREE.InstancedMesh(pt.geometry, liftWithDistance(pt.material.clone()), this.buggyCount);
             im.frustumCulled = false; im.castShadow = true;
             scene.add(im);
             this.buggyParts.push(im);
@@ -40,10 +40,10 @@ export class Traffic {
         const lg = new THREE.BufferGeometry();
         lg.setAttribute('position', new THREE.BufferAttribute(lp, 3));
         lg.setAttribute('color', new THREE.BufferAttribute(lc, 3));
-        this.lights = new THREE.Points(lg, new THREE.PointsMaterial({
+        this.lights = new THREE.Points(lg, liftWithDistance(new THREE.PointsMaterial({
             map: makeRadialTexture(32, [[0, 'rgba(255,255,255,1)'], [0.35, 'rgba(255,255,255,0.5)'], [1, 'rgba(255,255,255,0)']]),
             vertexColors: true, size: 4.5, sizeAttenuation: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: true,
-        }));
+        })));
         this.lights.frustumCulled = false;
         this.lights.visible = false;
         scene.add(this.lights);

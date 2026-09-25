@@ -66,19 +66,30 @@ function roadTexture() {
 let _roadMat = null;
 // Distant terrain is drawn with coarser tiles, which can poke through a road that hugs the true ground.
 // Lift road surfaces a little with distance from the camera so they never flicker or pop in and out.
-export function liftWithDistance(mat, perKm = 3.5) {
+// Anything that sits on a road (cars, buggies) gets the same lift, or it would sink into the road at range.
+// The lift is applied in world space, so it works for instanced meshes too.
+export const ROAD_LIFT = 2.6; // metres per km beyond 250 m
+export function liftWithDistance(mat, perKm = ROAD_LIFT) {
     mat.onBeforeCompile = (sh) => {
         sh.vertexShader = sh.vertexShader.replace('#include <project_vertex>', `
-            vec4 wpLift = modelMatrix * vec4(transformed, 1.0);
-            float dLift = distance(wpLift.xyz, cameraPosition);
-            transformed.y += max(0.0, dLift - 250.0) * ${(perKm / 1000).toFixed(5)};
-            #include <project_vertex>`);
+            vec4 mvPosition = vec4(transformed, 1.0);
+            #ifdef USE_INSTANCING
+                mvPosition = instanceMatrix * mvPosition;
+            #endif
+            vec4 wpLift = modelMatrix * mvPosition;
+            wpLift.y += max(0.0, distance(wpLift.xyz, cameraPosition) - 250.0) * ${(perKm / 1000).toFixed(5)};
+            mvPosition = viewMatrix * wpLift;
+            gl_Position = projectionMatrix * mvPosition;`);
     };
     mat.customProgramCacheKey = () => 'lift' + perKm;
     return mat;
 }
+// the same lift on the CPU, for single objects driving on roads (convoys)
+export function roadLiftAt(x, y, z, cam) {
+    return cam ? Math.max(0, Math.hypot(x - cam.x, y - cam.y, z - cam.z) - 250) * ROAD_LIFT / 1000 : 0;
+}
 export function roadMaterial() {
-    if (!_roadMat) _roadMat = liftWithDistance(new THREE.MeshStandardMaterial({ map: roadTexture(), roughness: 0.92, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: offsetUnits(-4) }), 2.6);
+    if (!_roadMat) _roadMat = liftWithDistance(new THREE.MeshStandardMaterial({ map: roadTexture(), roughness: 0.92, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: offsetUnits(-4) }));
     return _roadMat;
 }
 // bridges carry their own deck geometry, so their road surface must not be lifted
@@ -107,6 +118,59 @@ export function samplePath(path, s, out, tangent) {
     }
     return out;
 }
+
+// ── Terrain meets the road ──
+// The drawn terrain near a road is pulled to just under the road surface (cut through bumps, fill dips),
+// then eased back to the natural ground over a shoulder, so roads sit in the landscape instead of
+// floating over it or disappearing into it. Physics keeps the true terrain height.
+const EDGE = 1.5, SHOULDER = 16, UNDER = 0.25;
+export class RoadGround {
+    constructor(paths) {
+        this.cell = 64;
+        this.grid = new Map();
+        for (const p of paths) {
+            const half = p.half ?? ROAD_HALF, reach = half + EDGE + SHOULDER, P = p.pts;
+            for (let k = 0; k + 1 < P.length; k++) {
+                const a = P[k], b = P[k + 1];
+                if (p.bridges.some(br => b.s > br.s0 + 0.01 && a.s < br.s1 - 0.01)) continue; // the deck carries itself
+                const L = Math.hypot(b.x - a.x, b.z - a.z);
+                if (L < 0.01) continue;
+                const seg = { a, b, L, tx: (b.x - a.x) / L, tz: (b.z - a.z) / L, half, reach };
+                const c0x = Math.floor((Math.min(a.x, b.x) - reach) / this.cell), c1x = Math.floor((Math.max(a.x, b.x) + reach) / this.cell);
+                const c0z = Math.floor((Math.min(a.z, b.z) - reach) / this.cell), c1z = Math.floor((Math.max(a.z, b.z) + reach) / this.cell);
+                for (let cx = c0x; cx <= c1x; cx++) for (let cz = c0z; cz <= c1z; cz++) {
+                    const key = cx * 100003 + cz;
+                    let list = this.grid.get(key);
+                    if (!list) this.grid.set(key, list = []);
+                    list.push(seg);
+                }
+            }
+        }
+    }
+
+    // drawn height of the ground at (x, z), given its natural height h
+    conform(x, z, h) {
+        if (h < 0) return h; // never build land out into a lake
+        const list = this.grid.get(Math.floor(x / this.cell) * 100003 + Math.floor(z / this.cell));
+        if (!list) return h;
+        let bestW = 0, target = h;
+        for (const sg of list) {
+            const t = Math.max(0, Math.min(sg.L, (x - sg.a.x) * sg.tx + (z - sg.a.z) * sg.tz));
+            const px = sg.a.x + sg.tx * t, pz = sg.a.z + sg.tz * t;
+            const lat = (x - px) * -sg.tz + (z - pz) * sg.tx; // + to the right of travel
+            const d = Math.hypot(x - px, z - pz);
+            if (d >= sg.reach) continue;
+            const w = d <= sg.half + EDGE ? 1 : 1 - smooth01((d - sg.half - EDGE) / SHOULDER);
+            if (w <= bestW) continue;
+            const u = t / sg.L;
+            const y = sg.a.y + (sg.b.y - sg.a.y) * u, g = (sg.a.g || 0) + ((sg.b.g || 0) - (sg.a.g || 0)) * u;
+            bestW = w;
+            target = y + g * Math.max(-sg.half, Math.min(sg.half, lat)) - UNDER;
+        }
+        return h + (target - h) * bestW;
+    }
+}
+const smooth01 = (t) => { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 * t); };
 
 export function buildRoads(group, nodes) {
     const edges = new Set();
@@ -269,9 +333,8 @@ function buildRoadMesh(paths) {
             const rx = -tz, rz = tx;
             const base = pos.length / 3;
             const lx = P.x - rx * ROAD_HALF, lz = P.z - rz * ROAD_HALF, Rx = P.x + rx * ROAD_HALF, Rz = P.z + rz * ROAD_HALF;
-            // each edge follows its own ground so the ribbon never dips under a bank
-            const yl = Math.max(P.y - P.g * ROAD_HALF, terrainHeight(lx, lz) + 0.35);
-            const yr = Math.max(P.y + P.g * ROAD_HALF, terrainHeight(Rx, Rz) + 0.35);
+            // one flat cross-section (what the cars drive on); the drawn terrain is shaped to meet it (RoadGround)
+            const yl = P.y - P.g * ROAD_HALF, yr = P.y + P.g * ROAD_HALF;
             pos.push(lx, yl, lz, Rx, yr, Rz);
             uv.push(0, P.s / ROAD_V, 1, P.s / ROAD_V);
             if (prev !== null) idx.push(prev, prev + 1, base, prev + 1, base + 1, base);

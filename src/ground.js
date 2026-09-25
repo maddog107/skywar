@@ -7,7 +7,7 @@ import { makeParkedModel } from './airbase.js';
 import { propInstance, hasProp } from './props.js';
 import { rand, clamp, interceptTime, lerp } from './util.js';
 import { WEAPONS } from './config.js';
-import { samplePath, LANE } from './roads.js';
+import { samplePath, LANE, roadLiftAt } from './roads.js';
 
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3();
 
@@ -292,7 +292,8 @@ class GroundTarget {
         if (r.dir < 0) _v2.negate();
         const rl = Math.hypot(_v2.x, _v2.z) || 1;
         p.x += -_v2.z / rl * LANE * 0.5; p.z += _v2.x / rl * LANE * 0.5;
-        this.mesh.position.set(p.x, p.y, p.z);
+        // drawn with the road's distance lift so it doesn't sink into the road when seen from afar
+        this.mesh.position.set(p.x, p.y + roadLiftAt(p.x, p.y, p.z, this.game.camera && this.game.camera.position), p.z);
         this.mesh.rotation.set(0, Math.atan2(-_v2.x, -_v2.z), 0);
         this.pos.set(p.x, p.y + this.radius * 0.4, p.z);
     }
