@@ -36,8 +36,10 @@ def srgb(h):
     return tuple(x / 12.92 if x <= 0.04045 else ((x + 0.055) / 1.055) ** 2.4 for x in c)
 
 _PANEL_IMG = {}
-def panel_image(key='panel', size=1024, seed=7, line=0.80, contrast=1.0, grime=0.035):
-    """Tileable panel-line + subtle weathering texture (greyscale, ~white) — multiplied by paint colour."""
+def panel_image(key='panel', size=1024, seed=7, line=0.80, contrast=1.0, grime=0.035, camo=0.0, camo_seed=3):
+    """Tileable panel-line + subtle weathering texture (greyscale, ~white) — multiplied by paint colour.
+    camo > 0 adds large soft-edged blotches darkened by that fraction (a two-tone camouflage that still
+    takes any livery colour, because the game multiplies the texture by the paint colour)."""
     if key in _PANEL_IMG:
         return _PANEL_IMG[key]
     import numpy as np
@@ -81,6 +83,14 @@ def panel_image(key='panel', size=1024, seed=7, line=0.80, contrast=1.0, grime=0
         img[np.ix_(ys[[0, -1]], xs)] *= 0.86
         img[np.ix_(ys, xs[[0, -1]])] *= 0.86
     img = np.clip(img / np.percentile(img, 97) * 0.97, 0, 1)
+    if camo:
+        r2 = np.random.default_rng(camo_seed)
+        n = np.zeros((N, N), np.float32)
+        for _ in range(10):
+            fx, fy = r2.integers(1, 5, 2) * r2.choice([-1, 1], 2)
+            n += np.sin(6.283 * (fx * xx + fy * yy) + r2.random() * 6.283) / (abs(fx) + abs(fy))
+        mask = np.clip((n - 0.05) * 6.0, 0, 1)          # soft-edged blotches, ~45% coverage
+        img = img * (1 - camo * mask)
     rgba = np.stack([img, img, img, np.ones_like(img)], -1)
     im = bpy.data.images.new(key, N, N, alpha=False)
     im.pixels.foreach_set(rgba.ravel())
