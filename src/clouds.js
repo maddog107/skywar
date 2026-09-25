@@ -547,6 +547,52 @@ function fullScreenTriangle() {
     return g;
 }
 
+// ── Cloud shadows on the ground (and on anything else lit by the sun) ──
+// Every built-in lit material gets its sun light (directional light 0) dimmed where the weather map puts a
+// cloud between it and the sun: the point is projected along the sun direction to the middle of the cumulus
+// layer (and to the rain deck) and the cover there read from the same map. The parameters are typed arrays
+// shared by every material's uniforms (UniformsUtils.clone keeps them by reference), switched on only while
+// the world scene renders (the cockpit scene has its own coordinates).
+const SHADOW = {
+    a: new Float32Array([0, 1, 0, 0]),       // sun direction (world), on
+    b: new Float32Array([0.6, 1500, 2000, 0.8]), // cumulus threshold, mid-layer altitude, layer top, strength
+    c: new Float32Array([0, 0, 0, DECK_Y]),   // wind drift x, z, deck amount, deck base
+};
+const SHADOW_GLSL = /* glsl */`
+uniform sampler2D cloudShadowMap;
+uniform vec4 cloudShadowA, cloudShadowB, cloudShadowC;
+float cloudSunShadow( vec3 viewPos ) {
+    if ( cloudShadowA.w < 0.5 ) return 1.0;
+    vec3 wp = cameraPosition + ( vec4( viewPos, 0.0 ) * viewMatrix ).xyz;
+    vec3 L = cloudShadowA.xyz;
+    float sy = max( L.y, 0.08 );
+    vec2 q = wp.xz + L.xz * ( max( cloudShadowB.y - wp.y, 0.0 ) / sy ) - cloudShadowC.xy;
+    float sh = smoothstep( cloudShadowB.x, cloudShadowB.x + 0.12, texture2D( cloudShadowMap, q / ${WEATHER_SIZE.toFixed(1)} ).r )
+        * cloudShadowB.w * ( 1.0 - smoothstep( cloudShadowB.y, cloudShadowB.z, wp.y ) );
+    if ( cloudShadowC.z > 0.0 && wp.y < cloudShadowC.w ) {
+        vec2 qd = wp.xz + L.xz * ( ( cloudShadowC.w + 300.0 - wp.y ) / sy ) - cloudShadowC.xy;
+        sh = max( sh, smoothstep( 1.0 - cloudShadowC.z, 1.35 - cloudShadowC.z, texture2D( cloudShadowMap, qd / ${WEATHER_SIZE.toFixed(1)} ).b ) * 0.85 );
+    }
+    return 1.0 - sh;
+}`;
+function installCloudShadows(map) {
+    const C = THREE.ShaderChunk, anchor = 'getDirectionalLightInfo( directionalLight, directLight );';
+    if (!C.lights_fragment_begin.includes('cloudSunShadow')) {
+        if (!C.lights_fragment_begin.includes(anchor)) return false; // three.js changed: no cloud shadows
+        C.lights_fragment_begin = C.lights_fragment_begin.replace(anchor, anchor + `
+		#if ( UNROLLED_LOOP_INDEX == 0 )
+		directLight.color *= cloudSunShadow( geometryPosition );
+		#endif`);
+        C.lights_pars_begin += SHADOW_GLSL;
+    }
+    for (const k in THREE.ShaderLib) {
+        const L = THREE.ShaderLib[k];
+        if (!L.fragmentShader.includes('<lights_pars_begin>')) continue;
+        Object.assign(L.uniforms, { cloudShadowMap: { value: map }, cloudShadowA: { value: SHADOW.a }, cloudShadowB: { value: SHADOW.b }, cloudShadowC: { value: SHADOW.c } });
+    }
+    return true;
+}
+
 // ═══════════════════════════════════════════════════════════════
 export class Clouds {
     constructor(scene, renderer, { FOG_GLSL, SKY_FOG }) {
@@ -558,7 +604,9 @@ export class Clouds {
         // half floats on the GPU: 8-bit data would show as terraces on the smooth cloud surfaces
         const weather = new THREE.DataTexture(toHalf(this.weatherData), WEATHER_RES, WEATHER_RES, THREE.RGBAFormat, THREE.HalfFloatType);
         weather.wrapS = weather.wrapT = THREE.RepeatWrapping;
-        weather.magFilter = weather.minFilter = THREE.LinearFilter;
+        weather.magFilter = THREE.LinearFilter;
+        weather.minFilter = THREE.LinearMipmapLinearFilter; // the march reads level 0; far terrain its mips
+        weather.generateMipmaps = true;
         weather.needsUpdate = true;
         const base = new THREE.Data3DTexture(toHalf(this.baseData), BASE_RES, BASE_RES, BASE_RES);
         base.format = THREE.RGFormat;
@@ -648,6 +696,12 @@ export class Clouds {
         this.mesh.onBeforeRender = (r, s, cam) => this.march(r, cam);
         scene.add(this.mesh);
 
+        // cloud shadows: on while the world scene renders
+        this.shadows = installCloudShadows(weather);
+        const before = scene.onBeforeRender, after = scene.onAfterRender;
+        scene.onBeforeRender = (...a) => { SHADOW.a[3] = this.shadows && this.mesh.visible ? 1 : 0; before.apply(scene, a); };
+        scene.onAfterRender = (...a) => { SHADOW.a[3] = 0; after.apply(scene, a); };
+
         this.setWeather('clear', 0);
         this.setQuality('high');
         this.compile();
@@ -686,6 +740,7 @@ export class Clouds {
         let lo = W.base - W.baseVar * 0.5 - 60, hi = W.base + W.baseVar * 0.5 + W.thick + 60;
         if (W.deck > 0) { lo = Math.min(lo, DECK_Y - 160); hi = Math.max(hi, DECK_Y + DECK_THICK + 60); }
         f.slab.value.set(lo, hi);
+        SHADOW.b[0] = W.thr; SHADOW.b[1] = W.base + W.thick * 0.3; SHADOW.b[2] = W.base + W.thick; SHADOW.c[2] = W.deck;
         this.overcast = overcast || 0;
         this.resetHistory = true;
     }
@@ -698,6 +753,7 @@ export class Clouds {
         // the HUD's white-out should be as bright as the cloud around you (dim at dusk, faint at night)
         this.whiteBright = Math.min(1, 0.3 * shadow.r + 0.59 * shadow.g + 0.11 * shadow.b + 0.6 * (0.3 * lit.r + 0.59 * lit.g + 0.11 * lit.b));
         u.sunDir.value.copy(sunDir).normalize();
+        SHADOW.a[0] = u.sunDir.value.x; SHADOW.a[1] = u.sunDir.value.y; SHADOW.a[2] = u.sunDir.value.z;
         this.resetHistory = true;
     }
 
@@ -705,6 +761,7 @@ export class Clouds {
         this.windOff.x += wind.x * dt * 0.6;
         this.windOff.z += wind.z * dt * 0.6;
         this.windOff.y += dt * 1.2;
+        SHADOW.c[0] = this.windOff.x; SHADOW.c[1] = this.windOff.z;
         const u = this.marchMat.uniforms;
         u.fogColor.value.copy(fogColor);
         u.maxDist.value = this.SKY_FOG.a[3];
