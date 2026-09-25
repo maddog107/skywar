@@ -13,6 +13,9 @@ export const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 export const damp = (current, target, lambda, dt) => lerp(current, target, 1 - Math.exp(-lambda * dt));
 export const DEG = Math.PI / 180;
 export const G = 9.81;
+// set once the renderer exists: with a reversed depth buffer, polygonOffset units must flip sign
+export const DEPTH = { reversed: false };
+export const offsetUnits = (u) => (DEPTH.reversed ? -u : u);
 export const MS_TO_KTS = 1.94384;
 export const M_TO_FT = 3.28084;
 

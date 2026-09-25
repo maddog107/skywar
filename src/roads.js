@@ -7,6 +7,7 @@
 import * as THREE from 'three';
 import { terrainHeight, BASES, fenceOf, baseToWorld, worldToBase } from './world.js';
 import { Bridge } from './bridges.js';
+import { offsetUnits } from './util.js';
 
 export const ROAD_HALF = 7;      // 14 m wide: two 7 m lanes
 export const LANE = 3.3;          // lane centre offset from the middle
@@ -77,13 +78,13 @@ export function liftWithDistance(mat, perKm = 3.5) {
     return mat;
 }
 export function roadMaterial() {
-    if (!_roadMat) _roadMat = liftWithDistance(new THREE.MeshStandardMaterial({ map: roadTexture(), roughness: 0.92, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }), 2.6);
+    if (!_roadMat) _roadMat = liftWithDistance(new THREE.MeshStandardMaterial({ map: roadTexture(), roughness: 0.92, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: offsetUnits(-4) }), 2.6);
     return _roadMat;
 }
 // bridges carry their own deck geometry, so their road surface must not be lifted
 let _plainRoad = null;
 export function plainRoadMaterial() {
-    if (!_plainRoad) _plainRoad = new THREE.MeshStandardMaterial({ map: roadMaterial().map, roughness: 0.92, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+    if (!_plainRoad) _plainRoad = new THREE.MeshStandardMaterial({ map: roadMaterial().map, roughness: 0.92, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: offsetUnits(-2) });
     return _plainRoad;
 }
 export const ROAD_V = 24; // metres per texture repeat (one dash + gap)

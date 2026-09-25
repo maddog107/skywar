@@ -361,6 +361,7 @@ export class World {
         const sc = this.sun.shadow.camera;
         sc.left = -70; sc.right = 70; sc.top = 70; sc.bottom = -70; sc.near = 1; sc.far = 1200;
         this.sun.shadow.mapSize.set(2048, 2048);
+        this.sun.shadow.radius = 2.5; // PCFShadowMap is the soft one since r182
         this.sun.shadow.bias = -0.0004;
         this.sun.shadow.normalBias = 0.05;
         this.scene.add(this.sun);
@@ -385,7 +386,12 @@ export class World {
                     vec4 wp = modelMatrix * vec4(position, 1.0);
                     vWorld = wp.xyz;
                     gl_Position = projectionMatrix * viewMatrix * wp;
-                    gl_Position.z = gl_Position.w; // push to far plane
+                    // push to the far plane (which is depth 0 with a reversed depth buffer)
+                    #ifdef USE_REVERSED_DEPTH_BUFFER
+                    gl_Position.z = 0.0;
+                    #else
+                    gl_Position.z = gl_Position.w;
+                    #endif
                 }`,
             fragmentShader: /* glsl */`
                 uniform vec3 zenith, horizon, sunColor, glowColor, sunDir, camPos;

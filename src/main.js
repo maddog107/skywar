@@ -27,7 +27,7 @@ import { setupTouch, isTouchDevice } from './touch.js';
 import { Aircraft, refSpeeds } from './aircraft.js';
 import { Pilot } from './ai.js';
 import { preloadModels, hasFileModel } from './models.js';
-import { clamp, damp } from './util.js';
+import { clamp, damp, DEPTH } from './util.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -45,19 +45,27 @@ let best = {};
 try { best = JSON.parse(localStorage.getItem('skywar.best') || '{}'); } catch (e) { /* ignore */ }
 
 // ── Renderer ──
-const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+// reversed depth buffer (with a float depth target, below): far better depth precision over a 60 km view,
+// so distant coastlines, roads and terrain never z-fight. Falls back quietly if EXT_clip_control is missing.
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance', reversedDepthBuffer: true });
+DEPTH.reversed = !!renderer.capabilities.reversedDepthBuffer;
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap; // soft (Vogel disk) since r182; radius set on the sun
 $('app').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 60000);
 camera.position.set(0, 800, 0);
 
-const composer = new EffectComposer(renderer);
+// the scene renders into this target: a 32-bit float depth buffer is what makes reversed-Z pay off
+const composerTarget = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, {
+    type: THREE.HalfFloatType,
+    depthTexture: new THREE.DepthTexture(window.innerWidth, window.innerHeight, THREE.FloatType),
+});
+const composer = new EffectComposer(renderer, composerTarget);
 const renderPass = new RenderPass(scene, camera);
 composer.addPass(renderPass);
 const cockpit = new Cockpit(renderer);
@@ -563,10 +571,12 @@ function buildCredits() {
 }
 
 // ═════════════ Loop ═════════════
-const clock = new THREE.Clock();
+const timer = new THREE.Timer();
+timer.connect(document); // pauses cleanly while the tab is hidden
 function loop() {
     requestAnimationFrame(loop);
-    frame(Math.min(clock.getDelta(), 0.05));
+    timer.update();
+    frame(Math.min(timer.getDelta(), 0.05));
 }
 // debug/test hook: advance the simulation manually (works in background tabs)
 window.skywarStep = (n = 60, dt = 1 / 60) => { for (let i = 0; i < n; i++) frame(dt); };

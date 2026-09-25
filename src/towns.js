@@ -11,7 +11,7 @@
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
 import { terrainHeight, BASES, gateOf, baseToWorld } from './world.js';
-import { fbm, mulberry32, makeRadialTexture } from './util.js';
+import { fbm, mulberry32, makeRadialTexture, offsetUnits } from './util.js';
 import { buildRoads, roadMaterial, outsideBases, samplePath, liftWithDistance } from './roads.js';
 import { mergeGeometries as mergeGeos } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Traffic } from './traffic.js';
@@ -756,7 +756,7 @@ export class Towns {
         g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
         g.setIndex(idx);
         g.computeVertexNormals();
-        const mesh = new THREE.Mesh(g, liftWithDistance(new THREE.MeshStandardMaterial({ map: tex, roughness: 1, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4, side: THREE.DoubleSide }), 2.6));
+        const mesh = new THREE.Mesh(g, liftWithDistance(new THREE.MeshStandardMaterial({ map: tex, roughness: 1, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: offsetUnits(-4), side: THREE.DoubleSide }), 2.6));
         mesh.receiveShadow = true;
         mesh.frustumCulled = false;
         this.group.add(mesh);
