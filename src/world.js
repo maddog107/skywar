@@ -6,6 +6,7 @@ import { fbm, ridged, smoothstep, lerp, clamp, mulberry32, DEG, makeRadialTextur
 import { TIMES } from './config.js';
 import { Clouds } from './clouds.js';
 import { BASES, terrainHeight, colorAt as groundColorAt, tileJob, runJob } from './terraincore.js';
+import { TerrainBatch } from './terrainbatch.js';
 // the height function and the airbase list live in terraincore.js (no three.js: the terrain worker uses them too)
 export { BASES, terrainHeight };
 
@@ -1042,7 +1043,7 @@ export class World {
         // remove tiles out of range
         for (const [key, t] of this.tiles) {
             if (!wanted.has(key)) {
-                this.scene.remove(t.mesh); t.mesh.geometry.dispose();
+                this.dropTile(t);
                 if (t.trees) { this.scene.remove(t.trees); disposeTrees(t.trees); }
                 this.tiles.delete(key);
             }
@@ -1125,16 +1126,12 @@ export class World {
         if (t) {
             // the new resolution grows out of the old surface instead of popping (vertex shader morph)
             if (!instant) this.morphFrom(geo, t.mesh.geometry, this.time);
-            t.mesh.geometry.dispose();
-            t.mesh.geometry = geo;
+            this.dropTile(t);
             t.seg = j.seg;
+            this.drawTile(t, geo);
         } else {
-            const mesh = new THREE.Mesh(geo, this.terrainMat);
-            mesh.receiveShadow = true;
-            mesh.matrixAutoUpdate = false;
-            mesh.matrixWorldAutoUpdate = false;
-            this.scene.add(mesh);
-            t = { mesh, seg: j.seg, trees: null, treesDone: false };
+            t = { mesh: null, seg: j.seg, trees: null, treesDone: false };
+            this.drawTile(t, geo);
             this.tiles.set(j.key, t);
         }
         // trees only on close tiles: far ones drop theirs
@@ -1142,6 +1139,38 @@ export class World {
             if (t.trees) { this.scene.remove(t.trees); disposeTrees(t.trees); }
             t.trees = null; t.treesDone = false;
         }
+    }
+
+    // A tile's ground goes into the terrain batch (terrainbatch.js: all tiles in one draw call). t.mesh.geometry
+    // keeps the tile's positions and normals on the CPU (the next LOD morphs from them; drawnSample reads them).
+    // If the batch has no slot left for that resolution, the tile is drawn as a mesh of its own, as before.
+    drawTile(t, geo) {
+        if (!this.terrainBatch) {
+            // slots per resolution: the most tiles each LOD ring can hold at VIEW_TILES 9, hysteresis included
+            this.terrainBatch = new TerrainBatch(this.terrainMat, { 96: 18, 64: 48, 40: 100, 24: 220 });
+            this.scene.add(this.terrainBatch.mesh);
+        }
+        const h = this.terrainBatch.add(t.seg, geo);
+        if (h) {
+            t.handle = h;
+            for (const k of ['color', 'morph', 'hTrue']) geo.deleteAttribute(k); // (copied into the batch)
+            geo.setIndex(null);
+            t.mesh = { geometry: geo };
+            return;
+        }
+        const mesh = new THREE.Mesh(geo, this.terrainMat);
+        mesh.receiveShadow = true;
+        mesh.matrixAutoUpdate = false;
+        mesh.matrixWorldAutoUpdate = false;
+        this.scene.add(mesh);
+        t.handle = null;
+        t.mesh = mesh;
+    }
+
+    dropTile(t) {
+        if (t.handle) { this.terrainBatch.remove(t.handle); t.handle = null; }
+        else if (t.mesh) this.scene.remove(t.mesh);
+        if (t.mesh) t.mesh.geometry.dispose();
     }
 
     // Fill geo's morph attribute with the old tile's surface (bilinear) at each new vertex, starting now
