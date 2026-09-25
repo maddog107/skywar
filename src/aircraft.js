@@ -135,6 +135,11 @@ export class Aircraft {
         this.liftK = LIFT_K * f.lift;
         this.alphaMax = f.alpha * DEG;
         this.clSlope = CL_MAX / this.alphaMax;
+        // short-period response: time constant for AoA (so G) to follow the stick — nimble types are quick,
+        // heavies slow — and the fastest the nose may slew relative to the flight path (rad/s at ~120 m/s+)
+        this.pitchTau = f.pitchTau ?? clamp(0.3 / f.roll, 0.07, 0.35);
+        this.alphaRate = f.alphaRate ?? clamp(0.3 * f.roll, 0.6, 1.4);
+        this.rollResp = clamp(f.roll * 2.2, 3, 10); // 1/s: how quickly roll rate follows the stick
         this.cd0 = f.accel / (this.liftK * f.speed * f.speed);
         this.mmax = maxMach(typeId);
         this.waveK = waveStrength(typeId, this.spec);
@@ -508,7 +513,9 @@ export class Aircraft {
         // missing wing: strong roll toward the damaged side, less lift
         const lostL = this.lostRegions.has('wingL'), lostR = this.lostRegions.has('wingR');
         if (lostL !== lostR) rollTarget += (lostL ? -1 : 1) * f.roll * 0.3 * clamp(V / 150, 0.2, 1);
-        this.rollRate = damp(this.rollRate, rollTarget, 7, dt);
+        // roll rate builds briskly and stops harder than it starts, so the wings stop near where the stick is centred
+        const rollLag = this.rollResp * (Math.abs(rollTarget) < Math.abs(this.rollRate) ? 2.5 : 1);
+        this.rollRate = damp(this.rollRate, rollTarget, rollLag, dt);
         _q1.setFromAxisAngle(AZ, -this.rollRate * dt);
         this.qv.multiply(_q1);
 
@@ -519,6 +526,11 @@ export class Aircraft {
         let nCmd = c.pitch >= 0
             ? nNeutral + c.pitch * (gLim - nNeutral)
             : nNeutral + c.pitch * (nNeutral + 3);
+        // share of the pull range actually usable at this speed (max-AoA lift vs the G limit). The player's stick
+        // is scaled by it (game.js) so, slow, a little stick doesn't slam the nose to max AoA while full stick is
+        // still max performance; AI and autopilot loops keep the raw mapping they're tuned for.
+        const nAvail = q * (this.clEff * this.alphaMax + this.flapCl) / G;
+        this.pitchAuthority = clamp((nAvail * 1.03 - nNeutral) / Math.max(gLim - nNeutral, 0.1), 0.1, 1);
         // flaps: extra lift makes the jet balloon up for a few seconds (like an untrimmed GeoFS jet)
         if (this._lastFlaps === undefined) this._lastFlaps = this.flaps;
         if (this.flaps !== this._lastFlaps) { this.balloon = (this.balloon || 0) + (this.flaps - this._lastFlaps) * 0.45; this._lastFlaps = this.flaps; }
@@ -535,9 +547,11 @@ export class Aircraft {
         const vStall = Math.sqrt(G / (this.liftK * rho * CL_MAX * (1 + 0.2 * this.flaps)));
         this.stalling = !this.falling && (V < vStall * 1.1 || (alphaCmd > alphaLim * 0.98 && c.pitch > -0.2 && V < vStall * 1.6));
         alphaCmd = clamp(alphaCmd, -alphaLim * 0.55, alphaLim);
-        const pitchRateMax = 1.4 * clamp(V / 120, 0.35, 1.2);
-        const dA = clamp(alphaCmd - this.alpha, -pitchRateMax * dt, pitchRateMax * dt);
-        this.alpha = damp(this.alpha, this.alpha + dA * 1.0 / Math.max(dt, 1e-4) * dt, 1, dt) + dA * 0.9;
+        // AoA follows the command through a first-order lag (smooth G onset, no overshoot or porpoising),
+        // with the nose's slew rate relative to the flight path capped so it can't snap to max AoA
+        const alphaRateMax = this.alphaRate * clamp(V / Math.min(120, f.speed * 0.6), 0.35, 1.2);
+        const dA = (alphaCmd - this.alpha) * (1 - Math.exp(-dt / this.pitchTau));
+        this.alpha += clamp(dA, -alphaRateMax * dt, alphaRateMax * dt);
         this.alpha = clamp(this.alpha, -alphaLim * 0.6, alphaLim);
 
         // Sideslip from rudder

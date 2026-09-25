@@ -17,12 +17,13 @@ import { RingCourse } from './rings.js';
 import { GroundStart } from './groundstart.js';
 import { HEIST_JET } from './heist.js';
 import { updateCharacters } from './character.js';
-import { readStick } from './input.js';
+import { readStick, rampAxis, expo, STICK_EXPO } from './input.js';
 import { clamp, damp, lerp, rand, pick, formatTime, G } from './util.js';
 import { BASES, RUNWAY, terrainHeight, isOnRunway, baseToWorld } from './world.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
 const _q = new THREE.Quaternion(), _m = new THREE.Matrix4();
+const AIM_LEAD = 0.2; // mouse-aim: s of flight-path turn to lead the aim point by when a pitch/roll key is released
 
 class Events {
     constructor() { this.map = {}; }
@@ -78,6 +79,7 @@ export class Game {
         this.seeker = { x: 0, y: 0, visible: false };
         this.basesInfo = BASES.map(b => ({ x: b.x, z: b.z, friendly: b.friendly }));
         this.stick = { pitch: 0, roll: 0, yaw: 0 };
+        this.aimPrevVel = new THREE.Vector3();
         this.bindEvents();
         input.on((a) => this.onAction(a));
     }
@@ -1039,12 +1041,14 @@ export class Game {
         const s = readStick(this.input, this.settings);
         const c = p.controls;
         const mode = this.settings.controlMode;
-        // smoothed keyboard stick for fine control
-        const rate = 6;
-        this.stick.pitch = damp(this.stick.pitch, s.pitch, s.pitch ? rate : rate * 1.5, dt);
-        this.stick.roll = damp(this.stick.roll, s.roll, s.roll ? rate * 1.4 : rate * 2, dt);
-        this.stick.yaw = damp(this.stick.yaw, s.yaw, rate, dt);
-        if (s.pad) { this.stick.pitch = s.pitch; this.stick.roll = s.roll; }
+        // keyboard: a ramped virtual stick (tap = small precise input, hold = smooth build to full);
+        // an analog pad / touch stick is used as-is. Both go through an expo curve for fine control near centre.
+        const st = this.stick;
+        for (const ax of ['pitch', 'roll', 'yaw']) st[ax] = s.analog ? s[ax] : rampAxis(st[ax], Math.sign(s[ax]), ax, dt, this.settings.stickResponse || 1);
+        const k = { pitch: expo(st.pitch, STICK_EXPO.pitch), roll: expo(st.roll, STICK_EXPO.roll), yaw: expo(st.yaw, STICK_EXPO.yaw) };
+        // pull travel spans the G available at this speed (see Aircraft.pitchAuthority): full stick = max AoA/G
+        const auth = p.onGround ? 1 : p.pitchAuthority ?? 1;
+        if (k.pitch > 0) k.pitch *= auth;
 
         this.input.freeMouse = mode === 'mouseaim' && !this.input.locked;
         if (mode === 'mouseaim' && !this.input.locked && this.input.mouse.seen && document.hasFocus()) {
@@ -1065,19 +1069,23 @@ export class Game {
             if (Math.abs(newDir.y) < 0.985) this.aimDir.copy(newDir);
             this.aimDir.normalize();
             if (p.onGround) {
-                c.pitch = this.stick.pitch; c.roll = this.stick.roll; c.yaw = this.stick.yaw;
+                c.pitch = k.pitch; c.roll = k.roll; c.yaw = k.yaw;
                 // on the runway, holding the mouse up rotates
                 const fwd = p.getForward(_v3);
                 if (this.aimDir.y > fwd.y + 0.08) c.pitch = Math.max(c.pitch, 1);
             } else {
                 steerToward(p, this.aimDir, c, 1, true);
                 if (s.manual) {
-                    c.pitch = clamp(c.pitch * 0.2 + this.stick.pitch, -1, 1);
-                    c.roll = clamp(c.roll * 0.2 + this.stick.roll, -1, 1);
-                    // keyboard input drags the aim point along with the nose
-                    this.aimDir.lerp(p.getForward(_v3), 1 - Math.exp(-4 * dt)).normalize();
+                    c.pitch = clamp(c.pitch * 0.2 + k.pitch, -1, 1);
+                    c.roll = clamp(c.roll * 0.2 + k.roll, -1, 1);
+                    // keyboard input carries the aim point along the flight path (what steerToward flies), led by
+                    // how far the path still turns while the jet unloads — so on release it holds where you let go,
+                    // instead of chasing a point up at the nose (AoA above the path) or bobbing back to a lagging one
+                    const vd = _v3.copy(p.vel).normalize();
+                    this.aimDir.copy(vd);
+                    if (vd.dot(this.aimPrevVel) > 0.99) this.aimDir.addScaledVector(_v2.subVectors(vd, this.aimPrevVel), AIM_LEAD / Math.max(dt, 1e-3)).normalize();
                 }
-                c.yaw = clamp(c.yaw + this.stick.yaw, -1, 1);
+                c.yaw = clamp(c.yaw + k.yaw, -1, 1);
             }
         } else if (mode === 'mousestick') {
             // GeoFS-style: mouse position relative to screen centre is the stick
@@ -1086,11 +1094,12 @@ export class Game {
             const my = clamp((this.input.mouse.y - h / 2) / (h * 0.3), -1, 1);
             const curve = (v) => Math.sign(v) * Math.pow(Math.abs(v), 1.6);
             this.mouseStick = { x: mx, y: my };
-            c.roll = clamp(curve(mx) + this.stick.roll, -1, 1);
-            c.pitch = clamp(curve(my) * (this.settings.invertPitch ? -1 : 1) + this.stick.pitch, -1, 1);
-            c.yaw = this.stick.yaw;
+            c.roll = clamp(curve(mx) + k.roll, -1, 1);
+            const my2 = curve(my) * (this.settings.invertPitch ? -1 : 1);
+            c.pitch = clamp((my2 > 0 ? my2 * auth : my2) + k.pitch, -1, 1);
+            c.yaw = k.yaw;
         } else {
-            c.pitch = this.stick.pitch; c.roll = this.stick.roll; c.yaw = this.stick.yaw;
+            c.pitch = k.pitch; c.roll = k.roll; c.yaw = k.yaw;
             // mouse free-look in keyboard mode
             const fs = 0.004 * this.settings.sensitivity;
             this.freeLook.yaw = clamp(this.freeLook.yaw - mouse.dx * fs, -2.6, 2.6);
@@ -1099,11 +1108,12 @@ export class Game {
             this.freeLook.t -= dt;
             if (this.freeLook.t < 0) { this.freeLook.yaw = damp(this.freeLook.yaw, 0, 3, dt); this.freeLook.pitch = damp(this.freeLook.pitch, 0, 3, dt); }
         }
+        this.aimPrevVel.copy(p.vel).normalize();
         // throttle
         c.throttle = clamp(c.throttle + s.throttleDelta * dt * 0.6 - mouse.wheel * 0.05, 0, 1);
         const tc = this.input.touch;
         if (tc && tc.throttle != null) { c.throttle = tc.throttle; tc.throttle = null; }
-        if (tc && tc.active && mode !== 'keyboard') { c.pitch = this.stick.pitch; c.roll = this.stick.roll; } // touch flies like a stick
+        if (tc && tc.active && mode !== 'keyboard') { c.pitch = k.pitch; c.roll = k.roll; } // touch flies like a stick
         if (p.onGround) {
             // Space = wheel brakes on the ground (guns still on LMB); B = spoilers
             p.airbrake = s.airbrake;

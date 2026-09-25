@@ -89,10 +89,28 @@ export class Input {
     }
 }
 
+// Stick shaping. Digital keys ramp the virtual stick toward full deflection at a fixed rate (a tap is a
+// small, precise input; holding builds G over ~half a second) and let it back to centre quickly, so the
+// nose / bank stops close to where the key is released. Seconds for a full 0→1 rise, and 1→0 return.
+export const KEY_RAMP = { pitch: [0.4, 0.2], roll: [0.25, 0.05], yaw: [0.35, 0.15] };
+// Expo: fine control around centre, full authority at the stops (k = 0 linear, 1 = cubic)
+export const STICK_EXPO = { pitch: 0.4, roll: 0.35, yaw: 0 };
+export const expo = (v, k) => v * (1 - k + k * v * v);
+
+// Move one keyboard stick axis toward its target (-1/0/+1); reversing goes through centre at the return rate.
+// `response` (settings.stickResponse) speeds up (>1) or slows down (<1) the build-up.
+export function rampAxis(cur, target, axis, dt, response = 1) {
+    const [rise, ret] = KEY_RAMP[axis];
+    const returning = target === 0 || (cur !== 0 && Math.sign(target) !== Math.sign(cur));
+    const step = returning ? dt / ret : dt * response / rise;
+    const goal = returning ? 0 : target;
+    return Math.abs(goal - cur) <= step ? goal : cur + Math.sign(goal - cur) * step;
+}
+
 // Keyboard/pad → normalized stick values. pitch +1 = pull (nose up), roll +1 = right.
 export function readStick(input, settings) {
     const inv = settings.invertPitch ? -1 : 1;
-    const s = { pitch: 0, roll: 0, yaw: 0, throttleDelta: 0, fire: false, airbrake: false, manual: false };
+    const s = { pitch: 0, roll: 0, yaw: 0, throttleDelta: 0, fire: false, airbrake: false, manual: false, analog: false };
     if (input.down('KeyS', 'ArrowDown')) s.pitch += 1 * inv;
     if (input.down('KeyW', 'ArrowUp')) s.pitch -= 1 * inv;
     if (input.down('KeyA', 'ArrowLeft')) s.roll -= 1;
@@ -109,7 +127,7 @@ export function readStick(input, settings) {
         s.pitch = clamp(s.pitch + tc.pitch * inv, -1, 1);
         s.roll = clamp(s.roll + tc.roll, -1, 1);
         s.fire = s.fire || tc.fire;
-        if (Math.abs(tc.pitch) + Math.abs(tc.roll) > 0.05) s.manual = true;
+        if (Math.abs(tc.pitch) + Math.abs(tc.roll) > 0.05) s.manual = s.analog = true;
     }
     const pad = input.readPad();
     if (pad) {
@@ -122,6 +140,8 @@ export function readStick(input, settings) {
         s.airbrake = s.airbrake || pad.airbrake;
         s.manual = s.manual || Math.abs(pad.pitch) > 0 || Math.abs(pad.roll) > 0;
         s.pad = true;
+        // an analog stick in use is taken as-is (no keyboard ramp); an idle connected pad leaves the keys ramped
+        if (pad.pitch || pad.roll || pad.yaw) s.analog = true;
     }
     return s;
 }

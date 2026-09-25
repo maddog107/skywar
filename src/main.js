@@ -36,7 +36,7 @@ const $ = (id) => document.getElementById(id);
 // ── Settings (persisted) ──
 const DEFAULTS = {
     aircraft: 'f16', mode: 'dogfight', difficulty: 'veteran', time: 'day', wingmen: 1,
-    controlMode: 'mouseaim', sensitivity: 1, invertPitch: false, quality: 'high', volume: 0.7,
+    controlMode: 'mouseaim', sensitivity: 1, stickResponse: 1, invertPitch: false, quality: 'high', volume: 0.7,
     callouts: true, gEffects: true, defaultCockpit: false,
     start: 'auto', loadout: 'balanced', livery: 'default', fuel: true, weather: 'clear', unlockAll: false, music: 0.5,
 };
@@ -268,6 +268,8 @@ function buildMenu() {
     seg('setCockpit', [[false, 'OFF'], [true, 'ON']], 'defaultCockpit');
     $('setSens').value = settings.sensitivity;
     $('setSens').oninput = (e) => { settings.sensitivity = +e.target.value; save(); };
+    $('setStick').value = settings.stickResponse;
+    $('setStick').oninput = (e) => { settings.stickResponse = +e.target.value; save(); };
     $('setMusic').value = settings.music ?? 0.5;
     $('setMusic').oninput = (e) => { settings.music = +e.target.value; music.setVolume(settings.music); save(); };
     $('setVolume').value = settings.volume;
