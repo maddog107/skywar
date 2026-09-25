@@ -106,11 +106,12 @@ function normaliseGLTF(root, id, info) {
                     } else {
                         // painted airframes: GLB metalness 1 turns them into sky mirrors (dark navy)
                         m.roughness = clamp01(m.roughness ?? 0.6, 0.35, 0.7);
-                        m.metalness = clamp01(m.metalness ?? 0.2, 0.05, info.metal ?? 0.3);
+                        // paint is a dielectric coat: at 0.3 metallic a dark grey skin mirrors the blue sky and reads royal blue
+                        m.metalness = clamp01(m.metalness ?? 0.1, 0.02, info.metal ?? 0.1);
                         // the sky light (hemisphere + environment) is strongly blue: grey-blue paint under it
                         // turns royal blue, so keep military greys close to neutral and the sky fill modest
                         if (m.color && !m.userData.noPaint && !m.userData.tamed) { m.userData.tamed = true; tamePaint(m.color, !!m.map); }
-                        m.envMapIntensity = 0.7;
+                        m.envMapIntensity = 0.55;
                     }
                 }
                 if (m.transparent && m.opacity < 1) {
@@ -260,7 +261,9 @@ export function applyLivery(model, key) {
         if (!o.isMesh || Array.isArray(o.material)) return;
         if (!o.userData.origMat) o.userData.origMat = o.material;
         const base = o.userData.origMat;
-        if (!liv.color || base.isShaderMaterial || base.transparent || base.isMeshPhysicalMaterial || base.userData?.noPaint || !base.color) {
+        // paint goes on the airframe only: not the pilot, seat, glass, tyres or engine parts
+        const unpainted = /pilot|seat|helmet|glass|canopy|cockpit|tyre|tire|wheel|nozzle|engine|exhaust/i.test(base.name || '');
+        if (!liv.color || unpainted || base.isShaderMaterial || base.transparent || base.isMeshPhysicalMaterial || base.userData?.noPaint || !base.color) {
             if (o.material !== base) o.material.dispose();
             o.material = base;
             return;
