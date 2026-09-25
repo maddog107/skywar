@@ -14,6 +14,7 @@ All models are binary glTF 2.0 (`.glb`). CC BY models require the attribution be
 | `j20.glb` | Chengdu J-20 | Captain_Ahab_62 | CC0 1.0 | https://opengameart.org/content/adversary-aircraft |
 | `mig29.glb` | MiG-29 Fulcrum | Captain_Ahab_62 | CC0 1.0 | https://opengameart.org/content/adversary-aircraft |
 | `su57.glb` | Su-57 | Addmix | [MIT](https://github.com/addmix/godot_aerodynamic_physics/blob/main/LICENSE) (Copyright (c) 2023 Addmix) | https://github.com/addmix/godot_aerodynamic_physics/tree/main/demo/aircraft_examples/su57 |
+| `f35a.glb` | F-35A Lightning II | SKYWAR (built in Blender by `tools/f35a_model.py`, shaped after the public-domain USAF 3-view) | CC0 1.0 | https://commons.wikimedia.org/wiki/File:Lockheed_Martin_F-35A_Lightning_II_3-view_drawing.png |
 | `generic_fighter.glb` | Generic stealth-style fighter ("Jet") | jeremy | [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) | https://poly.pizza/m/6fyLMORhgGK |
 | `airliner.glb` | Generic wide-body airliner ("Jumbo Jet, Wide Body") | NuclearOsmosis | CC0 1.0 | https://opengameart.org/content/jumbo-jetwide-body |
 | `cargo.glb` | Cargo/transport plane ("Airplane 3268") | Remy Tauziac | [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) | https://poly.pizza/m/bjlICuVX1Sg |

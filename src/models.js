@@ -23,6 +23,7 @@ export const MODEL_FILES = {
     mig29: { file: 'mig29.glb', rot: [0, Math.PI, 0] },
     su57: { file: 'su57.glb', rot: [0, 0, 0], paint: true },
     f35: { file: 'generic_fighter.glb', rot: [0, Math.PI, 0] },
+    f35n: { file: 'f35a.glb', rot: [0, 0, 0], nozzles: [[0, -0.056, 0.405]], nozzleR: 0.036, cockpit: [0.01, -0.29] },
     b747: { file: 'airliner.glb', rot: [0, Math.PI, 0] },
     c130: { file: 'cargo.glb', rot: [0, Math.PI, 0] },
     mig21: { file: 'mig21.glb', rot: [0, Math.PI, 0] },

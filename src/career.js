@@ -20,7 +20,7 @@ export const RANKS = [
 const AIRCRAFT_RANK = {
     f15: 1, f14: 1, j8: 1, j10: 1,
     typhoon: 2, rafale: 2, gripen: 2, f2: 2,
-    f35: 3, su35: 3, mig25: 3, mig31: 3,
+    f35: 3, f35n: 3, su35: 3, mig25: 3, mig31: 3,
     j20: 4, b2: 4,
     su47: 5, su57: 6, f22: 7,
 };

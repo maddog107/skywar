@@ -534,6 +534,7 @@ function buildCredits() {
         ['J-20, MiG-29, MiG-21, MiG-25, J-10, J-8', 'Captain_Ahab_62', 'CC0', 'https://opengameart.org/content/adversary-aircraft'],
         ['Su-57, Su-47, B-2', 'Addmix (godot_aerodynamic_physics)', 'MIT', 'https://github.com/addmix/godot_aerodynamic_physics'],
         ['Jet (F-35 stand-in)', 'jeremy', 'CC BY 3.0', 'https://poly.pizza/m/6fyLMORhgGK'],
+        ['F-35A (new model)', 'SKYWAR / Blender', 'CC0', 'tools/f35a_model.py'],
         ['Jumbo Jet', 'NuclearOsmosis', 'CC0', 'https://opengameart.org/content/jumbo-jetwide-body'],
         ['Airplane (C-130 stand-in)', 'Remy Tauziac', 'CC BY 3.0', 'https://poly.pizza/m/bjlICuVX1Sg'],
         ['Aeroplane (Unlimited Air Racer)', 'Gilang Romadhan', 'CC BY 3.0', 'https://poly.pizza/m/9VeIc0cybp4'],

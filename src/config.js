@@ -27,6 +27,14 @@ export const AIRCRAFT = {
         health: 110, missiles: 8,
         proc: { body: [0.09, 0.07], wing: { rc: 0.46, tc: 0.08, sweep: 42, z: 0.12 }, tail: 'twin', cant: 28, hstab: true, engines: 2, spacing: 0.065, intake: 'side', paint: 0x6d7682, accent: 0x5a626d },
     }),
+    // same jet as below, drawn with the new hand-built model (tools/f35a_model.py) for comparison
+    f35n: jet({
+        name: 'F-35A Lightning II (new model)', role: 'Multirole Stealth', country: 'USA', length: 15.7, span: 10.7,
+        desc: 'Sensor-fused stealth multirole. Big missile load, decent in a knife fight. New Blender-built model.',
+        flight: { speed: 400, accel: 13.5, gLimit: 9, roll: 3.9, alpha: 28, lift: 0.98 },
+        health: 115, missiles: 8, gun: { damage: 10, rate: 14, ammo: 360, name: 'GAU-22 25mm' },
+        proc: { body: [0.11, 0.09], wing: { rc: 0.44, tc: 0.1, sweep: 36, z: 0.14 }, tail: 'twin', cant: 25, hstab: true, engines: 1, intake: 'side', paint: 0x5e666e, accent: 0x4c535b },
+    }),
     f35: jet({
         name: 'F-35A Lightning II', role: 'Multirole Stealth', country: 'USA', length: 15.7, span: 10.7,
         desc: 'Sensor-fused stealth multirole. Big missile load, decent in a knife fight.',

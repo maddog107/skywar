@@ -67,7 +67,7 @@ const navTex = makeRadialTexture(64, [[0, 'rgba(255,255,255,1)'], [0.2, 'rgba(25
 // peaks just past Mach 1 and falls off again at supersonic speed; each type's
 // wave-drag strength is calibrated so it tops out at its real Mach number.
 const MMAX = {
-    f22: 2.25, f35: 1.6, f16: 2.05, f15: 2.5, fa18: 1.8, f14: 2.34, a10: 0.75, f4: 2.23, f2: 2.0,
+    f22: 2.25, f35: 1.6, f35n: 1.6, f16: 2.05, f15: 2.5, fa18: 1.8, f14: 2.34, a10: 0.75, f4: 2.23, f2: 2.0,
     su57: 2.0, su35: 2.25, mig29: 2.25, mig31: 2.83, typhoon: 2.0, rafale: 1.8, j20: 2.0, gripen: 2.0,
     mig21: 2.05, mig25: 2.83, j10: 2.2, j8: 2.2, f5: 1.6, mirage: 2.2, jaguar: 1.6, su47: 1.65, b2: 0.95,
     cessna: 0.25, b737: 0.82, b747: 0.92, c130: 0.6, racer: 0.72, pitts: 0.35,
