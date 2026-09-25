@@ -15,12 +15,17 @@ import { propInstance } from './props.js';
 import { Character } from './character.js';
 import { samplePath } from './roads.js';
 import { clamp, rand } from './util.js';
+import { maxMach } from './aircraft.js';
+
+// Miramar's alert fighters, slowest first: the scramble sends a type at least as fast as the jet you took
+const ALERT_JETS = ['fa18', 'f35', 'f16', 'f22', 'f15'].sort((a, b) => maxMach(a) - maxMach(b));
 
 // fallback box meshes (no prop model loaded) own their geometry; prop clones share the cache's
 function ownMesh(geo, mat) { const m = new THREE.Mesh(geo, mat); m.userData.ownGeo = true; return m; }
 function freeOwn(m) { if (m && m.userData.ownGeo) { m.geometry.dispose(); m.material.dispose(); } }
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _e = new THREE.Euler(0, 0, 0, 'YXZ');
+const MP_TRACER = [3.4, 1.0, 0.5];
 
 // Miramar, base-local: where the jet to steal is parked (clear of the flight line rows), and what's solid
 export const HEIST_JET = { lx: 380, lz: -1450, yaw: Math.PI / 2 }; // nose toward the runways (-x)
@@ -283,7 +288,8 @@ export class HeistOp {
             const bar = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.2, 0.3), new THREE.MeshBasicMaterial({ color: 0xff2020, toneMapped: false }));
             bar.position.y = id === 'humvee' ? 2.1 : 1.6;
             mesh.add(bar);
-            this.pursuers.push({ mesh, bar, pos: new THREE.Vector3(w.x, b.h, w.z), yaw: 0, v: 0, vmax, fireT: rand(1, 3), id, hitT: 0 });
+            // team/spec: their rounds are real bullets (weapons.js), and "SHOT DOWN by …" names them
+            this.pursuers.push({ mesh, bar, pos: new THREE.Vector3(w.x, b.h, w.z), yaw: 0, v: 0, vmax, fireT: rand(1, 3), id, hitT: 0, burst: 0, team: 'red', spec: { name: 'the military police' } });
         }
     }
 
@@ -338,13 +344,14 @@ export class HeistOp {
                 this.stage = 'air'; this.tookOffT = g.time;
                 g.showBanner('AIRBORNE — NOW RUN!', 'Miramar is scrambling interceptors. Get 22 km away, or shoot them all down.', 6, '#ffc23f');
                 g.audio.say('Unauthorised departure! Scramble the alert fighters!', true);
-                this.scramble(['fa18', 'fa18']);
+                this.scramble([this.alertType(), 'fa18']);
             }
         }
         if (this.stage === 'air') {
             const d = Math.hypot(p.pos.x - this.base.x, p.pos.z - this.base.z);
             const reds = g.aircraft.filter(a => a.team === 'red' && a.alive && !a.pilotDead);
-            if (this.waves < 2 && g.time - this.tookOffT > 50) this.scramble(['f35', 'fa18']);
+            // the second flight is vectored in ahead of you to cut the run off (sooner if you're getting away fast)
+            if (this.waves < 2 && (g.time - this.tookOffT > 35 || d > 9000)) this.cutOff();
             g.objective = 'ESCAPE: ' + (d / 1000).toFixed(1) + ' / 22 KM FROM MIRAMAR · INTERCEPTORS: ' + reds.length;
             g.navTarget = null;
             if (d > 22000 || (this.waves >= 2 && reds.length === 0)) this.result = 'win';
@@ -357,12 +364,31 @@ export class HeistOp {
         }
     }
 
-    scramble(types) {
+    // the slowest alert type that can still keep up with the stolen jet (F/A-18s can't catch a Mach 2 jet)
+    alertType() {
+        const mine = maxMach(this.game.player ? this.game.player.type : 'fa18');
+        return ALERT_JETS.find(id => maxMach(id) >= mine - 0.05) || ALERT_JETS[ALERT_JETS.length - 1];
+    }
+
+    scramble(types, near = null) {
         const g = this.game, b = this.base;
         this.waves++;
-        const e = g.spawnEnemies(types.length, { x: b.x, z: b.z }, types);
+        const e = g.spawnEnemies(types.length, near || { x: b.x, z: b.z }, types);
         for (const a of e) { a.callsign = 'MIRAMAR ALERT'; if (a.pilot) { a.pilot.home = new THREE.Vector3(b.x, 0, b.z); a.pilot.leash = 30000; } }
-        g.addFeed('INTERCEPTORS SCRAMBLED FROM MIRAMAR (' + types.length + ')', '#ff4a3d');
+        if (!near) g.addFeed('INTERCEPTORS SCRAMBLED FROM MIRAMAR (' + types.length + ')', '#ff4a3d');
+        return e;
+    }
+
+    // wave two: a pair already airborne, placed ~9 km ahead of you, head-on
+    cutOff() {
+        const g = this.game, p = g.player;
+        const dir = _v.set(p.vel.x, 0, p.vel.z);
+        if (dir.lengthSq() < 1) dir.set(p.pos.x - this.base.x, 0, p.pos.z - this.base.z);
+        dir.normalize();
+        const t = this.alertType();
+        this.scramble([t, t], { x: p.pos.x + dir.x * 9000, z: p.pos.z + dir.z * 9000 });
+        g.showBanner('CAP INBOUND — AHEAD OF YOU', 'Two more fighters are cutting off your escape. Fight through or go around.', 4.5, '#ff4a3d');
+        g.audio.say('Alert two, vector to intercept. Cut him off!', true);
     }
 
     updatePursuers(dt) {
@@ -406,15 +432,22 @@ export class HeistOp {
                     if (Math.random() < 0.3) { gs.hp -= 7; g.shake = Math.min(1.6, g.shake + 0.25); if (gs.hp <= 0) this.busted(); }
                 }
             }
-            // shooting at the jet as it taxis and rolls
-            if (this.stage === 'jet' && g.player.onGround && d < 160) {
-                u.fireT -= dt;
-                if (u.fireT <= 0) {
-                    u.fireT = rand(0.8, 1.6);
-                    const from = _v.copy(u.pos).setY(u.pos.y + 2.2);
-                    const dir = _v2.subVectors(g.player.pos, from).normalize();
-                    g.weapons.bullets.push({ pos: from.clone(), vel: dir.multiplyScalar(700), owner: null, team: 'red', damage: 0, life: 0.6, tracer: true, color: [3.4, 1.0, 0.5] });
-                    if (Math.random() < 0.35) g.player.damage(3, null, 'gun');
+            // shooting at the jet as it taxis, rolls and climbs out: real rounds in bursts, led at the jet, that
+            // hit or miss (the spread opens up with range) — it pays to get moving and get low and fast
+            const jet = g.player;
+            if ((this.stage === 'jet' || this.stage === 'air') && !g.groundStart && jet && jet.alive && !this.result) {
+                const dj = jet.pos.distanceTo(u.pos), agl = jet.pos.y - Math.max(terrainHeight(jet.pos.x, jet.pos.z), 0);
+                if (dj < 550 && agl < 180) {
+                    u.fireT -= dt;
+                    if (u.fireT <= 0) {
+                        u.burst++;
+                        u.fireT = u.burst % 5 ? 0.11 : rand(0.9, 1.7);
+                        const from = _v.copy(u.pos).setY(u.pos.y + 2.2);
+                        const aim = _v2.subVectors(jet.pos, from).addScaledVector(jet.vel, dj / 700).normalize();
+                        const spread = 0.015 + dj / 40000;
+                        aim.x += rand(-spread, spread); aim.y += rand(-spread, spread); aim.z += rand(-spread, spread);
+                        g.weapons.newBullet(from, aim.normalize().multiplyScalar(700), u, 0.6, 1.1, u.burst % 2 === 0, MP_TRACER); // ~0.7 hull/s per MP up close (veteran)
+                    }
                 }
             }
         }

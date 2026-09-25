@@ -6,6 +6,7 @@ import { WEAPONS } from './config.js';
 import { rand, clamp, segPointDistSq, G, makeRadialTexture } from './util.js';
 import { terrainHeight } from './world.js';
 import { AIR_TARGETS, segHitsSphere } from './softtargets.js';
+import { seatHitTest, seatBody, seatCanopyUp, seatCanopyCenter, isEnemySeat, hitEnemySeat, shredEnemyCanopy } from './pilot.js';
 
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _v4 = new THREE.Vector3();
 const _prev = new THREE.Vector3();
@@ -55,23 +56,31 @@ export class Weapons {
     }
 
     // ── Cannon ──
+    // Returns the number of rounds fired this call (0 while the gun cycles). A held trigger fires every round
+    // it owes (up to 3 in one long frame), so the rate of fire doesn't drop at low frame rates; a fresh pull fires one.
     fireGun(ac, now) {
         const gun = ac.spec.gun;
-        if (!gun || !ac.alive || ac.ammo <= 0) return false;
-        if (now - ac.lastGun < 1 / gun.rate) return false;
-        ac.lastGun = now;
-        ac.ammo--;
+        if (!gun || !ac.alive || ac.ammo <= 0) return 0;
+        const iv = 1 / gun.rate, since = now - ac.lastGun;
+        if (since < iv) return 0;
+        const held = since < iv * 4;
+        const n = held ? Math.min(3, Math.floor(since / iv), ac.ammo) : 1;
+        ac.lastGun = held ? ac.lastGun + n * iv : now;
         const fwd = ac.getForward(_v1);
         const spread = ac.isPlayer || ac.team === 'blue' && !ac.pilot ? 0.0035 : 0.008 + (1 - (ac.pilot?.skill ?? 1)) * 0.02;
-        const dir = _v2.copy(fwd).add(_v3.set(rand(-spread, spread), rand(-spread, spread), rand(-spread, spread))).normalize();
-        const muzzle = _v3.copy(ac.pos).addScaledVector(fwd, ac.spec.length * 0.5);
-        const vel = dir.multiplyScalar(WEAPONS.bulletSpeed).add(ac.vel);
-        const b = this.newBullet(muzzle, vel, ac, gun.damage, WEAPONS.bulletLife, ac.ammo % 3 !== 0, ac.team === 'blue' ? GUN_BLUE : GUN_RED);
-        b.flak = false;
+        for (let k = 0; k < n; k++) {
+            ac.ammo--;
+            const dir = _v2.copy(fwd).add(_v3.set(rand(-spread, spread), rand(-spread, spread), rand(-spread, spread))).normalize();
+            // a catch-up round left the muzzle a moment ago: start it that much further down range
+            const muzzle = _v3.copy(ac.pos).addScaledVector(fwd, ac.spec.length * 0.5 + (n - 1 - k) * iv * WEAPONS.bulletSpeed);
+            const vel = dir.multiplyScalar(WEAPONS.bulletSpeed).add(ac.vel);
+            const b = this.newBullet(muzzle, vel, ac, gun.damage, WEAPONS.bulletLife, ac.ammo % 3 !== 0, ac.team === 'blue' ? GUN_BLUE : GUN_RED);
+            b.flak = false;
+        }
         this.game.events.emit('gunfire', ac);
         // muzzle flash
-        this.game.effects.fire.emit(muzzle, ac.vel, 0.05, 1.8, 0.6, [6, 5, 3], [3, 1.5, 0.5], 1, 0, 0, 0);
-        return true;
+        this.game.effects.fire.emit(_v3.copy(ac.pos).addScaledVector(fwd, ac.spec.length * 0.5), ac.vel, 0.05, 1.8, 0.6, [6, 5, 3], [3, 1.5, 0.5], 1, 0, 0, 0);
+        return n;
     }
 
     // Flak / AAA rounds from ground units
@@ -129,11 +138,8 @@ export class Weapons {
                     }
                 }
             }
-            if (!dead && b.damage > 0) dead = this.worldBulletHit(b, _prev);
-            if (!dead && b.team === 'red' && b.damage > 0 && g.pilotMode && g.pilotMode.alive) {
-                const head = g.pilotMode.headPos(_v1);
-                if (segPointDistSq(_prev, b.pos, head) < 2.4 * 2.4) { g.pilotMode.takeHit(b.damage * 2.5); dead = true; }
-            }
+            if (!dead && b.damage > 0) dead = this.worldBulletHit(b, _prev); // (walls first: cover works)
+            if (!dead && b.damage > 0) dead = this.peopleBulletHit(b, _prev);
             if (!dead && b.flak) {
                 b.fuse -= dt;
                 if (b.fuse <= 0) {
@@ -143,6 +149,7 @@ export class Weapons {
                     for (const ac of g.aircraft) {
                         if (ac.alive && ac.team !== b.team && ac.pos.distanceToSquared(b.pos) < 45 * 45) ac.damage(b.damage, b.owner, 'flak');
                     }
+                    this.blastPeople(b.pos, 30, b.damage * 5, b.owner, b.team);
                     dead = true;
                 }
             }
@@ -304,11 +311,13 @@ export class Weapons {
         const g = this.game;
         g.effects.explosion(m.pos, 0.9, m.vel);
         if (t.isFlare) return;
+        this.blastPeople(m.pos, 30, 90, m.owner, m.team);
         // splash damage scaled by miss distance
         const d = m.pos.distanceTo(t.pos);
         let dmg = m.W.damage * clamp(1.5 - d / 40, 0.6, 1.3);
         if (t.isPlayer) dmg *= 0.8;
-        if (t.damage) t.damage(dmg, m.owner, m.kind === 'rkt' ? 'rocket' : 'missile');
+        if (AIR_TARGETS.includes(t)) this.hitAir(t, dmg, m.owner); // a helicopter or airliner locked with T
+        else if (t.damage) t.damage(dmg, m.owner, m.kind === 'rkt' ? 'rocket' : 'missile');
         g.events.emit('missileHit', m.owner, { target: t, missile: m });
     }
 
@@ -325,15 +334,67 @@ export class Weapons {
         }
         g.world.towns?.traffic.blast(m.pos, R * 0.6, g);
         this.worldBlast(m.pos, R, m.W.damage * 2.2, m.owner);
+        this.blastPeople(m.pos, R + 8, m.W.damage, m.owner, m.team);
+    }
+
+    // ── People: the ejected player (hit by red rounds) and enemy pilots in their seats, under their canopies or
+    // standing where they landed (hit by blue rounds): a body capsule plus the canopy, which tears (pilot.js) ──
+    peopleBulletHit(b, prev) {
+        const g = this.game;
+        if (b.team === 'red') {
+            const pm = g.pilotMode;
+            if (!pm || !pm.alive || Math.abs(pm.pos.x - b.pos.x) > 60 || Math.abs(pm.pos.z - b.pos.z) > 60) return false;
+            if (!pm.bulletHit(prev, b.pos, b.damage)) return false;
+            g.effects.impact(b.pos, null);
+            return true;
+        }
+        for (const s of g.wreckage.seats) {
+            if (!isEnemySeat(s)) continue;
+            const r = s.root.position;
+            if (Math.abs(r.x - b.pos.x) > 60 || Math.abs(r.z - b.pos.z) > 60 || Math.abs(r.y + 8 - b.pos.y) > 60) continue;
+            const hit = seatHitTest(s, prev, b.pos);
+            if (!hit) continue;
+            if (hit === 'body') hitEnemySeat(g, s, 22 + b.damage, b.owner);
+            else shredEnemyCanopy(g, s, 6 + b.damage * 0.4, b.owner);
+            g.effects.impact(b.pos, null);
+            if (b.owner === g.player) g.hitmarkerT = g.time;
+            return true;
+        }
+        return false;
+    }
+
+    // an explosion at `at`: people inside R take up to `dmg` (canopies a little further out tear).
+    // `team` is the side that set it off: its own pilots are spared (null: everyone, e.g. a jet crashing)
+    blastPeople(at, R, dmg, owner, team = null) {
+        const g = this.game, pm = g.pilotMode;
+        if (pm && pm.alive && team !== 'blue') pm.blast(at, R, dmg);
+        if (team === 'red') return;
+        for (const s of g.wreckage.seats) {
+            if (!isEnemySeat(s)) continue;
+            seatBody(s, _v1, _v2);
+            const d = _v1.lerp(_v2, 0.5).distanceTo(at);
+            if (d < R) hitEnemySeat(g, s, dmg * (1 - d / R), owner);
+            if (!s.dead && seatCanopyUp(s)) {
+                const dc = seatCanopyCenter(s, _v1).distanceTo(at);
+                if (dc < R + 6) shredEnemyCanopy(g, s, dmg * 0.6 * (1 - dc / (R + 6)), owner);
+            }
+        }
     }
 
     // ── The rest of the world: town buildings, cars, helicopters and air traffic ──
+    // damage a helicopter / airliner (softtargets.js); tells the game when that brought it down
+    hitAir(t, amount, owner) {
+        if (!t.alive) return;
+        t.hit(amount, this.game, owner);
+        if (!t.alive) this.game.events.emit('airKilled', t, { source: owner });
+    }
+
     worldBulletHit(b, prev) {
         const g = this.game;
         for (const t of AIR_TARGETS) {
             if (!t.alive || Math.abs(t.pos.x - b.pos.x) > 120 || Math.abs(t.pos.z - b.pos.z) > 120) continue;
             if (segHitsSphere(prev, b.pos, t.pos, t.radius)) {
-                t.hit(b.damage, g, b.owner);
+                this.hitAir(t, b.damage, b.owner);
                 g.effects.impact(b.pos, null);
                 if (b.owner === g.player) g.hitmarkerT = g.time;
                 return true;
@@ -365,7 +426,7 @@ export class Weapons {
 
     worldMissileHit(m) {
         for (const t of AIR_TARGETS) {
-            if (t.alive && t.pos.distanceToSquared(m.pos) < (t.radius + 6) ** 2) { t.hit(m.W.damage * 1.5, this.game, m.owner); return true; }
+            if (t.alive && t.pos.distanceToSquared(m.pos) < (t.radius + 6) ** 2) { this.hitAir(t, m.W.damage * 1.5, m.owner); return true; }
         }
         const bl = this.game.world.towns && this.game.world.towns.buildings;
         return !!(bl && bl.at(m.pos.x, m.pos.y, m.pos.z));
@@ -379,7 +440,7 @@ export class Weapons {
         for (const t of AIR_TARGETS) {
             if (!t.alive) continue;
             const d = t.pos.distanceTo(at);
-            if (d < R + t.radius) t.hit(amount * 0.5 * (1 - d / (R + t.radius)), g, owner);
+            if (d < R + t.radius) this.hitAir(t, amount * 0.5 * (1 - d / (R + t.radius)), owner);
         }
     }
 
@@ -470,6 +531,7 @@ export class Weapons {
             }
             g.world.towns?.traffic.blast(at, W.splash * 0.7, g);
             this.worldBlast(at, W.splash, W.damage * 4, b.owner);
+            this.blastPeople(at, 75, 180, b.owner, b.team);
             for (const a of g.aircraft) {
                 if (!a.alive || a.team === b.team) continue;
                 const d = a.pos.distanceTo(at);

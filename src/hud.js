@@ -6,12 +6,14 @@ import { clamp, MS_TO_KTS, M_TO_FT, DEG, interceptTime, G } from './util.js';
 import { WEAPONS } from './config.js';
 import { terrainHeight } from './world.js';
 import { refSpeeds } from './aircraft.js';
+import { AIR_TARGETS } from './softtargets.js';
 
 const GREEN = '#5dffa0';
 const GREEN_DIM = 'rgba(93,255,160,0.55)';
 const RED = '#ff4a3d';
 const AMBER = '#ffc23f';
 const BLUE = '#5ab8ff';
+const NEUTRAL = '#d4dde6'; // air traffic: helicopters, airliners
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _h = new THREE.Vector3();
 
@@ -19,6 +21,15 @@ export class HUD {
     constructor(canvas) {
         this.canvas = canvas;
         this.ctx = canvas.getContext('2d');
+        // every HUD string gets a thin dark outline under it, so green/amber text stays legible over clouds and snow
+        const ctx = this.ctx, fill = ctx.fillText.bind(ctx), stroke = ctx.strokeText.bind(ctx);
+        ctx.fillText = (text, x, y, maxW) => {
+            const lw = ctx.lineWidth, ss = ctx.strokeStyle, lj = ctx.lineJoin;
+            ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,12,6,0.45)'; ctx.lineJoin = 'round';
+            if (maxW === undefined) stroke(text, x, y); else stroke(text, x, y, maxW);
+            ctx.lineWidth = lw; ctx.strokeStyle = ss; ctx.lineJoin = lj;
+            if (maxW === undefined) fill(text, x, y); else fill(text, x, y, maxW);
+        };
         this.resize();
         window.addEventListener('resize', () => this.resize());
         this.t = 0;
@@ -31,7 +42,13 @@ export class HUD {
         this.canvas.height = this.h * this.dpr;
         this.canvas.style.width = this.w + 'px';
         this.canvas.style.height = this.h + 'px';
+        // small screens (phones, small windows): a compact layout — smaller radar, panels and feed
+        this.compact = this.w < 900 || this.h < 560;
+        const R = Math.round(78 * clamp(Math.min(this.h / 720, this.w / 1100), 0.6, 1));
+        this.radarGeom = { R, cx: this.w / 2, cy: this.h - R - (this.compact ? 14 : 22) };
     }
+
+    touchUI() { const t = document.getElementById('touchUI'); return !!(t && t.classList.contains('show')); }
 
     project(p, cam, out = {}) {
         _v.copy(p).project(cam);
@@ -55,6 +72,7 @@ export class HUD {
         const ctx = this.ctx;
         ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
         ctx.clearRect(0, 0, this.w, this.h);
+        this.labels = [];
         const p = game.player;
         if (!p || game.state === 'menu') return;
         const cam = game.camera;
@@ -106,9 +124,9 @@ export class HUD {
     drawLadder(game, area, cockpit) {
         const ctx = this.ctx, p = game.player, cam = game.camera;
         const fwd = p.getForward(_h.set(0, 0, 0));
-        const vdir = _v3.copy(p.vel).normalize();
+        // (projectDir uses the _v3 scratch vector: take the flight-path heading before calling it)
+        const hdgDir = new THREE.Vector3(p.vel.x, 0, p.vel.z);
         const fpm = this.projectDir(p.speed > 5 ? p.vel.clone().normalize() : fwd.clone(), cam, {});
-        const hdgDir = new THREE.Vector3(vdir.x, 0, vdir.z);
         if (hdgDir.lengthSq() < 1e-4) hdgDir.set(fwd.x, 0, fwd.z);
         hdgDir.normalize();
         const side = new THREE.Vector3(-hdgDir.z, 0, hdgDir.x);
@@ -118,6 +136,13 @@ export class HUD {
         ctx.strokeStyle = GREEN; ctx.fillStyle = GREEN;
         const tmp1 = {}, tmp2 = {};
         const scale = Math.min(this.w, this.h) / 900;
+        ctx.save();
+        if (!cockpit) {
+            // chase view: rungs stay in the HUD area, under the heading tape, and never run through the radar scope
+            ctx.beginPath(); ctx.rect(area.x - 50, area.y + 54, area.w + 100, area.h + 46); ctx.clip();
+            const rg = this.radarGeom;
+            ctx.beginPath(); ctx.rect(0, 0, this.w, this.h); ctx.moveTo(rg.cx + rg.R + 10, rg.cy); ctx.arc(rg.cx, rg.cy, rg.R + 10, 0, Math.PI * 2); ctx.clip('evenodd');
+        }
         for (let a = -90; a <= 90; a += 5) {
             if (a % 10 !== 0 && Math.abs(a) > 30) continue;
             const r = a * DEG;
@@ -154,6 +179,7 @@ export class HUD {
             }
             ctx.restore();
         }
+        ctx.restore();
         // flight path marker
         if (fpm.front) {
             ctx.lineWidth = 2;
@@ -367,42 +393,71 @@ export class HUD {
     }
 
     // ── Target boxes (helmet-mounted, not clipped) ──
+    // Every contact gets its symbol. Labels (name above, range below) are placed in priority order — the locked
+    // target, hostile aircraft, friendlies, ground targets and ships, then neutral air traffic, nearest first within
+    // each — and one that would overprint a label already placed is merged into it ("DESTROYER ×2"), lifted a line,
+    // or left off, so a close formation or a carrier group never turns into a smear of text.
     drawTargets(game) {
         const ctx = this.ctx, cam = game.camera;
         const p = game.pilotMode ? { pos: cam.position, team: 'blue', isProxy: true } : game.player;
-        const list = [];
-        for (const a of game.aircraft) if (a !== p && a !== game.player && a.alive) list.push(a);
-        if (game.pilotMode && game.player && game.player.alive && game.player.abandoned) list.push(game.player);
-        if (game.ground) for (const t of game.ground.targets) if (t.alive && (!t.isBridge || t.objective)) list.push(t);
+        const lock = game.lockTarget;
+        const entries = [];
+        const add = (a, kind) => entries.push({ a, kind, dist: a.pos.distanceTo(p.pos) });
+        for (const a of game.aircraft) if (a !== game.player && a.alive) add(a, a.team === p.team ? 'friend' : 'air');
+        if (game.pilotMode && game.player && game.player.alive && game.player.abandoned) add(game.player, 'friend');
+        if (game.ground) for (const t of game.ground.targets) if (t.alive && (!t.isBridge || t.objective)) add(t, t.team === p.team ? 'friend' : 'ground');
+        for (const t of AIR_TARGETS) if (t.alive && !t.done) add(t, 'neutral');
+        const RANK = { air: 1, friend: 2, ground: 3, neutral: 4 };
+        for (const e of entries) e.rank = e.a === lock ? 0 : RANK[e.kind];
+        entries.sort((x, y) => x.rank - y.rank || x.dist - y.dist);
+        const labels = [];
+        const free = (x0, y0, x1, y1) => !labels.some(q => x0 < q.x1 && x1 > q.x0 && y0 < q.y1 && y1 > q.y0);
+        const font = (big) => (ctx.font = (big ? '700 13px' : '600 12px') + ' "Share Tech Mono", ui-monospace, monospace');
+        // place a centred label at (x, y); `merge` lets an identical one nearby absorb it; `lift` lets it move up
+        const place = (text, x, y, col, big, merge, lift) => {
+            font(big);
+            const w = ctx.measureText(text).width / 2 + 3;
+            const put = (yy) => { const L = { x0: x - w, y0: yy - 8, x1: x + w, y1: yy + 8, x, y: yy, text, col, big, n: 1 }; labels.push(L); return L; };
+            if (big || free(x - w, y - 8, x + w, y + 8)) return put(y);
+            if (merge) {
+                const twin = labels.find(q => q.text === text && q.col === col && Math.abs(q.x - x) < 110 && Math.abs(q.y - y) < 70);
+                if (twin) { twin.n++; return twin; }
+            }
+            if (lift) for (let k = 1; k <= 2; k++) if (free(x - w, y - k * 14 - 8, x + w, y - k * 14 + 8)) return put(y - k * 14);
+            return null;
+        };
         const tmp = {};
-        for (const a of list) {
+        for (const e of entries) {
+            const a = e.a, dist = e.dist;
+            const locked = a === lock;
+            if (e.kind === 'neutral' && !locked && dist > 3000) continue; // air traffic: only close by (or locked)
             const P = this.project(a.pos, cam, tmp);
-            const dist = a.pos.distanceTo(p.pos);
-            const locked = a === game.lockTarget;
-            const friendly = a.team === p.team;
             if (!P.front || P.x < -20 || P.x > this.w + 20 || P.y < -20 || P.y > this.h + 20) {
-                if (locked || (!friendly && dist < 4000 && !a.isGround)) this.edgeArrow(P, locked ? RED : AMBER, dist);
+                if (locked || (e.kind === 'air' && dist < 4000)) this.edgeArrow(P, locked ? RED : AMBER, dist);
                 continue;
             }
-            if (a.isGround && !a.isShip && dist > 9000 && !locked) continue;
+            if (e.kind === 'ground' && !a.isShip && dist > 9000 && !locked) continue;
             const size = clamp(3000 / Math.max(dist, 1) * (a.isGround ? 1.2 : 1), 10, 36);
             ctx.lineWidth = locked ? 2.2 : 1.5;
-            if (friendly) {
-                ctx.strokeStyle = BLUE; ctx.fillStyle = BLUE;
+            const range = dist < 1000 ? Math.round(dist) + 'm' : (dist / 1000).toFixed(1) + 'km';
+            if (e.kind === 'friend') {
+                ctx.strokeStyle = BLUE;
                 ctx.beginPath();
                 ctx.moveTo(P.x - size * 0.7, P.y - size * 0.4); ctx.lineTo(P.x, P.y + size * 0.4); ctx.lineTo(P.x + size * 0.7, P.y - size * 0.4);
                 ctx.stroke();
-                ctx.textAlign = 'center';
-                ctx.fillText(a.abandoned ? 'YOUR JET' : a.callsign, P.x, P.y - size * 0.4 - 10);
-                if (game.pilotMode) ctx.fillText(Math.round(dist) + 'm', P.x, P.y + size * 0.4 + 12);
+                place(a.abandoned ? 'YOUR JET' : a.callsign || a.name || 'FRIENDLY', P.x, P.y - size * 0.4 - 10, BLUE, false, true, false);
+                if (game.pilotMode) place(range, P.x, P.y + size * 0.4 + 12, BLUE, false, false, false);
                 continue;
             }
-            const col = locked ? RED : a.isGround ? AMBER : a.isAce ? '#ffd23f' : '#ff9f5a';
-            ctx.strokeStyle = col; ctx.fillStyle = col;
+            const neutral = e.kind === 'neutral';
+            const col = locked ? RED : neutral ? NEUTRAL : a.isGround ? AMBER : a.isAce ? '#ffd23f' : '#ff9f5a';
+            ctx.strokeStyle = col;
             if (a.isGround) {
                 ctx.beginPath();
                 ctx.moveTo(P.x, P.y - size); ctx.lineTo(P.x + size, P.y); ctx.lineTo(P.x, P.y + size); ctx.lineTo(P.x - size, P.y); ctx.closePath();
                 ctx.stroke();
+            } else if (neutral && !locked) {
+                ctx.beginPath(); ctx.arc(P.x, P.y, size * 0.7, 0, Math.PI * 2); ctx.stroke(); // unknown / neutral: a plain ring
             } else {
                 // corner brackets
                 const s = size, c = s * 0.45;
@@ -412,15 +467,14 @@ export class HUD {
                 }
                 ctx.stroke();
             }
-            ctx.textAlign = 'center';
-            const label = a.isGround ? a.name : a.isAce ? '★ ' + a.callsign : a.pilotDead ? 'NO PILOT — E' : a.callsign !== a.spec.name ? a.callsign : (a.spec.name.split(' ')[0]);
-            ctx.fillText(label, P.x, P.y - size - 10);
-            ctx.fillText(dist < 1000 ? Math.round(dist) + 'm' : (dist / 1000).toFixed(1) + 'km', P.x, P.y + size + 11);
-            // health pip
-            const hp = a.health / a.maxHealth;
-            if (hp < 1) {
+            const label = neutral ? a.name.toUpperCase() : a.isGround ? a.name : a.isAce ? '★ ' + a.callsign : a.pilotDead ? 'NO PILOT — E' : a.callsign !== a.spec.name ? a.callsign : (a.spec.name.split(' ')[0]);
+            const top = place(label, P.x, P.y - size - 10, col, locked, true, !neutral);
+            const rl = place(range, P.x, P.y + size + 11, col, locked, false, false);
+            // health pip (aircraft and ground targets: health/maxHealth; air traffic: hp/maxHp)
+            const hp = (a.health ?? a.hp) / (a.maxHealth ?? a.maxHp);
+            if (rl && hp < 1) {
                 ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(P.x - size, P.y + size + 20, size * 2, 3);
-                ctx.fillStyle = col; ctx.fillRect(P.x - size, P.y + size + 20, size * 2 * hp, 3);
+                ctx.fillStyle = col; ctx.fillRect(P.x - size, P.y + size + 20, size * 2 * clamp(hp, 0, 1), 3);
             }
             if (locked) {
                 const lk = game.lockProgress;
@@ -429,12 +483,21 @@ export class HUD {
                     ctx.save(); ctx.translate(P.x, P.y); ctx.rotate(Math.PI / 4 + this.t * 0.8);
                     ctx.strokeRect(-r * 0.75, -r * 0.75, r * 1.5, r * 1.5);
                     ctx.restore();
-                    ctx.fillText('LOCK', P.x, P.y - size - 24);
+                    if (top) place(neutral ? 'LOCK · NEUTRAL' : 'LOCK', P.x, top.y - 14, col, true, false, false);
                 } else if (lk > 0) {
                     ctx.beginPath(); ctx.arc(P.x, P.y, r, -Math.PI / 2, -Math.PI / 2 + lk * Math.PI * 2); ctx.stroke();
+                    if (neutral && top) place('NEUTRAL', P.x, top.y - 14, col, false, false, false);
                 }
             }
         }
+        this.labels = labels; // (drawNav keeps its label clear of these)
+        ctx.textAlign = 'center';
+        for (const L of labels) {
+            font(L.big);
+            ctx.fillStyle = L.col;
+            ctx.fillText(L.n > 1 ? L.text + ' ×' + L.n : L.text, L.x, L.y);
+        }
+        ctx.font = '600 13px "Share Tech Mono", ui-monospace, monospace';
         // missile seeker circle drifting to the target
         if (game.seeker && game.seeker.visible && p.alive) {
             ctx.strokeStyle = game.lockProgress >= 1 ? RED : GREEN;
@@ -457,7 +520,11 @@ export class HUD {
         for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2 + Math.PI / 6; ctx[k ? 'lineTo' : 'moveTo'](P.x + Math.cos(a) * r, P.y + Math.sin(a) * r); }
         ctx.closePath(); ctx.stroke();
         ctx.fillStyle = '#5dffa0'; ctx.textAlign = 'center';
-        ctx.fillText(n.label + ' · ' + (dist < 1000 ? Math.round(dist) + 'm' : (dist / 1000).toFixed(1) + 'km'), P.x, P.y - r - 12);
+        const text = n.label + ' · ' + (dist < 1000 ? Math.round(dist) + 'm' : (dist / 1000).toFixed(1) + 'km');
+        // above the marker, or below it when target labels already sit there
+        const hw = ctx.measureText(text).width / 2 + 3, clash = (y) => (this.labels || []).some(q => P.x - hw < q.x1 && P.x + hw > q.x0 && y - 8 < q.y1 && y + 8 > q.y0);
+        const ly = !clash(P.y - r - 12) ? P.y - r - 12 : !clash(P.y + r + 14) ? P.y + r + 14 : null;
+        if (ly !== null) ctx.fillText(text, P.x, ly); // (boxed in by target labels: the hexagon alone marks it)
     }
 
     edgeArrow(P, col, dist) {
@@ -499,66 +566,90 @@ export class HUD {
     // ── Corner panels ──
     drawPanels(game) {
         const ctx = this.ctx, p = game.player;
-        const W = this.w, H = this.h;
+        const W = this.w, H = this.h, C = this.compact;
+        const mono = (w, px) => (ctx.font = w + ' ' + px + 'px "Share Tech Mono", ui-monospace, monospace');
         ctx.textBaseline = 'middle';
-        // bottom-left: airframe
+        const M = C ? 14 : 28; // screen margin
+        // airframe: bottom-left (compact: top-left, under the objective — the touch stick lives bottom-left)
         const hp = clamp(p.health / p.maxHealth, 0, 1);
         const col = hp > 0.5 ? GREEN : hp > 0.25 ? AMBER : RED;
         ctx.fillStyle = GREEN_DIM; ctx.textAlign = 'left';
-        ctx.font = '600 11px "Share Tech Mono", ui-monospace, monospace';
-        ctx.fillText(p.spec.name.toUpperCase(), 28, H - 64);
-        ctx.fillText('HULL', 28, H - 46);
-        ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(66, H - 51, 180, 9);
-        ctx.fillStyle = col; ctx.fillRect(66, H - 51, 180 * hp, 9);
-        ctx.strokeStyle = GREEN_DIM; ctx.lineWidth = 1; ctx.strokeRect(66, H - 51, 180, 9);
-        ctx.fillStyle = col; ctx.fillText(Math.round(hp * 100) + '%', 254, H - 46);
+        mono('600', 11);
+        const hy = C ? 64 : H - 46, bw = C ? 110 : 180;
+        if (!C) ctx.fillText(p.spec.name.toUpperCase(), M, H - 64);
+        ctx.fillText('HULL', M, hy);
+        ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(M + 38, hy - 5, bw, 9);
+        ctx.fillStyle = col; ctx.fillRect(M + 38, hy - 5, bw * hp, 9);
+        ctx.strokeStyle = GREEN_DIM; ctx.lineWidth = 1; ctx.strokeRect(M + 38, hy - 5, bw, 9);
+        ctx.fillStyle = col; ctx.fillText(Math.round(hp * 100) + '%', M + 46 + bw, hy);
 
-        // bottom-right: weapons (gun + selectable stores)
-        const rx = W - 28;
+        // weapons: gun + selectable stores, bottom-right (compact: one line top-right, under the score)
         const rows = [['GUN', p.spec.gun ? p.ammo : '—', p.spec.gun ? p.spec.gun.name : 'NO GUN', false]];
         const SL = [['SRM', 'missiles'], ['LRM', 'lrm'], ['RKT', 'rockets'], ['BMB', 'bombs']];
         SL.forEach(([lab, key], i) => rows.push([lab, p[key] ?? 0, '', (game.slot || 0) === i]));
         rows.push(['FLR', p.flares, '', false]);
-        let yy = H - 30 - (rows.length - 1) * 26;
-        for (const [lab, val, sub, sel] of rows) {
+        const rx = W - M;
+        if (C) {
             ctx.textAlign = 'right';
-            ctx.font = '700 20px "Share Tech Mono", ui-monospace, monospace';
-            ctx.fillStyle = val === 0 ? RED : sel ? AMBER : GREEN;
-            ctx.fillText(String(val), rx, yy);
-            ctx.font = '600 11px "Share Tech Mono", ui-monospace, monospace';
-            ctx.fillStyle = sel ? AMBER : GREEN_DIM;
-            ctx.fillText((sel ? '▶ ' : '') + lab + (sub ? '  ' + sub : ''), rx - 58, yy);
-            yy += 26;
+            let x = rx;
+            for (let i = rows.length - 1; i >= 0; i--) {
+                const [lab, val, , sel] = rows[i];
+                mono('700', 12);
+                ctx.fillStyle = val === 0 ? RED : sel ? AMBER : GREEN;
+                ctx.fillText(String(val), x, 62);
+                x -= ctx.measureText(String(val)).width + 3;
+                mono('600', 10);
+                ctx.fillStyle = sel ? AMBER : GREEN_DIM;
+                ctx.fillText((sel ? '▶' : '') + lab, x, 62);
+                x -= ctx.measureText((sel ? '▶' : '') + lab).width + 9;
+            }
+        } else {
+            let yy = H - 30 - (rows.length - 1) * 26;
+            for (const [lab, val, sub, sel] of rows) {
+                ctx.textAlign = 'right';
+                mono('700', 20);
+                ctx.fillStyle = val === 0 ? RED : sel ? AMBER : GREEN;
+                ctx.fillText(String(val), rx, yy);
+                mono('600', 11);
+                ctx.fillStyle = sel ? AMBER : GREEN_DIM;
+                ctx.fillText((sel ? '▶ ' : '') + lab + (sub ? '  ' + sub : ''), rx - 58, yy);
+                yy += 26;
+            }
         }
 
         // top-right: score
         ctx.textAlign = 'right';
         ctx.fillStyle = GREEN;
-        ctx.font = '700 26px "Share Tech Mono", ui-monospace, monospace';
-        ctx.fillText(String(Math.floor(game.score)).padStart(6, "0"), W - 28, 34);
-        ctx.font = '600 12px "Share Tech Mono", ui-monospace, monospace';
+        mono('700', C ? 20 : 26);
+        ctx.fillText(String(Math.floor(game.score)).padStart(6, '0'), rx, C ? 22 : 34);
+        mono('600', C ? 10 : 12);
         ctx.fillStyle = GREEN_DIM;
         let line = 'KILLS ' + game.kills;
-        if (game.mode !== 'freeflight' && game.mode !== 'strike') line += '   WAVE ' + game.wave;
-        ctx.fillText(line, W - 28, 58);
+        if (game.mode === 'dogfight' || game.mode === 'survival') line += '   WAVE ' + game.wave;
+        ctx.fillText(line, rx, C ? 42 : 58);
         if (game.combo > 1) {
             ctx.fillStyle = AMBER;
-            ctx.font = '700 16px "Share Tech Mono", ui-monospace, monospace';
-            ctx.fillText('x' + game.combo + ' COMBO', W - 28, 80);
+            mono('700', C ? 12 : 16);
+            ctx.fillText('x' + game.combo + ' COMBO', C ? rx - ctx.measureText(line).width - 70 : rx, C ? 42 : 80);
         }
-        // top-left: objective
+        // top-left: objective, clock, spare jets, collateral
         ctx.textAlign = 'left';
-        ctx.font = '600 12px "Share Tech Mono", ui-monospace, monospace';
+        mono('600', C ? 11 : 12);
         ctx.fillStyle = GREEN_DIM;
-        if (game.objective) ctx.fillText(game.objective, 28, 34);
-        ctx.fillText('T+' + game.clockText() + (game.lives !== Infinity && game.lives != null ? '   SPARE JETS ' + game.lives : ''), 28, 52);
+        const maxW = C ? W * 0.55 : W * 0.5;
+        if (game.objective) ctx.fillText(game.objective, M, C ? 22 : 34, maxW);
+        ctx.fillText('T+' + game.clockText() + (game.lives !== Infinity && game.lives != null ? '   SPARE JETS ' + game.lives : ''), M, C ? 40 : 52);
+        if (game.collateral) {
+            ctx.fillStyle = '#ff9f5a';
+            ctx.fillText('COLLATERAL ' + game.collateral, M + (C ? 170 : 200), C ? 40 : 52);
+        }
     }
 
     drawRadar(game) {
         const ctx = this.ctx;
         const pm = game.pilotMode;
         const p = pm ? { pos: pm.pos, getForward: (o) => pm.viewDir(o) } : game.player;
-        const R = 78, cx = this.w / 2, cy = this.h - R - 22;
+        const { R, cx, cy } = this.radarGeom;
         ctx.save();
         ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2);
         ctx.fillStyle = 'rgba(2,16,10,0.55)'; ctx.fill();
@@ -590,6 +681,8 @@ export class HUD {
         };
         for (const b of game.basesInfo || []) plot(b, b.friendly ? 'rgba(90,184,255,0.7)' : 'rgba(255,160,90,0.7)', 'dia', 4);
         if (game.ground) for (const t of game.ground.targets) if (t.alive && (!t.isBridge || t.objective)) plot(t.pos, t.team === 'blue' ? BLUE : AMBER, 'dia', t.isShip ? 4.5 : 2.5);
+        // neutral air traffic (helicopters, airliners): small grey contacts
+        for (const t of AIR_TARGETS) if (t.alive && !t.done) plot(t.pos, t === game.lockTarget ? RED : 'rgba(212,221,230,0.75)', 'sq', t === game.lockTarget ? 3.5 : 2);
         for (const a of game.aircraft) {
             if (a === p || !a.alive) continue;
             plot(a.pos, a.team === 'blue' ? BLUE : (a === game.lockTarget ? RED : '#ff9f5a'), 'sq', a === game.lockTarget ? 4 : 3);
@@ -606,35 +699,66 @@ export class HUD {
 
     drawMessages(game) {
         const ctx = this.ctx;
-        // kill feed (right, under score)
+        const C = this.compact;
+        // kill feed (right, under score; compact: under the one-line weapons readout)
         ctx.textAlign = 'right';
-        ctx.font = '600 13px "Share Tech Mono", ui-monospace, monospace';
-        let y = 112;
+        ctx.font = (C ? '600 11px' : '600 13px') + ' "Share Tech Mono", ui-monospace, monospace';
+        let y = C ? 82 : 112, shown = 0;
         for (const m of game.feed) {
             const age = game.time - m.t;
             const a = clamp(1 - (age - 4) / 1, 0, 1);
-            if (a <= 0) continue;
+            if (a <= 0 || (C && shown >= 4)) continue;
             ctx.globalAlpha = a;
             ctx.fillStyle = m.color || GREEN;
-            ctx.fillText(m.text, this.w - 28, y);
-            y += 18;
+            ctx.fillText(m.text, this.w - (C ? 14 : 28), y, this.w * 0.6);
+            y += C ? 15 : 18; shown++;
         }
         ctx.globalAlpha = 1;
-        // centre banner
+        // centre banner, on a soft dark band so it reads over bright sky
         const b = game.banner;
         if (b && game.time - b.t < b.dur) {
             const age = game.time - b.t;
             const a = clamp(Math.min(age * 4, (b.dur - age) * 2), 0, 1);
+            const by = C ? this.h * 0.24 : this.h * 0.1, maxW = this.w - 40;
             ctx.globalAlpha = a;
             ctx.textAlign = 'center';
-            ctx.fillStyle = b.color || GREEN;
-            ctx.font = '700 34px "Rajdhani", "Share Tech Mono", sans-serif';
-            ctx.fillText(b.text, this.w / 2, this.h * 0.1);
-            if (b.sub) {
-                ctx.font = '600 15px "Share Tech Mono", ui-monospace, monospace';
-                ctx.fillText(b.sub, this.w / 2, this.h * 0.1 + 32);
+            ctx.font = (C ? '700 24px' : '700 34px') + ' "Rajdhani", "Share Tech Mono", sans-serif';
+            let bw = ctx.measureText(b.text).width;
+            ctx.font = (C ? '600 12px' : '600 15px') + ' "Share Tech Mono", ui-monospace, monospace';
+            // a long subtitle wraps onto a second line rather than being squeezed
+            let subs = b.sub ? [b.sub] : [];
+            if (b.sub && ctx.measureText(b.sub).width > maxW) {
+                const mid = b.sub.length / 2;
+                let cut = -1;
+                for (let i = 0; i < b.sub.length; i++) if (b.sub[i] === ' ' && (cut < 0 || Math.abs(i - mid) < Math.abs(cut - mid))) cut = i;
+                if (cut > 0) subs = [b.sub.slice(0, cut), b.sub.slice(cut + 1)];
             }
+            for (const t of subs) bw = Math.max(bw, Math.min(ctx.measureText(t).width, maxW));
+            const bh = (subs.length ? (C ? 50 : 64) : (C ? 32 : 44)) + (subs.length > 1 ? (C ? 16 : 20) : 0);
+            const grd = ctx.createLinearGradient(this.w / 2 - bw / 2 - 60, 0, this.w / 2 + bw / 2 + 60, 0);
+            grd.addColorStop(0, 'rgba(0,8,6,0)'); grd.addColorStop(0.15, 'rgba(0,8,6,0.32)'); grd.addColorStop(0.85, 'rgba(0,8,6,0.32)'); grd.addColorStop(1, 'rgba(0,8,6,0)');
+            ctx.fillStyle = grd;
+            ctx.fillRect(this.w / 2 - bw / 2 - 60, by - (C ? 18 : 24), bw + 120, bh);
+            ctx.fillStyle = b.color || GREEN;
+            ctx.font = (C ? '700 24px' : '700 34px') + ' "Rajdhani", "Share Tech Mono", sans-serif';
+            ctx.fillText(b.text, this.w / 2, by, maxW);
+            ctx.font = (C ? '600 12px' : '600 15px') + ' "Share Tech Mono", ui-monospace, monospace';
+            subs.forEach((t, i) => ctx.fillText(t, this.w / 2, by + (C ? 22 : 32) + i * (C ? 16 : 20), maxW));
             ctx.globalAlpha = 1;
+        }
+        // first seconds of a sortie: the essential keys, under the banner (not on touch screens: no keyboard there)
+        const tip = game.tip;
+        if (tip && !game.pilotMode && !game.groundStart && !this.touchUI()) {
+            const age = game.time - tip.t;
+            const a = clamp(Math.min(age * 2, (tip.dur - age) / 2), 0, 1) * 0.85;
+            if (a > 0) {
+                ctx.globalAlpha = a;
+                ctx.textAlign = 'center';
+                ctx.font = '600 12px "Share Tech Mono", ui-monospace, monospace';
+                ctx.fillStyle = '#e8eef4';
+                ctx.fillText(tip.text, this.w / 2, this.h * 0.1 + 56, this.w - 40);
+                ctx.globalAlpha = 1;
+            }
         }
         // hitmarker
         const hm = game.time - game.hitmarkerT;
@@ -655,24 +779,30 @@ export class HUD {
         if (!p.alive) return;
         const blink = (this.t * 3) % 1 < 0.6;
         ctx.textAlign = 'center';
-        ctx.font = '700 22px "Share Tech Mono", ui-monospace, monospace';
+        const wf = this.compact ? '700 16px "Share Tech Mono", ui-monospace, monospace' : '700 22px "Share Tech Mono", ui-monospace, monospace';
+        ctx.font = wf;
         let y = this.h * 0.68;
-        const warn = (txt, col) => { ctx.fillStyle = col; ctx.fillText(txt, this.w / 2, y); y += 28; };
+        // warnings sit on a dark plate: they must read over anything, including target labels
+        const warn = (txt, col) => {
+            const w = ctx.measureText(txt).width + 18;
+            ctx.fillStyle = 'rgba(0,0,0,0.38)'; ctx.fillRect(this.w / 2 - w / 2, y - 14, w, 28);
+            ctx.fillStyle = col; ctx.fillText(txt, this.w / 2, y); y += 30;
+        };
         if (p.incoming.length && blink) warn('▲ MISSILE ▲', RED);
         else if (p.lockedBy && p.lockedBy.size && blink) warn('LOCKED ON', AMBER);
         if (game.pullUp && blink) warn('PULL UP', RED);
         if (game.autopilot && game.autopilot.active) {
             ctx.font = '700 15px "Share Tech Mono", ui-monospace, monospace';
             ctx.fillStyle = BLUE;
-            ctx.fillText('AUTOPILOT · ' + game.autopilot.status, this.w / 2, this.h * 0.2);
+            ctx.fillText('AUTOPILOT · ' + game.autopilot.status, this.w / 2, this.h * 0.2, this.w - 30);
             if (game.time - (game.autopilot.warnT || -9) < 1.5) {
                 const k = clamp((game.autopilot.override || 0) / 450, 0, 1);
                 ctx.fillStyle = AMBER;
-                ctx.fillText('AUTOPILOT ON — KEEP MOVING / HOLD A KEY TO TAKE CONTROL (Y/U: OFF NOW)', this.w / 2, this.h * 0.2 + 24);
+                ctx.fillText('AUTOPILOT ON — KEEP MOVING / HOLD A KEY TO TAKE CONTROL (Y/U: OFF NOW)', this.w / 2, this.h * 0.2 + 24, this.w - 30);
                 ctx.fillRect(this.w / 2 - 120, this.h * 0.2 + 38, 240 * k, 4);
                 ctx.strokeStyle = AMBER; ctx.strokeRect(this.w / 2 - 120, this.h * 0.2 + 38, 240, 4);
             }
-            ctx.font = '700 22px "Share Tech Mono", ui-monospace, monospace';
+            ctx.font = wf;
         }
         if (p.stalling && blink) warn('STALL', AMBER);
         if (p.flameout && blink) warn('FLAMEOUT — GLIDE TO BASE', RED);
@@ -682,9 +812,9 @@ export class HUD {
         if (p.onGround && p.speed < 4) {
             ctx.font = '600 13px "Share Tech Mono", ui-monospace, monospace';
             ctx.fillStyle = GREEN;
-            const msg = p.bellied ? 'CRASH LANDED — E: CLIMB OUT · ENTER: NEW JET' : p.speed < 0.8 && p.controls.throttle < 0.06 && !p.deck ? 'E: CLIMB OUT AND WALK · Z / 1–0: THROTTLE · U: AUTO-TAKEOFF' : p.deck ? 'FULL POWER (9 or 0) TO FIRE THE CATAPULT · U: AUTO-TAKEOFF' : 'Z / 1–0: THROTTLE · ←/→: STEER · S: ROTATE AT ' + Math.round(game.rotateSpeed * MS_TO_KTS) + ' KTS · U: AUTO-TAKEOFF';
-            ctx.fillText(msg, this.w / 2, this.h * 0.8);
-            if (game.atFriendlyPad(p)) ctx.fillText('STOPPED ON A FRIENDLY PAD: REPAIR · REFUEL · REARM  (L: CHANGE LOADOUT)', this.w / 2, this.h * 0.8 + 20);
+            const msg = p.bellied ? 'CRASH LANDED — E: CLIMB OUT · ENTER: ' + (game.lives > 0 ? 'NEW JET' : game.mission ? 'END (NO JETS LEFT)' : 'END THE SORTIE') : p.speed < 0.8 && p.controls.throttle < 0.06 && !p.deck ? 'E: CLIMB OUT AND WALK · Z / 1–0: THROTTLE · U: AUTO-TAKEOFF' : p.deck ? 'FULL POWER (9 or 0) TO FIRE THE CATAPULT · U: AUTO-TAKEOFF' : 'Z / 1–0: THROTTLE · ←/→: STEER · S: ROTATE AT ' + Math.round(game.rotateSpeed * MS_TO_KTS) + ' KTS · U: AUTO-TAKEOFF';
+            ctx.fillText(msg, this.w / 2, this.h * 0.8, this.w - 30);
+            if (game.atFriendlyPad(p) && !p.bellied) ctx.fillText('STOPPED ON A FRIENDLY PAD: REPAIR · REFUEL · REARM  (L: CHANGE LOADOUT)', this.w / 2, this.h * 0.8 + 20, this.w - 30);
         }
     }
 
@@ -722,56 +852,84 @@ export class HUD {
 
     // ── Ejected pilot HUD ──
     drawPilotMode(game) {
-        const ctx = this.ctx, W = this.w, H = this.h, pm = game.pilotMode;
-        ctx.font = '600 13px "Share Tech Mono", ui-monospace, monospace';
+        const ctx = this.ctx, W = this.w, H = this.h, pm = game.pilotMode, C = this.compact;
+        const M = C ? 14 : 28;
+        const mono = (w, px) => (ctx.font = w + ' ' + px + 'px "Share Tech Mono", ui-monospace, monospace');
+        mono('600', 13);
         ctx.textBaseline = 'middle';
         this.drawTargets(game);
         this.drawRadar(game);
         this.drawMessages(game);
+        const s = pm.seat, agl = pm.pos.y - Math.max(terrainHeight(pm.pos.x, pm.pos.z), 0);
         // crosshair
         const cx = W / 2, cy = H / 2, gap = 6 + pm.recoil * 300;
-        ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(cx - gap - 10, cy); ctx.lineTo(cx - gap, cy);
-        ctx.moveTo(cx + gap, cy); ctx.lineTo(cx + gap + 10, cy);
-        ctx.moveTo(cx, cy - gap - 10); ctx.lineTo(cx, cy - gap);
-        ctx.moveTo(cx, cy + gap); ctx.lineTo(cx, cy + gap + 10);
-        ctx.stroke();
+        if (pm.alive) {
+            ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(cx - gap - 10, cy); ctx.lineTo(cx - gap, cy);
+            ctx.moveTo(cx + gap, cy); ctx.lineTo(cx + gap + 10, cy);
+            ctx.moveTo(cx, cy - gap - 10); ctx.lineTo(cx, cy - gap);
+            ctx.moveTo(cx, cy + gap); ctx.lineTo(cx, cy + gap + 10);
+            ctx.stroke();
+        }
         if (game.time - game.hitmarkerT < 0.15) {
             ctx.strokeStyle = game.time - game.killmarkerT < 0.4 ? RED : '#fff';
             ctx.beginPath();
             for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { ctx.moveTo(cx + sx * 5, cy + sy * 5); ctx.lineTo(cx + sx * 13, cy + sy * 13); }
             ctx.stroke();
         }
-        // ammo & health
+        // ammo (a 60-round drum: "60 / 540")
         ctx.textAlign = 'right';
-        ctx.font = '700 30px "Share Tech Mono", ui-monospace, monospace';
-        ctx.fillStyle = pm.mag > 5 ? '#fff' : RED;
-        ctx.fillText(pm.reloadT > 0 ? 'RELOADING' : pm.mag + ' / ' + pm.reserve, W - 28, H - 40);
-        ctx.font = '600 12px "Share Tech Mono", ui-monospace, monospace';
+        mono('700', C ? 22 : 30);
+        ctx.fillStyle = pm.mag > 8 ? '#fff' : RED;
+        ctx.fillText(pm.reloadT > 0 ? 'RELOADING' : pm.mag + ' / ' + pm.reserve, W - M, H - (C ? 26 : 40));
+        mono('600', C ? 10 : 12);
         ctx.fillStyle = 'rgba(255,255,255,0.7)';
-        ctx.fillText('AK-47 · 7.62mm', W - 28, H - 70);
+        ctx.fillText('AK-47 · 7.62mm · DRUM', W - M, H - (C ? 48 : 70));
+        // health: number + bar (red and pulsing when low, flashing right after a hit)
+        const hp = clamp(pm.health / 100, 0, 1), hurt = game.time - pm.lastHitT < 0.35;
+        const hc = hurt ? '#fff' : hp > 0.5 ? '#fff' : hp > 0.25 ? AMBER : RED;
         ctx.textAlign = 'left';
-        ctx.fillStyle = pm.health > 50 ? '#fff' : RED;
-        ctx.font = '700 22px "Share Tech Mono", ui-monospace, monospace';
-        ctx.fillText('♥ ' + Math.max(0, Math.round(pm.health)), 28, H - 40);
-        ctx.font = '600 12px "Share Tech Mono", ui-monospace, monospace';
+        mono('700', C ? 18 : 22);
+        ctx.fillStyle = hc;
+        const hy = H - (C ? 26 : 40);
+        ctx.fillText('♥ ' + Math.max(0, Math.round(pm.health)), M, hy);
+        const bx = M + (C ? 62 : 78), bw = C ? 90 : 130;
+        ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fillRect(bx, hy - 4, bw, 8);
+        ctx.fillStyle = hp > 0.5 ? '#e8eef4' : hp > 0.25 ? AMBER : RED; ctx.fillRect(bx, hy - 4, bw * hp, 8);
+        ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 1; ctx.strokeRect(bx, hy - 4, bw, 8);
+        // status: where you are, the canopy's state
+        mono('600', C ? 10 : 12);
+        ctx.fillStyle = 'rgba(255,255,255,0.75)';
+        let status = s.landed ? 'ON THE GROUND' : s.deployed ? (pm.canopyGone ? 'CANOPY SHREDDED' : 'CANOPY ' + Math.round(pm.canopyHp / 1.5) + '%') + ' · SINK ' + Math.round(-s.vel.y * 196.85) + ' FPM' : 'SEAT FIRING';
+        if (!s.landed) status += ' · ' + Math.round(agl * M_TO_FT) + ' FT';
+        if (s.deployed && !s.landed && pm.canopyHp < 150) ctx.fillStyle = pm.canopyHp < 60 ? RED : AMBER;
+        ctx.fillText(status, M, H - (C ? 48 : 70));
         ctx.fillStyle = 'rgba(255,255,255,0.7)';
-        const agl = pm.pos.y - Math.max(terrainHeight(pm.pos.x, pm.pos.z), 0);
-        ctx.fillText((pm.seat.landed ? 'ON THE GROUND' : pm.seat.deployed ? 'CANOPY OPEN · SINK ' + Math.round(-pm.seat.vel.y * 196.85) + ' FPM' : 'SEAT FIRING') + ' · ' + Math.round(agl * M_TO_FT) + ' FT', 28, H - 70);
-        ctx.fillText(pm.walker ? 'WASD WALK · SHIFT RUN · E BOARD A JET · ENTER NEW JET · V VIEW' : pm.seat.deployed ? 'A/D TURN · W DIVE · S BRAKE · SPACE FLARE (LOW) · V VIEW' + (pm.flareUsed ? '' : '') : '', 28, H - 92);
-        if (pm.seat.deployed && !pm.seat.landed && agl < 18 && !pm.flareUsed && Math.floor(game.time * 3) % 2) {
-            ctx.textAlign = 'center'; ctx.font = '700 18px "Share Tech Mono", ui-monospace, monospace'; ctx.fillStyle = GREEN;
+        const keys = pm.walker ? 'WASD WALK · SHIFT RUN · LMB FIRE · R RELOAD · E BOARD A JET · V VIEW'
+            : s.deployed ? 'A/D TURN · W DIVE · S BRAKE · SPACE FLARE (LOW) · LMB FIRE · V VIEW' : '';
+        if (pm.alive) ctx.fillText(keys, M, H - (C ? 66 : 92), W * 0.62);
+        if (pm.alive && s.deployed && !s.landed && agl < 18 && !pm.flareUsed && !pm.canopyGone && Math.floor(game.time * 3) % 2) {
+            ctx.textAlign = 'center'; mono('700', 18); ctx.fillStyle = GREEN;
             ctx.fillText('SPACE — FLARE!', W / 2, H * 0.6);
-            ctx.textAlign = 'left'; ctx.font = '600 12px "Share Tech Mono", ui-monospace, monospace'; ctx.fillStyle = 'rgba(255,255,255,0.7)';
         }
-        ctx.fillText('SCORE ' + Math.floor(game.score) + (game.lives !== Infinity ? '   SPARE JETS ' + game.lives : ''), 28, 34);
+        ctx.textAlign = 'left'; mono('600', C ? 11 : 12); ctx.fillStyle = 'rgba(255,255,255,0.7)';
+        if (game.objective && game.mission) ctx.fillText(game.objective, M, C ? 22 : 34, W * 0.55);
+        ctx.fillText('SCORE ' + Math.floor(game.score) + (game.lives !== Infinity ? '   SPARE JETS ' + game.lives : ''), M, game.objective && game.mission ? (C ? 40 : 52) : (C ? 22 : 34));
+        // a hostile lining up on you: get out of the way (canopy) or behind something solid (on foot)
+        if (pm.alive && pm.strafeT > 0 && (this.t * 4) % 1 < 0.65) {
+            ctx.textAlign = 'center'; mono('700', C ? 15 : 20);
+            const txt = 'BANDIT INBOUND — ' + (s.landed ? 'TAKE COVER!' : s.deployed && !pm.canopyGone ? 'STEER! (A/D)' : 'STRAFING RUN');
+            const tw = ctx.measureText(txt).width + 20, ty = H * 0.3;
+            ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fillRect(W / 2 - tw / 2, ty - 15, tw, 30);
+            ctx.fillStyle = RED; ctx.fillText(txt, W / 2, ty);
+        }
         // hint
-        if (pm.hint) {
+        if (pm.hint && pm.alive) {
             ctx.textAlign = 'center';
-            ctx.font = '700 16px "Share Tech Mono", ui-monospace, monospace';
+            mono('700', C ? 13 : 16);
             ctx.fillStyle = AMBER;
-            ctx.fillText(pm.hint, W / 2, H * 0.66);
+            ctx.fillText(pm.hint, W / 2, H * 0.66, W - 30);
         }
     }
 
