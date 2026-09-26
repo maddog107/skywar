@@ -848,6 +848,7 @@ export class World {
                         crN = texture2D(groundMap, wxz / 3.3 + 0.19).a * 0.6 + texture2D(groundMap, wxz / 12.0 + 0.53).a * 0.4;
                         crD = max(smoothstep(0.75, 0.95, crT.y), smoothstep(0.12, 0.7, crT.y * (0.4 + 1.2 * crN)));
                         vec3 soil = mix(mix(vec3(0.17, 0.12, 0.075), vec3(0.1, 0.07, 0.045), crT.w), vcol * 0.55, 0.25) * mix(0.8, 1.2, crN);
+                        soil = mix(soil, sandC * mix(0.65, 0.85, crN), sandW * 0.8); // on a beach it's sand that's thrown up
                         #ifdef CRATER_MESH
                             soil *= 1.0 + 0.1 * vCrClod; // clods: fresh earth, turned up from below
                         #endif
