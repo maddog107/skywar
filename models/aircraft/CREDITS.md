@@ -77,3 +77,23 @@ the models).
 - "Eurofighter Typhoon Game Prop" (https://sketchfab.com/3d-models/eurofighter-typhoon-game-prop-01d9a26a89dc4a17a9fa4c4c1f7ac39f) by robnewman76, CC BY 4.0. Changes: textures downscaled.
 - "Dassault Rafale" (https://sketchfab.com/3d-models/dassault-rafale-d8bbfb0970ca4128b73e7e5364828fd3) by so_O, CC BY 4.0. Changes: stores removed, levelled, decimated, painted.
 - C-130 model courtesy of NASA (Airborne Science Program). Changes: NASA markings removed, repainted, decimated.
+
+## Support aircraft, drones and bombers (the living war, docs/WAR.md)
+
+Built with `tools/aircraft/support_kit.py` (on top of `tools/aircraft_kit.py`); each aircraft's script is
+`tools/aircraft/<id>.py`, run as `blender -b -P tools/aircraft/<id>.py -- SRC OUT.glb`, and says exactly what was
+changed. Moving parts (rotodome, flying boom, hose-and-drogue units) are separate nodes (`src/rigparts.js`).
+Sketchfab licences were checked against the live API (`api.sketchfab.com/v3/models/<uid>`) on 2026-09-26.
+Reference drawings and photographs were used only to measure.
+
+| File | Aircraft | Source / Author | Licence | Source link |
+|---|---|---|---|---|
+| `kc135.glb` | KC-135R Stratotanker (MPRS) | "KC135R" by Adastra | CC BY 4.0 | https://sketchfab.com/3d-models/kc135r-95fedbaed45b492e8dfa9d1a8f76b25f |
+| `e3.glb` | E-3G Sentry (AWACS), derived from the same KC-135R model | "KC135R" by Adastra | CC BY 4.0 | https://sketchfab.com/3d-models/kc135r-95fedbaed45b492e8dfa9d1a8f76b25f |
+
+References: USAF E-3 line drawing (https://commons.wikimedia.org/wiki/File:AWACS_Line_drawing.jpg, public domain),
+USAF KC-135 line drawing (File:Boeing_KC-135_Stratotanker_line_drawing_-_USAF_medium_res.png), photographs of
+E-3C 81-0005 and RAF E-3Ds on Wikimedia Commons, US patents 4072283 and 7850121 (the KC-135 boom).
+
+Attribution lines:
+- "KC135R" (https://sketchfab.com/3d-models/kc135r-95fedbaed45b492e8dfa9d1a8f76b25f) by Adastra, CC BY 4.0. Changes (kc135.glb): repainted with panel lines, unit markings and the HF wire removed, a new articulated flying boom and two MPRS hose-and-drogue pods added. Changes (e3.glb): lengthened and re-winged into a Boeing 707-320B (E-3G), new TF33 nacelles, rotodome and antennas, KC-135 details removed.

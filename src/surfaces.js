@@ -24,6 +24,8 @@ const TRAVEL = {
     fighter: { flap: 3, brake: 1.5 },
     bomber: { flap: 6, brake: 2 },
     civil: { flap: 14, brake: 1.5 },
+    support: { flap: 14, brake: 1.5 },
+    drone: { flap: 6, brake: 1.5 },
     racer: { flap: 6, brake: 1.5 },
 };
 

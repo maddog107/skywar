@@ -2,7 +2,7 @@
 // Game: modes, waves, scoring, player control, targeting, cameras
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
-import { AIRCRAFT, ENEMY_POOL, ENEMY_EARLY, ALLY_POOL, DIFFICULTY, WEAPONS } from './config.js';
+import { AIRCRAFT, ENEMY_POOL, ENEMY_EARLY, ALLY_POOL, DIFFICULTY, WEAPONS, hasEjectionSeat } from './config.js';
 import { Aircraft } from './aircraft.js';
 import { Pilot, steerToward } from './ai.js';
 import { Weapons } from './weapons.js';
@@ -504,7 +504,7 @@ export class Game {
     // ── Ejection & hijacking ──
     ejectPlayer() {
         const p = this.player;
-        if (!p || !p.alive || this.pilotMode || p.spec.category === 'civil') return;
+        if (!p || !p.alive || this.pilotMode || !hasEjectionSeat(p.spec)) return;
         this.wreckage.eject(p); // emits 'eject' → enters pilot mode
         p.abandoned = true;
         p.controls.pitch = p.controls.roll = p.controls.yaw = 0;
@@ -749,7 +749,8 @@ export class Game {
                     this.audio.say(pick(['That was not a landing.', 'Ouch.', 'Well, that was a mess.']), true);
                 } else {
                     this.showBanner('SHOT DOWN', source && source.spec ? 'by ' + source.spec.name : '', 4, '#ff4a3d');
-                    this.audio.say(ac.spec.category === 'civil' ? 'Mayday, mayday! We are going down!' : 'Mayday, mayday! Ejecting!', true); // (airliners have no ejection seat)
+                    // (airliners, AWACS and tankers have no ejection seat; a drone just loses its link)
+                    this.audio.say(ac.spec.category === 'drone' ? 'Link lost. The aircraft is down.' : !hasEjectionSeat(ac.spec) ? 'Mayday, mayday! We are going down!' : 'Mayday, mayday! Ejecting!', true);
                 }
                 return;
             }
@@ -1004,7 +1005,8 @@ export class Game {
                 this.audio.tick(300, 0.12, 0.3);
                 break;
             case 'eject':
-                if (p.spec.category === 'civil') this.addFeed('NO EJECTION SEAT IN A ' + p.spec.name.toUpperCase() + ' — LAND, STOP, THEN E TO CLIMB OUT', '#ff9f5a');
+                if (p.spec.category === 'drone') this.addFeed('UNMANNED — NOBODY ON BOARD TO EJECT', '#ff9f5a');
+                else if (!hasEjectionSeat(p.spec)) this.addFeed('NO EJECTION SEAT IN A ' + p.spec.name.toUpperCase() + ' — LAND, STOP, THEN E TO CLIMB OUT', '#ff9f5a');
                 else if (this.time - (this.lastEjectPress || -9) < 0.6) this.ejectPlayer();
                 else { this.lastEjectPress = this.time; this.addFeed('PRESS J AGAIN TO EJECT', '#ff4a3d'); }
                 break;

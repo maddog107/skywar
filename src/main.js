@@ -202,12 +202,15 @@ let showcase = null;
 let orbit = 0;
 
 function buildMenu() {
-    // aircraft list
+    // aircraft list (a type's `group` overrides its category's heading: the EA-18G is a fighter listed with support)
+    const grp = (k) => AIRCRAFT[k].group || AIRCRAFT[k].category;
     const groups = [
-        ['FIGHTERS', k => AIRCRAFT[k].category === 'fighter'],
-        ['BOMBER', k => AIRCRAFT[k].category === 'bomber'],
-        ['RACING & AEROBATIC', k => AIRCRAFT[k].category === 'racer'],
-        ['CIVIL & TRANSPORT', k => AIRCRAFT[k].category === 'civil'],
+        ['FIGHTERS', k => grp(k) === 'fighter'],
+        ['BOMBERS', k => grp(k) === 'bomber'],
+        ['AWACS, TANKERS, RECON & EW', k => grp(k) === 'support'],
+        ['DRONES', k => grp(k) === 'drone'],
+        ['RACING & AEROBATIC', k => grp(k) === 'racer'],
+        ['CIVIL & TRANSPORT', k => grp(k) === 'civil'],
     ];
     const list = $('acList');
     list.innerHTML = '';
@@ -614,6 +617,8 @@ function buildCredits() {
         ['P-51 Mustang (racer)', 'UlissesVinicios', 'CC BY 4.0', 'https://sketchfab.com/3d-models/p-51-mustang-36f0f3e71d2a4c18b479db1ae8f9e7a7'],
         ['Airplane biplane (pitts)', 'BlueHour', 'CC BY 4.0', 'https://sketchfab.com/3d-models/airplane-biplane-be48f3f906ed431b98b1bf03ab7aadd6'],
         ['MiG-31, MiG-25, J-20, J-10, J-8, F-5E, MiG-21, Mirage III, Jaguar', 'SKYWAR / Blender (tools/aircraft_kit.py)', 'CC0', 'tools/aircraft/'],
+        // support aircraft, drones and bombers (models/aircraft/CREDITS.md, last section)
+        ['KC135R (kc135; the e3 E-3G Sentry is derived from it)', 'Adastra', 'CC BY 4.0', 'https://sketchfab.com/3d-models/kc135r-95fedbaed45b492e8dfa9d1a8f76b25f'],
         ['Aircraft carrier and destroyer', 'SKYWAR / Blender (tools/ships)', 'CC0', 'tools/ships/'],
         ['Helicopter (military)', 'Zsky', 'CC BY 3.0', 'https://poly.pizza/m/hG2Qr0A3zR'],
         ['Helicopter (civil)', 'jeremy', 'CC BY 3.0', 'https://poly.pizza/m/eb7b31pjGtQ'],

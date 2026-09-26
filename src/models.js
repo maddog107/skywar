@@ -8,6 +8,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { AIRCRAFT } from './config.js';
 import { segmentModel, regionAt } from './damage.js';
 import { cutSurfaces } from './surfaces.js';
+import { extractRigParts, attachRigParts, refuelTemplate, REFUEL } from './rigparts.js';
 
 // Loaded GLB models. rot = Euler to bring nose to -Z / up to +Y.
 // Filled in by MODEL_FILES (see models/CREDITS.md for sources/licences).
@@ -50,6 +51,17 @@ export const MODEL_FILES = {
     gripen: { file: 'aircraft/gripen.glb', rot: [0, 0, 0], cockpit: [-0.0248, -0.2295] },
     cessna: { file: 'aircraft/cessna.glb', rot: [0, 0, 0], nozzles: [], fixedGear: true, prop: { y: -0.04, r: 0.11, blades: 2 }, cockpit: [0.03, -0.1] },
     b737: { file: 'aircraft/b737.glb', rot: [0, 0, 0], cockpit: [-0.054, -0.43] },
+
+    // ── Air support, special mission, drones and heavy bombers (tools/aircraft/<id>.py; rig parts: rigparts.js) ──
+    // flame: false — turbofans / turboprops: the nozzles mark the exhausts for contrails, with no afterburner plume
+    e3: {
+        file: 'aircraft/e3.glb', rot: [0, 0, 0], cockpit: [-0.0497, -0.41], flame: false, nozzleR: 0.009,
+        nozzles: [[0.2058, -0.1075, -0.0215], [-0.2058, -0.1075, -0.0215], [0.3366, -0.0892, 0.0647], [-0.3366, -0.0892, 0.0647]],
+    },
+    kc135: {
+        file: 'aircraft/kc135.glb', rot: [0, 0, 0], cockpit: [-0.05, -0.3997], flame: false, nozzleR: 0.012,
+        nozzles: [[-0.3392, -0.0937, 0.056], [-0.2006, -0.1128, -0.054], [0.2006, -0.1128, -0.054], [0.3392, -0.0937, 0.056]],
+    },
 };
 
 const cache = {};
@@ -133,6 +145,9 @@ function normaliseGLTF(root, id, info) {
             });
         }
     });
+    // moving parts (a rotodome, a tanker's boom and drogues: rigparts.js) are taken out before the airframe is cut
+    // into damage sections, and each instance gets its own copy (createAircraftModel)
+    const partTemplates = extractRigParts(holder);
     const box2 = new THREE.Box3().setFromObject(holder);
     const rig = {
         length: spec.length,
@@ -144,6 +159,7 @@ function normaliseGLTF(root, id, info) {
         wingtips: findWingtips(holder, box2),
         cockpit: new THREE.Vector3(0, (info.cockpit?.[0] ?? 0.05) * spec.length, (info.cockpit?.[1] ?? -0.27) * spec.length),
         fixedGear: !!info.fixedGear, // the model has its own (non-retracting) wheels
+        flame: info.flame !== false, // false: turbofans / turboprops, the nozzles only mark the exhausts (contrails)
     };
     // propellers: separate spinning props (the model's own blades are removed at import, or static).
     // props: [{ x, y, z, r, blades, style }] in fractions of the length (a turboprop's engines), or the older
@@ -160,6 +176,12 @@ function normaliseGLTF(root, id, info) {
             return prop;
         });
     }
+    // the rig parts ride on the airframe section they sit in; a receiver's refuelling point (rigparts.js REFUEL,
+    // or the entry's own `refuel`) is an empty named 'refuel' among them
+    const refuel = info.refuel ?? REFUEL[id.replace(/^new_/, '')];
+    if (refuel) partTemplates.push(refuelTemplate(refuel, L));
+    for (const t of partTemplates) t.userData.region = regionAt(t.position.x, t.position.z, L, hs);
+    if (partTemplates.length) rig.partTemplates = partTemplates;
     return { object: holder, rig };
 }
 
@@ -169,6 +191,8 @@ function normaliseGLTF(root, id, info) {
 // hidden and the blades opaque (parked aircraft merge them as they are); aircraft.js fades the blades and shows the
 // disc as the prop speeds up. Blade stations: [radius, chord, sweep back, pitch in degrees], radius / chord / sweep as
 // fractions of the prop radius. 'scimitar': the C-130J's six-bladed Dowty R391, wide blades with swept-back tips.
+// opts.dir -1: a prop turning the other way (counter-clockwise seen from behind: the rear prop of a contra-rotating
+// pair), its blades mirrored so they still bite the air leading edge first.
 const PROP_BLADES = {
     paddle: [[0.12, 0.07, 0, 42], [0.3, 0.095, 0, 34], [0.55, 0.095, 0, 27], [0.8, 0.085, 0, 21], [0.95, 0.065, 0, 18], [1, 0.035, 0, 17]],
     scimitar: [[0.14, 0.075, 0, 50], [0.26, 0.11, -0.012, 43], [0.45, 0.14, -0.006, 34], [0.63, 0.145, 0.015, 27], [0.78, 0.13, 0.045, 23],
@@ -197,6 +221,8 @@ function makeProp(R, n, opts = {}) {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     geo.setIndex(idx);
+    const dir = opts.dir < 0 ? -1 : 1;
+    if (dir < 0) geo.scale(-1, 1, 1);
     geo.computeVertexNormals();
     const bladeMat = new THREE.MeshStandardMaterial({ color: opts.color ?? 0x1c1d1f, roughness: 0.55, metalness: 0.25, side: THREE.DoubleSide });
     const discMat = new THREE.MeshBasicMaterial({ color: 0x1d1f22, map: propBlurTexture(n), transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide });
@@ -206,10 +232,12 @@ function makeProp(R, n, opts = {}) {
     const disc = new THREE.Mesh(new THREE.RingGeometry(0.1 * R, R, 48, 1), discMat);
     disc.name = 'propDisc';
     disc.visible = false;
+    if (dir < 0) disc.scale.x = -1; // the blur trails the blades the other way round
     const prop = new THREE.Group();
     prop.add(blades, disc);
     prop.userData.isProp = true;
     prop.userData.blades = n;
+    prop.userData.dir = dir;
     return prop;
 }
 
@@ -348,6 +376,7 @@ export function createAircraftModel(id) {
         const object = src.object.clone(true);
         const rig = cloneRig(src.rig);
         rig.props = addProps(object, src.rig.propTemplates);
+        rig.parts = attachRigParts(object, src.rig.partTemplates); // rigparts.js: rotodome, boom, drogues, refuel
         return { object, rig, fromFile: true };
     }
     if (!cache['proc_' + id]) {
@@ -366,6 +395,7 @@ export function createAircraftModel(id) {
     const object = src.object.clone(true);
     const rig = cloneRig(src.rig);
     rig.props = addProps(object, src.rig.propTemplates);
+    rig.parts = {};
     return { object, rig, fromFile: false };
 }
 

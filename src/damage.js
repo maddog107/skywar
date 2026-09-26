@@ -8,6 +8,7 @@
 import * as THREE from 'three';
 import { Character } from './character.js';
 import { rand, clamp } from './util.js';
+import { hasEjectionSeat } from './config.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion();
 
@@ -233,7 +234,7 @@ export class Wreckage {
     }
 
     eject(ac) {
-        if (ac.ejected || ac.spec.category === 'civil') return;
+        if (ac.ejected || !hasEjectionSeat(ac.spec)) return;
         ac.ejected = true;
         const up = ac.getUp(new THREE.Vector3());
         const start = ac.rig.cockpit.clone().applyMatrix4(ac.model.matrixWorld).addScaledVector(up, 1.5);

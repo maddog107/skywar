@@ -39,3 +39,18 @@ are listed in `models/aircraft/CREDITS.md` with their reference drawings.
 Previewing: `node server.mjs` (and `node tools/aircraft/upload.mjs` to save PNGs), then open `/tools/aircraft/preview.html` (see the comment at the top of
 `tools/aircraft/preview.js`). It renders models through the game's own loader/normaliser, with the nozzle
 (red), wingtip (blue) and cockpit (green) rig points as markers.
+
+## Support aircraft, drones and bombers
+
+Derived and built with `tools/aircraft/support_kit.py` (import, clean, stretch, add parts with `aircraft_kit.py`,
+export the moving parts as separate named nodes for `src/rigparts.js`):
+
+    /opt/homebrew/bin/blender -b -P tools/aircraft/<id>.py -- SRC.glb models/aircraft/<id>.glb
+
+| id | script | source file |
+|---|---|---|
+| kc135 | `kc135.py` | Objaverse `glbs/000-081/95fedbaed45b492e8dfa9d1a8f76b25f.glb` ("KC135R" by Adastra) |
+| e3 | `e3.py` | the same KC-135R file |
+
+Each script's header lists what it changes; sources and licences are in the last section of
+`models/aircraft/CREDITS.md`.

@@ -30,6 +30,16 @@
 //       drag-divergence ("wall") marker only.
 // ═══════════════════════════════════════════════════════════════
 
+// Categories (what the rest of the game makes of them):
+//   fighter  fighters and attack jets: ejection seats, a tail hook, fighter handling for the AI
+//   bomber   heavy bombers: four times the bomb load; ejection seats unless `eject: false`
+//   support  AWACS, tankers, reconnaissance and electronic-warfare aircraft: airliner-like engine lapse and AI
+//            handling, no ejection seats unless `eject: true` (the U-2 has one)
+//   drone    unmanned: nobody on board to eject
+//   racer, civil  racers and aerobatic planes; airliners, transports and light aircraft (no ejection seats)
+// `group` puts a type under another heading in the hangar list than its category's (main.js buildMenu).
+export const hasEjectionSeat = (spec) => spec.eject ?? !(spec.category === 'civil' || spec.category === 'support' || spec.category === 'drone');
+
 const FIGHTER = { speed: 400, mach: 1.8, cd0: 0.05, accel: 14, lift: 1.0, gLimit: 9, roll: 4.2, alpha: 24 };
 
 function jet(o) {
@@ -276,6 +286,26 @@ export const AIRCRAFT = {
         flight: { speed: 170, mach: 0.6, accel: 4.5, lift: 1.6, gLimit: 3, roll: 1.0, alpha: 16 },
         health: 220, gun: null, missiles: 0, flares: 60,
         proc: { airliner: true, turboprop: true, highWing: true, engines: 4, body: [0.14, 0.14], paint: 0x5b6556, accent: 0x4a5346 },
+    },
+
+    // ── Air support, special-mission aircraft, drones and heavy bombers (the living war: docs/WAR.md) ──
+    // Published dimensions and performance. Their moving parts (rotodome, flying boom, hose-and-drogue units) are
+    // nodes in the models, posed with src/rigparts.js. Thrust (`accel`) is scaled up from the real thrust-to-weight
+    // ratio like the airliners' so they take off and climb in a game-sized world; `lift` follows the wing loading
+    // (≈ 520 / (kg/m² at max weight), as for the 737 and 747). fuelTime: seconds of full power on internal fuel.
+    e3: {
+        name: 'E-3G Sentry', role: 'AWACS', country: 'USA', length: 46.61, span: 44.42, category: 'support',
+        desc: 'Airborne warning and control: a Boeing 707 carrying a 9 m radar rotodome that sees 400 km. Slow, huge and priceless.',
+        flight: { speed: 225, mach: 0.78, afterburner: false, accel: 3.8, lift: 0.95, gLimit: 2.5, roll: 0.7, alpha: 14 },
+        health: 230, gun: null, missiles: 0, flares: 0, fuelTime: 5400,
+        proc: { airliner: true, engines: 4, body: [0.08, 0.085], paint: 0xb2b6b7, accent: 0x2a2d30 },
+    },
+    kc135: {
+        name: 'KC-135R Stratotanker', role: 'Aerial Tanker', country: 'USA', length: 41.53, span: 39.88, category: 'support',
+        desc: 'The USAF\'s flying gas station since 1957: a flying boom for USAF jets, MPRS wing pods with hoses and drogues for probe-equipped fighters.',
+        flight: { speed: 238, mach: 0.86, afterburner: false, accel: 4.0, lift: 0.82, gLimit: 2.5, roll: 0.75, alpha: 14 },
+        health: 220, gun: null, missiles: 0, flares: 0, fuelTime: 7200,
+        proc: { airliner: true, engines: 4, body: [0.09, 0.095], paint: 0x7d858b, accent: 0x2b2e31 },
     },
 };
 

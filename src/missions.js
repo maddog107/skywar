@@ -327,9 +327,10 @@ export function dailyMission(date = new Date()) {
     const r = mulberry32(h);
     const ids = Object.keys(MISSIONS);
     const id = ids[Math.floor(r() * ids.length)];
-    // no comparison model (f35n); anything but a strike mission needs a real fighter (Mach 1.4+, so not the A-10)
+    // no comparison model (f35n) or special-mission variant (the EA-18G: `group`); anything but a strike mission needs a
+    // real fighter (Mach 1.4+, so not the A-10)
     const tag = MISSIONS[id].tag;
-    const fighters = Object.keys(AIRCRAFT).filter(k => AIRCRAFT[k].category === 'fighter' && k !== 'f35n' && (tag === 'STRIKE' || maxMach(k) >= 1.4));
+    const fighters = Object.keys(AIRCRAFT).filter(k => AIRCRAFT[k].category === 'fighter' && !AIRCRAFT[k].group && k !== 'f35n' && (tag === 'STRIKE' || maxMach(k) >= 1.4));
     const aircraft = fighters[Math.floor(r() * fighters.length)];
     const time = ['dawn', 'day', 'day', 'dusk', 'night'][Math.floor(r() * 5)];
     return { key, id, aircraft, time, def: MISSIONS[id] };
