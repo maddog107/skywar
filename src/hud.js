@@ -84,6 +84,12 @@ export class HUD {
             ctx.fillText('PHOTO MODE · mouse: orbit · wheel: zoom · O: exit', this.w / 2, this.h - 18);
             return;
         }
+        // a full-screen sensor (the targeting pod's video, sensors.js) draws its own display; radio and warnings stay
+        if (game.sensorView && !game.hideHud) {
+            ctx.textBaseline = 'middle'; ctx.lineWidth = 1.6;
+            this.drawSystems(game); this.drawMessages(game); this.drawWarnings(game);
+            return;
+        }
         this.drawScreenEffects(game);
         if (game.hideHud) return;
         if (game.pilotMode) { this.drawPilotMode(game); this.drawSystems(game); return; }
@@ -694,12 +700,26 @@ export class HUD {
             else if (shape === 'dia') { ctx.beginPath(); ctx.moveTo(x, y - size - 1); ctx.lineTo(x + size + 1, y); ctx.lineTo(x, y + size + 1); ctx.lineTo(x - size - 1, y); ctx.fill(); }
         };
         for (const b of game.basesInfo || []) plot(b, b.friendly ? 'rgba(90,184,255,0.7)' : 'rgba(255,160,90,0.7)', 'dia', 4);
-        if (game.ground) for (const t of game.ground.targets) if (t.alive && (!t.isBridge || t.objective)) plot(t.pos, t.team === 'blue' ? BLUE : AMBER, 'dia', t.isShip ? 4.5 : 2.5);
+        // with the war running the scope shows our side's picture (war.js): hostiles only once a sensor has had them,
+        // at their last known position (air tracks drop off when they go stale), unidentified ones in yellow
+        const war = game.war && game.war.enabled ? game.war : null;
+        const seen = (u, air) => {
+            const r = war && war.rec(u);
+            if (!r || r.team === war.side || r.team === 'neutral') return u.pos;
+            return r.known < 1 || (air && war.time - r.lastSeen > 12) ? null : r.lastPos;
+        };
+        const iff = (u, col) => { const r = war && war.rec(u); return r && r.team !== war.side && r.team !== 'neutral' && r.known < 2 ? '#ffd24a' : col; };
+        if (game.ground) for (const t of game.ground.targets) {
+            if (!t.alive || (t.isBridge && !t.objective)) continue;
+            const at = seen(t, false);
+            if (at) plot(at, t.team === 'blue' ? BLUE : iff(t, war ? '#ff9f5a' : AMBER), 'dia', t.isShip ? 4.5 : 2.5);
+        }
         // neutral air traffic (helicopters, airliners): small grey contacts
         for (const t of AIR_TARGETS) if (t.alive && !t.done) plot(t.pos, t === game.lockTarget ? RED : 'rgba(212,221,230,0.75)', 'sq', t === game.lockTarget ? 3.5 : 2);
         for (const a of game.aircraft) {
             if (a === p || !a.alive) continue;
-            plot(a.pos, a.team === 'blue' ? BLUE : (a === game.lockTarget ? RED : '#ff9f5a'), 'sq', a === game.lockTarget ? 4 : 3);
+            const at = a === game.lockTarget ? a.pos : seen(a, true);
+            if (at) plot(at, a.team === 'blue' ? BLUE : (a === game.lockTarget ? RED : iff(a, '#ff9f5a')), 'sq', a === game.lockTarget ? 4 : 3);
         }
         for (const m of game.weapons.missiles) plot(m.pos, m.target === p ? RED : 'rgba(255,255,255,0.8)', 'dot', 1.8);
         ctx.restore();
