@@ -221,7 +221,6 @@ export class Craters {
         this.hash = new Map();                 // HASH m cell → craters over it (physics)
         this.bb = [0, 0, 0, 0];                // bounds of every crater's reach
         this.cellOwners = new Map();           // grid cell index → craters registered there (for eviction)
-        this.gridRows = [];                    // grid texel rows touched since the last upload
         this.dataDirty = false;
         this.serial = 0;
         this._ds = { h: 0, nx: 0, ny: 1, nz: 0 };
