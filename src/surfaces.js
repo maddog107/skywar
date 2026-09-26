@@ -33,8 +33,9 @@ export function surfaceTravel(typeId, spec) {
 }
 
 // Cut the surfaces of aircraft `id` out of its segmented model (damage.js segmentModel: region groups of
-// non-indexed meshes). Adds a pivot per surface (userData.surface: kind, axis, angle, slide) to the region
-// group it mostly came from. Returns the number of surfaces made.
+// non-indexed meshes). Adds a pivot per surface (userData.surface: kind, axis, angle, slide, id) to the region
+// group it mostly came from; the meshes closing its opening carry userData.surfaceWell = that id. Returns the
+// number of surfaces made.
 export function cutSurfaces(obj, id, L) {
     const defs = SURFACE_DEFS[id];
     if (!defs) return 0;
@@ -133,6 +134,7 @@ function splitPoly(poly, pl) {
     return [inP, outP];
 }
 
+let nextId = 1;
 function cutOne(obj, def, kind, side, L) {
     const R = makeRegion(def, side, L);
     const hinge = def.hinge.map(([x, y, z]) => new THREE.Vector3(x * side * L, y * L, z * L));
@@ -146,6 +148,9 @@ function cutOne(obj, def, kind, side, L) {
     // wing is too thin for a height band alone to keep the other skin out
     const skinDir = def.skin ? (R.plan === 'top' ? new THREE.Vector3(0, def.skin, 0) : new THREE.Vector3(def.skin * side, 0, 0)) : null;
     const fn = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
+    // a whole part's faces may lie right on the region's faces: widen the box so rounding doesn't drop them
+    const nudge = def.whole ? (def.whole === true ? 0.0003 : def.whole) * L : 0;
+    if (nudge) R.box.expandByScalar(2 * nudge);
     for (const g of obj.children) {
         if (!g.userData.region) continue;
         const off = g.position;
@@ -175,13 +180,12 @@ function cutOne(obj, def, kind, side, L) {
                 names.forEach((n, k) => { const at = geo.attributes[n]; for (let c = 0; c < sizes[k]; c++) a[o++] = at.array[i * sizes[k] + c]; });
                 return { p: new THREE.Vector3().fromBufferAttribute(pos, i).add(off), a };
             };
-            const keep = [];   // pieces of the hit triangles that stay with the airframe
-            const taken = new Set();
+            const taken = new Map();   // hit triangle → the pieces of it that stay with the airframe
             for (const t of hits) {
                 let piece = [vert(t), vert(t + 1), vert(t + 2)];
                 const out = [];
                 if (def.whole) {
-                    if (!partInside(piece, R, (def.whole === true ? 0.0003 : def.whole) * L)) continue;
+                    if (!partInside(piece, R, nudge)) continue;
                 } else {
                     // clip plane by plane: what falls outside a plane stays with the airframe
                     for (let pi = 0; pi < R.planes.length && piece.length >= 3; pi++) {
@@ -192,8 +196,7 @@ function cutOne(obj, def, kind, side, L) {
                 }
                 const area = piece.length >= 3 ? polyArea(piece) : 0;
                 if (area < 1e-7) continue; // only touches the region: the triangle stays whole
-                taken.add(t);
-                keep.push(...out);
+                taken.set(t, out);
                 let b = surfBuckets.get(mesh.material);
                 if (!b) surfBuckets.set(mesh.material, b = { names, sizes, verts: [], shadow: mesh.castShadow });
                 add(b.verts, piece);
@@ -209,8 +212,15 @@ function cutOne(obj, def, kind, side, L) {
                 }
             }
             if (!taken.size) continue;
-            // rebuild the airframe mesh: its untouched triangles as they were, plus the pieces left outside the region
-            for (let t = 0; t < pos.count; t += 3) if (!taken.has(t)) keep.push(vert(t), vert(t + 1), vert(t + 2));
+            // rebuild the airframe mesh: its untouched triangles as they were, and the pieces left outside the region
+            // in place of the triangle they came from (a skin drawn blended, without depth writes, is layered in
+            // triangle order: keeping the order keeps its look)
+            const keep = [];
+            for (let t = 0; t < pos.count; t += 3) {
+                const out = taken.get(t);
+                if (out) keep.push(...out);
+                else keep.push(vert(t), vert(t + 1), vert(t + 2));
+            }
             mesh.geometry = buildGeometry(keep, names, sizes, off);
             geo.dispose();
         }
@@ -225,7 +235,7 @@ function cutOne(obj, def, kind, side, L) {
     const h0 = hinge[0];
     pivot.position.copy(h0).sub(owner.position);
     for (const [mat, b] of surfBuckets) {
-        const m = new THREE.Mesh(buildGeometry(b.verts, b.names, b.sizes, h0), mat);
+        const m = new THREE.Mesh(buildGeometry(b.verts, b.names, b.sizes, h0), solidMat(mat));
         m.castShadow = b.shadow; m.receiveShadow = true;
         pivot.add(m);
     }
@@ -247,11 +257,15 @@ function cutOne(obj, def, kind, side, L) {
     // depth: 0 leaves the opening as it is (no walls, no floor): for a skin that is a single sheet (the panel
     // shows the other side of the sheet where it opened), or the two halves of a split surface
     const depth = (def.depth ?? 0.004) * L;
+    // split: one half of a split surface (two defs on one outline, skin 1 and −1) whose halves are bodies of
+    // their own meeting face to face: each takes its skin and the inner face turned its way, so the two make the
+    // whole surface. No bay behind it: its walls span the half's own section, and it gets no floor or inside face.
+    const split = !!(def.split && skin);
     if (depth > 0) R.planes.forEach((pl, pi) => {
         if (!pl.wall || !cutSegs[pi].length) return;
-        for (const q of wallStrip(pl, cutSegs[pi], R.plan, skin, depth)) { wellRest.push(q); if (!skin) wellSurf.push(q); }
+        for (const q of wallStrip(pl, cutSegs[pi], R.plan, split ? 0 : skin, depth)) { wellRest.push(q); if (!skin || split) wellSurf.push(q); }
     });
-    if (skin && depth > 0) {
+    if (skin && !split && depth > 0) {
         // a floor under the panel, and the panel's inside face (moves with it)
         const up = R.plan === 'top' ? new THREE.Vector3(0, skin, 0) : new THREE.Vector3(skin, 0, 0);
         const inset = Math.min(depth * 0.25, 0.03);
@@ -263,9 +277,10 @@ function cutOne(obj, def, kind, side, L) {
             }
         }
     }
-    if (wellRest.length) owner.add(wellMesh(wellRest, owner.position));
-    if (wellSurf.length) pivot.add(wellMesh(wellSurf, h0));
-    pivot.userData.surface = { kind, axis: a.toArray(), angle: def.angle, slide };
+    const id = nextId++;
+    if (wellRest.length) owner.add(wellMesh(wellRest, owner.position, id));
+    if (wellSurf.length) pivot.add(wellMesh(wellSurf, h0, id));
+    pivot.userData.surface = { kind, axis: a.toArray(), angle: def.angle, slide, id };
     owner.add(pivot);
     return true;
 }
@@ -283,6 +298,23 @@ function partInside(tri, R, nudge) {
     const n = new THREE.Vector3().subVectors(b, a).cross(new THREE.Vector3().subVectors(c, a)).normalize();
     const p = a.clone().add(b).add(c).divideScalar(3).addScaledVector(n, -nudge);
     return R.planes.every(pl => pl.n.dot(p) + pl.d > 0);
+}
+
+// A skin whose glTF material is blended at full opacity (the atlas's alpha is only for a canopy elsewhere on it)
+// writes no depth, so a surface cut from it, now a mesh of its own, would sort against the airframe as a whole
+// and let what lies behind it (a pylon under a flap) show through. Surfaces are solid skin: draw them opaque.
+// Such a skin takes no livery paint (applyLivery skips blended materials), and neither does its twin.
+const solidMats = new WeakMap();
+function solidMat(mat) {
+    if (!mat.transparent || mat.depthWrite || mat.opacity < 1) return mat;
+    let s = solidMats.get(mat);
+    if (!s) {
+        s = mat.clone();
+        s.transparent = false; s.depthWrite = true;
+        s.userData = { ...mat.userData, noPaint: true };
+        solidMats.set(mat, s);
+    }
+    return s;
 }
 
 function polyArea(poly) {
@@ -330,9 +362,14 @@ function wallStrip(pl, segs, plan, skin, depth) {
     let s0 = Infinity, s1 = -Infinity;
     const S = segs.map(([u, w]) => { const a = toS(u), b = toS(w); s0 = Math.min(s0, a, b); s1 = Math.max(s1, a, b); return [a, toV(u), b, toV(w)]; });
     if (!(s1 - s0 > 1e-4)) return [];
-    const N = 28, samples = [];
-    for (let i = 0; i <= N; i++) {
-        const s = s0 + (s1 - s0) * (i === 0 ? 0.002 : i === N ? 0.998 : i / N);
+    // sampled evenly, and just either side of every segment's ends, so a narrow feature in the section (a strut
+    // or track fairing under a flap) keeps its outline instead of a wedge spilling past its sides
+    const N = 28, ss = [], e = (s1 - s0) * 1e-4;
+    for (let i = 0; i <= N; i++) ss.push(s0 + (s1 - s0) * (i === 0 ? 0.002 : i === N ? 0.998 : i / N));
+    for (const [a, , b] of S) for (const s of [a - e, a + e, b - e, b + e]) if (s > ss[0] && s < ss[N]) ss.push(s);
+    ss.sort((p, q) => p - q);
+    const samples = [];
+    for (const s of ss) {
         let lo = Infinity, hi = -Infinity;
         for (const [a, va, b, vb] of S) {
             if ((s - a) * (s - b) > 0 || a === b) continue;
@@ -345,7 +382,7 @@ function wallStrip(pl, segs, plan, skin, depth) {
         samples.push([s, lo, hi]);
     }
     const quads = [];
-    for (let i = 0; i < N; i++) {
+    for (let i = 0; i + 1 < samples.length; i++) {
         const A = samples[i], B = samples[i + 1];
         if (!A || !B) continue;
         const a0 = at(A[0], A[1]), a1 = at(A[0], A[2]), b0 = at(B[0], B[1]), b1 = at(B[0], B[2]);
@@ -354,7 +391,7 @@ function wallStrip(pl, segs, plan, skin, depth) {
     return quads;
 }
 
-function wellMesh(tris, origin) {
+function wellMesh(tris, origin, id) {
     const P = new Float32Array(tris.length * 9);
     tris.forEach((t, i) => t.forEach((p, k) => { P[i * 9 + k * 3] = p.x - origin.x; P[i * 9 + k * 3 + 1] = p.y - origin.y; P[i * 9 + k * 3 + 2] = p.z - origin.z; }));
     const g = new THREE.BufferGeometry();
@@ -363,13 +400,28 @@ function wellMesh(tris, origin) {
     g.computeBoundingSphere();
     const m = new THREE.Mesh(g, WELL_MAT);
     m.castShadow = false; m.receiveShadow = true;
-    m.userData.surfaceWell = true;
+    m.userData.surfaceWell = id;
+    m.visible = false;
     return m;
+}
+
+// The meshes closing each surface's opening, by surface id. They are shown only while it is out of its stowed
+// position: stowed, the skin is whole, and a dark wall behind a hairline where the cut meets would show.
+export function surfaceWells(model) {
+    const wells = new Map();
+    model.traverse(o => {
+        const id = o.userData.surfaceWell;
+        if (!o.isMesh || !id) return;
+        if (!wells.has(id)) wells.set(id, []);
+        wells.get(id).push(o);
+    });
+    return wells;
 }
 
 // Pose a model's surfaces (preview tool / hangar): flap and brake travel 0..1
 export function poseSurfaces(model, flap, brake) {
     const q = new THREE.Quaternion(), ax = new THREE.Vector3();
+    const wells = surfaceWells(model);
     model.traverse(o => {
         const s = o.userData.surface;
         if (!s) return;
@@ -378,5 +430,6 @@ export function poseSurfaces(model, flap, brake) {
         o.quaternion.copy(q.setFromAxisAngle(ax.fromArray(s.axis), s.angle * Math.PI / 180 * k));
         o.position.fromArray(o.userData.base);
         if (s.slide) o.position.x += s.slide[0] * k, o.position.y += s.slide[1] * k, o.position.z += s.slide[2] * k;
+        for (const w of wells.get(s.id) || []) w.visible = k > 0;
     });
 }
