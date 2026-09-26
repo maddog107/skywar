@@ -13,6 +13,8 @@ const { AIRCRAFT, hasEjectionSeat } = await src('config.js');
 const { MODEL_FILES } = await src('models.js');
 const RP = await src('rigparts.js');
 const { segmentModel, regionAt } = await src('damage.js');
+const { steerToward } = await src('ai.js');
+const { makeAircraft } = await import('./helpers/flight.mjs');
 
 // type → rig nodes its model must have (name → parent name, or null for a part of its own)
 const RIGS = {
@@ -172,4 +174,41 @@ describe('rig parts', () => {
         assert.equal(t.name, 'refuel');
         assert.ok(t.position.distanceTo(new THREE.Vector3(0, 1, -6)) < 1e-9);
     });
+});
+
+// The AI flies every new type: a 30° heading change settles without swinging through, at a sedate bank for the
+// heavies (ai.js defaultMaxBank), holding its height (as the AI steering test does for the transports)
+function stepResponse(id, V, turnDeg, fps = 60) {
+    const ac = makeAircraft(id, { alt: 3000 });
+    ac.spawnAir(new THREE.Vector3(0, 3000, 0), 0, V / ac.spec.flight.speed);
+    ac.controls.throttle = 0.9;
+    const a = turnDeg * Math.PI / 180;
+    const dir = new THREE.Vector3(Math.sin(a), 0, -Math.cos(a));
+    const series = [];
+    let bank = 0;
+    for (let i = 0; i < 30 * fps; i++) {
+        steerToward(ac, dir, ac.controls, 1);
+        ac.updateFlight(1 / fps);
+        bank = Math.max(bank, Math.acos(Math.min(1, new THREE.Vector3(0, 1, 0).applyQuaternion(ac.quat).y)) * 180 / Math.PI);
+        series.push(Math.acos(Math.min(1, ac.vel.clone().normalize().dot(dir))) * 180 / Math.PI);
+    }
+    const i0 = series.findIndex((x, i) => i > 0 && x < 3 && series[i + 1] >= x);
+    const over = i0 < 0 ? 0 : Math.max(...series.slice(i0));
+    let settle = 0;
+    series.forEach((x, i) => { if (x > 2) settle = (i + 1) / fps; });
+    return { over, settle, final: series[series.length - 1], bank, alt: ac.pos.y };
+}
+
+describe('the AI flies the new types', () => {
+    for (const id of Object.keys(RIGS)) {
+        test(`${id}: a 30° heading change settles (< 1.5° overshoot) at a sensible bank, holding height`, () => {
+            const s = AIRCRAFT[id];
+            const r = stepResponse(id, Math.min(150, s.flight.speed * 0.7), 30);
+            assert.ok(r.over < 1.5, `overshoot ${r.over.toFixed(2)}°`);
+            assert.ok(r.settle < 20, `settled after ${r.settle.toFixed(1)} s`);
+            assert.ok(r.final < 0.5, `final error ${r.final.toFixed(2)}°`);
+            if (s.category !== 'fighter') assert.ok(r.bank < 50, `banked ${r.bank.toFixed(0)}°`);
+            assert.ok(Math.abs(r.alt - 3000) < 150, `height ${r.alt.toFixed(0)} m`);
+        });
+    }
 });

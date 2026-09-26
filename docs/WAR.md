@@ -160,6 +160,27 @@ and the conventions every part follows. Read it before touching the war systems.
   big ship. JPEG/WebP textures up to 1024 (2048 for a hero model), one or two materials. Keep glass and
   paint material names meaningful; liveries skip `glass|canopy|tyre|wheel|…`.
 
+### Aircraft rigs (support aircraft, `src/rigparts.js`)
+
+Aircraft models are cut into damage sections when loaded, which merges every mesh, so an aircraft's moving
+parts are pulled out first and every instance gets its own copy, hung on the section it rides on:
+`ac.rig.parts` maps each node name to that instance's node.
+- **Nodes:** `rotodome` (turns about its own +y); `boom` (flying boom, hinge at its origin, lying along +z) >
+  `boom_ext` (telescope) > `boom_nozzle` (empty at the tip); `drogue_l` / `drogue_r` / `drogue_c` (hose exit) >
+  `hose_*` (1 m long, stretched) and `basket_*` (the coupling); `rig_*` for anything else. Node custom
+  properties arrive as `userData` (boom: `pitchMin`/`pitchMax`/`yawMax` in degrees; `boom_ext.travel` and
+  `drogue_*.hose` in metres).
+- **Helpers:** `setBoom(rig, pitch, yaw, ext)` (radians down / right, metres out), `stowBoom(rig)`,
+  `trailDrogue(rig, 'l' | 'r' | 'c', k)` (0 reeled in … 1 trailed), `spinRotodome(rig, dt, rpm)` and
+  `rigPoint(ac, name, out)` (a node's world position). The rotodome turns by itself while the aircraft is alive
+  (6 rpm airborne, ¼ rpm on the ground; `ac.radarRpm` overrides).
+- **Receivers:** `REFUEL` in rigparts.js gives each receiver an empty named `refuel`: the boom receptacle
+  (`userData.kind === 'boom'`) or the extended probe's tip (`'probe'`).
+- **Categories:** `support` (AWACS, tankers, reconnaissance and EW) and `drone` join `fighter`, `bomber`,
+  `racer` and `civil`; `hasEjectionSeat(spec)` in config.js says who can eject. A type's `group` lists it
+  under another hangar heading (the EA-18G is a fighter listed with the support types).
+- **Frozen models:** a model frozen with `freezeLocal()` must pass its rig parts as `moving`.
+
 ## The war layer (Phase B), for plug-ins
 
 ### Controls
