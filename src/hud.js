@@ -86,14 +86,16 @@ export class HUD {
         }
         this.drawScreenEffects(game);
         if (game.hideHud) return;
-        if (game.pilotMode) { this.drawPilotMode(game); return; }
-        if (game.groundStart) { this.drawGroundStart(game); return; }
+        if (game.pilotMode) { this.drawPilotMode(game); this.drawSystems(game); return; }
+        if (game.groundStart) { this.drawGroundStart(game); this.drawSystems(game); return; }
         const cockpit = game.cameraMode === 'cockpit';
         ctx.lineWidth = 1.6;
         ctx.font = '600 13px "Share Tech Mono", ui-monospace, monospace';
         ctx.textBaseline = 'middle';
 
-        if (p.alive && !game.missileCam) {
+        // (a missile camera, the old one or the strikes one, shows the missile, not the jet's HUD)
+        const missileView = game.missileCam || (game.strikes && game.strikes.cam);
+        if (p.alive && !missileView) {
             // central HUD symbology (clipped to combiner glass in the cockpit)
             ctx.save();
             let area;
@@ -110,7 +112,7 @@ export class HUD {
             ctx.restore();
             this.drawGunsight(game);
         }
-        if (p.alive && !game.missileCam) this.drawControlAids(game);
+        if (p.alive && !missileView) this.drawControlAids(game);
         this.drawTargets(game);
         this.drawNav(game);
         this.drawThreats(game);
@@ -118,6 +120,18 @@ export class HUD {
         if (game.cameraMode !== 'cockpit') this.drawRadar(game);
         this.drawMessages(game);
         this.drawWarnings(game);
+        this.drawSystems(game);
+    }
+
+    // the war plug-ins' HUD layers (systems.js: marks, strikes, the command menu…)
+    drawSystems(game) {
+        for (const s of game.systems || []) {
+            if (!s.drawHud) continue;
+            const ctx = this.ctx;
+            ctx.save();
+            try { s.drawHud(ctx, this); } catch (e) { if (!this._sysErr) { this._sysErr = true; console.warn('[hud] system layer failed', e); } }
+            ctx.restore();
+        }
     }
 
     // ── Pitch ladder, flight-path marker, boresight ──
