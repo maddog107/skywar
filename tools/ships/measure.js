@@ -48,6 +48,7 @@ export async function load(types = null) {
 // In a naval sortie: spawn the ships near the home carrier, point the photo camera at them, A/B the frame time
 export async function frame(types, opts = {}) {
     const H = await import('/perf/harness.js');
+    await (await import('/src/naval.js')).shipsLoaded();
     const S = window.skywar, g = S.game, nv = g.naval, cv = nv.homeCarrier;
     const ships = [];
     types.forEach((t, i) => {

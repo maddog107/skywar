@@ -7,8 +7,9 @@ Nothing here changes how a ship behaves: the fleet code decides when a door open
 ## Using a rig
 
 ```js
-import { openCell, ventCell, cellFrame, raiseMast, setElevator, openHatch, steerWheel, setDepth, poseRig, shipModel } from './naval.js';
+import { openCell, ventCell, cellFrame, raiseMast, setElevator, openHatch, steerWheel, setDepth, poseRig, shipModel, shipsLoaded } from './naval.js';
 
+await shipsLoaded();               // only the carrier and destroyer load at boot; the rest follow in the background
 const s = game.naval.spawn('destroyer', 'blue', spot, { orbitR: 1800 });   // any type in SHIP_TYPES
 openCell(s, 0, 1);                 // cell_1's door fully open (k 0..1, any value in between for the animation)
 ventCell(s, 0, 1);                 // the Mk 41 module's exhaust uptake (opens as the missile fires)
@@ -52,7 +53,16 @@ Each rig node is an object with a custom property `rig` (a JSON string, exported
 - `{"t":"point"}` an empty: seats, `hatch_entry`, nozzles, muzzles.
 
 Doors that share one mesh (same geometry and material, same parent, three or more) are drawn instanced
-automatically; anything else stays a mesh of its own, merged per node (one or two draw calls each).
+automatically; anything else stays a mesh of its own, merged per node (one or two draw calls each). Rig nodes
+smaller than 3 m across (hatches, a boat's wheel) cast no shadow, which saves a draw call per shadow cascade.
+
+## Loading
+
+`preloadShips()` waits only for the carrier and the destroyer (the boot-time sortie ships); the other models load
+in the background and `shipsLoaded()` resolves when they are in. A type spawned before its model has arrived gets
+the procedural stand-in (not cached, so the next spawn after loading gets the real model). Submarines get a
+material that fades whatever is below the waterline towards deep-water colour, so a boat at periscope depth shows
+only its masts through clear water.
 
 ## Per vessel
 

@@ -128,13 +128,25 @@ const SHIP_FILES = {
     cruiser: 'models/ships/cruiser.glb', ssn: 'models/ships/ssn.glb', ssgn: 'models/ships/ssgn.glb', rhib: 'models/ships/rhib.glb', cb90: 'models/ships/cb90.glb', supply: 'models/ships/supply.glb', slava: 'models/ships/slava.glb',
 };
 const shipGltf = {};
+// The carrier and destroyer (what the game modes spawn today) load before the game starts; the other fleet models
+// load right after, off the boot's critical path: await shipsLoaded() before spawning them.
+const BOOT_SHIPS = ['carrier', 'destroyer'];
+let lateShips = null;
+const shipLoading = new Set();   // types whose model is still on its way
 export async function preloadShips() {
     foamTexture(); // build the procedural foam texture now (~80 ms) rather than on the first sortie
     const loader = new GLTFLoader();
-    await Promise.all(Object.entries(SHIP_FILES).map(async ([type, file]) => {
+    const load = async ([type, file]) => {
+        shipLoading.add(type);
         try { shipGltf[type] = await loader.loadAsync(file); } catch (e) { console.warn('[naval] ship model not loaded:', file, e && e.message); }
-    }));
+        shipLoading.delete(type);
+    };
+    const files = Object.entries(SHIP_FILES);
+    await Promise.all(files.filter(([t]) => BOOT_SHIPS.includes(t)).map(load));
+    lateShips = Promise.all(files.filter(([t]) => !BOOT_SHIPS.includes(t)).map(load));
 }
+export function shipsLoaded() { return lateShips || Promise.resolve(); }
+export function hasShipModel(type) { return !!shipGltf[type]; }
 // Use an already parsed glTF for a ship type (tests, tools); ships made after this use it.
 export function setShipModel(type, gltf) { shipGltf[type] = gltf; delete templates[type]; }
 export const SHIP_MODEL_FILES = SHIP_FILES;
@@ -240,6 +252,14 @@ function prepareRig(root) {
             o.userData.rigInst = { ims: ims.map(im => im.name), index: i };
         });
         for (const im of ims) { im.computeBoundingSphere(); list[0].parent.add(im); }
+    }
+    // small moving parts (hatches, a boat's wheel) are a draw call each in every shadow cascade for a shadow
+    // nobody sees: they don't cast one (judged per node, so a mast's parts stay one mesh)
+    root.updateMatrixWorld(true);
+    const box = new THREE.Box3(), size = new THREE.Vector3();
+    for (const o of nodes) {
+        box.setFromObject(o);
+        if (!box.isEmpty() && box.getSize(size).length() < 3) o.traverse(c => { if (c.isMesh && !c.isInstancedMesh) c.castShadow = false; });
     }
 }
 
@@ -440,16 +460,45 @@ function mergeStatic(g) {
     for (const o of moving) if (o.children.length) mergeInPlace(o, moving.filter(x => x !== o));
 }
 
+// Submarines: below the surface their paint fades to the colour of deep water (light absorbed on the way down
+// and back), fully by ~5 m, so at periscope depth only the raised masts read, whatever the water shader lets
+// through. A clone per source material (a sub's merged meshes share theirs with other ships otherwise).
+const DEEP_WATER = new THREE.Color(0.004, 0.025, 0.045);
+const _uwMats = new Map();
+function underwaterMaterial(src) {
+    let m = _uwMats.get(src);
+    if (m) return m;
+    m = src.clone();
+    const prev = src.onBeforeCompile;
+    m.onBeforeCompile = (sh, r) => {
+        if (prev && prev !== THREE.Material.prototype.onBeforeCompile) prev.call(src, sh, r);
+        sh.uniforms.uDeep = { value: DEEP_WATER };
+        sh.vertexShader = sh.vertexShader
+            .replace('#include <common>', '#include <common>\nvarying float vSubY;')
+            .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvSubY = (modelMatrix * vec4(transformed, 1.0)).y;');
+        sh.fragmentShader = sh.fragmentShader
+            .replace('#include <common>', '#include <common>\nvarying float vSubY;\nuniform vec3 uDeep;')
+            .replace('#include <opaque_fragment>', 'outgoingLight = mix(outgoingLight, uDeep, smoothstep(0.2, 5.0, -vSubY) * 0.95);\n#include <opaque_fragment>');
+    };
+    const key = src.customProgramCacheKey.bind(src);
+    m.customProgramCacheKey = () => key() + '|underwater';
+    _uwMats.set(src, m);
+    return m;
+}
+
 // Ships are built once per type and cloned: clones share geometry and materials, so a sortie that
 // rebuilds the home carrier (or sinks a group) allocates nothing on the GPU.
 const templates = {};
 function makeShip(type) {
     let t = templates[type];
     if (!t) {
-        if (!shipGltf[type] && type !== 'carrier' && type !== 'destroyer') console.warn('[naval] no model for', type, '(using the procedural destroyer)');
-        t = templates[type] = shipGltf[type] ? buildFromGltf(type, shipGltf[type]) : type === 'carrier' ? buildCarrier() : buildDestroyer();
+        const pending = !shipGltf[type] && shipLoading.has(type);
+        if (pending) console.warn('[naval] model for', type, 'not loaded yet (await shipsLoaded()): using the procedural destroyer');
+        t = shipGltf[type] ? buildFromGltf(type, shipGltf[type]) : type === 'carrier' ? buildCarrier() : buildDestroyer();
+        if (!pending) templates[type] = t;   // (a stand-in isn't kept: the next ship of the type gets the real model)
         t.mounts.forEach((m, i) => { m.turret.name = 'ship:mount' + i; });
         mergeStatic(t.group);
+        if (TYPES[type] && TYPES[type].cls === 'sub') t.group.traverse(o => { if (o.isMesh) o.material = underwaterMaterial(o.material); });
     }
     const group = t.group.clone(true);
     const parts = {};

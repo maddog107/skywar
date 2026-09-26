@@ -510,7 +510,7 @@ def tube_hatch_mesh(d, name):
     p.g('SubHull').face(ring1, [(v[0] / TILE, v[2] / TILE) for v in ring1], (0, 1, 0))
     p.g('SubHull').face(ring0[::-1], [(0, 0)] * n, (0, -1, 0))
     for sx in (-r * 0.45, r * 0.45):
-        p.box('SubSteel', sx - 0.12, sx + 0.12, 0.0, 0.12, -0.12, 0.22)
+        p.box('SubHull', sx - 0.12, sx + 0.12, 0.0, 0.12, -0.12, 0.22)
     return p.mesh(origin=(0, 0, 0))
 
 HINGE = {   # hinge side → (hinge point from the tube centre (across, along), rotation so local +z runs across the disc)

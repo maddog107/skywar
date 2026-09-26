@@ -310,6 +310,7 @@ let NAV = null;
 export async function loadShips() {
     NAV = await import('/src/naval.js?t=' + Date.now());
     await NAV.preloadShips();
+    await NAV.shipsLoaded();
     return NAV;
 }
 function shipScene(type, o) {

@@ -344,6 +344,43 @@ for sx in (-4.6, 4.6):
         S.beam('Dark', (sx, -4.6, 61.7), (sx + 2.5 * math.cos(a), -4.6 + 2.5 * math.sin(a), 61.9), 0.8, 0.1)
     S.box('Hull', sx - 0.3, sx + 0.3, -5.6, -1.4, 65.0, 69.5, uvf=hull_uv)
 
+# ═════════════ detail: superstructure rails and stairs, deck-edge cleats, hose stations, buoys, antennas ═════════════
+K.rail(S, [(-7.2, Y03, ZF1), (7.2, Y03, ZF1)], h=1.0, step=1.5)                                   # 03 aft ledge
+K.rail(S, [(-6.3, 18.0, ZX(48.6)), (-6.6, 18.0, ZX(50.0)), (-3.0, 18.0, ZX(50.0))], h=1.0, step=1.2)
+K.rail(S, [(6.3, 18.0, ZX(48.6)), (6.6, 18.0, ZX(50.0)), (3.0, 18.0, ZX(50.0))], h=1.0, step=1.2)
+K.rail(S, [(-3.0, 19.6, ZX(50.0)), (3.0, 19.6, ZX(50.0)), (3.0, 19.6, ZX(56.0)), (-3.0, 19.6, ZX(56.0))], h=0.9, step=1.2, closed=True)
+for (z0, z1, xh) in ((ZX(76.0), ZX(85.5), 5.1), (ZX(93.0), ZX(106.0), 4.7)):
+    K.rail(S, [(-xh, Y02, z0), (xh, Y02, z0), (xh, Y02, z1), (-xh, Y02, z1)], h=1.0, step=1.6, closed=True)
+for sg in (1, -1):
+    K.stair(S, (sg * 6.2, Y01, ZX(88.6)), (sg * 5.3, Y02, ZX(86.0)))
+    if sg < 0:                                   # (the starboard side there is the boat bay)
+        K.stair(S, (sg * 6.0, Y01, ZX(107.6)), (sg * 4.9, Y02, ZX(105.0)))
+    # cleats and chocks along the main deck edges, fire-hose stations and ring buoys on the deckhouse sides
+    for x in range(52, 128, 9):
+        e = K.edge_at(top, ZX(x))
+        K.cleat(S, sg * (e[0] - 0.45), e[1] + 0.05, ZX(x))
+    for x in (6.0, 12.0, 22.0, 33.0):
+        e = K.edge_at(top, ZX(x))
+        K.cleat(S, sg * (e[0] - 0.5), e[1] + 0.05, ZX(x))
+    for x in (54.0, 70.0, 99.0, 118.0):
+        K.hose_reel(S, sg * 8.3, MAIN, ZX(x), '+x' if sg > 0 else '-x')
+    for x in (51.0, 78.0, 112.0, 124.0):
+        e = K.edge_at(top, ZX(x))
+        K.lifebuoy(S, sg * (e[0] - 0.1), e[1] + 0.75, ZX(x), '+x' if sg > 0 else '-x')
+    # whip and wire antennas on the superstructure and hangar edges
+    for (x, y, h) in ((58.5, 19.4, 5.5), (63.0, 19.4, 6.5), (98.0, Y02, 7.0), (110.0, Y01, 6.0), (126.0, Y01, 5.0)):
+        K.whip(S, sg * (5.6 if y > 15 else 7.4), y, ZX(x), h, r=0.045)
+    S.beam('Dark', (sg * 5.6, 19.4 + 5.2, ZX(58.5)), (sg * 1.0, 32.3, MZ - 1.2), 0.02, caps=False)     # halyard / wire
+    for k in range(3):                                                          # dipoles on the yardarm
+        S.beam('Dark', (sg * (2.4 + k * 1.3), 32.3, MZ - 1.2), (sg * (2.4 + k * 1.3), 33.6, MZ - 1.2), 0.035, caps=False)
+# the forward CIWS platform's ladder, the chain stopper, VERTREP lights on the forecastle
+K.stair(S, (0.0, Y01, ZX(49.4)), (0.0, Y03 - 0.6, ZX(47.3)))
+S.box('Dark', 1.2, 2.0, deck_y(ZX(7.0)), deck_y(ZX(7.0)) + 0.25, ZX(6.4), ZX(7.8))
+for x in (17.0, 27.0):
+    for sg in (1, -1):
+        e = K.edge_at(top, ZX(x))
+        S.box('NavWhite', sg * (e[0] - 0.6) - 0.08, sg * (e[0] - 0.6) + 0.08, e[1], e[1] + 0.1, ZX(x) - 0.08, ZX(x) + 0.08)
+
 root = bpy.data.objects.new('destroyer', None)
 bpy.context.collection.objects.link(root)
 

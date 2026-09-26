@@ -40,6 +40,7 @@ material('VLS', srgb(0x575c61), 0.1, 0.78)
 material('Canister', srgb(0x3a3f44), 0.1, 0.7)
 material('Tube', srgb(0x5d6166), 0.0, 0.8)
 material('Black', srgb(0x161718), 0.1, 0.6)
+material('Orange', srgb(0xff6a10), 0.0, 0.6)
 material('Under', srgb(0x74879a), 0.04, 0.7)
 material('NavRed', srgb(0xff2020), 0.0, 0.5, emit=srgb(0xff2020), emit_strength=5.0)
 material('NavGreen', srgb(0x20ff50), 0.0, 0.5, emit=srgb(0x20ff50), emit_strength=5.0)
@@ -295,6 +296,30 @@ for sx in (-4.2, 4.2):
         a = 2 * math.pi * b / 5
         S.beam('Dark', (sx, -5.6, ZX(156.7)), (sx + 2.6 * math.cos(a), -5.6 + 2.6 * math.sin(a), ZX(156.9)), 0.85, 0.1)
     S.box('Hull', sx - 0.3, sx + 0.3, -6.6, -1.8, ZX(160.0), ZX(164.5), uvf=hull_uv)
+
+# ═════════════ detail: superstructure rails and stairs, cleats, hose stations, buoys, antennas ═════════════
+K.rail(S, [(-7.0, L04, ZX(70.5)), (7.0, L04, ZX(70.5))], h=1.0, step=1.5)
+K.rail(S, [(-6.6, L05, ZX(65.0)), (-6.6, L05, ZX(70.0)), (6.6, L05, ZX(70.0)), (6.6, L05, ZX(65.0))], h=1.0, step=1.5)
+K.rail(S, [(-7.2, L02, ZX(70.5)), (-7.2, L02, ZX(84.5))], h=1.0, step=1.6)
+K.rail(S, [(7.2, L02, ZX(70.5)), (7.2, L02, ZX(84.5))], h=1.0, step=1.6)
+K.rail(S, [(-6.8, L02, ZX(91.0)), (-6.8, L02, ZX(110.0))], h=1.0, step=1.6)
+K.rail(S, [(6.8, L02, ZX(91.0)), (6.8, L02, ZX(110.0))], h=1.0, step=1.6)
+K.rail(S, [(-6.6, L04 + 1.4, ZX(113.0)), (6.6, L04 + 1.4, ZX(113.0)), (6.6, L04 + 1.4, ZX(125.0)), (-6.6, L04 + 1.4, ZX(125.0))], h=1.0, step=1.6, closed=True)
+for sg in (1, -1):
+    K.stair(S, (sg * 7.8, Y01 - 0.3, ZX(94.5)), (sg * 7.0, L02, ZX(92.0)))
+    K.stair(S, (sg * 6.2, L02, ZX(123.5)), (sg * 6.2, L04 + 1.4, ZX(120.5)))
+    for x in list(range(30, 150, 10)) + [160, 166, 171]:
+        e = K.edge_at(top, ZX(x))
+        K.cleat(S, sg * (e[0] - 0.45), e[1] + 0.05, ZX(x))
+    for x in (60.0, 80.0, 95.0, 114.0):
+        K.hose_reel(S, sg * 7.2, Y01 - 0.4, ZX(x), '+x' if sg > 0 else '-x')
+    for x in (56.0, 96.0, 128.0, 150.0):
+        e = K.edge_at(top, ZX(x))
+        K.lifebuoy(S, sg * (e[0] - 0.1), e[1] + 0.75, ZX(x), '+x' if sg > 0 else '-x')
+    for (x, y, h) in ((66.0, ROOF, 6.0), (69.0, L05, 5.0), (86.0, 16.0, 6.5), (108.0, L02, 7.0), (122.0, L04 + 1.4, 6.0)):
+        K.whip(S, sg * 5.2, y, ZX(x), h, r=0.045)
+    S.beam('Dark', (sg * 4.4, 30.0, FMZ), (sg * 2.0, ROOF + 3.0, ZX(66.0)), 0.02, caps=False)
+    S.beam('Dark', (sg * 4.8, 34.0, MMZ), (sg * 5.0, L02 + 6.5, ZX(108.0)), 0.02, caps=False)
 
 root = bpy.data.objects.new('cruiser', None)
 bpy.context.collection.objects.link(root)

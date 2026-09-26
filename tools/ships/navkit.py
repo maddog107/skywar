@@ -206,6 +206,35 @@ def ladder(part, p0, p1, w=0.7, mat='Dark', rung=0.3):
         c = [p0[i] + (p1[i] - p0[i]) * t for i in range(3)]
         part.beam(mat, (c[0] - w / 2, c[1], c[2]), (c[0] + w / 2, c[1], c[2]), 0.04, caps=False)
 
+def stair(part, p0, p1, w=0.8, mat='Super', rail='Dark'):
+    """external inclined ladder between two decks (p0 bottom centre, p1 top centre) with handrails both sides"""
+    ladder(part, p0, p1, w=w, mat=mat, rung=0.25)
+    for sx in (-w / 2 - 0.05, w / 2 + 0.05):
+        a = (p0[0] + sx, p0[1] + 0.95, p0[2])
+        b = (p1[0] + sx, p1[1] + 0.95, p1[2])
+        part.beam(rail, a, b, 0.04, caps=False)
+        part.beam(rail, (p0[0] + sx, p0[1], p0[2]), a, 0.04, caps=False)
+        part.beam(rail, (p1[0] + sx, p1[1], p1[2]), b, 0.04, caps=False)
+
+def cleat(part, x, y, z, along='z', mat='Dark'):
+    """mooring cleat / chock on the deck edge"""
+    if along == 'z':
+        part.box(mat, x - 0.1, x + 0.1, y, y + 0.12, z - 0.4, z + 0.4)
+        part.box(mat, x - 0.12, x + 0.12, y + 0.12, y + 0.18, z - 0.5, z + 0.5)
+    else:
+        part.box(mat, x - 0.4, x + 0.4, y, y + 0.12, z - 0.1, z + 0.1)
+        part.box(mat, x - 0.5, x + 0.5, y + 0.12, y + 0.18, z - 0.12, z + 0.12)
+
+def hose_reel(part, x, y, z, face, mat='Super', hose='Dark'):
+    """fire-hose station on a bulkhead: a small box with the reel"""
+    sg = 1 if face in ('+x', '+z') else -1
+    if face in ('+x', '-x'):
+        part.box(mat, min(x, x + sg * 0.35), max(x, x + sg * 0.35), y + 0.6, y + 1.5, z - 0.35, z + 0.35)
+        part.cyl(hose, (0, y + 1.05, z), 0.28, 0.28, min(x + sg * 0.35, x + sg * 0.5), max(x + sg * 0.35, x + sg * 0.5), 10, axis='x')
+    else:
+        part.box(mat, x - 0.35, x + 0.35, y + 0.6, y + 1.5, min(z, z + sg * 0.35), max(z, z + sg * 0.35))
+        part.cyl(hose, (x, y + 1.05, 0), 0.28, 0.28, min(z + sg * 0.35, z + sg * 0.5), max(z + sg * 0.35, z + sg * 0.5), 10, axis='z')
+
 def wdoor(part, x, y, z, face, w=0.8, h=1.9, mat='Dark'):
     """watertight door (dark panel, slightly proud) on a wall facing `face` ('+x', '-x', '+z', '-z')"""
     o = 0.03
@@ -497,7 +526,7 @@ def mk41_door_mesh(name='mk41_hatch', mat='VLS', dark='Dark'):
     t = 0.08                     # a raised plate about 8 cm thick
     p.box(mat, -h / 2, h / 2, 0.01, 0.01 + t, 0.02, h - 0.02)
     p.box(mat, -h / 2 + 0.05, h / 2 - 0.05, 0.01 + t, 0.01 + t + 0.015, 0.07, h - 0.07)   # the raised centre
-    p.box(dark, -0.08, 0.08, 0.01 + t, 0.01 + t + 0.035, h - 0.12, h - 0.04)             # latch
+    p.box(mat, -0.08, 0.08, 0.01 + t, 0.01 + t + 0.035, h - 0.12, h - 0.04)             # latch
     # the hinge: two brackets and a bar (~0.5 m × 0.1 m) along the lid's outer edge
     p.cyl(mat, (0, 0.05, 0.0), 0.05, 0.05, -0.25, 0.25, 8, axis='x')
     for x in (-0.2, 0.2):
@@ -513,7 +542,7 @@ def mk41_uptake_mesh(name='mk41_uptake', mat='VLS', dark='Dark'):
     p.box(mat, 0.0, w, 0.01, 0.07, -L / 2, L / 2)
     for k in range(6):
         zz = -L / 2 + (k + 0.5) * L / 6
-        p.box(dark, 0.04, w - 0.04, 0.07, 0.085, zz - 0.02, zz + 0.02)
+        p.box(mat, 0.04, w - 0.04, 0.07, 0.085, zz - 0.02, zz + 0.02)
     return p.mesh(origin=(0, 0, 0))
 
 def mk41_launcher(part, root, x0, z0, nx, nz, y, cell_no, uptake_no, door_mesh, uptake_mesh,

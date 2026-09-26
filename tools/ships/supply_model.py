@@ -362,6 +362,39 @@ for sx in (-6.5, 6.5):
         S.beam('Dark', (sx, -8.8, ZX(214.9)), (sx + 3.0 * math.cos(a), -8.8 + 3.0 * math.sin(a), ZX(215.2)), 1.1, 0.14)
     S.box('Hull', sx - 0.45, sx + 0.45, -10.5, -3.0, ZX(219.0), ZX(225.0), uvf=hull_uv)
 
+# ═════════════ detail: RAS winches and cargo, superstructure rails and stairs, deck fittings, antennas ═════════════
+for i, (x, rs, rp) in enumerate(STATIONS):
+    zc = ZX(x)
+    for sg, rig in ((1, rs), (-1, rp)):
+        # the station's winch on the main deck inboard of the post (drum and motor housing)
+        S.box('Super',min(sg * 10.0, sg * 11.4), max(sg * 10.0, sg * 11.4), MAIN, MAIN + 1.2, zc + 1.2, zc + 2.8)
+        S.cyl('Dark', (0, MAIN + 0.9, zc + 2.0), 0.55, 0.55, min(sg * 11.5, sg * 12.6), max(sg * 11.5, sg * 12.6), 12, axis='x')
+        if rig == 'stream':
+            # palletised cargo staged at the deck edge for the next lift
+            for k in range(3):
+                e = K.edge_at(top, zc - 3.0 - k * 1.6)
+                S.box('Dark' if k % 2 else 'Super', sg * (e[0] - 2.6) - 0.6, sg * (e[0] - 2.6) + 0.6, MAIN + 0.1, MAIN + 1.2 + 0.2 * k, zc - 3.6 - k * 1.6, zc - 2.4 - k * 1.6)
+for (y, xh, z0, z1) in ((16.4, 13.0, FZ0, FZ1), (19.2, 12.4, FZ0 + 1.0, FZ1 - 1.5), (22.0, 11.8, FZ0 + 1.5, FZ1 - 6.0)):
+    K.rail(S, [(-xh, y, z1), (-xh, y, z0 + 2.0)], h=1.0, step=2.0)
+    K.rail(S, [(xh, y, z1), (xh, y, z0 + 2.0)], h=1.0, step=2.0)
+    K.rail(S, [(-xh, y, z1), (xh, y, z1)], h=1.0, step=2.0)
+K.rail(S, [(-14.0, 17.5, AZ0), (14.0, 17.5, AZ0), (14.0, 17.5, AZ1), (-14.0, 17.5, AZ1)], h=1.0, step=2.0, closed=True)
+for sg in (1, -1):
+    K.stair(S, (sg * 12.0, MAIN, FZ1 + 3.0), (sg * 12.0, 16.4, FZ1 - 0.5))
+    K.stair(S, (sg * 11.0, MAIN, ZX(140.0)), (sg * 10.4, 17.5, ZX(136.0)))
+    K.stair(S, (sg * 15.0, MAIN, AZ0 - 2.5), (sg * 14.5, 17.5, AZ0 + 1.5))
+    for x in list(range(8, 44, 7)) + list(range(50, 205, 12)):
+        e = K.edge_at(top, ZX(x))
+        if not any(abs(x - rx) < 4.5 for rx in RAS_X):
+            K.cleat(S, sg * (e[0] - 0.5), e[1] + 0.05, ZX(x))
+    for x in (60.0, 90.0, 130.0, 185.0):
+        K.hose_reel(S, sg * (13.0 if x < 72 else 10.0 if x < 176 else 14.0), MAIN, ZX(x), '+x' if sg > 0 else '-x')
+    for x in (40.0, 98.0, 178.0, 210.0):
+        e = K.edge_at(top, ZX(x))
+        K.lifebuoy(S, sg * (e[0] - 0.15), e[1] + 0.8, ZX(x), '+x' if sg > 0 else '-x')
+    for (x, y, h) in ((50.0, 26.2, 6.0), (70.0, 22.0, 5.0), (150.0, 27.5, 5.0), (196.0, 22.5, 7.0)):
+        K.whip(S, sg * 5.5, y, ZX(x), h, r=0.05)
+
 root = bpy.data.objects.new('supply', None)
 bpy.context.collection.objects.link(root)
 S.build(parent=root)

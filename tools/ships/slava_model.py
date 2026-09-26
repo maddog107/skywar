@@ -32,6 +32,7 @@ material('Hull', srgb(0xffffff), 0.04, 0.68, image=os.path.join(TEX, 'slava_hull
 material('Super', srgb(0x8d979f), 0.04, 0.6)          # Soviet light blue-grey
 material('Dark', srgb(0x2a2d31), 0.2, 0.7)
 material('Black', srgb(0x151617), 0.1, 0.6)
+material('Orange', srgb(0xff6a10), 0.0, 0.6)
 material('White', srgb(0xdcdedd), 0.05, 0.45)
 material('Glass', srgb(0x18232d), 0.5, 0.12)
 material('Array', srgb(0x4f575e), 0.2, 0.55)
@@ -296,6 +297,29 @@ for sx in (-6.2, -2.4, 2.4, 6.2):
 for sx in (-3.6, 3.6):
     S.box('Hull', sx - 0.35, sx + 0.35, -5.4, -1.2, ZX(175.0), ZX(179.5), uvf=hull_uv)
 
+# ═════════════ detail: portholes, superstructure rails and stairs, deck fittings, antennas ═════════════
+for sg in (1, -1):
+    K.portholes(S, sg * 5.4, 10.4, ZX(56.0), ZX(94.0), 14, '+x' if sg > 0 else '-x', r=0.2)
+    K.portholes(S, sg * 4.6, 13.4, ZX(58.0), ZX(94.0), 12, '+x' if sg > 0 else '-x', r=0.2)
+    K.portholes(S, sg * 6.8, 10.6, ZX(104.0), ZX(125.0), 8, '+x' if sg > 0 else '-x', r=0.2)
+    K.rail(S, [(sg * 4.6, 14.8, ZX(72.0)), (sg * 4.6, 14.8, ZX(96.0))], h=1.0, step=1.6)
+    K.rail(S, [(sg * 6.8, 12.5, ZX(116.5)), (sg * 6.8, 12.5, ZX(126.0))], h=1.0, step=1.6)
+    K.rail(S, [(sg * 5.6, 16.2, ZX(84.0)), (sg * 5.6, 16.2, ZX(96.0))], h=1.0, step=1.6)
+    K.stair(S, (sg * 6.3, deck_y(ZX(98.0)), ZX(98.5)), (sg * 6.2, 12.5, ZX(95.0)))
+    K.stair(S, (sg * 5.0, 12.0, ZX(52.5)), (sg * 4.9, 14.8, ZX(55.5)))
+    for x in list(range(4, 40, 7)) + list(range(96, 186, 9)):
+        e = K.edge_at(top, ZX(x))
+        K.cleat(S, sg * (e[0] - 0.5), e[1] + 0.05, ZX(x))
+    for x in (92.0, 118.0, 147.0):
+        K.hose_reel(S, sg * (6.8 if x < 126 else 7.2), deck_y(ZX(x)), ZX(x), '+x' if sg > 0 else '-x')
+    for x in (36.0, 100.0, 128.0, 170.0):
+        e = K.edge_at(top, ZX(x))
+        K.lifebuoy(S, sg * (e[0] - 0.15), e[1] + 0.75, ZX(x), '+x' if sg > 0 else '-x')
+    for (x, y, h) in ((66.0, 20.0, 6.5), (86.0, 16.2, 7.0), (112.0, 18.6, 5.0), (150.0, 10.2, 6.0)):
+        K.whip(S, sg * 3.8, y, ZX(x), h, r=0.05)
+    S.beam('Dark', (sg * 5.5, 30.0, fz), (sg * 3.8, 16.2 + 6.8, ZX(86.0)), 0.02, caps=False)
+K.rail(S, [(-7.2, 10.2, HZ0), (7.2, 10.2, HZ0), (7.2, 10.2, HZ1), (-7.2, 10.2, HZ1)], h=1.0, step=1.8, closed=True)
+
 root = bpy.data.objects.new('slava', None)
 bpy.context.collection.objects.link(root)
 S.build(parent=root)
@@ -321,7 +345,7 @@ def cap_mesh():
         p.g('Canister').face([ring0[i], ring0[j], ring1[j], ring1[i]], None, (ring0[i][0], ring0[i][1] + CR, -0.6), True)
     p.g('Canister').face(ring1, None, (0, 0, -1))
     p.g('Canister').face(ring0[::-1], None, (0, 0, 1))
-    p.box('Dark', -0.1, 0.1, -0.08, 0.06, -0.12, 0.05)
+    p.box('Canister', -0.1, 0.1, -0.08, 0.06, -0.12, 0.05)
     return p.mesh(origin=(0, 0, 0))
 cap_me = cap_mesh()
 for sg in (1, -1):
@@ -379,7 +403,7 @@ C2.build(parent=root)
 def fort_hatch_mesh():
     p = Part('fort_hatch')
     p.cyl('Super', (0, 0, 0.42), 0.46, 0.44, 0.0, 0.1, 14)
-    p.box('Dark', -0.08, 0.08, 0.1, 0.14, 0.0, 0.2)
+    p.box('Super', -0.08, 0.08, 0.1, 0.14, 0.0, 0.2)
     return p.mesh(origin=(0, 0, 0))
 fh = fort_hatch_mesh()
 cell_no = tube_no

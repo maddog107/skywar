@@ -2,7 +2,7 @@
 // In-game check for the ship models (dev tool, not loaded by the game). In a running SKYWAR tab:
 //   const G = await import('/tools/ships/ingame.js');
 //   G.boot();                                   // naval sortie (home carrier + enemy group), keyboard controls
-//   const group = G.group(['cruiser', 'destroyer', 'supply', 'ssn', 'rhib']);   // spawn them round the home carrier
+//   const group = await G.group(['cruiser', 'destroyer', 'supply', 'ssn', 'rhib']);   // spawn them round the home carrier
 //   G.step(600);                                // 10 s of game time: they steam, the wakes build up
 //   await G.shot(group[0], 0.6, 0.25, 260, 'naval/ingame_cruiser.jpg');         // photo-mode camera → upload server
 // Uses perf/harness.js (boot, step, shot) so frames are stepped with window.skywarStep, not rAF.
@@ -17,7 +17,8 @@ export function boot() {
 }
 
 // spawn `types` in a loose formation round the home carrier's circle (same angular speed, so they keep station)
-export function group(types, opts = {}) {
+export async function group(types, opts = {}) {
+    await (await import('/src/naval.js')).shipsLoaded();     // the fleet models load in the background after boot
     const g = S().game, nv = g.naval, cv = nv.homeCarrier;
     const out = [];
     types.forEach((t, i) => {
