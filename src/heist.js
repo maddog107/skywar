@@ -14,6 +14,7 @@ import { GroundStart } from './groundstart.js';
 import { propInstance } from './props.js';
 import { Character } from './character.js';
 import { samplePath } from './roads.js';
+import { craterAdj } from './craters.js';
 import { clamp, rand } from './util.js';
 import { maxMach } from './aircraft.js';
 
@@ -317,7 +318,7 @@ export class HeistOp {
             const f = this.fleeing[i];
             f.t -= dt;
             f.ch.root.position.addScaledVector(f.dir, 6 * dt);
-            f.ch.root.position.y = Math.max(terrainHeight(f.ch.root.position.x, f.ch.root.position.z), 0);
+            f.ch.root.position.y = Math.max(terrainHeight(f.ch.root.position.x, f.ch.root.position.z), 0) + craterAdj(f.ch.root.position.x, f.ch.root.position.z);
             if (f.t <= 0) { f.ch.dispose(); this.fleeing.splice(i, 1); }
         }
         // entering the base any other way also trips the alarm
@@ -405,7 +406,7 @@ export class HeistOp {
             u.v += clamp(vt - u.v, -10 * dt, 5 * dt);
             u.pos.x += -Math.sin(u.yaw) * u.v * dt;
             u.pos.z += -Math.cos(u.yaw) * u.v * dt;
-            u.pos.y = Math.max(terrainHeight(u.pos.x, u.pos.z), 0);
+            u.pos.y = Math.max(terrainHeight(u.pos.x, u.pos.z), 0) + craterAdj(u.pos.x, u.pos.z);
             u.mesh.position.copy(u.pos);
             _e.set(0, u.yaw, 0);
             u.mesh.quaternion.setFromEuler(_e);

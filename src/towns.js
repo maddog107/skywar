@@ -23,6 +23,7 @@ import { Traffic } from './traffic.js';
 import { setBridgeNight, BridgeBatch } from './bridges.js';
 import { Buildings } from './buildings.js';
 import { townGradeAt } from './terraincore.js';
+import { craterCut } from './craters.js';
 import { CarSet, PAINTS, NearInstances } from './carset.js';
 
 const EXTENT = 24000, CELL = 3200;
@@ -768,7 +769,7 @@ export class Towns {
                 markB.quad(cx + rx * lat, cz + rz * lat, a.dx, a.dz, 0.25, a.w * 0.5 - 0.35, (x, z) => J.yAt(x, z) + 0.02);
             }
         }
-        const verge = liftWithDistance(new THREE.MeshStandardMaterial({ color: 0x6f6a5c, roughness: 1 }));
+        const verge = craterCut(liftWithDistance(new THREE.MeshStandardMaterial({ color: 0x6f6a5c, roughness: 1 }))); // (cut by craters too)
         const meshes = [[roadB, roadMaterial()], [streetB, streetMaterial()], [boxB, junctionMaterial()], [walkB, sidewalkMaterial()], [markB, markMaterial()], [vergeB, verge]];
         const geos = [];
         for (const [B, mat] of meshes) {
@@ -873,7 +874,7 @@ export class Towns {
         for (let i = 0; i < this.lamps.n; i++) this.lamps.setColor(i, this.lampColors.red);
         const zTex = canvasTex(64, 64, (ctx) => { ctx.clearRect(0, 0, 64, 64); ctx.fillStyle = 'rgba(240,240,232,0.95)'; for (let i = 0; i < 4; i++) ctx.fillRect(4 + i * 16, 0, 8, 64); }, false);
         const zGeo = new THREE.PlaneGeometry(STREET_HALF * 2 - 1, 3.5); zGeo.rotateX(-Math.PI / 2);
-        const zm = this.near(zGeo, liftWithDistance(new THREE.MeshStandardMaterial({ map: zTex, color: 0xb8b8b0, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: offsetUnits(-8), roughness: 0.9 })), Math.max(1, zebra.length));
+        const zm = this.near(zGeo, craterCut(liftWithDistance(new THREE.MeshStandardMaterial({ map: zTex, color: 0xb8b8b0, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: offsetUnits(-8), roughness: 0.9 }))), Math.max(1, zebra.length));
         // the crossing lies on the arm just outside the box: its height is the street's there
         const v = new THREE.Vector3();
         for (const zb of zebra) {
@@ -1336,7 +1337,7 @@ export class Towns {
             if (!byTown.has(k)) byTown.set(k, []);
             byTown.get(k).push(o);
         }
-        const mat = liftWithDistance(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: offsetUnits(-2) }));
+        const mat = craterCut(liftWithDistance(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: offsetUnits(-2) })));
         for (const items of byTown.values()) {
             const pos = [], col = [], idx = [];
             for (const o of items) {
@@ -1669,7 +1670,7 @@ export class Towns {
         g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
         g.setIndex(idx);
         g.computeVertexNormals();
-        const mesh = new THREE.Mesh(g, liftWithDistance(new THREE.MeshStandardMaterial({ map: tex, roughness: 1, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: offsetUnits(-4), side: THREE.DoubleSide })));
+        const mesh = new THREE.Mesh(g, craterCut(liftWithDistance(new THREE.MeshStandardMaterial({ map: tex, roughness: 1, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: offsetUnits(-4), side: THREE.DoubleSide }))));
         mesh.receiveShadow = true;
         mesh.frustumCulled = false;
         this.group.add(mesh);

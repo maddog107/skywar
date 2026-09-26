@@ -151,9 +151,11 @@ describe('skill and difficulty', () => {
     });
 
     test('gun damage on a weaving player scales with difficulty (rookie < veteran < ace, veteran fair)', () => {
+        // (32 one-minute fights: a single fight scores anywhere from 0 to ~60 hp, so with a handful the average
+        // flipped on nothing more than how many random numbers object construction happened to use)
         const perMin = (difficulty, skill) => {
             let dmg = 0, secs = 0;
-            for (let s = 1; s <= 6; s++) {
+            for (let s = 1; s <= 32; s++) {
                 seeded(s * 977, () => {
                     const g = arenaGame({ difficulty });
                     const P = g.spawn('f16', { team: 'blue', pos: { x: 0, y: 3000, z: -20000 }, heading: 0, isPlayer: true, speedFrac: 0.6 });

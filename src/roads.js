@@ -14,6 +14,7 @@ import { terrainHeight, BASES, fenceOf, baseToWorld, worldToBase } from './world
 import { Bridge } from './bridges.js';
 import { offsetUnits } from './util.js';
 import { SEG_STRIDE, roadBaseConform, roadConform, vkey, smooth01 } from './terraincore.js';
+import { craterCut } from './craters.js';
 
 export const ROAD_HALF = 7;      // 14 m wide: two 7 m lanes
 export const LANE = 3.3;          // lane centre offset from the middle
@@ -183,14 +184,15 @@ export function liftWithDistance(mat, perKm = ROAD_LIFT) {
 export function roadLiftAt(x, y, z, cam) {
     return cam ? Math.max(0, Math.hypot(x - cam.x, y - cam.y, z - cam.z) - 250) * ROAD_LIFT / 1000 : 0;
 }
-const surfaceMat = (map, extra = {}) => liftWithDistance(new THREE.MeshStandardMaterial({ map, roughness: 0.92, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: offsetUnits(-4), ...extra }));
+// (craterCut: a crater on a road cuts through the tarmac too, and dirties it; craters.js)
+const surfaceMat = (map, extra = {}) => craterCut(liftWithDistance(new THREE.MeshStandardMaterial({ map, roughness: 0.92, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: offsetUnits(-4), ...extra })));
 let _roadMat = null, _streetMat = null, _junctionMat = null, _walkMat = null, _markMat = null;
 export function roadMaterial() { return _roadMat || (_roadMat = surfaceMat(roadTexture())); }
 export function streetMaterial() { return _streetMat || (_streetMat = surfaceMat(streetTexture())); }
 export function junctionMaterial() { return _junctionMat || (_junctionMat = surfaceMat(asphaltTexture())); }
 export function sidewalkMaterial() { return _walkMat || (_walkMat = surfaceMat(concreteTexture(), { roughness: 0.95 })); }
 // painted lines laid over the tarmac (stop lines): pulled a little further forward
-export function markMaterial() { return _markMat || (_markMat = liftWithDistance(new THREE.MeshStandardMaterial({ color: 0xe6e6de, roughness: 0.8, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: offsetUnits(-8) }))); }
+export function markMaterial() { return _markMat || (_markMat = craterCut(liftWithDistance(new THREE.MeshStandardMaterial({ color: 0xe6e6de, roughness: 0.8, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: offsetUnits(-8) })))); }
 // bridges carry their own deck geometry, so their road surface must not be lifted
 let _plainRoad = null;
 export function plainRoadMaterial() {

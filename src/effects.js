@@ -670,6 +670,26 @@ export class Effects {
         }
     }
 
+    // Earth thrown out of a fresh crater of radius r (m): clods arcing out and falling back, and a brown curtain of
+    // dust going up with them (craters.js)
+    ejecta(pos, r = 3) {
+        const V = this._tmpV, P = this._tmpP, s = Math.min(r / 3.3, 3.5), k = Math.sqrt(s);
+        const n = Math.round(16 + 12 * s);
+        for (let i = 0; i < n; i++) {
+            const a = Math.random() * Math.PI * 2, sp = rand(8, 24) * k;
+            V.set(Math.cos(a) * sp, sp * rand(0.9, 1.9), Math.sin(a) * sp);
+            P.set(pos.x + Math.cos(a) * r * 0.4, pos.y + 0.5, pos.z + Math.sin(a) * r * 0.4);
+            const c = rand(0.07, 0.13);
+            this.smoke.emit(P, V, rand(1.4, 2.6) * k, rand(0.3, 0.75) * k, rand(0.25, 0.5) * k, [c, c * 0.8, c * 0.6], [c * 1.3, c * 1.05, c * 0.8], 1, 0.7, 0.1, -20, 0, 0.5, 3);
+        }
+        for (let i = 0; i < 5 + 4 * s; i++) {
+            const a = Math.random() * Math.PI * 2;
+            V.set(Math.cos(a) * rand(2, 7), rand(10, 26), Math.sin(a) * rand(2, 7)).multiplyScalar(k);
+            P.set(pos.x + Math.cos(a) * r * 0.6, pos.y + 1, pos.z + Math.sin(a) * r * 0.6);
+            this.smoke.emit(P, V, rand(2.5, 4.5), 2.5 * s, rand(9, 14) * s, [0.3, 0.25, 0.18], [0.44, 0.39, 0.31], 0.8, 0, 1.3, -4, 0, 0.5, 0.6);
+        }
+    }
+
     // a column of smoke that keeps rising from a burning spot for `duration` seconds
     smokeColumn(pos, size = 1, duration = 10) {
         this.emitters.push({ kind: 'column', pos: pos.clone(), life: duration, t: 0, acc: 0, size });

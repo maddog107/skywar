@@ -4,7 +4,9 @@
 import * as THREE from 'three';
 import { WEAPONS } from './config.js';
 import { rand, clamp, segPointDistSq, G, makeRadialTexture } from './util.js';
-import { terrainHeight } from './world.js';
+import { terrainHeight, isOnRunway } from './world.js';
+import { outsideBases } from './roads.js';
+import { CRATER_KINDS, craterAdj } from './craters.js';
 import { AIR_TARGETS, segHitsSphere } from './softtargets.js';
 import { seatHitTest, seatBody, seatCanopyUp, seatCanopyCenter, isEnemySeat, hitEnemySeat, shredEnemyCanopy } from './pilot.js';
 
@@ -21,7 +23,6 @@ export class Weapons {
         this.missiles = [];
         this.flares = [];
         this.bombs = [];
-        this.craters = [];
         this.bombGeo = (() => {
             const g = new THREE.Group();
             const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.2, 1.6, 4, 10), new THREE.MeshStandardMaterial({ color: 0x5d6650, roughness: 0.6 }));
@@ -32,9 +33,6 @@ export class Weapons {
             g.add(body, fins, fins2);
             return g;
         })();
-        this.craterTex = makeRadialTexture(128, [[0, 'rgba(20,16,12,0.95)'], [0.45, 'rgba(35,28,20,0.85)'], [0.7, 'rgba(60,50,38,0.4)'], [1, 'rgba(60,50,38,0)']]);
-        this.craterGeo = new THREE.CircleGeometry(1, 20);
-        this.craterMat = new THREE.MeshBasicMaterial({ map: this.craterTex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, fog: true });
         this.bulletPool = []; // spent round objects, reused by fireGun / fireFlak
         this.missileGeo = (() => {
             const g = new THREE.CylinderGeometry(0.1, 0.1, 3, 8);
@@ -308,7 +306,10 @@ export class Weapons {
             const h = terrainHeight(m.pos.x, m.pos.z);
             if (m.pos.y < Math.max(h, 0) || m.life <= 0 || (m.age > W.boost + 2 && speed < 170)) {
                 if (m.pos.y < 0 && h < 0) fx.waterSplash(m.pos, 0.6);
-                else { fx.explosion(m.pos, m.pos.y < h + 3 ? 0.8 : 0.5); this.splash(m); }
+                else {
+                    fx.explosion(m.pos, m.pos.y < h + 3 ? 0.8 : 0.5); this.splash(m);
+                    if (m.pos.y < h + 2.5) this.addCrater(_v2.set(m.pos.x, h, m.pos.z), m.kind === 'aam' ? 'missile' : m.kind, m.vel);
+                }
                 this.removeMissile(i);
                 continue;
             }
@@ -532,7 +533,7 @@ export class Weapons {
                 fx.explosion(at, 2.4);
                 fx.debrisBurst(at, _v1.set(0, 40, 0), 5, 0.8);
                 for (let k = 0; k < 20; k++) fx.smoke.emit(at, _v1.set(rand(-25, 25), rand(15, 60), rand(-25, 25)), rand(2, 4), 6, 22, [0.35, 0.3, 0.24], [0.5, 0.45, 0.38], 0.8, 0, 1.2, -12);
-                if (!hitShip && !s.ship && !onBuilding) this.addCrater(at);
+                if (!hitShip && !s.ship && !onBuilding && !s.bridge) this.addCrater(at, 'bomb', b.vel);
             }
             g.audio.boom(g.camera.position.distanceTo(at), 1.6);
             if (g.camera.position.distanceTo(at) < 800) g.shake = Math.min(1.5, g.shake + 0.6);
@@ -556,16 +557,50 @@ export class Weapons {
         }
     }
 
-    addCrater(p) {
+    // ── Craters (craters.js): a hole in the ground where something blew up on it ──
+    // at: the point on the ground; kind: a CRATER_KINDS key ('rkt', 'missile', 'bomb', ...) or a shape
+    // ({ r, rb, depth, rim, ... }); vel: what hit (a gouge runs along an elongated crater's long axis)
+    addCrater(at, kind = 'missile', vel = null, opts = {}) {
+        const g = this.game, C = g.world && g.world.craters;
+        if (!C) return null;
+        const K = typeof kind === 'string' ? CRATER_KINDS[kind] || CRATER_KINDS.missile : kind;
+        const r = Math.max(K.r, K.rb || 0) * (opts.scale || 1);
+        if (!this.craterSite(at.x, at.z, at.y, r)) return null;
+        const c = C.add(at.x, at.z, K, { dir: K.rb && vel ? vel : null, scale: opts.scale || 1, instant: !!opts.instant });
+        if (!c) return null;
+        // earth thrown out of it
+        if (!opts.quiet) g.effects.ejecta(at, r);
+        // vehicles and wrecks in it settle into it
+        if (g.ground) for (const t of g.ground.targets) {
+            if (t.radius > 9 || (t.route && t.alive) || t.sinking) continue;
+            const mp = t.mesh.position;
+            if (Math.abs(mp.x - at.x) > r * 3 || Math.abs(mp.z - at.z) > r * 3) continue;
+            const a = craterAdj(mp.x, mp.z), d = a - (t.craterY || 0);
+            mp.y += d; t.pos.y += d; t.craterY = a;
+        }
+        return c;
+    }
+
+    // Can the ground at (x, z) take a crater of radius r? Dry land only (the whole hole), not on a runway or
+    // inside an airbase fence, a bridge, a building or right under a big ground target
+    craterSite(x, z, y, r) {
         const g = this.game;
-        const m = new THREE.Mesh(this.craterGeo, this.craterMat);
-        m.rotation.x = -Math.PI / 2;
-        m.position.copy(p).y += 0.4;
-        m.scale.setScalar(rand(14, 20));
-        m.renderOrder = 2;
-        g.scene.add(m);
-        this.craters.push(m);
-        if (this.craters.length > 60) g.scene.remove(this.craters.shift());
+        for (let k = 0; k < 7; k++) {
+            const a = k * 0.9, d = k ? r * 1.3 : 0, px = x + Math.cos(a) * d, pz = z + Math.sin(a) * d;
+            if (terrainHeight(px, pz) < 1.5 || isOnRunway(px, pz)) return false;
+        }
+        if (outsideBases(x, z, 40)) return false; // (non-null: inside a fence, plus a margin)
+        const towns = g.world.towns;
+        if (towns) {
+            if (towns.bridgeAt && towns.bridgeAt(x, z, y + 6) != null) return false;
+            const bl = towns.buildings;
+            if (bl && bl.at(x, y + 1, z, r * 0.5)) return false;
+        }
+        if (g.naval && g.naval.ships.length && g.naval.deckAt(x, z, y + 6)) return false;
+        if (g.ground) for (const t of g.ground.targets) {
+            if (t.radius > 9 && Math.hypot(t.pos.x - x, t.pos.z - z) < t.radius * 0.8 + r * 0.5) return false;
+        }
+        return true;
     }
 
     // ── Flares ──
@@ -628,7 +663,6 @@ export class Weapons {
         this.flares.length = 0;
         this.bombs.forEach(b => this.game.scene.remove(b.mesh));
         this.bombs.length = 0;
-        this.craters.forEach(c => this.game.scene.remove(c));
-        this.craters.length = 0;
+        if (this.game.world && this.game.world.craters) this.game.world.craters.clear();
     }
 }

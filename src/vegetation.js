@@ -8,6 +8,7 @@
 //  - the photo ground textures (models/ground) as texture arrays for the terrain's close-up detail
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
+import { CRATER_GLSL, CRATER_U } from './craters.js';
 
 // Atlas layers. Heights, crowns and frame sizes come from each atlas' json (the bake writes them).
 export const SPECIES = ['fir_tree_01_a', 'fir_tree_01_b', 'fir_tree_01_c', 'fir_sapling', 'island_tree_01', 'island_tree_02', 'tree_small_02', 'grass_medium_02_e', 'fern_02_b'];
@@ -98,6 +99,7 @@ const VERT_PARS = /* glsl */`
     varying vec4 vCard; // position on the crown (x, y in crown radii), height fraction, 1 on the top card
     varying vec3 vTint, vVegUp;
     varying float vVegBias; // texture lod bias: the wide far shadow cascade reads coarser mips
+    ${CRATER_GLSL}
     vec3 vegPos, vegN;
     float vegShift, vegCov;
     float vegHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -140,6 +142,7 @@ const VERT_PARS = /* glsl */`
         #endif
         float dist = length(base - vegCam);
         vegCov = cardW * (1.0 - smoothstep(vegFade.x, vegFade.y, dist)) * clamp((uTime - born) / vegFade.z, 0.0, 1.0);
+        if (craterAt(base.xz).x < 1.5) vegCov = 0.0; // blown away by the blast that dug a crater here (craters.js)
         vec3 up;
         if (top) {
             float fx = mix(C.x, C.y, position.x), fy = mix(C.z, C.w, position.y);
@@ -259,7 +262,7 @@ export class Vegetation {
         this.uniforms = {
             vegAtlas: { value: null }, vegA: { value: v4() }, vegB: { value: v4() }, vegC: { value: v4() }, vegD: { value: v4() }, vegE: { value: v4() },
             vegCam: { value: new THREE.Vector3() }, vegSun: { value: new THREE.Vector3(0, 1, 0) }, vegMip: { value: 0.3 },
-            uTime, uWind,
+            uTime, uWind, ...CRATER_U,
         };
         LOOK.forEach((l, i) => {
             this.uniforms.vegD.value[i].set(l.tint[0], l.tint[1], l.tint[2], l.top);

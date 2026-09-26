@@ -312,6 +312,8 @@ export class Wreckage {
                     else {
                         fx.explosion(p.obj.position, p.heavy ? 1.4 : 0.6);
                         g.audio.boom(g.camera.position.distanceTo(p.obj.position), p.heavy ? 1 : 0.5);
+                        // a heavy section digs itself a small crater (craters.js)
+                        if (p.heavy && !surf.ship && !surf.bridge && !surf.runway) g.weapons.addCrater(_v.set(p.obj.position.x, gh, p.obj.position.z), 'part', null);
                     }
                 }
                 this.removeObj(p.obj);
