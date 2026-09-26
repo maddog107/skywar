@@ -8,6 +8,7 @@ import { Clouds, CLOUD_SHADOW_GLSL } from './clouds.js';
 import { Vegetation, SP, GROUND_GLSL } from './vegetation.js';
 import { BASES, terrainHeight, colorAt as groundColorAt, tileJob, runJob } from './terraincore.js';
 import { TerrainBatch } from './terrainbatch.js';
+import { Craters, CRATER_U, CRATER_GLSL } from './craters.js';
 // the height function and the airbase list live in terraincore.js (no three.js: the terrain worker uses them too)
 export { BASES, terrainHeight };
 
@@ -226,6 +227,7 @@ export class World {
         this.initLights();
         this.initSky();
         this.initTerrainMaterial();
+        this.craters = new Craters(this, this.craterMat); // holes blown in the ground (craters.js)
         this.initWater();
         this.clouds = new Clouds(this.scene, this.renderer, { FOG_GLSL, SKY_FOG }); // raymarched cumulus + rain deck (clouds.js)
         Object.assign(this.waterMat.uniforms, this.clouds.shadowUniforms()); // cloud shadows on the sea and lakes
@@ -447,6 +449,7 @@ export class World {
         this.sun.shadow.intensity = this.sunFar.shadow.intensity = 1 - this.overcast * 0.6;
 
         this.terrainMat.emissive = new THREE.Color(night ? 0x020306 : 0x000000);
+        this.syncCraterMat();
         this.terrainDesat.value = night ? 0.45 : 0; // moonlight washes the colour out of grass and sand
         this.envI = P.envI;
         this.baseLights.forEach(l => (l.visible = night || key === 'dusk'));
@@ -548,6 +551,7 @@ export class World {
             if (q === 'medium') this.terrainMat.defines.GROUND_LITE = ''; else delete this.terrainMat.defines.GROUND_LITE;
             this.terrainMat.needsUpdate = true;
         }
+        this.syncCraterMat();
         this.grassOn = q === 'high' || q === 'ultra';
         this.setFogEdge();
     }
@@ -720,6 +724,9 @@ export class World {
     //    vegetation.js GROUND) blended by cover and slope, with their normal maps
     //  - rock strata on steep faces, projected on the slope instead of stretched from above
     //  - a short morph when a tile switches resolution, so mountain silhouettes slide instead of popping
+    //  - craters (craters.js): the ground is cut away inside a hole, turned over and scorched around it. The
+    //    crater meshes are drawn with this same shader (CRATER_MESH: no hole, the vertex shader digs the bowl), so
+    //    a crater matches the ground it's in.
     initTerrainMaterial() {
         this.terrainMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.93, metalness: 0 });
         this.terrainMat.envMapIntensity = 0.8;
@@ -732,34 +739,60 @@ export class World {
             shader.uniforms.uDesat = this.terrainDesat;
             shader.uniforms.uTime = this.uTime;
             shader.uniforms.uDetail = this.terrainDetail;
-            Object.assign(shader.uniforms, this.veg.groundU); // photo ground textures (vegetation.js)
+            Object.assign(shader.uniforms, this.veg.groundU, CRATER_U); // photo ground textures (vegetation.js), craters
             shader.vertexShader = shader.vertexShader
                 .replace('#include <common>', `#include <common>
-                    attribute vec4 morph; // previous LOD: height, normal x, normal z, start time
-                    attribute float hTrue; // terrain height without the drawn waterline step
+                    #ifdef CRATER_MESH
+                        attribute vec4 crater; // position in hole radii, slot, kind (craters.js)
+                        varying float vCrClod;
+                        ${CRATER_GLSL}
+                    #else
+                        attribute vec4 morph; // previous LOD: height, normal x, normal z, start time
+                        attribute float hTrue; // terrain height without the drawn waterline step
+                    #endif
                     uniform float uTime;
                     varying vec3 vWPos, vWN;
                     varying float vTrueH;`)
                 .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
-                    float mk = clamp((uTime - morph.w) * 0.7, 0.0, 1.0);
-                    mk = mk * mk * (3.0 - 2.0 * mk);
-                    vec3 prevN = vec3(morph.y, sqrt(max(1.0 - morph.y * morph.y - morph.z * morph.z, 0.0)), morph.z);
-                    objectNormal = normalize(mix(prevN, objectNormal, mk));
-                    vWN = objectNormal;
-                    vTrueH = hTrue;`)
+                    #ifdef CRATER_MESH
+                        float crLift = craterLift(crater, objectNormal);
+                        vCrClod = crater.w > 0.5 ? 1.0 : 0.0;
+                        vTrueH = position.y;
+                    #else
+                        float mk = clamp((uTime - morph.w) * 0.7, 0.0, 1.0);
+                        mk = mk * mk * (3.0 - 2.0 * mk);
+                        vec3 prevN = vec3(morph.y, sqrt(max(1.0 - morph.y * morph.y - morph.z * morph.z, 0.0)), morph.z);
+                        objectNormal = normalize(mix(prevN, objectNormal, mk));
+                        vTrueH = hTrue;
+                    #endif
+                    vWN = objectNormal;`)
                 .replace('#include <begin_vertex>', `#include <begin_vertex>
-                    transformed.y = mix(morph.x, transformed.y, mk);
+                    #ifdef CRATER_MESH
+                        transformed.y += crLift;
+                    #else
+                        transformed.y = mix(morph.x, transformed.y, mk);
+                    #endif
                     vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`);
             shader.fragmentShader = shader.fragmentShader
                 .replace('#include <common>', `#include <common>
                     varying vec3 vWPos, vWN;
                     varying float vTrueH;
+                    #ifdef CRATER_MESH
+                        varying float vCrClod;
+                    #endif
                     uniform sampler2D detailMap, groundMap;
                     uniform float uDesat, uTime, uDetail;
                     // the sea bed doesn't get shadows (a ship's shadow would show through the water)
                     float seaFade(float s) { return mix(s, 1.0, smoothstep(-0.5, -4.0, vWPos.y)); }
                     #define SHADOW_FADE( s ) seaFade( s )
-                    ${GROUND_GLSL}`)
+                    ${GROUND_GLSL}
+                    ${CRATER_GLSL}`)
+                .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
+                    vec4 crT = craterAt(vWPos.xz);
+                    #ifdef CRATER_MESH
+                        crT.y = max(crT.y, vCrClod); // clods are earth, wherever they landed
+                        crT.z *= 1.0 - 0.35 * vCrClod;
+                    #endif`)
                 .replace('#include <color_fragment>', `#include <color_fragment>
                     vec3 tN = normalize(vWN);
                     float tSlope = 1.0 - tN.y, tH = vWPos.y;
@@ -808,6 +841,20 @@ export class World {
                         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.82, 0.85, 0.86), foamBand * smoothstep(0.35, 0.75, fn + swash * 0.22) * 0.85);
                     }
                     #endif
+                    // craters (craters.js): turned earth in clumps and rays over the ground's own cover, darker and damp
+                    // in the bowl, then (below) scorched around the blast
+                    float crD = 0.0, crN = 0.5;
+                    if (crT.y > 0.0 || crT.z > 0.0) {
+                        crN = texture2D(groundMap, wxz / 3.3 + 0.19).a * 0.6 + texture2D(groundMap, wxz / 12.0 + 0.53).a * 0.4;
+                        crD = max(smoothstep(0.75, 0.95, crT.y), smoothstep(0.12, 0.7, crT.y * (0.4 + 1.2 * crN)));
+                        vec3 soil = mix(mix(vec3(0.17, 0.12, 0.075), vec3(0.1, 0.07, 0.045), crT.w), vcol * 0.55, 0.25) * mix(0.8, 1.2, crN);
+                        soil = mix(soil, sandC * mix(0.65, 0.85, crN), sandW * 0.8); // on a beach it's sand that's thrown up
+                        #ifdef CRATER_MESH
+                            soil *= 1.0 + 0.1 * vCrClod; // clods: fresh earth, turned up from below
+                        #endif
+                        diffuseColor.rgb = mix(diffuseColor.rgb, soil, crD);
+                        rockW *= 1.0 - crD; snowW *= 1.0 - crD; sandW *= 1.0 - crD;
+                    }
                     // close-up detail: photo ground textures (meadow, dry grass, dirt, rock, sand, snow), each at two
                     // scales mixed so neither repeat shows, as a ratio around the ground's own colour, with normal maps
                     float nearF = uDetail * gReady * (1.0 - smoothstep(420.0, 1100.0, tDist));
@@ -816,7 +863,7 @@ export class World {
                     if (nearF > 0.0) {
                         float wr = rockW, ws = sandW, wn = snowW * (1.0 - sandW), wg = max(1.0 - wr - ws - wn, 0.0);
                         float dryK = clamp((1.0 - smoothstep(0.3, 0.7, dm)) * 0.8 + smoothstep(320.0, 700.0, tH), 0.0, 1.0);
-                        float dirtK = smoothstep(0.64, 0.8, texture2D(groundMap, wxz / 230.0 + 0.61).a) * 0.85;
+                        float dirtK = max(smoothstep(0.64, 0.8, texture2D(groundMap, wxz / 230.0 + 0.61).a) * 0.85, crD);
                         float gw[6];
                         gw[0] = wg * (1.0 - dryK) * (1.0 - dirtK); gw[1] = wg * dryK * (1.0 - dirtK); gw[2] = wg * dirtK;
                         gw[3] = wr; gw[4] = ws; gw[5] = wn;
@@ -845,15 +892,33 @@ export class World {
                         diffuseColor.rgb *= mix(vec3(1.0), clamp(gc, 0.0, 3.0), nearF * 0.9);
                     }
                     #endif
+                    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.022, 0.02, 0.018), 0.65 * crT.z * (0.6 + 0.4 * crN));
                     diffuseColor.rgb = mix(diffuseColor.rgb, vec3(dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11))), uDesat);`)
+                .replace('#include <dithering_fragment>', `#include <dithering_fragment>
+                    #ifndef CRATER_MESH
+                        if (crT.x < 1.0) discard; // a crater's hole: its mesh is drawn there instead (at the end: after every derivative)
+                    #endif`)
                 .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
                     #ifndef TERRAIN_LOW
                     // the photo textures' normal maps (tangent u = +x, v = -z)
                     normal = normalize(normal + (viewMatrix * vec4(gNrm.x, 0.0, -gNrm.y, 0.0)).xyz);
                     #endif`);
         };
+        // the crater meshes: the same shader, digging its bowl in the vertex shader (craters.js)
+        this.craterMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.93, metalness: 0 });
+        this.craterMat.envMapIntensity = 0.8;
+        this.craterMat.defines = { ...this.terrainMat.defines, CRATER_MESH: '' };
+        this.craterMat.onBeforeCompile = this.terrainMat.onBeforeCompile;
         this.TILE = 2048;
         this.VIEW_TILES = 9;
+    }
+
+    // the crater mesh material follows the terrain's quality defines and night tint
+    syncCraterMat() {
+        const d = { ...this.terrainMat.defines, CRATER_MESH: '' };
+        const m = this.craterMat;
+        if (Object.keys(d).sort().join() !== Object.keys(m.defines).sort().join()) { m.defines = d; m.needsUpdate = true; }
+        m.emissive.copy(this.terrainMat.emissive);
     }
 
     // Tileable ground detail (512², repeats seamlessly): r = grass, g = rock, b = sand grain, a = soft noise
@@ -1318,7 +1383,7 @@ export class World {
         const mat = new THREE.MeshStandardMaterial({ roughness: 0.95 });
         mat.onBeforeCompile = (sh) => {
             const VU = this.veg.uniforms;
-            Object.assign(sh.uniforms, this.grassU, { uTime: this.uTime, uWind: this.uWind, vegAtlas: VU.vegAtlas, vegA: VU.vegA, vegB: VU.vegB, vegMip: VU.vegMip });
+            Object.assign(sh.uniforms, this.grassU, CRATER_U, { uTime: this.uTime, uWind: this.uWind, vegAtlas: VU.vegAtlas, vegA: VU.vegA, vegB: VU.vegB, vegMip: VU.vegMip });
             sh.vertexShader = sh.vertexShader
                 .replace('#include <common>', `#include <common>
                     attribute vec3 gi;
@@ -1328,6 +1393,7 @@ export class World {
                     uniform vec3 uWind;
                     uniform vec4 vegA[${SP.FERN + 1}], vegB[${SP.FERN + 1}];
                     varying vec3 vGrassCol, vGUv; varying float vGrassY;
+                    ${CRATER_GLSL}
                     float gHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
                     vec4 gTex(sampler2D t, vec2 xz) { // manual bilinear (float textures)
                         vec2 f = (xz - grassO.xz) / grassO.y - 0.5;
@@ -1351,6 +1417,9 @@ export class World {
                         float s = hm.g * grassFade * (1.0 - smoothstep(outer * 0.6, outer * 0.95, dist));
                         if (L.w > 0.5) s *= smoothstep(${(G.layers[0].cell * G.layers[0].n * 0.3).toFixed(1)}, ${(G.layers[0].cell * G.layers[0].n * 0.45).toFixed(1)}, dist);
                         s *= L.z * (0.7 + 0.6 * gHash(wc + 3.7));
+                        // none in a crater or on the earth thrown out of it (craters.js)
+                        vec4 crG = craterAt(xz);
+                        s *= crG.x < 1.3 ? 0.0 : 1.0 - smoothstep(0.25, 0.6, crG.y);
                         // ferns in and near the forests, grass tussocks elsewhere
                         bool fern = gHash(wc + 11.3) < 0.015 + 0.2 * hm.b;
                         int sp = fern ? ${SP.FERN} : ${SP.GRASS};
@@ -1413,11 +1482,16 @@ export class World {
         this.grassCentre = new THREE.Vector2(1e9, 1e9);
     }
 
-    // Height and up-normal of the terrain as drawn (the tile mesh under x, z), which differs from
+    // Height and normal (out.nx, ny, nz) of the terrain as drawn (the tile mesh under x, z), which differs from
     // terrainHeight() by up to a metre or so between vertices; falls back to the true height off the tiles
     drawnSample(x, z, out) {
-        const T = this.TILE, t = this.tiles.get(this.tileKey(Math.floor(x / T), Math.floor(z / T)));
-        if (!t || !t.mesh.geometry.userData.V) { out.h = terrainHeight(x, z); out.ny = 1; return out; }
+        const T = this.TILE;
+        return this.drawnSampleIn(this.tiles.get(this.tileKey(Math.floor(x / T), Math.floor(z / T))), x, z, out);
+    }
+
+    // the same on a given tile (its entry in this.tiles, or undefined), for callers sampling many points on one
+    drawnSampleIn(t, x, z, out) {
+        if (!t || !t.mesh.geometry.userData.V) { out.h = terrainHeight(x, z); out.ny = 1; out.nx = out.nz = 0; return out; }
         const g = t.mesh.geometry, u = g.userData, p = g.attributes.position.array, n = g.attributes.normal.array, V = u.V;
         const fx = clamp((x - u.x0) / u.step, 0, V - 1.0001), fz = clamp((z - u.z0) / u.step, 0, V - 1.0001);
         const i = Math.floor(fx), j = Math.floor(fz), a = fx - i, b = fz - j;
@@ -1426,6 +1500,8 @@ export class World {
         out.h = a + b <= 1 ? p[ka + 1] + (p[kb + 1] - p[ka + 1]) * a + (p[kc + 1] - p[ka + 1]) * b
             : p[kd + 1] + (p[kc + 1] - p[kd + 1]) * (1 - a) + (p[kb + 1] - p[kd + 1]) * (1 - b);
         out.ny = (n[ka + 1] * (1 - a) + n[kb + 1] * a) * (1 - b) + (n[kc + 1] * (1 - a) + n[kd + 1] * a) * b;
+        out.nx = (n[ka] * (1 - a) + n[kb] * a) * (1 - b) + (n[kc] * (1 - a) + n[kd] * a) * b;
+        out.nz = (n[ka + 2] * (1 - a) + n[kb + 2] * a) * (1 - b) + (n[kc + 2] * (1 - a) + n[kd + 2] * a) * b;
         return out;
     }
 
@@ -1742,6 +1818,7 @@ export class World {
         }
         this.updateGrass(camera, dt);
         this.updateTerrain(focus);
+        this.craters.update(dt);
     }
 
     // Returns 0..1: how deep inside a cloud a point is (for the whiteout effect)

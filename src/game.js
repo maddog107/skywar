@@ -21,6 +21,7 @@ import { AIR_TARGETS, AIR } from './softtargets.js';
 import { readStick, rampAxis, expo, STICK_EXPO } from './input.js';
 import { clamp, damp, lerp, rand, pick, formatTime, G } from './util.js';
 import { BASES, RUNWAY, terrainHeight, isOnRunway, baseToWorld } from './world.js';
+import { craterAdj } from './craters.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
 const _q = new THREE.Quaternion(), _m = new THREE.Matrix4();
@@ -87,6 +88,20 @@ export class Game {
         input.on((a) => this.onAction(a));
     }
 
+    // A jet that went into the ground leaves a gouge: longer the shallower it hit, bigger the bigger and faster it was
+    crashCrater(ac) {
+        const p = ac.pos, s = this.surfaceAt(p.x, p.z, p.y + 5);
+        if (s.water || s.ship || s.runway || s.bridge || p.y - s.h > 12) return; // (in the sea, on a deck, into a building...)
+        const v = ac.vel, speed = v.length(), hs = Math.hypot(v.x, v.z);
+        const steep = speed > 1 ? Math.min(1, Math.abs(v.y) / speed) : 1;
+        const k = clamp(speed / 160, 0.45, 1.25), L = ac.spec.length || 15;
+        const rb = clamp(L * 0.26, 3.5, 13) * k, ra = rb * (1 + 1.4 * (1 - steep));
+        const K = { r: ra, rb, depth: clamp(L * 0.15, 2, 5) * k * (0.7 + 0.3 * steep), rim: 0.75 * k, scorch: 1, reach: 2.8, clods: 12 };
+        const at = _v.set(p.x, s.h, p.z);
+        if (hs > 1) { at.x += v.x / hs * ra * 0.35; at.z += v.z / hs * ra * 0.35; } // it ploughs on a little
+        this.weapons.addCrater(at, K, v);
+    }
+
     // Surface under a point: moving carrier decks, runways, terrain or sea
     surfaceAt(x, z, y = 1e9) {
         const d = this.naval && this.naval.ships.length ? this.naval.deckAt(x, z, y) : null;
@@ -102,7 +117,8 @@ export class Game {
         r.runway = isOnRunway(x, z);
         // inside a town the ground is drawn on its graded (smoothed) hillside: stand, drive and land on that
         const towns = this.world.towns;
-        r.h = Math.max(towns && towns.townBase ? towns.townBase(x, z, th) : th, 0);
+        // and dug out where something blew a crater in it (craters.js)
+        r.h = Math.max(towns && towns.townBase ? towns.townBase(x, z, th) : th, 0) + craterAdj(x, z);
         r.water = th < -0.5 && !r.runway;
         r.ship = null; r.hull = false;
         return r;
@@ -764,11 +780,12 @@ export class Game {
                 this.audio.say(ac.callsign + ' is down!', true);
             }
         });
-        ev.on('exploded', (ac) => {
+        ev.on('exploded', (ac, { ground, water } = {}) => {
             const d = this.camera.position.distanceTo(ac.pos);
             this.audio.boom(d, 1.2);
             if (d < 500) this.shake = Math.min(1.5, this.shake + (500 - d) / 400);
             this.weapons.blastPeople(ac.pos, 45, 110, null); // a jet going up next to a parachute
+            if (ground && !water) this.crashCrater(ac);
         });
         ev.on('groundKilled', (t, { source }) => {
             const d = this.camera.position.distanceTo(t.pos);
@@ -1427,7 +1444,7 @@ export class Game {
         // terrain detail follows you: on foot / in the Ready Room car too, not the parked jet
         this.world.update(dt, this.camera, pm ? pm.pos : this.groundStart ? this.groundStart.focus : p ? p.pos : this.camera.position, this.wind);
         this.world.updateWeather(rawDt, this.camera, this);
-        this.effects.update(dt, this.camera, this.scene.fog, (x, z) => Math.max(terrainHeight(x, z), 0));
+        this.effects.update(dt, this.camera, this.scene.fog, this.fxGround || (this.fxGround = (x, z) => Math.max(terrainHeight(x, z), 0) + craterAdj(x, z)));
         if (this.cockpit && this.cockpit.enabled && pm) this.cockpit.updateRifle(rawDt, this, this.camera, this.world, pm);
         else if (this.cockpit && this.cockpit.enabled && p && p.alive) this.cockpit.update(rawDt, this, this.camera, this.world);
         this.audio.update(rawDt, pm ? null : p, {

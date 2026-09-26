@@ -18,6 +18,7 @@ import { samplePath, LANE, liftWithDistance } from './roads.js';
 import { rand, makeRadialTexture } from './util.js';
 import { propParts } from './props.js';
 import { CarSet, PAINTS, PAINTS_BUS, mergeVehicleParts, vehicleMaterial } from './carset.js';
+import { craterAdj } from './craters.js';
 
 const _p = new THREE.Vector3(), _t = new THREE.Vector3(), _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _e = new THREE.Euler(0, 0, 0, 'YXZ'), _v = new THREE.Vector3(), _v2 = new THREE.Vector3();
 const GAP = 3.5;     // metres kept to the vehicle ahead when stopped
@@ -371,7 +372,7 @@ export class Traffic {
         if (c.dir < 0) _t.negate();
         const rx = -_t.z, rz = _t.x, rl = Math.hypot(rx, rz) || 1;
         _p.x += rx / rl * lane; _p.z += rz / rl * lane;
-        _p.y += (_p.g || 0) * lane * c.dir + c.yOff;
+        _p.y += (_p.g || 0) * lane * c.dir + c.yOff + craterAdj(_p.x, _p.z); // (down into a crater on the road and out)
         c.pos = c.pos || new THREE.Vector3();
         c.pos.copy(_p);
     }

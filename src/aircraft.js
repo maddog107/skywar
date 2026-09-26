@@ -13,6 +13,7 @@ import { AIRCRAFT } from './config.js';
 import { createAircraftModel } from './models.js';
 import { clamp, damp, lerp, rand, G, DEG, makeRadialTexture } from './util.js';
 import { groundHeight, terrainHeight, isOnRunway } from './world.js';
+import { craterAdj } from './craters.js';
 import { createEngineFlame } from './afterburner.js';
 import { surfaceTravel, surfaceWells } from './surfaces.js';
 
@@ -756,9 +757,9 @@ export class Aircraft {
         if (!ship) {
             // rolled off the runway at speed on rough ground?
             if (!surf.runway && !surf.bridge && V > (this.bellied ? 8 : 40) && surf.h > 1) {
-                const e = 5;
-                const dx = terrainHeight(this.pos.x + e, this.pos.z) - terrainHeight(this.pos.x - e, this.pos.z);
-                const dz = terrainHeight(this.pos.x, this.pos.z + e) - terrainHeight(this.pos.x, this.pos.z - e);
+                const e = 5, H = (x, z) => terrainHeight(x, z) + craterAdj(x, z); // (rolling into a crater wrecks it too)
+                const dx = H(this.pos.x + e, this.pos.z) - H(this.pos.x - e, this.pos.z);
+                const dz = H(this.pos.x, this.pos.z + e) - H(this.pos.x, this.pos.z - e);
                 const slope = Math.hypot(dx, dz) / (2 * e);
                 if (slope > (this.bellied ? 0.35 : 0.12)) this.crash();
             }
