@@ -1,0 +1,21 @@
+{
+    "title": "Remington 870 Classic by space_potato",
+    "uid": "cf28a90d832e416e905f946bb42915d4",
+    "src": "cf28a90d832e416e905f946bb42915d4.glb",
+    "forward": "+X",
+    "up": "+Z",
+    "length": 0.990,
+    "lengthOf": "^(?!BULLET)",
+    "parts": { "pump": "^RELOAD MECH", "shell": "^BULLET" },
+    "root": ["shell"],
+    "points": {
+        "grip": [0, 0.280, 0.108],
+        "support": [0, 0.665, 0.132],
+        "muzzle": [0, 0.990, 0.1675],
+        "eject": [0.016, 0.465, 0.160],
+        "sight": [0, 0.400, 0.183],
+        "sightFront": [0, 0.975, 0.188],
+        "port": [0, 0.400, 0.130]
+    },
+    "lod1": 1200
+}

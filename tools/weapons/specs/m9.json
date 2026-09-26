@@ -1,0 +1,20 @@
+{
+    "title": "3D Beretta M9 by damkung13",
+    "uid": "67a0596c99364e97ae15554cd30553e3",
+    "src": "67a0596c99364e97ae15554cd30553e3.glb",
+    "delete": "^Cube\\.007",
+    "forward": "+Y",
+    "up": "+Z",
+    "length": 0.217,
+    "parts": { "slide": "^Cube\\.001", "mag": "^Cube\\.003", "hammer": "^Cube\\.002" },
+    "pivots": { "mag": [0.050, 0.100], "hammer": [0.022, 0.106] },
+    "points": {
+        "grip": [0, 0.050, 0.068],
+        "muzzle": [0, 0.217, 0.121],
+        "eject": [0.012, 0.100, 0.135],
+        "sight": [0, 0.036, 0.139],
+        "sightFront": [0, 0.201, 0.140]
+    },
+    "lod1": 600,
+    "oneUV": true
+}

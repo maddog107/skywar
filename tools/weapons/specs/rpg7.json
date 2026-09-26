@@ -1,0 +1,22 @@
+{
+    "title": "RPG_7 by AnilkumarG",
+    "uid": "625b550f52a04068b943837558b5a582",
+    "src": "625b550f52a04068b943837558b5a582.glb",
+    "delete": "^RPG_7_WoodenHeatShield_2",
+    "forward": "+X",
+    "up": "+Z",
+    "length": 0.950,
+    "lengthOf": "^RPG_7_WoodenHeatShield_RPG_7_WoodenHeatShield",
+    "parts": { "rocket": "^RPG_7_Grenade_RPG", "rocket_flight": "^(RPG_7_WoodenHeatShield_1|Open_)" },
+    "root": ["rocket_flight"],
+    "points": {
+        "grip": [0, 0.745, 0.085],
+        "support": [0, 0.600, 0.135],
+        "muzzle": [0, 0.950, 0.215],
+        "rear": [0, 0.000, 0.215],
+        "shoulder": [0, 0.400, 0.215],
+        "sight": [0, 0.600, 0.300],
+        "sightFront": [0, 0.925, 0.280]
+    },
+    "lod1": 1200
+}

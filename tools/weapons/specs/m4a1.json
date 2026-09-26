@@ -1,0 +1,21 @@
+{
+    "title": "M4A1 Carbine by MrM0lten",
+    "uid": "9bb8f18ad94d4b468e447a2d43bd08b9",
+    "src": "9bb8f18ad94d4b468e447a2d43bd08b9.glb",
+    "delete": "^Bullet",
+    "forward": "+X",
+    "up": "+Z",
+    "length": 0.838,
+    "parts": { "mag": "^Magazine" },
+    "pivots": { "mag": [0.415, 0.140] },
+    "points": {
+        "grip": [0, 0.283, 0.088],
+        "support": [0, 0.570, 0.170],
+        "muzzle": [0, 0.838, 0.176],
+        "eject": [0.015, 0.380, 0.175],
+        "sight": [0, 0.310, 0.2235],
+        "sightFront": [0, 0.672, 0.2255],
+        "charge": [0, 0.270, 0.210]
+    },
+    "lod1": 1400
+}

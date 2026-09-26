@@ -1,0 +1,22 @@
+{
+    "title": "AK-47(Disassembly of weapons) by skartemka",
+    "uid": "a1a1750320864923884608db5dc0ea33",
+    "src": "a1a1750320864923884608db5dc0ea33.glb",
+    "delete": "knife_low|f2_low",
+    "forward": "+Y",
+    "up": "+Z",
+    "length": 0.870,
+    "parts": { "mag": "^mag_low", "bolt": "^spusk_low" },
+    "pivots": { "mag": [0.452, 0.168] },
+    "points": {
+        "grip": [0, 0.264, 0.105],
+        "support": [0, 0.555, 0.172],
+        "muzzle": [0, 0.870, 0.178],
+        "eject": [0.018, 0.430, 0.190],
+        "sight": [0, 0.495, 0.2215],
+        "sightFront": [0, 0.812, 0.2225],
+        "charge": [0.034, 0.400, 0.197]
+    },
+    "lod1": 1400,
+    "tex": 1024
+}

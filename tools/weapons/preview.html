@@ -1,0 +1,74 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<base href="/">
+<title>SKYWAR weapon preview</title>
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"
+} }
+</script>
+</head>
+<body style="background:#222;color:#ddd;font:14px sans-serif;margin:0">
+<canvas id="c" width="1200" height="700" style="width:1200px;height:700px"></canvas>
+<pre id="log" style="padding:8px"></pre>
+<script type="module">
+// Weapon model preview (dev tool, not loaded by the game). From the console:
+//   await W.show('ak47', { view: 'q34', markers: true, lod: 0 });   W.save('ak47_q34.png')
+// Renders models/weapons/<id>.glb as the game loads it (GLTFLoader, ACES, RoomEnvironment); the empties
+// (grip, support, muzzle, eject, sight...) are drawn as coloured dots. PNGs go to W.UPLOAD (tools/aircraft/upload.mjs).
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+const log = (s) => { document.getElementById('log').textContent += s + '\n'; };
+const canvas = document.getElementById('c');
+const R = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+R.toneMapping = THREE.ACESFilmicToneMapping; R.outputColorSpace = THREE.SRGBColorSpace;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x8f969c);
+scene.environment = new THREE.PMREMGenerator(R).fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.7;
+const sun = new THREE.DirectionalLight(0xffffff, 2.2); sun.position.set(2, 3, 1.5); scene.add(sun);
+const cam = new THREE.PerspectiveCamera(30, 1200 / 700, 0.005, 50);
+const loader = new GLTFLoader();
+const cache = {};
+let cur = null;
+const W = window.W = {
+    UPLOAD: 'http://localhost:8154/',
+    async load(id) { return cache[id] || (cache[id] = await loader.loadAsync('models/weapons/' + id + '.glb?t=' + Date.now())); },
+    async show(id, { view = 'q34', markers = true, lod = 0, dist = 1, part = null } = {}) {
+        if (cur) scene.remove(cur);
+        const g = await W.load(id);
+        cur = g.scene.clone(true);
+        scene.add(cur);
+        const l0 = cur.getObjectByName('lod0'), l1 = cur.getObjectByName('lod1');
+        if (l0) l0.visible = lod === 0; if (l1) l1.visible = lod === 1;
+        for (const o of cur.children) if (o !== l0 && o !== l1) o.visible = part ? o.name === part : false;
+        if (markers && l0) for (const e of l0.children) if (!e.isMesh && !e.children.length) {
+            const col = { grip: 0x00ff00, support: 0x0080ff, muzzle: 0xff0000, eject: 0xffff00, sight: 0xff00ff, sightFront: 0xff00ff }[e.name] || 0xffffff;
+            const m = new THREE.Mesh(new THREE.SphereGeometry(0.006, 10, 8), new THREE.MeshBasicMaterial({ color: col, depthTest: false }));
+            m.renderOrder = 10; e.add(m);
+        }
+        cur.updateMatrixWorld(true);
+        const box = new THREE.Box3().setFromObject(l0 && lod === 0 ? l0 : cur);
+        const c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3()), L = Math.max(s.x, s.y, s.z);
+        const dir = { q34: [1.1, 0.55, -0.9], side: [1, 0, 0], left: [-1, 0, 0], top: [0, 1, 0.001], front: [0.2, 0.15, -1], back: [0.3, 0.3, 1] }[view];
+        cam.position.copy(c).add(new THREE.Vector3(...dir).normalize().multiplyScalar(L * 2.1 * dist));
+        cam.lookAt(c);
+        R.render(scene, cam);
+        const info = [];
+        cur.traverse(o => { if (o.isMesh) info.push(o.name + ':' + (o.geometry.index ? o.geometry.index.count / 3 : o.geometry.attributes.position.count / 3)); });
+        return info.join(' ');
+    },
+    async save(name) {
+        const r = await fetch(W.UPLOAD + '?name=' + encodeURIComponent(name), { method: 'POST', body: canvas.toDataURL('image/png') });
+        return r.text();
+    },
+};
+document.title = 'READY';
+log('ready');
+</script>
+</body>
+</html>
