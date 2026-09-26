@@ -904,6 +904,105 @@ def truss(part, pts_a, pts_b, skin='paint', w=0.05, diag=True):
                 part.beam(skin, pts_b[i], pts_a[i + 1], w * 0.7, w * 0.7)
 
 
+def belt_path(circles, n_arc=6):
+    """a closed belt around circles given in loop order in the side (z, y) plane, belt on the OUTSIDE of every circle.
+    circles: [(z, y, r)], traversed so that the bottom (ground) run goes towards −z (forwards), i.e. clockwise when
+    seen from the left with z to the right. Returns a closed list of (z, y) points and their cumulative length."""
+    m = len(circles)
+    # In the (z, y) plane (z right, y up) the loop runs clockwise: rear-bottom → front-bottom (towards −z) → up
+    # round the front → back along the top → down round the rear. The belt's outside is then to the LEFT of the
+    # direction of travel. The arrangement must be convex (road wheels level, rollers not below the top run).
+    def tangent(c1, c2):
+        (x1, y1, r1), (x2, y2, r2) = c1, c2
+        dx, dy = x2 - x1, y2 - y1
+        D = math.hypot(dx, dy)
+        ang = math.atan2(dy, dx)
+        a = math.acos(clamp((r1 - r2) / D, -1, 1))
+        nang = ang + a          # outer normal of the tangent (left of travel): n·(c2 − c1) = r1 − r2
+        n = (math.cos(nang), math.sin(nang))
+        return (x1 + n[0] * r1, y1 + n[1] * r1), (x2 + n[0] * r2, y2 + n[1] * r2), nang
+    tans = [tangent(circles[i], circles[(i + 1) % m]) for i in range(m)]
+    pts = []
+    for i in range(m):
+        # arc on circle i from the incoming tangent's end to the outgoing tangent's start
+        (cx, cy, r) = circles[i]
+        a_in = tans[i - 1][2]
+        a_out = tans[i][2]
+        # clockwise (decreasing angle) from a_in to a_out
+        da = (a_in - a_out) % (2 * math.pi)
+        k = max(1, int(round(n_arc * da / math.pi)))
+        for s in range(k + 1):
+            ang = a_in - da * s / k
+            pts.append((cx + r * math.cos(ang), cy + r * math.sin(ang)))
+    # drop near-duplicates
+    out = [pts[0]]
+    for p in pts[1:]:
+        if math.hypot(p[0] - out[-1][0], p[1] - out[-1][1]) > 1e-4:
+            out.append(p)
+    if math.hypot(out[0][0] - out[-1][0], out[0][1] - out[-1][1]) < 1e-4:
+        out.pop()
+    return out
+
+
+def track_run(veh, side, x, width, circles, thick=0.07, tile=0.68, name=None, parent=None, skin_edge='track_pad', guide=True):
+    """a track loop as its own node (name track_l / track_r): an outer surface in the Track material (u = distance
+    along the loop / tile, so the game scrolls it: vehicles.js roll()), an inner surface and edges.
+    circles: [(z, y, r)] sprocket / road wheels / idler / return rollers in loop order (see belt_path);
+    the loop is laid `thick` outside them. side = -1 left, +1 right; x = the track's centre line."""
+    name = name or ('track_l' if side < 0 else 'track_r')
+    p = Part(veh, name, pivot=(x, 0, 0), parent=parent)
+    outer = belt_path([(z, y, r + thick) for (z, y, r) in circles])
+    inner = belt_path([(z, y, r + 0.004) for (z, y, r) in circles])
+    # resample the inner loop to the outer loop's count by nearest parameter (keep it simple: equal counts)
+    def resample(loop, n):
+        L = [0.0]
+        for i in range(1, len(loop) + 1):
+            a, b = loop[i - 1], loop[i % len(loop)]
+            L.append(L[-1] + math.hypot(b[0] - a[0], b[1] - a[1]))
+        tot = L[-1]
+        res = []
+        j = 0
+        for k in range(n):
+            s = tot * k / n
+            while L[j + 1] < s:
+                j += 1
+            a, b = loop[j], loop[(j + 1) % len(loop)]
+            t = (s - L[j]) / max(1e-9, L[j + 1] - L[j])
+            res.append((lerp(a[0], b[0], t), lerp(a[1], b[1], t)))
+        return res, tot
+    n = max(48, len(outer))
+    O, Lo = resample(outer, n)
+    I, Li = resample(inner, n)
+    x0, x1 = x - width / 2, x + width / 2
+    u = 0.0
+    us = [0.0]
+    for k in range(1, n + 1):
+        a, b = O[k - 1], O[k % n]
+        us.append(us[-1] + math.hypot(b[0] - a[0], b[1] - a[1]) / tile)
+    # make the loop hold a whole number of tiles, so the seam doesn't jump
+    scale = round(us[-1]) / us[-1] if us[-1] > 1 else 1
+    us = [q * scale for q in us]
+    cz = sum(q[0] for q in O) / n
+    cy = sum(q[1] for q in O) / n
+    for k in range(n):
+        a, b = O[k], O[(k + 1) % n]
+        ia, ib = I[k], I[(k + 1) % n]
+        mz, my = (a[0] + b[0]) / 2 - cz, (a[1] + b[1]) / 2 - cy
+        # outer face (Track), u along the loop, v across
+        p.face([(x0, a[1], a[0]), (x1, a[1], a[0]), (x1, b[1], b[0]), (x0, b[1], b[0])], 'track',
+               uvs=[(us[k], 0.0), (us[k], 1.0), (us[k + 1], 1.0), (us[k + 1], 0.0)], want=(0, my, mz))
+        # inner face (the running surface the wheels ride on): dark steel
+        p.face([(x0, ia[1], ia[0]), (x0, ib[1], ib[0]), (x1, ib[1], ib[0]), (x1, ia[1], ia[0])], skin_edge, want=(0, -my, -mz))
+        # edges
+        for (xe, s) in ((x0, -1), (x1, 1)):
+            p.face([(xe, a[1], a[0]), (xe, b[1], b[0]), (xe, ib[1], ib[0]), (xe, ia[1], ia[0])], skin_edge, want=(s, 0, 0))
+    if guide:
+        # centre guide horns on the inside of the run are part of the texture; add a thin centre ridge on the inner face
+        pass
+    veh.meta['tracks'].append({'node': name, 'side': side, 'tile': round(tile / scale, 5)})
+    return p
+
+
 def joint_point(part, p, value):
     """where world point p (attached to `part`) goes when part's joint (and its ancestors' — not handled) is at value"""
     j = part.joint

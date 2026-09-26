@@ -254,7 +254,7 @@ export function roll(rig, dist, distRight = dist) {
     }
     for (const t of rig.tracks) {
         t.offset = (t.offset + (t.side > 0 ? distRight : dist) / t.tile) % 1;
-        if (t.material) t.material.map.offset.x = -t.offset;
+        if (t.material) t.material.map.offset.x = t.offset; // u runs forwards along the ground run (vkit track_run)
     }
 }
 
