@@ -180,7 +180,7 @@ b = ((xx - yy) % 16 < 3) & ((xx // 8 + yy // 8) % 2 == 1)
 g = np.full((th, tw, 3), 96.0)
 g[a | b] = [150, 152, 150]
 det[ty:ty + th, tx:tx + tw] = g
-orm[ty:ty + th, tx:tx + tw] = [255, 110, 220]
+orm[ty:ty + th, tx:tx + tw] = [255, 165, 120]   # worn, painted-over steel: not a mirror
 # dials (instrument panel)
 dx, dy, dw, dh = [v * S for v in PATTERNS['dials']]
 im = Image.new('RGB', (dw, dh), (34, 36, 34))
