@@ -125,7 +125,7 @@ function box(w, h, d, mat, x, y, z, parent) {
 // procedural ship below is used instead.
 const SHIP_FILES = {
     carrier: 'models/ships/carrier.glb', destroyer: 'models/ships/destroyer.glb',
-    ssn: 'models/ships/ssn.glb', ssgn: 'models/ships/ssgn.glb', rhib: 'models/ships/rhib.glb',
+    ssn: 'models/ships/ssn.glb', ssgn: 'models/ships/ssgn.glb', rhib: 'models/ships/rhib.glb', cb90: 'models/ships/cb90.glb', supply: 'models/ships/supply.glb', slava: 'models/ships/slava.glb',
 };
 const shipGltf = {};
 export async function preloadShips() {
@@ -188,8 +188,8 @@ function buildFromGltf(type, gltf) {
 // Each rig node carries extras "rig" (JSON). {hinge: [x, y, z], open: rad} turns it about its own axis (after its
 // rest rotation) by open·k; {slide: [x, y, z], travel: m} moves it along its own axis by travel·k. t (kind):
 // 'door' (vls_<n> cell doors, uptake_<n>, hatch_*, door_*), 'mast' (mast_*), 'elevator' (elevator_<n>),
-// 'wheel' (k −1..1), 'cell' (cell_<n>: the missile's start point, +Y = launch direction; door = the node that
-// covers it), 'point' (seat_*, hatch_entry, jet_<n>, muzzle_<n>).
+// 'wheel' and 'turret' (k −1..1: ±open about the hinge), 'cell' (cell_<n>: the missile's start point, +Y = launch
+// direction; door = the node that covers it), 'point' (seat_*, hatch_entry, jet_<n>, muzzle_<n>).
 // Template time: parse the specs, give single-mesh rig nodes a pivot of their own, and draw doors that share a
 // mesh (the ~100 VLS cell doors of a destroyer) as one InstancedMesh per ship — one draw call, not a hundred.
 function toPivot(mesh) {
@@ -246,7 +246,7 @@ function prepareRig(root) {
 // Per ship (a clone of the template): the rig nodes by name and by kind. Lists are in number order
 // (vls_1 → rig.vls[0], cell_1 → rig.cells[0], elevator_1 → rig.elevators[0]).
 function bindRig(group) {
-    const rig = { nodes: {}, vls: [], cells: [], uptakes: [], masts: {}, elevators: [], hatches: {}, doors: {}, seats: {}, points: {}, wheel: null };
+    const rig = { nodes: {}, vls: [], cells: [], uptakes: [], masts: {}, elevators: [], hatches: {}, doors: {}, seats: {}, points: {}, turrets: {}, wheel: null };
     const ims = {};
     group.traverse(o => { if (o.isInstancedMesh && o.name.startsWith('ship:rigdoors')) ims[o.name] = o; });
     group.traverse(o => {
@@ -275,6 +275,7 @@ function bindRig(group) {
         else if (nm.startsWith('door_')) rig.doors[nm.slice(5)] = e;
         else if (nm.startsWith('seat_')) rig.seats[nm.slice(5)] = e.node;
         else if (e.spec.t === 'wheel') rig.wheel = e;
+        else if (e.spec.t === 'turret') rig.turrets[nm] = e;
         if (e.spec.t === 'point') rig.points[nm] = e.node;
     }
     return rig;
@@ -286,7 +287,7 @@ export function poseRig(ship, name, k) {
     const e = ship && ship.rig && ship.rig.nodes[name];
     if (!e) return false;
     const s = e.spec, o = e.node;
-    e.k = s.t === 'wheel' ? clamp(k, -1, 1) : clamp(k, 0, 1);
+    e.k = s.t === 'wheel' || s.t === 'turret' ? clamp(k, -1, 1) : clamp(k, 0, 1);
     if (s.hinge) o.quaternion.copy(e.q0).multiply(_rq.setFromAxisAngle(_rax.fromArray(s.hinge), (s.open || 0) * e.k));
     if (s.slide) o.position.copy(e.p0).addScaledVector(_rax.fromArray(s.slide).applyQuaternion(e.q0), (s.travel || 0) * e.k);
     o.updateMatrix();

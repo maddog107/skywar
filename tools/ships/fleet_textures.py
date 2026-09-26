@@ -7,8 +7,11 @@
 # The Blender scripts map them with the same constants (HULLS / DECKS below, imported by the scripts).
 # ═══════════════════════════════════════════════════════════════
 import math, os, random, sys
-import numpy as np
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+try:                        # (the Blender scripts import this file only for HULLS / DECKS: Blender has no Pillow)
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFilter, ImageFont
+except ImportError:
+    pass
 
 # ── hull texture layouts: z range (bow → stern), y range (keel → top), bands, fittings ──
 # (Blender scripts import these to write the matching UVs)
@@ -164,8 +167,8 @@ def supply_deck(m, P, s):
         m.line([P(sg * 1.4, -98.0), P(sg * 7.0, -109.0)], fill=BLACK, width=max(1, int(0.4 * s)))
 
 def slava_deck(m, P, s):
-    # Soviet helicopter pad on the quarterdeck: yellow-edged circle and cross
-    cz = 80.0
+    # Soviet helicopter pad on the quarterdeck (x 166–186 m from the stem): yellow-edged circle and cross
+    cz = 82.8
     (ax, ay), (bx, by) = P(-5.5, cz - 5.5), P(5.5, cz + 5.5)
     m.ellipse([ax, ay, bx, by], outline=YELLOW, width=max(1, int(0.3 * s)))
     m.line([P(-4.5, cz), P(4.5, cz)], fill=WHITE, width=max(1, int(0.35 * s)))
@@ -222,6 +225,31 @@ def rubber_deck(out, W=512, H=512, seed=11):
     l = 0.16 + 0.05 * (dmd > 0.55) + nrng.normal(0, 0.012, (H, W)).astype(np.float32)
     Image.fromarray(np.clip(np.stack([l, l * 1.02, l * 1.03], -1) * 255, 0, 255).astype(np.uint8), 'RGB').save(os.path.join(out, 'boat_deck.jpg'), quality=88, optimize=True)
 
+def camo(out, W=1024, H=512, seed=90):
+    """Swedish coastal-forces splinter camouflage (CB90): angular patches of grey-green, green, dark green and
+    black-brown on a light grey-green ground; tiles in both directions"""
+    rng = random.Random(seed)
+    cols = [(128, 138, 116), (86, 101, 64), (48, 61, 44), (43, 38, 34)]
+    img = Image.new('RGB', (W, H), cols[0])
+    d = ImageDraw.Draw(img)
+    for layer, (col, n, size) in enumerate(((cols[1], 34, 150), (cols[2], 30, 120), (cols[3], 18, 80))):
+        for k in range(n):
+            cx, cy = rng.uniform(0, W), rng.uniform(0, H)
+            m = rng.randint(4, 6)
+            ang0 = rng.uniform(0, math.pi * 2)
+            pts = []
+            for i in range(m):
+                a = ang0 + 2 * math.pi * i / m + rng.uniform(-0.4, 0.4)
+                r = size * rng.uniform(0.35, 1.0)
+                pts.append((cx + math.cos(a) * r * 1.6, cy + math.sin(a) * r * 0.7))   # stretched along the hull
+            for ox in (-W, 0, W):
+                for oy in (-H, 0, H):
+                    d.polygon([(x + ox, y + oy) for x, y in pts], fill=col)
+    arr = np.asarray(img, np.float32)
+    nrng = np.random.default_rng(seed)
+    arr *= (0.94 + 0.08 * smooth_noise(H, W, 40, nrng)[..., None])
+    Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), 'RGB').save(os.path.join(out, 'cb90_camo.jpg'), quality=88, optimize=True)
+
 if __name__ == '__main__':
     OUT = sys.argv[1] if len(sys.argv) > 1 else '.'
     os.makedirs(OUT, exist_ok=True)
@@ -232,4 +260,5 @@ if __name__ == '__main__':
     deck_texture(OUT, 'slava', slava_deck)
     anechoic(OUT)
     rubber_deck(OUT)
+    camo(OUT)
     print('fleet textures written to', OUT)

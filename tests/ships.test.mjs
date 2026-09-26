@@ -41,14 +41,14 @@ const parse = (ab) => new Promise((res, rej) => new GLTFLoader().parse(ab, '', r
 // What each type's rig must have (counts are exact; names must exist)
 const EXPECT = {
     carrier: { elevators: 4, doors: ['island_1', 'island_2', 'island_3', 'island_4', 'island_5', 'accom'], points: ['hatch_entry'] },
-    destroyer: { cells: 96, uptakes: 12, vertical: true, todo: 'the Mk 41 rig lands with the destroyer upgrade' },
+    destroyer: { cells: 96, uptakes: 12, vertical: true, doors: ['hangar_1', 'hangar_2'] },
     cruiser: { cells: 122, uptakes: 16, vertical: true },
     ssn: { cellsMin: 12, masts: ['periscope_1', 'periscope_2'], hatches: ['escape'], points: ['hatch_entry'], sub: true },
     ssgn: { cells: 154, masts: ['periscope_1'], hatches: ['escape'], points: ['hatch_entry'], sub: true },
-    supply: { pointsMin: 1 },
-    rhib: { seats: ['driver'], seatsMin: 6, wheel: true, points: ['jet_1', 'jet_2'] },
-    cb90: { seats: ['driver'], seatsMin: 4, wheel: true, points: ['jet_1', 'jet_2'], doors: ['ramp'] },
-    slava: { cells: 16 },
+    rhib: { seats: ['driver', 'nav', '1', '8', 'gunner'], seatsMin: 10, wheel: true, points: ['jet_1', 'jet_2', 'hatch_entry'] },
+    cb90: { seats: ['driver', 'commander'], seatsMin: 20, wheel: true, points: ['jet_1', 'jet_2', 'muzzle_1', 'muzzle_3'], doors: ['ramp'], hatches: ['bow', 'roof'] },
+    supply: { points: ['ras_1', 'ras_12', 'hatch_entry'], doors: ['hangar_1', 'hangar_2', 'hangar_3', 'accom'] },
+    slava: { cells: 80 },
 };
 
 const types = Object.entries(N.SHIP_MODEL_FILES).filter(([, f]) => existsSync(repo + f));

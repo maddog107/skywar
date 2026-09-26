@@ -121,15 +121,34 @@ def edge_at(top, z):
     p = top[0] if z < top[0][2] else top[-1]
     return p[0], p[1]
 
-def deck_strip(part, top, camber, mat='Deck', uvf=None, z0=-1e9, z1=1e9):
-    """cambered deck along the hull's top row: each pair of stations → two quads meeting on the centreline"""
+def deck_strip(part, top, camber, mat='Deck', uvf=None, z0=-1e9, z1=1e9, holes=()):
+    """cambered deck along the hull's top row: each pair of stations → quads from the deck edge to the
+    centreline. holes: [(half_width, z0, z1)] openings centred on the centreline (a VLS launcher sits in one)."""
+    def y_at(x, zp, ea, eb):
+        """deck height at |x| on the section interpolated at zp between stations ea and eb"""
+        t = (zp - ea[2]) / (eb[2] - ea[2]) if eb[2] != ea[2] else 0.0
+        xe = ea[0] + (eb[0] - ea[0]) * t
+        ye = ea[1] + (eb[1] - ea[1]) * t
+        return xe, ye + camber * (1 - min(abs(x) / xe, 1.0) if xe > 1e-6 else 1.0)
     for a, b in zip(top, top[1:]):
         if b[2] <= z0 or a[2] >= z1:
             continue
-        ca = (0.0, a[1] + camber, a[2]); cb = (0.0, b[1] + camber, b[2])
-        for sg in (1, -1):
-            q = [(sg * a[0], a[1], a[2]), (sg * b[0], b[1], b[2]), cb, ca]
-            part.g(mat).face(q, [uvf(*p) for p in q] if uvf else None, (0, 1, 0))
+        cuts = sorted(set([a[2], b[2]] + [z for h in holes for z in (h[1], h[2]) if a[2] < z < b[2]]))
+        for zs, ze in zip(cuts, cuts[1:]):
+            zm = (zs + ze) / 2
+            hw = max([h[0] for h in holes if h[1] <= zm <= h[2]] or [0.0])
+            xe_s, _ = y_at(0, zs, a, b)
+            xe_e, _ = y_at(0, ze, a, b)
+            spans = [(0.0, 1.0)] if hw <= 0 else [(min(hw / max(xe_s, 1e-6), 1.0), 1.0)]
+            for sg in (1, -1):
+                for (f0, f1) in spans:
+                    # corners at fraction f of the local half-width (so the quads follow the deck edge)
+                    def P(f, zp, xe):
+                        x = hw if (f0 > 0 and f == f0) else f * xe
+                        _, y = y_at(x, zp, a, b)
+                        return (sg * x, y, zp)
+                    q = [P(f1, zs, xe_s), P(f1, ze, xe_e), P(f0, ze, xe_e), P(f0, zs, xe_s)]
+                    part.g(mat).face(q, [uvf(*p) for p in q] if uvf else None, (0, 1, 0))
 
 # ═════════════ structure ═════════════
 def deckhouse(part, xh0, xh1, y0, y1, z0, z1, mat='Super', chamfer_front=0.0, chamfer_back=0.0, xc=0.0, top=True, roof_mat=None):
