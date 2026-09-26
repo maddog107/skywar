@@ -1,7 +1,7 @@
 # ═══════════════════════════════════════════════════════════════
 # Truck crane on the Ural-4320 (KS-35714-style, military green), used as the SCUD transloader: a slewing turret
 # with the operator's cab and counterweight, a two-section telescopic box boom luffed by a hydraulic ram, the hook
-# block with a missile lifting beam, and four outriggers.
+# block, and four outriggers.
 #   blender -b -P tools/vehicles/build.py -- crane
 # References: KS-35714 on Ural-4320 photos (Wikimedia Commons); the 9T31M1 transloader crane of the Scud brigades.
 # Rig: turret (rot y, slewing, full circle); boom (rot x about the boom foot, 0 → 70°, group 'raise'); boom_2
@@ -51,7 +51,6 @@ def build_turret(v):
     t.prism_y('paint', deck, 1.74, 1.86)
     # counterweight at the tail
     t.prism_y('paint', [(-1.05, 6.35), (1.05, 6.35), (0.78, 6.9), (-0.78, 6.9)], 1.86, 2.55)
-    ural.outline(t, [(-1.05, 2.2, 6.3501), (1.05, 2.2, 6.3501)], (0, 0, -1)) if False else None
     # boom foot brackets and the winch drum between them
     for sx in (-1, 1):
         x0, x1 = (0.26, 0.34) if sx > 0 else (-0.34, -0.26)

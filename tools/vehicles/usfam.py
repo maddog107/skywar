@@ -475,3 +475,98 @@ def hemtt_chassis(v, b, axles, zend, fenders=((), ()), tank=True):
         for y in (0.82, 1.1):
             b.cyl('dark', (-0.95, y, 5.1), (-0.95, y, 5.95), 0.12, 0.12, 12)
 
+
+# ── FMTV with the armoured (LSAC) cab, as on the M142 HIMARS ──
+
+FMTV = {
+    'track': 2.02,
+    'R': 0.59, 'W': 0.40, 'rim': 0.27,     # 395/85R20
+    'half': 1.20,
+    'cab_z': (0.18, 2.36), 'cab_top': 3.0,
+    'frame': (0.82, 1.14),
+}
+
+
+def fmtv_armoured_cab(v, b):
+    """the FMTV cab-over-engine cab with the add-on armour of the HIMARS: flat armoured front with a two-pane
+    windscreen in thick frames, grille below, headlights in guards on the bumper, doors with small windows,
+    big mirrors, a roof hatch. Returns the door parts."""
+    F = FMTV
+    zf, zr = F['cab_z']
+    hw = F['half'] - 0.02
+    top = F['cab_top']
+    yb, yw0, yw1 = 1.12, 1.98, 2.76
+    # lower cab body (over the engine) and the upper cab with a slightly raked windscreen
+    b.box('paint', -hw, hw, yb, yw0, zf, zr, bev=0.03)
+    r0 = [(x, yw0, z) for (x, z) in _plan(zf, zr, hw, 0.06)]
+    r1 = [(x, yw1, z) for (x, z) in _plan(zf + 0.14, zr, hw, 0.06)]
+    r2 = [(x, top, z) for (x, z) in _plan(zf + 0.3, zr - 0.02, hw - 0.04, 0.08)]
+    b.loft('paint', [r0, r1, r2], smooth=False)
+    b.face(r2, 'paint', want=(0, 1, 0))
+    A0, A1, B0, B1 = Vector(r0[0]), Vector(r0[1]), Vector(r1[0]), Vector(r1[1])
+    n = (A1 - A0).cross(B0 - A0).normalized()
+    if n.z > 0:
+        n = -n
+
+    def on(u, w):
+        return lerp(lerp(A0, A1, u), lerp(B0, B1, u), w)
+    # armoured windscreen: two thick-framed panes and a centre post
+    for (u0, u1) in ((0.06, 0.47), (0.53, 0.94)):
+        b.panel('glass', [on(u0, 0.12), on(u1, 0.12), on(u1, 0.9), on(u0, 0.9)], n, off=0.03, frame=0.07, frame_skin='dark')
+        # the armour frame's proud border
+        q = [on(u0 - 0.03, 0.05), on(u1 + 0.03, 0.05), on(u1 + 0.03, 0.97), on(u0 - 0.03, 0.97)]
+        b.panel('paint', q, n, off=0.02)
+    for u in (0.27, 0.73):
+        b.beam('black', on(u, 0.14) + n * 0.045, on(u - 0.07, 0.72) + n * 0.045, 0.014, 0.008)
+    # grille (FMTV slots) and armour bolts on the front, bumper with headlight guards and tow hooks
+    b.panel('vents', [(-0.72, 1.3, zf), (0.72, 1.3, zf), (0.72, 1.86, zf), (-0.72, 1.86, zf)], (0, 0, -1), off=0.006, frame=0.04, frame_skin='dark')
+    for x in (-1.05, 1.05):
+        for y in (1.25, 1.85):
+            b.cyl('dark', (x, y, zf - 0.02), (x, y, zf), 0.022, 0.022, 6)
+    b.box('paint', -hw, hw, 0.72, 1.08, 0.0, zf + 0.12, bev=0.03)
+    for sx in (-1, 1):
+        cx = sx * (hw - 0.22)
+        b.box('dark', cx - 0.17, cx + 0.17, 1.08, 1.4, 0.02, 0.2)
+        vkit.headlight(b, (cx, 1.24, 0.02), (0, 0, -1), r=0.085, depth=0.05, skin_body='dark', lens='lens', guard=True)
+        vkit.lamp_box(b, (cx + sx * 0.3, 0.9, -0.01), (0.1, 0.07, 0.04), (0, 0, -1), lens='lens_amber')
+        b.tube('dark', [(sx * 0.62, 0.95, -0.0), (sx * 0.62, 0.86, -0.06), (sx * 0.62, 0.8, -0.1), (sx * 0.62, 0.84, -0.14)], 0.024, 6)
+        vkit.lamp_box(b, (sx * (hw - 0.3), top + 0.03, zf + 0.34), (0.1, 0.06, 0.06), (0, 0, -1), lens='lens_amber')
+    stencil_box(b, (-0.5, 0.9, -0.005), 0.3, 0.07, (0, 0, -1))
+    stencil_box(b, (0.5, 0.9, -0.005), 0.3, 0.07, (0, 0, -1))
+    # doors: armoured, small windows, handles; the steps behind the front wheel
+    parts = {}
+    for sx, key in ((-1, 'l'), (1, 'r')):
+        x = sx * hw
+        dz0, dz1, dy0, dy1 = 0.52, 1.52, 1.3, 2.9
+        d = Part(v, 'door_' + key, pivot=(x, dy0, dz0), joint=rot([0, sx, 0], 0.0, 1.15, stow=0.0, deploy=1.15, group='door'))
+        xo_ = x + sx * 0.015
+        xi = xo_ - sx * 0.07
+        d.box('paint', min(xo_, xi), max(xo_, xi), dy0, dy1, dz0, dz1, bev=0.012)
+        d.panel('glass', [(xo_, 2.2, dz0 + 0.18), (xo_, 2.2, dz1 - 0.3), (xo_, 2.7, dz1 - 0.3), (xo_, 2.7, dz0 + 0.18)], (sx, 0, 0), off=0.008, frame=0.05, frame_skin='dark')
+        d.panel('glass', [(xi, 2.2, dz0 + 0.18), (xi, 2.2, dz1 - 0.3), (xi, 2.7, dz1 - 0.3), (xi, 2.7, dz0 + 0.18)], (-sx, 0, 0), off=0.006)
+        vkit.grab_handle(d, (xo_ + sx * 0.012, 1.95, dz1 - 0.14), (0, 1, 0), (sx, 0, 0), 0.2, 0.04, 'dark')
+        for y in (1.55, 2.6):
+            d.cyl('dark', (xo_ + sx * 0.02, y - 0.08, dz0 + 0.04), (xo_ + sx * 0.02, y + 0.08, dz0 + 0.04), 0.03, 0.03, 6)
+        parts['door_' + key] = d
+        b.panel('interior', [(x, dy0 + 0.02, dz0 + 0.02), (x, dy0 + 0.02, dz1 - 0.02), (x, dy1 - 0.02, dz1 - 0.02), (x, dy1 - 0.02, dz0 + 0.02)], (sx, 0, 0), off=0.002)
+        # rear side window behind the door
+        b.panel('glass', [(x, 2.25, 1.72), (x, 2.25, 2.15), (x, 2.7, 2.15), (x, 2.7, 1.72)], (sx, 0, 0), off=0.008, frame=0.05, frame_skin='dark')
+        for k, y in enumerate((0.55, 0.85, 1.12)):
+            b.box('dark', min(x, x - sx * 0.34), max(x, x - sx * 0.34), y - 0.03, y, 1.98, 2.3)
+        vkit.grab_handle(b, (x + sx * 0.01, 1.95, 1.65), (0, 1, 0), (sx, 0, 0), 0.7, 0.05, 'dark')
+        # big mirrors on arms from the front corners
+        base = Vector((x, 2.5, zf + 0.25))
+        head = Vector((x + sx * 0.22, 2.35, zf + 0.05))
+        b.tube('dark', [base, base + Vector((sx * 0.14, 0.05, -0.08)), head], 0.02, 5)
+        b.box('dark', head.x - 0.11, head.x + 0.11, head.y - 0.42, head.y + 0.05, head.z - 0.02, head.z + 0.05)
+        b.panel('glass', [(head.x - 0.09, head.y - 0.4, head.z + 0.05), (head.x + 0.09, head.y - 0.4, head.z + 0.05), (head.x + 0.09, head.y + 0.03, head.z + 0.05), (head.x - 0.09, head.y + 0.03, head.z + 0.05)], (0, 0, 1), off=0.003)
+    # roof: escape hatch, antenna bases; rear wall window
+    b.box('paint', -0.4, 0.4, top, top + 0.06, 1.1, 1.8, bev=0.02)
+    b.cyl('dark', (0.0, top + 0.06, 1.45), (0.0, top + 0.1, 1.45), 0.25, 0.25, 14)
+    for sx in (-1, 1):
+        vkit.whip_antenna(b, (sx * 0.95, top, zr - 0.2), h=2.2)
+    b.panel('glass', [(-0.45, 2.2, zr), (0.45, 2.2, zr), (0.45, 2.65, zr), (-0.45, 2.65, zr)], (0, 0, 1), off=0.006, frame=0.04, frame_skin='dark')
+    b.empty('seat_driver', (-0.55, 2.0, 1.2), (0, 0, -1))
+    b.empty('hatch_entry', (-1.6, 0.0, 1.0), (1, 0, 0))
+    return parts
+

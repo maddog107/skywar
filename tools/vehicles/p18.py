@@ -19,7 +19,6 @@ import vkit
 from vkit import Vehicle, Part, rot, slide, lerp, vec
 import ural
 from ural import URAL
-import ammo_red
 
 PIV = Vector((0.0, 2.95, 6.90))     # mast hinge
 MAST_L = 5.6                        # hinge → rotator top

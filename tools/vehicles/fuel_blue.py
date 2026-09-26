@@ -67,12 +67,12 @@ def build_tank(b):
         c = Vector((x, 1.72, 9.25))
         b.panel('red', [c + Vector((0, -0.18, 0)), c + Vector((0, 0, 0.18)), c + Vector((0, 0.18, 0)), c + Vector((0, 0, -0.18))], (sx, 0, 0), off=0.006)
         b.panel('white', [c + Vector((0, -0.05, -0.1)), c + Vector((0, -0.05, 0.1)), c + Vector((0, 0.05, 0.1)), c + Vector((0, 0.05, -0.1))], (sx, 0, 0), off=0.008)
-        # FLAMMABLE / NO SMOKING WITHIN 50 FEET, pressed onto the oval shell (reading front → back on the right side,
-        # back → front on the left, as painted)
+        # FLAMMABLE / NO SMOKING WITHIN 50 FEET, pressed onto the oval shell (read from outside: rear → front on the
+        # right side, front → rear on the left)
         def onto(p, sx=sx):
             t = max(-0.999, min(0.999, (p.y - TANK['yc']) / TANK['b']))
             return Vector((sx * TANK['a'] * math.sqrt(1 - t * t), p.y, p.z))
-        right = (0, 0, sx)
+        right = (0, 0, -sx)
         usfam.add_text(b, 'black', 'FLAMMABLE', 0.24, (x, 2.02, 6.9), right, (0, 1, 0), project=onto, off=0.006)
         usfam.add_text(b, 'black', 'NO SMOKING WITHIN 50 FEET', 0.085, (x, 1.83, 6.9), right, (0, 1, 0), project=onto, off=0.006)
 

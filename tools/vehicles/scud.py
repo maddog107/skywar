@@ -42,7 +42,7 @@ def build_missile(v, parent):
     # body of revolution (the X of the fins is at 45°: phase so seams fall between fins)
     m.lathe(nose, (0, 0, 1), r17_profile(), n=20, smooth=True, cap1=False)
     # nozzle: a dark recessed bell at the base
-    m.lathe(tail + Vector((0, 0, -0.30)), (0, 0, 1), [(0.0, 0.10, 'soot'), (0.30, 0.34, 'soot')], n=16, smooth=True)
+    m.lathe(tail + Vector((0, 0, -0.30)), (0, 0, 1), [(0.30, 0.40, 'soot'), (0.30, 0.34, 'soot'), (0.0, 0.10, 'soot')], n=16, smooth=True)   # base ring, the bell's inside
     m.disc('soot', tail + Vector((0, 0, -0.28)), (0, 0, 1), 0.11, 10)
     # four trapezoidal tail fins in an X (swept leading edge), with root fairings
     for k in range(4):
@@ -268,7 +268,7 @@ def build_body(v, b):
     b.cyl('dark', (-1.1, 2.92, 1.35), (-1.1, 3.0, 1.35), 0.04, 0.04, 6)
     b.cyl('dark', (-1.1, 3.0, 1.35), (-1.1, 3.04, 1.12), 0.03, 0.09, 10)
     # tow cable looped across the bumper
-    b.tube('dark', [(-1.05, 1.32, -0.02), (-0.6, 1.14, -0.07), (0.25, 1.12, -0.07), (0.95, 1.3, -0.02)], 0.022, 5)
+    b.tube('steel', [(-1.05, 1.32, -0.02), (-0.6, 1.14, -0.07), (0.25, 1.12, -0.07), (0.95, 1.3, -0.02)], 0.022, 5)
     # radio antenna on the left cab's rear corner
     vkit.whip_antenna(b, (-1.35, 2.92, 2.75), h=2.6)
     # engine exhaust: behind the left cab, pointing up and out

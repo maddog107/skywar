@@ -191,6 +191,52 @@ export const VEHICLES = {
         parts: ['body', 'turret', 'launcher', 'muzzle_1', 'muzzle_2', 'door_l', 'door_r', 'hatch_l', 'hatch_r', 'hatch_turret', 'exhaust', 'seat_driver', 'hatch_entry'],
         deploy: [],
     },
+    cmd_red: {
+        name: 'Command-staff vehicle (KShM, Ural-4320 with a K-4320 box body)', short: 'COMMAND POST', cls: 'command', team: 'red', file: 'cmd_red.glb', paint: 'red_green',
+        chassis: 'Ural-4320 6×6', dims: { length: 7.6, width: 2.5, height: 3.45 }, crew: 2, staff: 5, mass: 12.5, speed: 80,
+        arm: 'none; HF/VHF radio stations, secure communications, the battalion or brigade command post', muzzles: 0,
+        // mast: rot about −x at its hinge on the roof front, 0 → 90° (lies back along the roof when stowed); mast_2 / mast_3:
+        // telescopic sections sliding out 2.4 m each (all 'raise': about 11 m up when raised); mast_head: empty at the top;
+        // door_rear: the box body's door (rot y 0 → 100°, group 'door'); whip antennas stand on the roof corners
+        parts: ['body', 'mast', 'mast_2', 'mast_3', 'mast_head', 'door_rear', 'wheel_1l', 'wheel_1r', 'exhaust', 'seat_driver', 'hatch_entry'],
+        deploy: ['raise'],
+    },
+    fuel_red: {
+        name: 'ATZ-5-4320 fuel tanker (Ural-4320)', short: 'URAL FUEL', cls: 'fuel', team: 'red', file: 'fuel_red.glb', paint: 'red_green',
+        chassis: 'Ural-4320 6×6', dims: { length: 7.4, width: 2.5, height: 3.1 }, crew: 2, mass: 15.5, speed: 80,
+        arm: 'none; 5,000 l of fuel, pump and dispensing hose (it burns and explodes when hit)', muzzles: 0,
+        // door_l / door_r: the rear pump compartment's doors (rot y 0 → ±110°, group 'door'): pump, meter and hose reel inside
+        parts: ['body', 'door_l', 'door_r', 'wheel_1l', 'wheel_1r', 'exhaust', 'seat_driver', 'hatch_entry'],
+        deploy: ['door'],
+    },
+    crane: {
+        name: 'Truck crane / Scud transloader (KS-35714-style, Ural-4320)', short: 'CRANE TRUCK', cls: 'vehicle', team: 'red', file: 'crane.glb', paint: 'red_green',
+        chassis: 'Ural-4320 6×6', dims: { length: 8.0, width: 2.5, height: 3.45 }, crew: 2, mass: 17.5, speed: 60,
+        arm: 'none; 16 t crane with a 10 m telescopic boom, reloads Scud / missile launchers', muzzles: 0,
+        // turret: slewing, rot y full circle; boom: rot x about its foot 0 → 70° ('raise'); boom_2: the telescopic section,
+        // slides out 3.6 m ('raise'); hook: counter-rotates so it hangs plumb as raise(rig, k) lifts the boom; ram_l: luffing
+        // ram; outrigger_fl/fr/rl/rr slide out and jack_fl/fr/rl/rr go down (group 'jack'). Raise before slewing (the boom
+        // rests over the cab when stowed)
+        parts: ['body', 'turret', 'boom', 'boom_2', 'hook', 'ram_l', 'outrigger_fl', 'outrigger_rr', 'jack_fl', 'jack_fr', 'jack_rl', 'jack_rr', 'exhaust', 'seat_driver', 'hatch_entry'],
+        deploy: ['jack', 'raise'],
+    },
+    hemtt: {
+        name: 'M983A4 HEMTT A4 tractor', short: 'HEMTT TRACTOR', cls: 'vehicle', team: 'blue', file: 'hemtt.glb', paint: 'blue_tan',
+        chassis: 'Oshkosh HEMTT A4 8×8', dims: { length: 9.12, width: 2.44, height: 3.0 }, crew: 2, mass: 16.2, speed: 100,
+        arm: 'none; prime mover for the Patriot launching station and radar set (fifth wheel, 9.5 t vertical load)', muzzles: 0,
+        // hitch: empty on the fifth wheel (where a semi-trailer's `kingpin` goes: patriot_ln, patriot_radar — raise their
+        // landing gear with pose(rig, 'gear', 1) when coupled); door_l/door_r: cab doors (group 'door'); the front tandem steers
+        parts: ['body', 'hitch', 'door_l', 'door_r', 'wheel_1l', 'wheel_1r', 'wheel_4l', 'wheel_4r', 'exhaust', 'seat_driver', 'hatch_entry'],
+        deploy: [],
+    },
+    fuel_blue: {
+        name: 'M978A4 HEMTT A4 fuel servicing truck', short: 'HEMTT FUELER', cls: 'fuel', team: 'blue', file: 'fuel_blue.glb', paint: 'blue_tan',
+        chassis: 'Oshkosh HEMTT A4 8×8', dims: { length: 10.3, width: 2.44, height: 3.0 }, crew: 2, mass: 30, speed: 100,
+        arm: 'none; 2,500 US gal (9,500 L) of fuel, pump and hose reels in the rear module', muzzles: 0,
+        // door_l/door_r: cab doors; door_pump: the pump module's side door (all group 'door'); the front tandem steers
+        parts: ['body', 'door_l', 'door_r', 'door_pump', 'wheel_1l', 'wheel_1r', 'wheel_4l', 'wheel_4r', 'exhaust', 'seat_driver', 'hatch_entry'],
+        deploy: ['door'],
+    },
 };
 
 // Paint schemes: models/vehicles/tex/paint_<scheme>.jpg (tools/vehicles/textures.py)

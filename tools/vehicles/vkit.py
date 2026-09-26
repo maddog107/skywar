@@ -608,7 +608,8 @@ class Part:
 
     def lathe(self, p0, axis, prof, n=16, smooth=True, cap0=False, cap1=False, phase=None, a=None, b=None):
         """surface of revolution: prof = [(t, r, skin), ...] (t along axis from p0; skin applies to the band from this
-        station to the next). r = 0 closes to a point."""
+        station to the next). r = 0 closes to a point. Each band faces the left of the profile's direction in the (t, r)
+        plane (t to the right, r up): a skin traversed towards +t faces outwards, a step back along the axis faces in."""
         p0 = vec(p0)
         d = Vector(axis).normalized()
         if a is None:
@@ -627,9 +628,11 @@ class Part:
                 k = (i + 1) % n
                 ang = ph + 2 * math.pi * (i + 0.5) / n
                 radial = a * math.cos(ang) + b * math.sin(ang)
-                # outward normal of the band: radial tilted by the slope of r
-                slope = (r1 - r0) / max(1e-6, (c1 - c0).length)
-                want = radial - d * slope
+                # the band faces the LEFT of the profile's direction of travel in the (t, r) plane: an outer skin
+                # traversed towards +t faces out, and a profile that steps back along the axis (a bore, a recess,
+                # the inside of a lip) faces in. Traverse a profile the other way to show its other side.
+                dt = (c1 - c0).dot(d)
+                want = radial * dt - d * (r1 - r0)
                 if r0 < 1e-6:
                     self.face([A[i], B[k], B[i]], sk, want=tuple(want), smooth=smooth)
                 elif r1 < 1e-6:
@@ -789,8 +792,9 @@ def build_wheel(part, R, W, rim_r, lugs=18, seg=28, style='mil', hub_skin='paint
     rs = rim_skin
     fl = rim_r + 0.025
     xo = hw * 0.78
-    p.lathe((xo + 0.01, 0, 0), (-1, 0, 0), [(0, fl, rs), (0.03, rim_r, rs), (0.06 + rim_dish, rim_r * 0.92, rs),
-                                          (0.09 + rim_dish, rim_r * 0.55, rs), (0.08 + rim_dish, rim_r * 0.35, rs), (0.08 + rim_dish, 0.0001, rs)],
+    # (traversed from the hub out to the flange, so the faces look outwards, +x, into the dish)
+    p.lathe((xo + 0.01, 0, 0), (-1, 0, 0), [(0.08 + rim_dish, 0.0001, rs), (0.08 + rim_dish, rim_r * 0.35, rs), (0.09 + rim_dish, rim_r * 0.55, rs),
+                                          (0.06 + rim_dish, rim_r * 0.92, rs), (0.03, rim_r, rs), (0, fl, rs)],
             n=seg, smooth=False, a=a, b=b)
     # hub boss and cap
     hx = xo + 0.01 - 0.08 - rim_dish
