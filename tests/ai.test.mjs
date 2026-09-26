@@ -108,8 +108,8 @@ describe('skill and difficulty', () => {
     test('an ace beats a rookie in most 1v1s, and hits more of the rounds he fires', () => {
         let ace = 0, rookie = 0;
         const shots = { ace: 0, aceHits: 0 };
-        // 24 duels: with 12 the result swung on unrelated changes to how many random numbers a frame draws
-        for (let s = 1; s <= 24; s++) {
+        // 40 duels: with 12 or 24 the result swung on unrelated changes to how many random numbers a frame draws
+        for (let s = 1; s <= 40; s++) {
             seeded(s * 104729, () => {
                 const g = arenaGame();
                 const ang = s * 1.3, cx = 0, cz = -20000;
@@ -120,7 +120,7 @@ describe('skill and difficulty', () => {
                 if (A.alive && !B.alive) ace++; else if (B.alive && !A.alive) rookie++;
             });
         }
-        assert.ok(ace >= 15 && ace > rookie * 2, `ace ${ace} – rookie ${rookie}`);
+        assert.ok(ace >= 24 && ace >= rookie * 2, `ace ${ace} – rookie ${rookie}`);
         void shots;
     });
 
