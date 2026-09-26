@@ -145,7 +145,7 @@ describe('rig parts', () => {
         RP.setBoom(rig, 30 * Math.PI / 180, 10 * Math.PI / 180, 5);
         assert.ok(p('boom_nozzle').x > 1, 'yawed right');
         RP.setBoom(rig, 0, 0, 99);
-        assert.ok(Math.abs(rig.parts.boom_ext.position.z - rig.parts.boom_ext.userData.rest.p.z - 5.6) < 1e-6, 'extension capped at the travel');
+        assert.ok(Math.abs(rig.parts.boom_ext.position.z - rig.parts.boom_ext.userData.rest.p[2] - 6) < 1e-6, 'extension capped at the travel');
         RP.stowBoom(rig);
         assert.ok(p('boom_nozzle').distanceTo(stowed) < 1e-5, 'stowed again');
         const b0 = p('basket_l');
@@ -157,6 +157,11 @@ describe('rig parts', () => {
         assert.equal(rig.parts.basket_l.visible, true);
         assert.equal(RP.trailDrogue(rig, 'r', 1), false, 'no right drogue on this one');
         assert.equal(RP.setBoom({ parts: {} }, 0.3), false);
+        // a cloned model keeps a usable rest pose (three.js JSON-copies userData on clone)
+        const copy = rig.parts.boom.clone(true);
+        const cp = {}; copy.traverse(o => { if (o.name) cp[o.name] = o; });
+        RP.setBoom({ parts: cp }, 0.5, 0, 3); RP.stowBoom({ parts: cp });
+        assert.ok(cp.boom.quaternion.angleTo(rig.parts.boom.quaternion) < 1e-6, 'stowed copy matches');
         // rotodome: 6 rpm is a turn every 10 s
         const dome = new THREE.Group(); dome.name = 'rotodome';
         const r2 = { parts: RP.attachRigParts(new THREE.Group(), [dome]) };

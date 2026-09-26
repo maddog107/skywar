@@ -95,7 +95,8 @@ export function refuelTemplate(def, length) {
 }
 
 // A fresh copy of the part templates on a model instance, each hung on the airframe section it rides on.
-// Returns { name: node } for every named node in them. Every node remembers its rest pose (userData.rest).
+// Returns { name: node } for every named node in them. Every node remembers its rest pose (userData.rest: plain
+// arrays p, q, s, so the pose survives userData's JSON copy when a model is cloned).
 export function attachRigParts(object, templates) {
     const parts = {};
     for (const t of templates || []) {
@@ -104,7 +105,7 @@ export function attachRigParts(object, templates) {
         if (g !== object) c.position.sub(g.position);
         g.add(c);
         c.traverse((o) => {
-            o.userData.rest = { p: o.position.clone(), q: o.quaternion.clone(), s: o.scale.clone() };
+            o.userData.rest = { p: o.position.toArray(), q: o.quaternion.toArray(), s: o.scale.toArray() };
             if (o.name) parts[o.name] = o;
         });
     }
@@ -126,7 +127,7 @@ export function spinRotodome(rig, dt, rpm = 6) {
 
 const _e = new THREE.Euler(0, 0, 0, 'YXZ');
 // Pose the flying boom: pitch (rad) down from the fuselage axis, yaw (rad) to the right, ext (m) of telescope
-// out. The KC-135's contact envelope is about 20-40° down, ±10° (±15° at most) across and 1.8-5.6 m out
+// out. The KC-135's contact envelope is about 20-40° down and ±10° (±15° at most) across, with a 6 m telescope
 // (userData on the nodes: boom.pitchMin / pitchMax / yawMax in degrees, boom_ext.travel in m).
 // Returns false if the type has no boom.
 export function setBoom(rig, pitch, yaw = 0, ext = 0) {
@@ -135,8 +136,8 @@ export function setBoom(rig, pitch, yaw = 0, ext = 0) {
     b.quaternion.setFromEuler(_e.set(pitch, yaw, 0, 'YXZ'));
     const e = rig.parts.boom_ext;
     if (e) {
-        const travel = e.userData.travel ?? 5.6;
-        e.position.copy(e.userData.rest.p);
+        const travel = e.userData.travel ?? 6;
+        e.position.fromArray(e.userData.rest.p);
         e.position.z += Math.max(0, Math.min(travel, ext));
     }
     return true;
@@ -146,8 +147,8 @@ export function setBoom(rig, pitch, yaw = 0, ext = 0) {
 export function stowBoom(rig) {
     const b = rig.parts?.boom;
     if (!b) return false;
-    b.quaternion.copy(b.userData.rest.q);
-    if (rig.parts.boom_ext) rig.parts.boom_ext.position.copy(rig.parts.boom_ext.userData.rest.p);
+    b.quaternion.fromArray(b.userData.rest.q);
+    if (rig.parts.boom_ext) rig.parts.boom_ext.position.fromArray(rig.parts.boom_ext.userData.rest.p);
     return true;
 }
 
@@ -165,11 +166,12 @@ export function trailDrogue(rig, side, k) {
         hose.scale.set(1, 1, Math.max(len, 1e-3));
     }
     if (basket) {
-        basket.position.set(basket.userData.rest.p.x, basket.userData.rest.p.y, basket.userData.rest.p.z + len);
+        const r = basket.userData.rest.p;
+        basket.position.set(r[0], r[1], r[2] + len);
         basket.visible = k > 0; // stowed, the drogue is inside its pod
     }
     _q.setFromAxisAngle(_p.set(1, 0, 0), (d.userData.droop ?? 6) * Math.PI / 180 * k);
-    d.quaternion.copy(d.userData.rest.q).multiply(_q);
+    d.quaternion.fromArray(d.userData.rest.q).multiply(_q);
     return true;
 }
 
