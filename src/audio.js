@@ -39,6 +39,16 @@ function engineKind(spec) {
 
 const SOUND = 343;
 
+// the on-foot weapons' reports: crack band (Hz) / Q / level and length, the body's pitch and level, the action's
+// click, the echo's level and tail (s)
+const GUN_SOUND = {
+    ak47: { band: 1350, q: 0.8, crack: 0.8, decay: 0.11, body: 115, thump: 0.5, click: 0.08, echo: 0.28, tail: 0.75 },
+    m4a1: { band: 2100, q: 0.9, crack: 0.72, decay: 0.085, body: 145, thump: 0.38, click: 0.08, echo: 0.24, tail: 0.65 },
+    m870: { band: 850, q: 0.55, crack: 1.0, decay: 0.19, body: 80, thump: 0.85, click: 0, echo: 0.45, tail: 1.1 },
+    m9: { band: 2600, q: 1, crack: 0.55, decay: 0.065, body: 180, thump: 0.28, click: 0.06, echo: 0.16, tail: 0.5 },
+    deagle: { band: 1050, q: 0.7, crack: 1.0, decay: 0.17, body: 72, thump: 0.9, click: 0.07, echo: 0.5, tail: 1.2 },
+};
+
 export class Audio {
     constructor() {
         this.ctx = null;
@@ -705,6 +715,109 @@ export class Audio {
         const eg = ctx.createGain(); eg.gain.setValueAtTime(0, t); eg.gain.setValueAtTime(0.18, t + 0.09); eg.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
         e.connect(ef).connect(eg).connect(this.sfx); e.start(t, Math.random()); e.stop(t + 0.65);
         this.cleanup(e, ef, eg);
+    }
+
+    // ── On foot (ordnance.js, pilot.js, infantry.js) ──
+    // a bus straight to the master: on foot the world isn't heard through a canopy
+    footBus() {
+        if (!this.foot) { this.foot = this.ctx.createGain(); this.foot.gain.value = 0.9; this.foot.connect(this.master); }
+        return this.foot;
+    }
+
+    // one short noise burst through a filter: the building block of the foley below
+    burst(t, { type = 'bandpass', freq = 2000, q = 1, gain = 0.3, attack = 0.002, decay = 0.05, buf = this.white, out = null, pan = 0 }) {
+        const ctx = this.ctx;
+        const src = this.noiseSrc(buf);
+        const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
+        const g = ctx.createGain(); g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(gain, t + attack); g.gain.exponentialRampToValueAtTime(0.0008, t + attack + decay);
+        let node = src.connect(f).connect(g);
+        const p = pan && ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+        if (p) { p.pan.value = pan; node = node.connect(p); }
+        node.connect(out || this.footBus());
+        src.start(t, Math.random() * 1.5); src.stop(t + attack + decay + 0.05);
+        this.cleanup(src, f, g, ...(p ? [p] : []));
+    }
+    tone(t, { type = 'sine', f0 = 100, f1 = null, gain = 0.3, decay = 0.1, out = null }) {
+        const ctx = this.ctx, o = ctx.createOscillator(); o.type = type;
+        o.frequency.setValueAtTime(f0, t); if (f1) o.frequency.exponentialRampToValueAtTime(f1, t + decay);
+        const g = ctx.createGain(); g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0008, t + decay);
+        o.connect(g).connect(out || this.footBus()); o.start(t); o.stop(t + decay + 0.03);
+        this.cleanup(o, g);
+    }
+
+    // A shot from one of the arsenal's weapons, heard `dist` m away (0: your own), panned -1…1. The crack of the
+    // muzzle blast, the low body of it, the action cycling, and the report rolling back off the surroundings; far
+    // away: late (speed of sound), quiet, dull. Busy firefights drop the faint ones.
+    gunfire(id, dist = 0, pan = 0) {
+        if (!this.running) return;
+        const P = GUN_SOUND[id] || GUN_SOUND.ak47;
+        const ctx = this.ctx, t0 = ctx.currentTime;
+        const vol = Math.min(1, 1.2 / (1 + dist / 45));
+        if (vol < 0.015) return;
+        this.shotEnds = (this.shotEnds || []).filter(e => e > t0);
+        if (this.shotEnds.length > 14 && dist > 60) return;
+        const t = t0 + Math.min(dist / SOUND, 2);
+        const air = 16000 * Math.exp(-dist / 350) + 700;   // air soaks up the highs
+        this.shotEnds.push(t + P.tail + 0.3);
+        const out = ctx.createBiquadFilter(); out.type = 'lowpass'; out.frequency.value = air;
+        const pn = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+        if (pn) { pn.pan.value = dist > 0 ? Math.max(-1, Math.min(1, pan)) * 0.8 : 0.08; out.connect(pn).connect(this.footBus()); } else out.connect(this.footBus());
+        setTimeout(() => { out.disconnect(); if (pn) pn.disconnect(); }, (Math.min(dist / SOUND, 2) + P.tail + 1.2) * 1000);
+        // crack
+        this.burst(t, { type: 'bandpass', freq: P.band, q: P.q, gain: P.crack * vol, attack: 0.0015, decay: P.decay, out });
+        this.burst(t, { type: 'highpass', freq: 3500, q: 0.7, gain: P.crack * 0.45 * vol * Math.exp(-dist / 120), attack: 0.001, decay: 0.025, out });
+        // body
+        this.tone(t, { type: 'sine', f0: P.body, f1: P.body * 0.4, gain: P.thump * vol, decay: P.decay * 1.4 + 0.04, out });
+        // the action cycling (close by only)
+        if (dist < 25 && P.click) this.tone(t + 0.035, { type: 'triangle', f0: 3200 + Math.random() * 600, gain: P.click * vol, decay: 0.012, out });
+        // the report rolling back
+        const e = this.noiseSrc(this.brown);
+        const ef = ctx.createBiquadFilter(); ef.type = 'lowpass'; ef.frequency.value = Math.min(air, 900);
+        const eg = ctx.createGain(); eg.gain.setValueAtTime(0, t0); eg.gain.setValueAtTime(0, t + 0.05); eg.gain.linearRampToValueAtTime(P.echo * vol, t + 0.09); eg.gain.exponentialRampToValueAtTime(0.0008, t + P.tail);
+        e.connect(ef).connect(eg).connect(out); e.start(t, Math.random()); e.stop(t + P.tail + 0.05);
+        this.cleanup(e, ef, eg);
+    }
+
+    // reload foley by event (arsenal.js Gun events)
+    reloadSound(id, ev) {
+        if (!this.running) return;
+        const t = this.ctx.currentTime, heavy = id === 'rpg7';
+        switch (ev) {
+            case 'magOut': this.burst(t, { freq: 1800, q: 2, gain: 0.25, decay: 0.05 }); this.tone(t, { type: 'triangle', f0: 420, gain: 0.08, decay: 0.05 }); break;
+            case 'magIn': this.burst(t, { freq: 2600, q: 3, gain: 0.22, decay: 0.03 }); this.burst(t + 0.09, { freq: 1500, q: 2, gain: 0.35, decay: 0.05 }); this.tone(t + 0.09, { type: 'sine', f0: 180, f1: 90, gain: 0.18, decay: 0.07 }); break;
+            case 'bolt': this.burst(t, { freq: 1200, q: 1, gain: 0.18, attack: 0.03, decay: 0.05 }); this.burst(t + 0.16, { freq: 2200, q: 2.5, gain: 0.4, decay: 0.06 }); this.tone(t + 0.16, { type: 'sine', f0: 220, f1: 100, gain: 0.2, decay: 0.08 }); break;
+            case 'pump': this.burst(t + 0.05, { freq: 1600, q: 2, gain: 0.35, decay: 0.06 }); this.burst(t + 0.25, { freq: 2100, q: 2.2, gain: 0.4, decay: 0.07 }); break;
+            case 'shellIn': this.burst(t, { freq: 2400, q: 2.5, gain: 0.22, decay: 0.035 }); this.burst(t + 0.05, { freq: 1100, q: 1.5, gain: 0.12, decay: 0.05 }); break;
+            case 'rocketIn': this.burst(t, { freq: 700, q: 1, gain: 0.2, attack: 0.08, decay: 0.12 }); this.tone(t + 0.12, { type: 'sine', f0: 120, f1: 60, gain: 0.35, decay: 0.15 }); break;
+        }
+        void heavy;
+    }
+    dryFire() { if (this.running) { const t = this.ctx.currentTime; this.tone(t, { type: 'triangle', f0: 2900, gain: 0.12, decay: 0.015 }); this.burst(t, { freq: 4000, q: 2, gain: 0.08, decay: 0.01 }); } }
+    weaponSwitch(type) {
+        if (!this.running) return;
+        const t = this.ctx.currentTime;
+        this.burst(t, { buf: this.pink, type: 'bandpass', freq: 900, q: 0.7, gain: 0.07, attack: 0.04, decay: 0.12 }); // cloth
+        this.burst(t + 0.12, { freq: type === 'pistol' ? 3000 : 2200, q: 3, gain: 0.12, decay: 0.04 });                // metal
+    }
+    grenadePin() { if (!this.running) return; const t = this.ctx.currentTime; this.tone(t, { type: 'sine', f0: 3300, gain: 0.07, decay: 0.35 }); this.tone(t, { type: 'sine', f0: 4270, gain: 0.04, decay: 0.25 }); this.burst(t, { freq: 3000, q: 3, gain: 0.1, decay: 0.02 }); }
+    grenadeThrow() { if (!this.running) return; const t = this.ctx.currentTime; this.burst(t, { buf: this.pink, freq: 700, q: 0.8, gain: 0.12, attack: 0.05, decay: 0.15 }); this.tone(t + 0.1, { type: 'triangle', f0: 5200, f1: 3000, gain: 0.05, decay: 0.2 }); }
+    grenadeBounce(dist = 0) { if (!this.running || dist > 120) return; const t = this.ctx.currentTime + dist / SOUND, v = 1 / (1 + dist / 12); this.tone(t, { type: 'triangle', f0: 1100 + Math.random() * 900, gain: 0.18 * v, decay: 0.07 }); this.burst(t, { freq: 800, q: 1, gain: 0.12 * v, decay: 0.03 }); }
+    clatter(dist = 0) { if (!this.running || dist > 80) return; const t = this.ctx.currentTime, v = 1 / (1 + dist / 10); for (let i = 0; i < 3; i++) this.tone(t + i * 0.07 + Math.random() * 0.03, { type: 'triangle', f0: 700 + Math.random() * 1400, gain: 0.12 * v, decay: 0.05 }); }
+    // a round snapping past your head (supersonic): a sharp crack and a short whistle
+    whiz() {
+        if (!this.running) return;
+        const t = this.ctx.currentTime, pan = Math.random() * 1.6 - 0.8;
+        this.burst(t, { type: 'highpass', freq: 3000, q: 0.8, gain: 0.3, attack: 0.001, decay: 0.03, pan });
+        this.tone(t, { type: 'sine', f0: 2400 + Math.random() * 800, f1: 900, gain: 0.05, decay: 0.12 });
+    }
+    // the RPG's booster: a flat bang and the rocket tearing away
+    rocketLaunch(dist = 0) {
+        if (!this.running) return;
+        const t = this.ctx.currentTime + dist / SOUND, v = Math.min(1, 1.3 / (1 + dist / 60));
+        this.burst(t, { buf: this.brown, type: 'lowpass', freq: 600, q: 0.7, gain: 0.9 * v, attack: 0.003, decay: 0.35 });
+        this.burst(t, { type: 'bandpass', freq: 1200, q: 0.6, gain: 0.5 * v, attack: 0.002, decay: 0.12 });
+        this.tone(t, { type: 'sine', f0: 90, f1: 35, gain: 0.6 * v, decay: 0.35 });
+        this.whoosh(0.5 * v);
     }
 
     // flares popping out of the dispensers (scheduled on the audio clock, not timers)

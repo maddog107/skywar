@@ -11,6 +11,9 @@
 //     the other lane is clear
 //   • slow for broken bridges and turn back; wrecked by nearby explosions
 //     (a bridge collapsing under them sends them into the water)
+//   • shot up: the driver stops, the engine smokes, then catches fire, and the car goes up (hops, a
+//     fireball that hurts whoever's close, knocks its neighbours about); a rocket or grenade wrecks it at once.
+//     Cars parked in driveways too. A grid of the cars keeps rounds and blasts to the nearby ones.
 //   • at night: head and tail lights, and a pool of headlight on the road
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
@@ -23,6 +26,9 @@ import { craterAdj } from './craters.js';
 const _p = new THREE.Vector3(), _t = new THREE.Vector3(), _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _e = new THREE.Euler(0, 0, 0, 'YXZ'), _v = new THREE.Vector3(), _v2 = new THREE.Vector3();
 const GAP = 3.5;     // metres kept to the vehicle ahead when stopped
 const POOLS = 90;    // headlight pools drawn (the nearest cars)
+const CELL = 24;     // car grid cell (m)
+const cellKey = (x, z) => Math.floor(x / CELL) * 100003 + Math.floor(z / CELL);
+const _hp = new THREE.Vector3();
 
 const laneOf = (p) => p.turn ? 0 : p.street ? 2.4 : p.dirt ? 1.4 : LANE;
 
@@ -106,6 +112,11 @@ export class Traffic {
 
     reset() {
         if (this.towns && this.towns.resetPeople) this.towns.resetPeople();
+        // parked cars shot up or wrecked last sortie are as good as new (and re-uploaded next frame)
+        let dirty = false;
+        for (const c of this._parked || []) if (c.dead || c.hp < c.maxHp) { c.dead = false; c.hp = c.maxHp; c.fire = 0; c.set.wrecked[c.i] = 0; dirty = true; }
+        if (this._burningParked) this._burningParked.clear();
+        if (dirty && this.towns) this.towns._parkAt = null;
         for (const c of this.cars) this.place(c);
         // no two cars on top of each other: nudge them apart along their lane
         for (const list of this.lanes()) for (let k = 1; k < list.length; k++) {
@@ -131,7 +142,8 @@ export class Traffic {
         c.cruise = (path.street ? rand(10, 14) : rand(16, 27)) * (c.big ? 0.82 : 1);
         c.speed = c.cruise * 0.5;
         c.wait = 0; c.stopDone = null; c.stopT = 0; c.plan = null; c.turn = null; c.passing = null; c.laneOff = laneOf(path); c.blocked = 0;
-        c.dead = false; c.fall = 0; c.vy = 0; c.yOff = 0; c.smoke = 0; c.stolen = false; c.hp = c.big ? 60 : 30;
+        c.dead = false; c.fall = 0; c.vy = 0; c.yOff = 0; c.smoke = 0; c.stolen = false; c.hp = c.maxHp = c.big ? 60 : 30;
+        c.disabled = false; c.fire = 0; c.hopV = 0; c.hopY = 0; c.puff = 0;
         c.color = c.bus ? PAINTS_BUS[Math.floor(Math.random() * PAINTS_BUS.length)] : PAINTS[Math.floor(Math.random() * PAINTS.length)];
         this.carSet.restore(c.i, c.color);
     }
@@ -141,7 +153,8 @@ export class Traffic {
         b.path = path; b.dir = Math.random() < 0.5 ? 1 : -1;
         b.s = rand(5, path.len - 5);
         b.cruise = rand(11, 19); b.speed = b.cruise;
-        b.dead = false; b.fall = 0; b.yOff = 0; b.vy = 0; b.smoke = 0; b.bounce = Math.random() * 10; b.hp = 20;
+        b.dead = false; b.fall = 0; b.yOff = 0; b.vy = 0; b.smoke = 0; b.bounce = Math.random() * 10; b.hp = b.maxHp = 20;
+        b.disabled = false; b.fire = 0; b.hopV = 0; b.hopY = 0; b.puff = 0;
         b.dust = 0; b.laneOff = 1.4;
     }
 
@@ -235,30 +248,132 @@ export class Traffic {
         this.carSet.wreck(c.i);
     }
 
-    // a round (or a rammed car) hitting near p: the car there takes the damage, a few rounds wreck it
-    hitAt(p, amount, game, r = 2.8) {
+    // ── The cars by grid cell (rebuilt each frame; parked cars once) ──
+    indexCars() {
+        const G = this._grid || (this._grid = new Map());
+        for (const l of G.values()) l.length = 0;
         for (const list of [this.cars, this.buggies]) for (const c of list) {
-            if (c.dead || !c.pos || c.stolen) continue;
+            if (!c.pos || c.stolen) continue;
+            const k = cellKey(c.pos.x, c.pos.z);
+            let l = G.get(k);
+            if (!l) G.set(k, l = []);
+            l.push(c);
+        }
+    }
+    // the parked cars (driveways: towns.js parkedSet), as damageable records, with their own grid
+    parked() {
+        if (this._parked) return this._parked;
+        const set = this.towns && this.towns.parkedSet, n = this.towns ? this.towns.parkedCars || 0 : 0;
+        this._parked = [];
+        this._pgrid = new Map();
+        if (!set) return this._parked;
+        for (let i = 0; i < n; i++) {
+            const M = set.mats, o = i * 16;
+            const c = { i, parked: true, set, pos: new THREE.Vector3(M[o + 12], M[o + 13], M[o + 14]), hp: 30, maxHp: 30, len: 4.6, big: false, dead: false, fire: 0, puff: 0, smoke: 0 };
+            this._parked.push(c);
+            const k = cellKey(c.pos.x, c.pos.z);
+            let l = this._pgrid.get(k);
+            if (!l) this._pgrid.set(k, l = []);
+            l.push(c);
+        }
+        return this._parked;
+    }
+    // every car (moving or parked) within r of (x, z): fn(car); stops early if fn returns true
+    near(x, z, r, fn) {
+        if (!this._grid) this.indexCars();
+        this.parked();
+        const x0 = Math.floor((x - r) / CELL), x1 = Math.floor((x + r) / CELL), z0 = Math.floor((z - r) / CELL), z1 = Math.floor((z + r) / CELL);
+        for (let cx = x0; cx <= x1; cx++) for (let cz = z0; cz <= z1; cz++) {
+            const k = cx * 100003 + cz;
+            const a = this._grid.get(k), b = this._pgrid.get(k);
+            if (a) for (const c of a) if (fn(c)) return true;
+            if (b) for (const c of b) if (fn(c)) return true;
+        }
+        return false;
+    }
+    // is there any car near the segment a → b? (a cheap test before sampling it)
+    nearAny(a, b) {
+        if (!this._grid) this.indexCars();
+        this.parked();
+        const x0 = Math.floor((Math.min(a.x, b.x) - 6) / CELL), x1 = Math.floor((Math.max(a.x, b.x) + 6) / CELL);
+        const z0 = Math.floor((Math.min(a.z, b.z) - 6) / CELL), z1 = Math.floor((Math.max(a.z, b.z) + 6) / CELL);
+        if ((x1 - x0 + 1) * (z1 - z0 + 1) > 64) return true;
+        for (let cx = x0; cx <= x1; cx++) for (let cz = z0; cz <= z1; cz++) {
+            const k = cx * 100003 + cz, l = this._grid.get(k), p = this._pgrid.get(k);
+            if ((l && l.length) || (p && p.length)) return true;
+        }
+        return false;
+    }
+    // the (live) car whose body contains p, give or take `pad` m
+    carAt(p, pad = 0) {
+        let hit = null;
+        this.near(p.x, p.z, 7 + pad, (c) => {
+            if (c.dead || c.stolen || !c.pos) return false;
+            const rr = (c.big ? 3.2 : 2.2) + pad, dx = c.pos.x - p.x, dz = c.pos.z - p.z, dy = p.y - c.pos.y;
+            if (dx * dx + dz * dz > rr * rr || dy < -0.5 - pad || dy > (c.big ? 3.6 : 1.9) + pad) return false;
+            hit = c; return true;
+        });
+        return hit;
+    }
+
+    // a round (or a rammed car) hitting near p: the car there takes the damage, and one shot up enough burns and
+    // goes up. source: who fired (for the score)
+    hitAt(p, amount, game, r = 2.8, source = null) {
+        let hit = null;
+        this.near(p.x, p.z, r + 3, (c) => {
+            if (c.dead || !c.pos || c.stolen) return false;
             const rr = c.big ? r + 2.5 : r;
             const dx = c.pos.x - p.x, dz = c.pos.z - p.z, dy = p.y - c.pos.y;
-            if (dx * dx + dz * dz > rr * rr || dy < -1 || dy > (c.big ? 4 : 3)) continue;
-            c.hp = (c.hp ?? 30) - amount;
-            if (c.hp <= 0) { this.wreck(c, false); if (game) game.effects.explosion(c.pos, c.big ? 0.8 : 0.5); }
-            return c;
+            if (dx * dx + dz * dz > rr * rr || dy < -1 || dy > (c.big ? 4 : 3)) return false;
+            hit = c; return true;
+        });
+        if (!hit) return null;
+        this.damageCar(hit, amount, game, source);
+        return hit;
+    }
+
+    damageCar(c, amount, game, source = null) {
+        if (c.dead || amount <= 0) return;
+        c.hp = (c.hp ?? 30) - amount;
+        if (source) c.hitBy = source;
+        if (!c.parked) c.disabled = true; // the driver stops (and bails)
+        if (c.hp <= 0) { this.destroyCar(c, game, source, amount >= 100 ? 'blast' : 'shot'); return; }
+        // badly hit: the engine catches fire, and it goes up a few seconds later
+        if (c.hp < (c.maxHp || 30) * 0.3 && !c.fire) c.fire = rand(2.5, 5);
+        if (c.parked) (this._burningParked || (this._burningParked = new Set())).add(c);
+    }
+
+    // it goes up: a fireball that hurts whoever's close, a hop, the neighbours knocked about; then a burnt wreck
+    destroyCar(c, game, source = null, how = 'shot') {
+        if (c.dead) return;
+        if (c.parked) {
+            c.dead = true; c.fire = 0; c.smoke = rand(15, 30);
+            c.set.wreck(c.i);
+            if (game && this.towns.recommit) this.towns.recommit(c.set, game.camera.position);
+            (this._burningParked || (this._burningParked = new Set())).add(c);
+        } else {
+            this.wreck(c, false);
+            c.hopV = how === 'blast' ? rand(3.5, 6) : rand(2.5, 4);
+            c.fire = 0;
         }
-        return null;
+        if (!game) return;
+        const at = _hp.copy(c.pos).setY(c.pos.y + 0.8);
+        game.effects.explosion(at, c.big ? 0.95 : 0.7);
+        game.effects.debrisBurst(at, _v.set(0, 8, 0), 3, 0.35);
+        game.audio.boom(game.camera.position.distanceTo(at), c.big ? 1.2 : 0.95);
+        if (game.camera.position.distanceTo(at) < 80) game.shake = Math.min(1.5, game.shake + 0.35);
+        // the fireball (a fuel tank going up): people close by, then the cars next to it
+        if (how === 'shot') game.weapons.blastPeople(at, 7, 70, source, null);
+        const p = c.pos;
+        this.near(p.x, p.z, 7, (o) => { if (o !== c && !o.dead && o.pos && o.pos.distanceToSquared(p) < 36) this.damageCar(o, 14, game, source); return false; });
+        game.events.emit('carDestroyed', c, { source, how });
     }
 
     // Explosion at `at` with radius R wrecks nearby vehicles (and sends the people nearby running)
-    blast(at, R, game) {
-        const r2 = (R + 4) * (R + 4);
-        for (const list of [this.cars, this.buggies]) for (const c of list) {
-            if (c.dead || !c.pos) continue;
-            if (c.pos.distanceToSquared(at) < r2) {
-                this.wreck(c, false);
-                if (game) game.effects.explosion(c.pos, 0.5);
-            }
-        }
+    blast(at, R, game, source = null) {
+        const r2 = (R + 4) * (R + 4), hit = [];
+        this.near(at.x, at.z, R + 4, (c) => { if (!c.dead && c.pos && c.pos.distanceToSquared(at) < r2) hit.push(c); return false; });
+        for (const c of hit) if (game) this.destroyCar(c, game, source, 'blast'); else this.wreck(c, false);
         if (this.towns && this.towns.panic) this.towns.panic(at, R);
     }
 
@@ -301,6 +416,8 @@ export class Traffic {
     }
 
     move(c, dt) {
+        // shot up: the driver stamps on the brakes and stays put
+        if (c.disabled) { c.speed = Math.max(0, c.speed - 9 * dt); c.s = Math.max(1, Math.min(c.path.len - 1, c.s + c.dir * c.speed * dt)); return; }
         const gap = this.gapAhead(c);
         if (gap < 0) { this.wreck(c, true); return; }
         let target = c.cruise;
@@ -319,10 +436,11 @@ export class Traffic {
             if (lead && lead === c.passing) lead = lane[k + 2];
             if (lead) {
                 const room = (lead.s - c.s) * c.dir - (lead.len + c.len) / 2 - GAP;
-                target = Math.min(target, Math.max(0, room * 0.6), lead.dead ? Infinity : lead.speed + room * 0.4);
-                if (lead.dead && room < 6 && c.speed < 1) {
+                const stuck = lead.dead || lead.disabled; // a wreck, or a car shot up and abandoned
+                target = Math.min(target, Math.max(0, room * 0.6), stuck ? Infinity : lead.speed + room * 0.4);
+                if (stuck && room < 6 && c.speed < 1) {
                     c.blocked += dt;
-                    const clear = !(c._other || []).some(o => { const d = (o.s - c.s) * c.dir; return d > -10 && d < 70 && !o.dead; });
+                    const clear = !(c._other || []).some(o => { const d = (o.s - c.s) * c.dir; return d > -10 && d < 70 && !o.dead && !o.disabled; });
                     if (c.blocked > 2.5 && clear) { c.passing = lead; c.blocked = 0; }
                 } else c.blocked = 0;
             }
@@ -372,9 +490,10 @@ export class Traffic {
         if (c.dir < 0) _t.negate();
         const rx = -_t.z, rz = _t.x, rl = Math.hypot(rx, rz) || 1;
         _p.x += rx / rl * lane; _p.z += rz / rl * lane;
-        _p.y += (_p.g || 0) * lane * c.dir + c.yOff + craterAdj(_p.x, _p.z); // (down into a crater on the road and out)
+        _p.y += (_p.g || 0) * lane * c.dir + c.yOff + (c.hopY || 0) + craterAdj(_p.x, _p.z); // (down into a crater on the road and out)
         c.pos = c.pos || new THREE.Vector3();
         c.pos.copy(_p);
+        (c.fwd || (c.fwd = new THREE.Vector3())).copy(_t);
     }
 
     fallUpdate(c, dt, game) {
@@ -394,6 +513,7 @@ export class Traffic {
         this.frame = (this.frame || 0) + 1;
         const FAR2 = 5000 * 5000;
         this.lanes();
+        this.indexCars();
         // who's in which junction box (for stop signs: wait until it's clear)
         if (this.towns && this.towns.junctions) for (const J of this.towns.junctions) J.busy = 0;
         for (const c of this.cars) {
@@ -415,6 +535,8 @@ export class Traffic {
             const cdt = dt + (c.acc || 0); c.acc = 0;
             if (!c.dead) this.move(c, cdt);
             this.fallUpdate(c, dt, game);
+            if (c.hopV || c.hopY) { c.hopV -= 9.8 * dt; c.hopY = Math.max(0, (c.hopY || 0) + c.hopV * dt); if (c.hopY === 0 && c.hopV < 0) c.hopV = 0; }
+            if (game && !c.dead && c.hp < c.maxHp * 0.6) this.damagedFx(c, dt, game);
             // lane: our own, or the other one while pulling round a wreck
             const want = c.passing ? -laneOf(c.path) * 0.9 : laneOf(c.path);
             c.laneOff += (want - c.laneOff) * Math.min(1, cdt * 1.5);
@@ -445,6 +567,14 @@ export class Traffic {
                 c.smoke -= dt;
                 if (Math.random() < dt * 8) game.effects.smoke.emit(c.pos, _v.set(rand(-1, 1), rand(4, 7), rand(-1, 1)), rand(2, 4), 4, 14, [0.08, 0.08, 0.08], [0.3, 0.3, 0.3], 0.5, 0, 0.2, 2);
             }
+        }
+        // parked cars that were shot up or blown up
+        if (game && this._burningParked) for (const c of this._burningParked) {
+            if (!c.dead) { if (c.hp < c.maxHp * 0.6) this.damagedFx(c, dt, game); continue; }
+            c.smoke -= dt;
+            if (c.smoke <= 0) { this._burningParked.delete(c); continue; }
+            if (Math.random() < dt * 8) game.effects.smoke.emit(c.pos, _v.set(rand(-1, 1), rand(4, 7), rand(-1, 1)), rand(2, 4), 4, 14, [0.08, 0.08, 0.08], [0.3, 0.3, 0.3], 0.5, 0, 0.2, 2);
+            if (c.smoke > 8 && Math.random() < dt * 10) game.effects.puffFire(_v2.copy(c.pos).setY(c.pos.y + 0.6), _v.set(0, 2.5, 0), 1.4, 0.4);
         }
         if (this.night) {
             this.pools.count = pools;
@@ -486,6 +616,24 @@ export class Traffic {
             im.instanceMatrix.needsUpdate = nb > 0;
         }
         if (this.lights.visible) lp.needsUpdate = true;
+    }
+
+    // a car that's been shot up: smoke from the engine, darker as it gets worse; then flames, and when the fire has
+    // burned a few seconds it goes up
+    damagedFx(c, dt, game) {
+        if (c.fire > 0) {
+            c.fire -= dt;
+            if (c.fire <= 0) { this.destroyCar(c, game, c.hitBy || null, 'shot'); return; }
+        }
+        c.puff = (c.puff || 0) - dt;
+        if (c.puff > 0) return;
+        if (game.camera.position.distanceToSquared(c.pos) > 1500 * 1500) { c.puff = 0.5; return; }
+        c.puff = c.fire > 0 ? 0.05 : 0.12;
+        const f = c.fwd, h = (c.len || 4.6) * 0.36;
+        const p = _hp.set(c.pos.x + (f ? f.x * h : 0), c.pos.y + 0.9, c.pos.z + (f ? f.z * h : 0));
+        const dark = c.fire > 0 ? 0.05 : 0.3 - (1 - c.hp / c.maxHp) * 0.2;
+        game.effects.puffSmoke(p, _v.set(rand(-0.4, 0.4), rand(1.5, 3), rand(-0.4, 0.4)), c.fire > 0 ? 1.1 : 0.7, dark, c.fire > 0 ? 3 : 2.2, 0.55);
+        if (c.fire > 0) game.effects.puffFire(p, _v.set(0, 2.2, 0), 0.9, 0.35);
     }
 
     // buggies: out and back along their trail

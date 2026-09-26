@@ -8,7 +8,7 @@
 // Eye point is the origin; forward is -Z.
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
-import { buildRifleModel } from './rifle.js';
+import { ViewModel } from './viewmodel.js';
 import { clamp, damp, MS_TO_KTS, M_TO_FT, DEG } from './util.js';
 import { terrainHeight } from './world.js';
 
@@ -160,49 +160,21 @@ export class Cockpit {
         this.buildRifle();
     }
 
-    // AK-47 view model (child of the overlay camera)
+    // On foot, first person: gloved arms and the current weapon (viewmodel.js), children of the overlay camera
     buildRifle() {
-        const g = buildRifleModel();
-        this.flash = new THREE.PointLight(0xffa040, 0, 3, 2);
-        this.flash.position.set(0, 0.03, -0.7);
-        g.add(this.flash);
-        const flashTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d'); const gr = x.createRadialGradient(32, 32, 0, 32, 32, 32); gr.addColorStop(0, 'rgba(255,240,200,1)'); gr.addColorStop(0.3, 'rgba(255,170,60,0.8)'); gr.addColorStop(1, 'rgba(255,120,20,0)'); x.fillStyle = gr; x.fillRect(0, 0, 64, 64); return new THREE.CanvasTexture(c); })();
-        this.muzzle = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTex, blending: THREE.AdditiveBlending, depthWrite: false, color: new THREE.Color(1.8, 1.5, 1.2) }));
-        this.muzzle.position.set(0, 0.02, -0.68);
-        this.muzzle.scale.setScalar(0.18);
-        g.add(this.muzzle);
-        g.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });
-        g.scale.setScalar(0.62);
-        g.position.set(0.2, -0.2, -0.5);
-        g.rotation.y = 0.05;
-        g.visible = false;
-        this.camera.add(g);
-        this.rifle = g;
-        this.rifleKick = 0;
+        this.viewModel = new ViewModel(this.camera);
+        this.rifle = this.viewModel.root;
     }
 
     updateRifle(dt, game, mainCamera, world, pm) {
         this.root.visible = false;
-        this.rifle.visible = true;
         this.camera.position.set(0, 0, 0);
         this.camera.quaternion.copy(mainCamera.quaternion);
         this.camera.fov = mainCamera.fov; this.camera.aspect = mainCamera.aspect;
         this.camera.updateProjectionMatrix();
+        this.camera.updateMatrixWorld();
         this.syncLights(world);
-        // a round went off in the last 50 ms (pilot.js stamps lastShotT; older builds only had fireT)
-        const firing = pm.reloadT <= 0 && (pm.lastShotT != null ? game.time - pm.lastShotT < 0.05 : pm.fireT > 0.05 && game.input.mouse.left);
-        if (firing) this.rifleKick = 1;
-        this.rifleKick = Math.max(0, this.rifleKick - dt * 14);
-        const reload = pm.reloadT > 0 ? Math.sin(Math.min(1, (2.2 - pm.reloadT) / 2.2) * Math.PI) : 0;
-        this.rifle.position.set(0.2, -0.2 - reload * 0.12, -0.5 + this.rifleKick * 0.03);
-        this.rifle.rotation.set(this.rifleKick * 0.06 + reload * 0.5, 0.05, reload * 0.4);
-        this.muzzle.visible = this.rifleKick > 0.6;
-        this.muzzle.material.rotation = Math.random() * 6;
-        this.flash.intensity = this.rifleKick > 0.6 ? 2 : 0;
-        // sway while hanging under the canopy / walking
-        const t = game.time;
-        this.rifle.position.x += Math.sin(t * 1.3) * 0.004;
-        this.rifle.position.y += Math.cos(t * 1.7) * 0.004;
+        this.viewModel.update(dt, game, pm);
     }
 
     build() {

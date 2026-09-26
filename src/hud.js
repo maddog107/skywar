@@ -7,6 +7,7 @@ import { WEAPONS } from './config.js';
 import { terrainHeight } from './world.js';
 import { refSpeeds } from './aircraft.js';
 import { AIR_TARGETS } from './softtargets.js';
+import { drawWeaponHud } from './weaponhud.js';
 
 const GREEN = '#5dffa0';
 const GREEN_DIM = 'rgba(93,255,160,0.55)';
@@ -861,31 +862,8 @@ export class HUD {
         this.drawRadar(game);
         this.drawMessages(game);
         const s = pm.seat, agl = pm.pos.y - Math.max(terrainHeight(pm.pos.x, pm.pos.z), 0);
-        // crosshair
-        const cx = W / 2, cy = H / 2, gap = 6 + pm.recoil * 300;
-        if (pm.alive) {
-            ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.moveTo(cx - gap - 10, cy); ctx.lineTo(cx - gap, cy);
-            ctx.moveTo(cx + gap, cy); ctx.lineTo(cx + gap + 10, cy);
-            ctx.moveTo(cx, cy - gap - 10); ctx.lineTo(cx, cy - gap);
-            ctx.moveTo(cx, cy + gap); ctx.lineTo(cx, cy + gap + 10);
-            ctx.stroke();
-        }
-        if (game.time - game.hitmarkerT < 0.15) {
-            ctx.strokeStyle = game.time - game.killmarkerT < 0.4 ? RED : '#fff';
-            ctx.beginPath();
-            for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { ctx.moveTo(cx + sx * 5, cy + sy * 5); ctx.lineTo(cx + sx * 13, cy + sy * 13); }
-            ctx.stroke();
-        }
-        // ammo (a 60-round drum: "60 / 540")
-        ctx.textAlign = 'right';
-        mono('700', C ? 22 : 30);
-        ctx.fillStyle = pm.mag > 8 ? '#fff' : RED;
-        ctx.fillText(pm.reloadT > 0 ? 'RELOADING' : pm.mag + ' / ' + pm.reserve, W - M, H - (C ? 26 : 40));
-        mono('600', C ? 10 : 12);
-        ctx.fillStyle = 'rgba(255,255,255,0.7)';
-        ctx.fillText('AK-47 · 7.62mm · DRUM', W - M, H - (C ? 48 : 70));
+        // the weapon: crosshair, hitmarkers, where hits come from, ammunition, the slots
+        drawWeaponHud(this, ctx, game, pm, W, H, C, M, mono);
         // health: number + bar (red and pulsing when low, flashing right after a hit)
         const hp = clamp(pm.health / 100, 0, 1), hurt = game.time - pm.lastHitT < 0.35;
         const hc = hurt ? '#fff' : hp > 0.5 ? '#fff' : hp > 0.25 ? AMBER : RED;
@@ -906,8 +884,8 @@ export class HUD {
         if (s.deployed && !s.landed && pm.canopyHp < 150) ctx.fillStyle = pm.canopyHp < 60 ? RED : AMBER;
         ctx.fillText(status, M, H - (C ? 48 : 70));
         ctx.fillStyle = 'rgba(255,255,255,0.7)';
-        const keys = pm.walker ? 'WASD WALK · SHIFT RUN · LMB FIRE · R RELOAD · E BOARD A JET · V VIEW'
-            : s.deployed ? 'A/D TURN · W DIVE · S BRAKE · SPACE FLARE (LOW) · LMB FIRE · V VIEW' : '';
+        const keys = pm.walker ? 'WASD MOVE · SHIFT SPRINT · LMB FIRE · RMB AIM · R RELOAD · 1–7 / WHEEL WEAPONS · Q LAST · E BOARD · V VIEW'
+            : s.deployed ? 'A/D TURN · W DIVE · S BRAKE · SPACE FLARE (LOW) · LMB FIRE · 1–7 WEAPONS · V VIEW' : '';
         if (pm.alive) ctx.fillText(keys, M, H - (C ? 66 : 92), W * 0.62);
         if (pm.alive && s.deployed && !s.landed && agl < 18 && !pm.flareUsed && !pm.canopyGone && Math.floor(game.time * 3) % 2) {
             ctx.textAlign = 'center'; mono('700', 18); ctx.fillStyle = GREEN;

@@ -25,6 +25,8 @@ import { Airbases } from './airbase.js';
 import { AirTraffic } from './airtraffic.js';
 import { preloadProps } from './props.js';
 import { preloadCharacter } from './character.js';
+import { preloadWeapons } from './weaponmodels.js';
+import { SLOTS } from './arsenal.js';
 import { preloadShips } from './naval.js';
 import { setupTouch, isTouchDevice } from './touch.js';
 import { Aircraft, refSpeeds } from './aircraft.js';
@@ -154,7 +156,7 @@ async function boot() {
     world.setTime(settings.time);
     world.updateTerrain(new THREE.Vector3(0, 0, 0), true);
     $('loadText').textContent = 'LOADING AIRFRAMES…';
-    await Promise.all([preloadModels((f) => { $('loadFill').style.width = (10 + f * 60) + '%'; }), preloadProps(), preloadCharacter(), preloadShips()]);
+    await Promise.all([preloadModels((f) => { $('loadFill').style.width = (10 + f * 60) + '%'; }), preloadProps(), preloadCharacter(), preloadShips(), preloadWeapons()]);
     $('loadText').textContent = 'BUILDING TOWNS & ROADS…';
     await new Promise(r => setTimeout(r, 20));
     world.towns = new Towns(scene, world);
@@ -522,6 +524,7 @@ function launch() {
         game.effects.explosion(new THREE.Vector3(0, -500, 0), 0.1);
         renderer.compile(scene, camera);
         warmUpload();
+        cockpit.viewModel.prewarm(SLOTS); // every weapon and the arms, so the first draw on foot doesn't hitch
         cockpit.rifle.visible = true;
         renderer.compile(cockpit.scene, cockpit.camera);
         cockpit.rifle.visible = false;
@@ -624,6 +627,15 @@ function buildCredits() {
         ['SWAT (the pilot on foot and under the parachute)', 'Quaternius', 'CC0', 'https://poly.pizza/m/Btfn3G5Xv4'],
         ['Man (the civilian in Grand Theft Aero)', 'Quaternius', 'CC0', 'https://poly.pizza/m/HMnuH5geEG'],
         ['M939 Truck', 'J-Toastie', 'CC BY 3.0', 'https://poly.pizza/m/y8lBpvMlim'],
+        // on-foot weapons and first-person arms (models/weapons/CREDITS.md)
+        ['AK-47(Disassembly of weapons) (AK-47)', 'skartemka', 'CC BY 4.0', 'https://sketchfab.com/3d-models/ak-47disassembly-of-weapons-a1a1750320864923884608db5dc0ea33'],
+        ['M4A1 Carbine (M4A1)', 'MrM0lten', 'CC BY 4.0', 'https://sketchfab.com/3d-models/m4a1-carbine-9bb8f18ad94d4b468e447a2d43bd08b9'],
+        ['Remington 870 Classic (shotgun)', 'space_potato', 'CC BY 4.0', 'https://sketchfab.com/3d-models/remington-870-classic-cf28a90d832e416e905f946bb42915d4'],
+        ['3D Beretta M9 (M9 pistol)', 'damkung13', 'CC BY 4.0', 'https://sketchfab.com/3d-models/3d-beretta-m9-67a0596c99364e97ae15554cd30553e3'],
+        ['Desert Eagle', 'ELIZION', 'CC BY 4.0', 'https://sketchfab.com/3d-models/desert-eagle-cabde59f5cf24effaf80536e35d04e95'],
+        ['RPG_7 (RPG-7 and PG-7V rocket)', 'AnilkumarG', 'CC BY 4.0', 'https://sketchfab.com/3d-models/rpg-7-625b550f52a04068b943837558b5a582'],
+        ['m67 frag grenade', 'mypPi', 'CC BY 4.0', 'https://sketchfab.com/3d-models/m67-frag-grenadem67-256b80fab7204f35a9284c5f5ee93dad'],
+        ['fps arms (first-person gloved arms)', 'bumstrum', 'CC BY 4.0', 'https://sketchfab.com/3d-models/fps-arms-08ec4403a47645d8ad80633abf13d39d'],
         ['Trees, grass, ferns and ground textures (photoscans; see models/vegetation and models/ground)', 'Poly Haven', 'CC0', 'https://polyhaven.com'],
     ];
     const body = $('creditsBody');
