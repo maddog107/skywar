@@ -26,6 +26,43 @@ const ownBox = (node) => {
     return b;
 };
 
+describe('vehicles API', () => {
+    test('vehiclesReady resolves once loaded, and every VEHICLES entry loaded', async () => {
+        await V.vehiclesReady();
+        for (const id of Object.keys(V.VEHICLES)) assert.ok(V.hasVehicle(id), id);
+    });
+    test('staticVehicle merges a posed vehicle into a few draw calls, keeping every triangle', () => {
+        const id = V.VEHICLES.scud ? 'scud' : Object.keys(V.VEHICLES)[0];
+        const { object, rig } = V.createVehicle(id);
+        for (const g of V.VEHICLES[id].deploy || []) V.pose(rig, g, 1);
+        let draws = 0;
+        object.traverse(o => { if (o.isMesh) draws++; });
+        const merged = V.staticVehicle(object);
+        let mdraws = 0;
+        merged.traverse(o => { if (o.isMesh) mdraws++; });
+        assert.ok(mdraws <= 3 && mdraws < draws, `${draws} → ${mdraws} draw calls`);
+        assert.equal(tris(merged), tris(object));
+        assert.ok(Math.abs(box(merged).max.y - box(object).max.y) < 1e-3, 'merged in the posed shape');
+    });
+    test('repaint swaps only the Paint material', () => {
+        const id = Object.keys(V.VEHICLES)[0];
+        const { object } = V.createVehicle(id, { paint: 'blue_tan' });
+        const names = new Map();
+        object.traverse(o => { if (o.isMesh) for (const m of [].concat(o.material)) names.set(m.name, m); });
+        assert.equal(names.get('Paint'), V.paintMaterial('blue_tan'));
+        assert.ok(names.get('Detail'));
+    });
+    test('tracks scroll with roll()', () => {
+        const id = Object.keys(V.VEHICLES).find(k => V.createVehicle(k).rig.tracks.length);
+        if (!id) return;
+        const { rig } = V.createVehicle(id);
+        const t = rig.tracks[0];
+        V.roll(rig, 0.1);
+        assert.ok(Math.abs(t.material.map.offset.x) > 0.01, 'track texture scrolls');
+        assert.notEqual(rig.tracks[0].material, rig.tracks[1].material, 'each side scrolls on its own');
+    });
+});
+
 describe('vehicles', () => {
     for (const [id, spec] of Object.entries(V.VEHICLES)) {
         describe(id, () => {

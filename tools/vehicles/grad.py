@@ -90,8 +90,11 @@ def build_launcher(v, parent):
             c1 = Vector((x, y, Z_BREECH))
             # tube shell (open ends)
             L.cyl('paint', c0, c1, TUBE_R, TUBE_R, 10, cap0=False, cap1=False, smooth=True)
-            # muzzle: rolled rim and the dark bore
-            L.lathe(c0, (0, 0, 1), [(-0.005, TUBE_R + 0.006, 'paint'), (0.02, TUBE_R + 0.006, 'paint'), (0.02, TUBE_R, 'dark'), (0.0, TUBE_R - 0.012, 'dark')], n=10, smooth=False)
+            # muzzle: the rim's front face and outer band (a profile traversed into the tube: the front annulus faces
+            # forwards, the band outwards), the bore wall seen from the muzzle (traversed back out: it faces in),
+            # the dark bottom of the bore
+            L.lathe(c0, (0, 0, 1), [(0.0, TUBE_R - 0.012, 'paint'), (0.0, TUBE_R + 0.006, 'paint'), (0.025, TUBE_R + 0.006, 'paint'), (0.025, TUBE_R, 'paint')], n=10, smooth=False)
+            L.lathe(c0, (0, 0, 1), [(0.12, TUBE_R - 0.012, 'dark'), (0.0, TUBE_R - 0.012, 'dark')], n=10, smooth=False)
             L.disc('black', c0 + Vector((0, 0, 0.12)), (0, 0, -1), TUBE_R - 0.012, 8)
             # breech end: dark bore with the contact
             L.disc('black', c1 + Vector((0, 0, -0.03)), (0, 0, 1), TUBE_R - 0.004, 8)

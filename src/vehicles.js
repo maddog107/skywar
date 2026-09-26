@@ -6,12 +6,17 @@
 //   { type: 'rot' | 'slide' | 'spin', axis: [x, y, z] (parent frame), min, max, stow, deploy, group, rpm }
 // and the root carries the rig description (userData.vk: wheels, rams, tracks, dimensions).
 //
-//   await preloadVehicles();                       // main.js, with the other preloads
-//   const { object, rig } = createVehicle('scud'); // a fresh copy (shares geometry and materials)
-//   deployJacks(rig, 1); deployPad(rig, 1); raise(rig, 1);   // 0 = stowed … 1 = deployed / erected
+//   preloadVehicles({ background: true });         // main.js, right after the boot's preloads (loads once idle)
+//   await vehiclesReady();
+//   const { object, rig } = createVehicle('scud', { paint: 'red_green' }); // a fresh copy (geometry, materials shared)
+//   for (const g of VEHICLES.scud.deploy) pose(rig, g, 1);  // travel → firing: jacks, pad, erector (0 … 1 each)
+//   deployJacks(rig, k); deployPad(rig, k); raise(rig, k); openDoors(rig, k); openHatches(rig, k); stow(rig);
 //   aim(rig, yaw, pitch); spin(rig, dt); roll(rig, metres); steer(rig, angle);
 //   muzzleWorld(rig, i, pos, dir);                 // launch point and direction of tube / rail / canister i
+//   staticVehicle(object);                         // a merged copy in its current pose (parked / distant vehicles)
 //
+// rig: nodes (every named node), joints / byGroup / byName, muzzles, missiles, canisters, wheels, tracks, rams,
+// and shortcuts (erector, missile, pad, turret, launcher, antenna, mast, jacks.fl…rr, exhaust, seat, hatch).
 // Every helper only moves nodes (no allocation); rams re-aim themselves after each pose change.
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
@@ -236,6 +241,17 @@ export const VEHICLES = {
         // door_l/door_r: cab doors; door_pump: the pump module's side door (all group 'door'); the front tandem steers
         parts: ['body', 'door_l', 'door_r', 'door_pump', 'wheel_1l', 'wheel_1r', 'wheel_4l', 'wheel_4r', 'exhaust', 'seat_driver', 'hatch_entry'],
         deploy: ['door'],
+    },
+    himars: {
+        name: 'M142 High Mobility Artillery Rocket System', short: 'HIMARS', cls: 'artillery', team: 'blue', file: 'himars.glb', paint: 'blue_green',
+        chassis: 'FMTV 6×6 (M1140) with the armoured cab', dims: { length: 6.94, width: 2.44, height: 3.18 }, crew: 3, mass: 16.25, speed: 85,
+        arm: '1 pod × 6 GMLRS (M30 / M31) 227 mm guided rockets, 70+ km (or 1 ATACMS / PrSM)', muzzles: 6,
+        // turret: the launcher-loader module on its turntable over the tandem, rot y (full circle; raise the launcher before
+        // traversing); launcher: the cage and pod, rot x about the rear pivot 0 → 60° (the pod's covered front ends face the
+        // cab when stowed); muzzle_1-3 upper row left → right seen from behind, 4-6 lower row; ram_l/ram_r: elevation rams;
+        // door_l/door_r: cab doors; the front axle steers
+        parts: ['body', 'turret', 'launcher', 'muzzle_1', 'muzzle_6', 'ram_l', 'ram_r', 'door_l', 'door_r', 'wheel_1l', 'wheel_1r', 'wheel_3l', 'wheel_3r', 'exhaust', 'seat_driver', 'hatch_entry'],
+        deploy: ['launcher'],
     },
 };
 

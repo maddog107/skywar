@@ -238,13 +238,13 @@ def m860_trailer(v, b, gear_parent=None):
         b.box('rubber', sx * 0.78, sx * 1.2, 0.35, yd - 0.26, T['axles'][1] + 0.72, T['axles'][1] + 0.74)
     wheels(v, None, T['axles'], T['track'], R, T['W'], T['rim'], lugs=20, seg=24, nbolts=10, cti=True,
            rim_skin='paint', hub_skin='paint', tread='block', prefix='wheel')
-    # ── landing gear (front support legs), raised for towing: group 'gear' ──
-    zg = 2.30
+    # ── landing gear (front support legs, behind a coupled tractor's rear wheels), raised for towing: group 'gear' ──
+    zg = 2.95
     gear = Part(v, 'landing_gear', pivot=(0, nb, zg), parent=gear_parent,
                 joint=slide('y', 0.42, group='gear'))
     for sx in (-1, 1):
         x = sx * 0.82
-        b.box('paint', x - 0.09, x + 0.09, 0.62, nb, zg - 0.09, zg + 0.09)                  # outer leg (static)
+        b.box('paint', x - 0.09, x + 0.09, 0.62, 1.32, zg - 0.09, zg + 0.09)                # outer leg (static)
         gear.box('paint', x - 0.065, x + 0.065, 0.1, 0.8, zg - 0.065, zg + 0.065)          # inner leg
         gear.box('dark', x - 0.2, x + 0.2, 0.0, 0.1, zg - 0.22, zg + 0.22, bev=0.02)        # sand shoe
     b.beam('paint', (-0.82, 0.9, zg), (0.82, 1.3, zg), 0.06, 0.06)
@@ -255,12 +255,12 @@ def m860_trailer(v, b, gear_parent=None):
     # ── four swing-out outriggers, folded along the sides ──
     rigs = {}
     for sx, side in ((-1, 'l'), (1, 'r')):
-        # front pair folded forward under the gooseneck, rear pair folded aft behind the trailer; both splay 45° out.
-        # Hinge knuckles on the frame (static).
+        # front pair folded aft along the sides (clear of a coupled tractor's rear wheels) and swinging 135° out and
+        # forward; rear pair folded aft behind the trailer, splaying 45° out. Hinge knuckles on the frame (static).
         xf, xr = 1.15, 1.20
         b.box('dark', sx * 0.64, sx * (xf + 0.02), yd - 0.55, yd - 0.28, 3.23, 3.47)
         b.box('dark', sx * 1.02, sx * (xr + 0.02), yd - 0.55, yd - 0.28, 10.40, 10.62)
-        rigs['f' + side] = outrigger(v, 'f' + side, (sx * xf, yd - 0.30, 3.35), sx, -1, -sx * math.radians(45))
+        rigs['f' + side] = outrigger(v, 'f' + side, (sx * xf, yd - 0.30, 3.35), sx, +1, sx * math.radians(135))
         rigs['r' + side] = outrigger(v, 'r' + side, (sx * xr, yd - 0.30, 10.52), sx, +1, sx * math.radians(45))
     return {'gear': gear, 'outriggers': rigs}
 

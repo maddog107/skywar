@@ -181,8 +181,8 @@ def build_deck(b):
     usfam.hatch_x(b, 1.18, 1, yd + 0.05, 1.8, 4.1, 4.95)
     usfam.hatch_x(b, 1.18, 1, yd + 0.05, 1.8, 5.0, 5.8, hinge='back')
     usfam.stencil_box(b, (1.181, 1.72, 5.4), 0.4, 0.07, (1, 0, 0))
-    b.box('paint', 0.62, 1.2, 0.72, yd - 0.26, 4.1, 5.85, bev=0.02)
-    usfam.hatch_x(b, 1.2, 1, 0.76, yd - 0.3, 4.2, 5.75)
+    b.box('paint', 0.62, 1.2, 0.72, yd - 0.26, 5.35, 6.95, bev=0.02)
+    usfam.hatch_x(b, 1.2, 1, 0.76, yd - 0.3, 5.45, 6.85)
     # left side: cable reels on the deck and a tool box below
     for z in (4.35, 5.25):
         b.cyl('dark', (-1.15, 1.72, z), (-0.35, 1.72, z), 0.34, 0.34, 18)
