@@ -58,6 +58,17 @@ export function cutSurfaces(obj, id, L) {
 // def.side: polygon [[z, y], ...] seen from the side, with def.x = [lo, hi] the band across.
 // All in fractions of the aircraft length; the def describes the right-hand (+x) surface, mirrored for the left.
 function makeRegion(def, side, L) {
+    const R = makePrism(def, side, L);
+    // def.clip: extra half-spaces [[point], [normal]] (the normal points into the part kept), e.g. the split
+    // between the upper and lower halves of a deceleron that is modelled drooped
+    for (const [p, n] of def.clip || []) {
+        const nn = new THREE.Vector3(n[0] * side, n[1], n[2]).normalize();
+        R.planes.push({ n: nn, d: -nn.dot(new THREE.Vector3(p[0] * side * L, p[1] * L, p[2] * L)) });
+    }
+    return R;
+}
+
+function makePrism(def, side, L) {
     const planes = [];
     const box = new THREE.Box3();
     if (def.top) {
@@ -137,6 +148,9 @@ function cutOne(obj, def, kind, side, L) {
     // wing is too thin for a height band alone to keep the other skin out
     const skinDir = def.skin ? (R.plan === 'top' ? new THREE.Vector3(0, def.skin, 0) : new THREE.Vector3(def.skin * side, 0, 0)) : null;
     const fn = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
+    // a whole part's faces may lie right on the region's faces: widen the box so rounding doesn't drop them
+    const nudge = def.whole ? (def.whole === true ? 0.0003 : def.whole) * L : 0;
+    if (nudge) R.box.expandByScalar(2 * nudge);
     for (const g of obj.children) {
         if (!g.userData.region) continue;
         const off = g.position;
@@ -168,13 +182,17 @@ function cutOne(obj, def, kind, side, L) {
             };
             const taken = new Map();   // hit triangle → the pieces of it that stay with the airframe
             for (const t of hits) {
-                // clip plane by plane: what falls outside a plane stays with the airframe
                 let piece = [vert(t), vert(t + 1), vert(t + 2)];
                 const out = [];
-                for (let pi = 0; pi < R.planes.length && piece.length >= 3; pi++) {
-                    const [inP, outP] = splitPoly(piece, R.planes[pi]);
-                    if (outP.length >= 3) add(out, outP);
-                    piece = inP;
+                if (def.whole) {
+                    if (!partInside(piece, R, nudge)) continue;
+                } else {
+                    // clip plane by plane: what falls outside a plane stays with the airframe
+                    for (let pi = 0; pi < R.planes.length && piece.length >= 3; pi++) {
+                        const [inP, outP] = splitPoly(piece, R.planes[pi]);
+                        if (outP.length >= 3) add(out, outP);
+                        piece = inP;
+                    }
                 }
                 const area = piece.length >= 3 ? polyArea(piece) : 0;
                 if (area < 1e-7) continue; // only touches the region: the triangle stays whole
@@ -184,7 +202,7 @@ function cutOne(obj, def, kind, side, L) {
                 add(b.verts, piece);
                 owners.set(g, (owners.get(g) || 0) + area);
                 // the cut along each wall plane: edges of the piece lying in that plane
-                for (let pi = 0; pi < R.planes.length; pi++) {
+                if (!def.whole) for (let pi = 0; pi < R.planes.length; pi++) {
                     const pl = R.planes[pi];
                     if (!pl.wall) continue;
                     for (let i = 0; i < piece.length; i++) {
@@ -236,16 +254,18 @@ function cutOne(obj, def, kind, side, L) {
     // skin 0: cut through the whole thickness (a flap); ±1: a panel of the upper / lower skin ('top'), or the
     // outer / inner skin ('side')
     const skin = (def.skin || 0) * (R.plan === 'side' ? side : 1);
+    // depth: 0 leaves the opening as it is (no walls, no floor): for a skin that is a single sheet (the panel
+    // shows the other side of the sheet where it opened), or the two halves of a split surface
     const depth = (def.depth ?? 0.004) * L;
     // split: one half of a split surface (two defs on one outline, skin 1 and −1) whose halves are bodies of
     // their own meeting face to face: each takes its skin and the inner face turned its way, so the two make the
     // whole surface. No bay behind it: its walls span the half's own section, and it gets no floor or inside face.
     const split = !!(def.split && skin);
-    R.planes.forEach((pl, pi) => {
+    if (depth > 0) R.planes.forEach((pl, pi) => {
         if (!pl.wall || !cutSegs[pi].length) return;
         for (const q of wallStrip(pl, cutSegs[pi], R.plan, split ? 0 : skin, depth)) { wellRest.push(q); if (!skin || split) wellSurf.push(q); }
     });
-    if (skin && !split) {
+    if (skin && !split && depth > 0) {
         // a floor under the panel, and the panel's inside face (moves with it)
         const up = R.plan === 'top' ? new THREE.Vector3(0, skin, 0) : new THREE.Vector3(skin, 0, 0);
         const inset = Math.min(depth * 0.25, 0.03);
@@ -263,6 +283,21 @@ function cutOne(obj, def, kind, side, L) {
     pivot.userData.surface = { kind, axis: a.toArray(), angle: def.angle, slide, id };
     owner.add(pivot);
     return true;
+}
+
+// def.whole: the surface is a part modelled as its own closed solid (a separate mesh in the model file that
+// segmentation merged, or a control surface modelled with a gap all round it). Its triangles are taken
+// whole, never clipped, and nothing closes the opening (the part was closed all round). A triangle belongs
+// to it if its centre, nudged `nudge` into the solid it bounds (against its normal), is inside the region:
+// two parts that touch (upper and lower brake petals sharing a split face) each keep their own face, and the
+// face of the airframe the part sits against stays put. whole: true nudges 0.0003 L; a number sets the
+// nudge (larger lets the outline follow a curved gap loosely; keep it under half the part's thickness where
+// the part meets a neighbour face to face).
+function partInside(tri, R, nudge) {
+    const [a, b, c] = tri.map(v => v.p);
+    const n = new THREE.Vector3().subVectors(b, a).cross(new THREE.Vector3().subVectors(c, a)).normalize();
+    const p = a.clone().add(b).add(c).divideScalar(3).addScaledVector(n, -nudge);
+    return R.planes.every(pl => pl.n.dot(p) + pl.d > 0);
 }
 
 // A skin whose glTF material is blended at full opacity (the atlas's alpha is only for a canopy elsewhere on it)

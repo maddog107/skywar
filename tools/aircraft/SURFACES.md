@@ -71,6 +71,16 @@ The F-15 (plain flaps, dorsal brake) and the 737 (Fowler flaps, spoilers, dihedr
   positive angle. When the model builds the surface as two bodies meeting face to face (the B-2), add
   `split: true` to both: each half then takes the inner face turned its way too, and gets walls across its
   own section instead of a bay floor, so nothing is left between the halves when they open.
+- **Parts modelled as their own solids** (the F-16's flaperons and speed-brake petals, which were separate
+  meshes in its GLB; a flaperon modelled with a gap all round it): use `whole: true`. The triangles are
+  taken whole by where their centre lies, never clipped, and nothing closes the opening, since the part was
+  closed all round. Two parts that touch face to face (upper and lower petals) each keep their own face; a
+  height band tilted with `dihedral` along the split between them tells them apart. `whole: <nudge in L>`
+  lets the outline follow a curved gap loosely.
+- **Single-sheet skins** (the F-14's beaver tail) and **drooped split surfaces** (the A-10's decelerons,
+  modelled half open with their fittings inside): `depth: 0` closes nothing (no walls, floor or inside
+  face). `clip: [[point, normal]]` adds a plane to the region, e.g. the split between the deceleron halves,
+  when the halves can't be told apart by the way their faces point.
 - **Stowed wells:** the walls and floors closing an opening are shown only while their surface is out of
   its stowed position, so a stowed surface can't show a dark line where its cut meets.
 - **Centreline surfaces** (dorsal, ventral, beaver-tail brakes) need `mirror: false`.
@@ -82,14 +92,14 @@ The F-15 (plain flaps, dorsal brake) and the 737 (Fowler flaps, spoilers, dihedr
 
 | id | flaps | speed brake |
 |---|---|---|
-| f16, f2 | flaperons (the F-16 model's `Aileron` parts) droop | split petals beside the nozzle (upper and lower, each side) |
-| f22 | flaperons droop | none dedicated (uses control surfaces): none |
-| f35, f35n | flaperons droop | none dedicated: none |
-| fa18 | large trailing-edge flaps (landing ~45°), ailerons outboard | dorsal panel between the fins |
-| f14 | trailing-edge flaps | upper and lower "beaver tail" panels between the engines |
-| f4 | inboard trailing-edge flaps | underwing panels opening down |
-| a10 | inboard flaps | split outer ailerons (decelerons) open top and bottom |
-| f5 | trailing-edge flaps | ventral panels under the forward fuselage |
+| f16, f2 | flaperons droop 20° (the F-16 model's `Aileron` parts, `whole`) | split petals beside the nozzle, 30° up and 30° down (F-16: the model's `Brake` parts, `whole`) |
+| f22 | flaperons droop 25° | none dedicated (uses control surfaces): none |
+| f35, f35n | flaperons droop 25° | none dedicated: none |
+| fa18 | E/F: big single-slotted TE flaps, 40° with a little aft travel | the E/F has no dorsal brake (that was the legacy Hornet): LEX spoilers rise 60° |
+| f14 | TE flaps, but this model's wings are fixed fully swept, where the real flaps are locked out: none | upper and lower beaver-tail panels, 60° each (`depth: 0`) |
+| f4 | inboard TE flaps 60°, the ailerons droop 16.5° with them | underwing panels aft of the gear wells, 50° down |
+| a10 | inboard flaps (two pieces a side) 20° | decelerons: upper half up 55°, lower half down 25° from the model's drooped pose (`clip`, `depth: 0`) |
+| f5 | TE flaps root to the kink, 20° | two ventral panels ahead of the main gear, 50° |
 | su35, su57, su47 | flaperons / TE flaps | Su-35: big dorsal brake behind the canopy; Su-57: none; Su-47: research |
 | mig29 | TE flaps | upper and lower split panels in the tail between the engines |
 | mig31, mig25 | TE flaps | ventral airbrakes (research where) |

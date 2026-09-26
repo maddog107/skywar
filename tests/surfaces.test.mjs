@@ -183,6 +183,81 @@ describe('surfaces: cutting flaps and brakes out of a model', () => {
         delete D.SURFACE_DEFS.__split;
     });
 
+    // two petal-like boxes stacked face to face (upper y 0..0.2, lower y −0.2..0, x 2..4.5, z 1.4..2), standing
+    // behind a wing slab (z 0..1.4) that touches their front faces, like the F-16's speed-brake petals
+    const petals = () => {
+        const g = new THREE.Group();
+        const wing = new THREE.Mesh(new THREE.BoxGeometry(12, 0.4, 1.4, 12, 1, 3), new THREE.MeshStandardMaterial());
+        wing.position.set(0, 0, 0.7);
+        const up = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.2, 0.6), new THREE.MeshStandardMaterial());
+        up.position.set(3.25, 0.1, 1.7);
+        const dn = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.2, 0.6), new THREE.MeshStandardMaterial());
+        dn.position.set(3.25, -0.1, 1.7);
+        g.add(wing, up, dn);
+        return segmentModel(g, L);
+    };
+    const faces = (o) => {   // world-space triangles of a surface's own skin: [{ c: centre, n: normal }]
+        const out = [], a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+        o.updateMatrixWorld(true);
+        o.traverse(m => {
+            if (!m.isMesh || m.userData.surfaceWell) return;
+            const pos = m.geometry.attributes.position;
+            for (let i = 0; i < pos.count; i += 3) {
+                a.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld); b.fromBufferAttribute(pos, i + 1).applyMatrix4(m.matrixWorld); c.fromBufferAttribute(pos, i + 2).applyMatrix4(m.matrixWorld);
+                const t = new THREE.Triangle(a, b, c);
+                out.push({ c: t.getMidpoint(new THREE.Vector3()), n: t.getNormal(new THREE.Vector3()) });
+            }
+        });
+        return out;
+    };
+
+    test('whole parts: two solids meeting face to face each move with their own faces, uncut, nothing closed', () => {
+        const before = area(petals());
+        const obj = petals();
+        const band = { top: [[0.199, 0.14], [0.451, 0.14], [0.451, 0.201], [0.199, 0.201]], whole: true, mirror: false };
+        D.SURFACE_DEFS.__whole = { brakes: [
+            { ...band, y: [0, 0.03], hinge: [[0.2, 0, 0.14], [0.45, 0, 0.14]], angle: -30 },
+            { ...band, y: [-0.03, 0], hinge: [[0.2, 0, 0.14], [0.45, 0, 0.14]], angle: 30 },
+        ] };
+        assert.equal(S.cutSurfaces(obj, '__whole', L), 2);
+        assert.ok(Math.abs(area(obj) - before) < 1e-3 * before, 'nothing cut away, nothing added');
+        let wells = 0;
+        obj.traverse(o => { if (o.userData.surfaceWell) wells++; });
+        assert.equal(wells, 0, 'no walls or floors');
+        for (const p of pivots(obj)) {
+            const upper = p.userData.surface.angle < 0;
+            const f = faces(p);
+            assert.equal(f.length, 12, 'the whole box: 12 triangles, none split');
+            for (const t of f) assert.ok(upper ? t.c.y >= -1e-6 : t.c.y <= 1e-6, `${upper ? 'upper' : 'lower'} petal keeps to its own side (y ${t.c.y.toFixed(3)})`);
+            // the split face turned toward the other petal comes along
+            assert.ok(f.some(t => Math.abs(t.c.y) < 1e-6 && t.n.y * (upper ? -1 : 1) > 0.9), 'its face on the split');
+        }
+        // the wing's back face, which the petals stand against, stays on the airframe
+        const rest = [];
+        obj.traverse(o => { if (o.isMesh && !o.userData.surfaceWell && !pivots(obj).some(p => p === o.parent)) rest.push(o); });
+        assert.ok(rest.some(m => faces(m).some(t => Math.abs(t.c.z - 1.4) < 1e-4 && t.n.z > 0.9 && t.c.x > 2 && t.c.x < 4.5)), 'wing trailing face kept');
+        delete D.SURFACE_DEFS.__whole;
+    });
+
+    test('clip planes bound the region, and depth 0 leaves the opening unclosed', () => {
+        const obj = model();
+        // the flap region of the first test, cut in two by a plane tilted 45° across the chord: only the part
+        // with y > (z − 1.7) is taken, and nothing closes the opening
+        D.SURFACE_DEFS.__clip = { flaps: [{ top: [[0.2, 0.14], [0.45, 0.14], [0.45, 0.25], [0.2, 0.25]], y: [-0.05, 0.05], clip: [[[0.3, 0, 0.17], [0, 1, -1]]], depth: 0, hinge: [[0.2, 0.02, 0.14], [0.45, 0.02, 0.14]], angle: 30, mirror: false }] };
+        assert.equal(S.cutSurfaces(obj, '__clip', L), 1);
+        const [flap] = pivots(obj);
+        const v = new THREE.Vector3();
+        flap.traverse(m => {
+            if (!m.isMesh) return;
+            const pos = m.geometry.attributes.position;
+            for (let i = 0; i < pos.count; i++) { v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld); assert.ok(v.y - (v.z - 1.7) > -1e-4, 'on the kept side of the clip plane'); }
+        });
+        let wells = 0;
+        obj.traverse(o => { if (o.userData.surfaceWell) wells++; });
+        assert.equal(wells, 0, 'depth 0: no walls or floor');
+        delete D.SURFACE_DEFS.__clip;
+    });
+
     test('actuator travel times: fighters quick, airliners slow', () => {
         const fighter = S.surfaceTravel('f15', { category: 'fighter' });
         const civil = S.surfaceTravel('b737', { category: 'civil' });
