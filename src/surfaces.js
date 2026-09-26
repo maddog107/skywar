@@ -215,13 +215,7 @@ function cutOne(obj, def, kind, side, L) {
             // rebuild the airframe mesh: its untouched triangles as they were, and the pieces left outside the region
             // in place of the triangle they came from (a skin drawn blended, without depth writes, is layered in
             // triangle order: keeping the order keeps its look)
-            const keep = [];
-            for (let t = 0; t < pos.count; t += 3) {
-                const out = taken.get(t);
-                if (out) keep.push(...out);
-                else keep.push(vert(t), vert(t + 1), vert(t + 2));
-            }
-            mesh.geometry = buildGeometry(keep, names, sizes, off);
+            mesh.geometry = rebuildGeometry(geo, taken, names, sizes, off);
             geo.dispose();
         }
     }
@@ -344,6 +338,45 @@ function buildGeometry(verts, names, sizes, origin) {
         const N = g.attributes.normal;
         for (let i = 0; i < N.count; i++) { const x = N.getX(i), y = N.getY(i), z = N.getZ(i), l = Math.hypot(x, y, z) || 1; N.setXYZ(i, x / l, y / l, z / l); }
     }
+    g.computeBoundingSphere();
+    return g;
+}
+
+// The airframe mesh after a cut: untouched triangles copied straight across (most of the model: no per-vertex
+// objects, so a type's first use doesn't hitch), the pieces of cut triangles written in their place
+function rebuildGeometry(geo, taken, names, sizes, off) {
+    const pos = geo.attributes.position;
+    let count = 0;
+    for (let t = 0; t < pos.count; t += 3) { const out = taken.get(t); count += out ? out.length : 3; }
+    const g = new THREE.BufferGeometry();
+    const P = new Float32Array(count * 3), src = pos.array;
+    const A = sizes.map(sz => new Float32Array(count * sz)), S = names.map(n => geo.attributes[n].array);
+    let v = 0;
+    for (let t = 0; t < pos.count; t += 3) {
+        const out = taken.get(t);
+        if (!out) {
+            P.set(src.subarray(t * 3, t * 3 + 9), v * 3);
+            for (let k = 0; k < names.length; k++) A[k].set(S[k].subarray(t * sizes[k], (t + 3) * sizes[k]), v * sizes[k]);
+            v += 3;
+            continue;
+        }
+        for (const r of out) {
+            P[v * 3] = r.p.x - off.x; P[v * 3 + 1] = r.p.y - off.y; P[v * 3 + 2] = r.p.z - off.z;
+            let o = 0;
+            for (let k = 0; k < names.length; k++) {
+                const sz = sizes[k];
+                for (let c = 0; c < sz; c++) A[k][v * sz + c] = r.a[o + c];
+                if (names[k] === 'normal') {
+                    const i = v * 3, x = A[k][i], y = A[k][i + 1], z = A[k][i + 2], l = Math.hypot(x, y, z) || 1;
+                    A[k][i] = x / l; A[k][i + 1] = y / l; A[k][i + 2] = z / l;
+                }
+                o += sz;
+            }
+            v++;
+        }
+    }
+    g.setAttribute('position', new THREE.BufferAttribute(P, 3));
+    names.forEach((n, k) => g.setAttribute(n, new THREE.BufferAttribute(A[k], sizes[k])));
     g.computeBoundingSphere();
     return g;
 }

@@ -29,7 +29,7 @@ import { preloadShips } from './naval.js';
 import { setupTouch, isTouchDevice } from './touch.js';
 import { Aircraft, refSpeeds } from './aircraft.js';
 import { Pilot } from './ai.js';
-import { preloadModels, hasFileModel } from './models.js';
+import { preloadModels, hasFileModel, precutSurfaces } from './models.js';
 import { clamp, damp, DEPTH } from './util.js';
 
 const $ = (id) => document.getElementById(id);
@@ -191,6 +191,7 @@ async function boot() {
     setTimeout(() => {
         $('loading').classList.remove('show');
         showMenu();
+        precutSurfaces(); // flaps and speed brakes for every type, while the menu is up
     }, 200);
     requestAnimationFrame(loop);
 }

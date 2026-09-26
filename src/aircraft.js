@@ -334,8 +334,10 @@ export class Aircraft {
 
     updateHookVisual() {
         if (!this.hookMesh) return;
-        // stowed flat along the belly, lowered ~38°
+        // stowed flat along the belly, lowered ~38°; fully stowed it's out of sight (the generic arm is longer
+        // than some tails, so it would poke out behind the jet)
         this.hookMesh.rotation.x = 0.04 + this.hookAnim * (this.hookDown - 0.04);
+        this.hookMesh.visible = this.hookAnim > 0.01;
     }
 
     // on the deck/runway the hook rides on the surface instead of sinking into it

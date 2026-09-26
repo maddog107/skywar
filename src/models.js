@@ -318,14 +318,33 @@ function findWingtips(obj, box) {
 }
 
 // ── Public: get a fresh model instance for an aircraft ──
+// Flaps and speed brakes are cut from a type's skin once, before any copy of it shares the geometry: in the
+// background while the menu is up (precutSurfaces), or on the spot when a type is needed before that
+function ensureSurfaces(id) {
+    const src = cache[id];
+    if (!src || src.surfacesCut) return;
+    src.surfacesCut = true;
+    try { cutSurfaces(src.object, id, AIRCRAFT[id].length); } catch (e) { console.warn('[models] could not cut surfaces for', id, e); }
+}
+
+// Cut every loaded type's surfaces, one type per idle moment (a type takes up to ~0.4 s), so a type first
+// seen mid-sortie (a new enemy wave) doesn't stall a frame
+export function precutSurfaces() {
+    const ids = Object.keys(cache).filter(id => !cache[id].surfacesCut);
+    const idle = window.requestIdleCallback || ((f) => setTimeout(f, 30));
+    const next = () => {
+        const id = ids.shift();
+        if (!id) return;
+        ensureSurfaces(id);
+        idle(next, { timeout: 500 });
+    };
+    idle(next, { timeout: 500 });
+}
+
 export function createAircraftModel(id) {
     if (cache[id]) {
         const src = cache[id];
-        // flaps and speed brakes are cut from the skin the first time a type is used (before any copy shares it)
-        if (!src.surfacesCut) {
-            src.surfacesCut = true;
-            try { cutSurfaces(src.object, id, AIRCRAFT[id].length); } catch (e) { console.warn('[models] could not cut surfaces for', id, e); }
-        }
+        ensureSurfaces(id);
         const object = src.object.clone(true);
         const rig = cloneRig(src.rig);
         rig.props = addProps(object, src.rig.propTemplates);
