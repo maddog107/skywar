@@ -36,6 +36,6 @@ Each was cleaned with
 Kit-built aircraft (`tools/aircraft/<id>.py`, run as `blender -b -P tools/aircraft/<id>.py -- models/aircraft/<id>.glb`)
 are listed in `models/aircraft/CREDITS.md` with their reference drawings.
 
-Previewing: `node server.mjs`, then open `/tools/aircraft/preview.html` (see the comment at the top of
+Previewing: `node server.mjs` (and `node tools/aircraft/upload.mjs` to save PNGs), then open `/tools/aircraft/preview.html` (see the comment at the top of
 `tools/aircraft/preview.js`). It renders models through the game's own loader/normaliser, with the nozzle
 (red), wingtip (blue) and cockpit (green) rig points as markers.

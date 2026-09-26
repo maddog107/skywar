@@ -14,6 +14,7 @@ import { createAircraftModel } from './models.js';
 import { clamp, damp, lerp, rand, G, DEG, makeRadialTexture } from './util.js';
 import { groundHeight, terrainHeight, isOnRunway } from './world.js';
 import { createEngineFlame } from './afterburner.js';
+import { surfaceTravel } from './surfaces.js';
 
 const LIFT_K = 0.0016;
 const CL_MAX = 1.65;
@@ -91,8 +92,16 @@ export function refSpeeds(spec) {
     return { stall: vs(0), takeoff: vs(1) * 1.12, approach: vs(2) * 1.3, flapLimit: 175 };
 }
 
+// A surface actuator: runs at `rate` (full travels per second) and eases into the end of its travel over the
+// last ~8% (a hydraulic ram slowing as it seats), so nothing snaps or crawls
+function actuate(x, target, rate, dt) {
+    const d = target - x;
+    if (d === 0) return x;
+    const step = rate * dt * clamp(Math.abs(d) / 0.08, 0.2, 1);
+    return Math.abs(d) <= step ? target : x + Math.sign(d) * step;
+}
+
 let nextId = 1;
-const SURF_MAT = new THREE.MeshStandardMaterial({ color: 0x6f777f, metalness: 0.35, roughness: 0.5, side: THREE.DoubleSide });
 const GEAR_MATS = {
     strutMat: new THREE.MeshStandardMaterial({ color: 0xb8bcc0, metalness: 0.7, roughness: 0.35 }),
     tyreMat: new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.9 }),
@@ -341,47 +350,34 @@ export class Aircraft {
         return this.hookTip.getWorldPosition(out);
     }
 
-    // Visible flaps (wing trailing edge) and speed brake (spine panel, or wing spoilers on big jets)
+    // Flaps and speed brakes: cut from the model's own skin (surfaces.js, surfacedefs.js), so stowed they are
+    // just part of the wing or fuselage. Each moves like a hydraulic / electric actuator: at a steady rate,
+    // settling gently at the end of its travel.
     buildSurfaces() {
-        const L = this.spec.length, rig = this.rig;
-        const hs = rig.halfSpan || this.spec.span / 2;
-        const tip = rig.wingtips[1] || new THREE.Vector3(hs, 0, L * 0.15);
-        const wingY = tip.y, teZ = tip.z + L * 0.015;
-        const mat = SURF_MAT;
-        const chord = Math.max(0.6, L * 0.055), span = hs * 0.42, thick = Math.max(0.05, L * 0.004);
-        this.flapPanels = [];
-        for (const s of [-1, 1]) {
-            const pivot = new THREE.Group();
-            pivot.position.set(s * hs * 0.4, wingY, teZ);
-            const panel = new THREE.Mesh(new THREE.BoxGeometry(span, thick, chord), mat);
-            panel.position.z = chord / 2;
-            panel.castShadow = true;
-            pivot.add(panel);
-            pivot.visible = false;
-            this.model.add(pivot);
-            this.flapPanels.push(pivot);
-        }
-        // spoilers: panels on top of each wing just ahead of the flaps, hinged at the front, rising up
-        this.brakePanels = [];
-        for (const s of [-1, 1]) {
-            const pivot = new THREE.Group();
-            pivot.position.set(s * hs * 0.4, wingY + thick * 1.5, teZ - chord * 1.05);
-            const panel = new THREE.Mesh(new THREE.BoxGeometry(span * 0.9, thick, chord * 0.9), mat);
-            panel.position.z = chord * 0.45;
-            panel.castShadow = true;
-            pivot.add(panel);
-            pivot.visible = false;
-            this.model.add(pivot);
-            this.brakePanels.push(pivot);
-        }
+        const t = surfaceTravel(this.type, this.spec);
+        this.flapRate = 1 / t.flap; this.brakeRate = 1 / t.brake;
+        this.surfaces = [];
+        this.model.traverse(o => {
+            const s = o.userData.surface;
+            if (!s) return;
+            this.surfaces.push({
+                pivot: o, kind: s.kind, axis: new THREE.Vector3().fromArray(s.axis), angle: s.angle * DEG,
+                slide: s.slide ? new THREE.Vector3().fromArray(s.slide) : null, base: o.position.clone(), k: -1,
+            });
+        });
     }
 
     updateSurfaces(dt) {
-        const brakeTarget = this.airbrake ? 1 : 0;
-        this.brakeAnim = damp(this.brakeAnim, this.alive ? brakeTarget : 0, 5, dt);
-        this.flapAnim = damp(this.flapAnim, this.flaps / 2, 2.5, dt);
-        for (const p of this.flapPanels) { p.visible = this.flapAnim > 0.03; p.rotation.x = this.flapAnim * 0.7; }
-        for (const p of this.brakePanels) { p.visible = this.brakeAnim > 0.03; p.rotation.x = -this.brakeAnim * 0.95; }
+        this.flapAnim = actuate(this.flapAnim, this.flaps / 2, this.flapRate, dt);
+        this.brakeAnim = actuate(this.brakeAnim, this.alive && this.airbrake ? 1 : 0, this.brakeRate, dt);
+        for (const s of this.surfaces) {
+            const k = s.kind === 'flap' ? this.flapAnim : this.brakeAnim;
+            if (k === s.k) continue;
+            s.k = k;
+            s.pivot.quaternion.setFromAxisAngle(s.axis, s.angle * k);
+            s.pivot.position.copy(s.base);
+            if (s.slide) s.pivot.position.addScaledVector(s.slide, k);
+        }
     }
 
     updateGearVisual() {
@@ -409,7 +405,7 @@ export class Aircraft {
         this.speed = this.vel.length();
         this.alpha = 0.03;
         this.throttle = this.controls.throttle = 0.8;
-        this.gear = false; this.gearAnim = 0; this.onGround = false; this.deck = null; this.flaps = 0;
+        this.gear = false; this.gearAnim = 0; this.onGround = false; this.deck = null; this.flaps = 0; this.flapAnim = 0; this.brakeAnim = 0;
         this.syncBody();
     }
 
@@ -422,7 +418,7 @@ export class Aircraft {
         this.vel.copy(ship.vel);
         this.speed = 0; this.alpha = 0;
         this.throttle = this.controls.throttle = 0;
-        this.gear = true; this.gearAnim = 1; this.onGround = true; this.flaps = 1;
+        this.gear = true; this.gearAnim = 1; this.onGround = true; this.flaps = 1; this.flapAnim = 0.5; this.brakeAnim = 0;
         this.syncBody();
     }
 
@@ -436,7 +432,7 @@ export class Aircraft {
         this.speed = 0;
         this.alpha = 0;
         this.throttle = this.controls.throttle = 0;
-        this.gear = true; this.gearAnim = 1; this.onGround = true; this.deck = null; this.relSpeed = 0; this.flaps = 1;
+        this.gear = true; this.gearAnim = 1; this.onGround = true; this.deck = null; this.relSpeed = 0; this.flaps = 1; this.flapAnim = 0.5; this.brakeAnim = 0;
         this.syncBody();
     }
 
@@ -995,8 +991,8 @@ export class Aircraft {
         for (const s of [this.navL, this.navR, this.strobe]) s && s.material.dispose();
         this.model.traverse(o => { if (o.isMesh && o.userData.origMat && o.material !== o.userData.origMat) o.material.dispose(); });
         for (const l of this.gearLegs || []) l.traverse(o => { if (o.isMesh) o.geometry.dispose(); });
-        // hook, flap and spoiler panels own their geometry (materials are shared, except the hook tip's)
-        for (const piv of [this.hookMesh, ...(this.flapPanels || []), ...(this.brakePanels || [])]) piv && piv.traverse(o => { if (o.isMesh) o.geometry.dispose(); });
+        // the hook owns its geometry (materials are shared, except the hook tip's; flaps and brakes share the model's)
+        if (this.hookMesh) this.hookMesh.traverse(o => { if (o.isMesh) o.geometry.dispose(); });
         if (this.hookTip) this.hookTip.material.dispose();
         if (this.wireMeshes) { this.wireMeshes.forEach(m => m.geometry.dispose()); this.wireMeshes[0].material.dispose(); this.wireMeshes = null; }
     }

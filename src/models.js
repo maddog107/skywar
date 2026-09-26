@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { AIRCRAFT } from './config.js';
 import { segmentModel } from './damage.js';
+import { cutSurfaces } from './surfaces.js';
 
 // Loaded GLB models. rot = Euler to bring nose to -Z / up to +Y.
 // Filled in by MODEL_FILES (see models/CREDITS.md for sources/licences).
@@ -227,6 +228,11 @@ function findWingtips(obj, box) {
 export function createAircraftModel(id) {
     if (cache[id]) {
         const src = cache[id];
+        // flaps and speed brakes are cut from the skin the first time a type is used (before any copy shares it)
+        if (!src.surfacesCut) {
+            src.surfacesCut = true;
+            try { cutSurfaces(src.object, id, AIRCRAFT[id].length); } catch (e) { console.warn('[models] could not cut surfaces for', id, e); }
+        }
         const object = src.object.clone(true);
         const rig = cloneRig(src.rig);
         rig.props = (src.rig.propTemplates || []).map(t => { const c = t.clone(true); object.add(c); return c; });
