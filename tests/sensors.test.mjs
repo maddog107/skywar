@@ -174,6 +174,102 @@ describe('sensors: targeting pod, grid references, identification', () => {
         assert.ok(Math.hypot(eb.x - 7000, eb.z + 17000) < 8);
     });
 
+    // the real Sensors plug-in on a stub game (a jet with no flight model: moved and rolled by hand)
+    const podGame = async () => {
+        const world = await src('world.js');
+        const player = {
+            pos: new THREE.Vector3(-14000, 4000, -9000), quat: new THREE.Quaternion(), qv: new THREE.Quaternion(), vel: new THREE.Vector3(),
+            spec: { length: 15, category: 'fighter', name: 'F-16C' }, alive: true, speed: 220,
+            getForward(o) { return o.set(0, 0, -1).applyQuaternion(this.quat); },
+        };
+        const g = {
+            state: 'playing', pilotMode: null, groundStart: null, player, time: 0, settings: {},
+            world: { clouds: null, weather: 'clear', timeKey: 'day', towns: null, tiles: new Map(), TILE: 2048 },
+            input: { down: () => false, mouse: { x: 0, y: 0, left: false }, lock() {}, unlock() {} },
+            surfaceAt: (x, z) => ({ h: Math.max(world.terrainHeight(x, z), 0) }),
+            audio: { tick() {}, say() {} }, addFeed() {}, events: { on() {}, emit() {} },
+            camera: new THREE.PerspectiveCamera(), strikes: null, lockTarget: null, navTarget: null,
+            aircraft: [], ground: { targets: [] }, naval: { ships: [] },
+        };
+        g.war = new W.War(g);
+        g.war.start('freeflight');
+        g.sensors = new S.Sensors(g);
+        g.sensors.start();
+        return { g, s: g.sensors, world };
+    };
+    // point the jet (nose along `dir`, rolled `bank` rad, + right wing down) and move it
+    const fly = (p, dir, bank, dt) => {
+        const m = new THREE.Matrix4().lookAt(new THREE.Vector3(), dir, new THREE.Vector3(0, 1, 0)); // (−Z along dir)
+        p.quat.setFromRotationMatrix(m).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, -1), bank));
+        p.qv.copy(p.quat);
+        p.vel.copy(dir).setLength(220);
+        p.pos.addScaledVector(p.vel, dt);
+    };
+
+    test('the pod holds an area track on the ground while the jet flies a turn', async () => {
+        const { g, s, world } = await podGame();
+        const spi = new THREE.Vector3(-20000, 0, -15000);
+        spi.y = Math.max(world.terrainHeight(spi.x, spi.z), 0);
+        s.pod.on = true;
+        s.podPos(g.player, s.pod.pos);
+        s.areaTrack(spi);
+        s.pod.los.subVectors(spi, s.pod.pos).normalize();
+        let worst = 0, checked = 0;
+        const dir = new THREE.Vector3(-1, 0, 0);
+        for (let t = 0; t < 40; t += 1 / 30) {
+            // a gentle left turn round it: the SPI stays off the left wing, under it
+            dir.applyAxisAngle(new THREE.Vector3(0, 1, 0), 0.06 / 30).normalize();
+            fly(g.player, dir, -20 * DEG, 1 / 30);
+            g.time += 1 / 30; g.war.time += 1 / 30;
+            s.update(1 / 30);
+            assert.equal(s.pod.mode, 'AREA', 'still an area track at ' + t.toFixed(1) + ' s');
+            assert.ok(s.pod.spi.distanceTo(spi) < 1e-6, 'the SPI stays put on the ground');
+            if (!s.pod.masked && !s.pod.limit) {
+                const want = new THREE.Vector3().subVectors(spi, s.pod.pos).normalize();
+                worst = Math.max(worst, s.pod.los.angleTo(want)); checked++;
+            }
+        }
+        assert.ok(checked > 300, 'in view most of the time (' + checked + ' frames)');
+        assert.ok(worst < 0.2 * DEG, 'the line of sight stays on it (worst ' + (worst / DEG).toFixed(3) + '°)');
+    });
+
+    test('a point track coasts on (INR) while the airframe masks the unit, and picks it up again', async () => {
+        const { g, s, world } = await podGame();
+        const x = -21000, z = -16000, y = Math.max(world.terrainHeight(x, z), 0);
+        const unit = { pos: new THREE.Vector3(x, y + 2, z), vel: new THREE.Vector3(12, 0, 5), team: 'red', alive: true, name: 'TRUCK', radius: 5, isGround: true, damage() {} };
+        g.war.add(unit, { cls: 'vehicle' });
+        g.player.pos.set(-14000, 4000, -9000);
+        const toward = new THREE.Vector3(x - g.player.pos.x, 0, z - g.player.pos.z).normalize();
+        fly(g.player, toward, 0, 0);
+        s.pod.on = true; s.podPos(g.player, s.pod.pos);
+        s.pointTrack(unit);
+        s.pod.los.subVectors(unit.pos, s.pod.pos).normalize();
+        const step = (bank, secs) => {
+            for (let t = 0; t < secs; t += 1 / 30) {
+                unit.pos.addScaledVector(unit.vel, 1 / 30);
+                unit.pos.y = Math.max(world.terrainHeight(unit.pos.x, unit.pos.z), 0) + 2; // (it drives on the ground)
+                fly(g.player, toward, bank, 1 / 30);
+                g.time += 1 / 30; g.war.time += 1 / 30;
+                s.update(1 / 30);
+            }
+        };
+        step(0, 2);
+        assert.equal(s.pod.mode, 'POINT');
+        assert.ok(s.pod.spi.distanceTo(unit.pos) < 0.01, 'follows the unit');
+        // roll inverted: the unit is above the wing plane now
+        step(Math.PI, 2);
+        assert.ok(s.pod.masked, 'masked by the airframe');
+        assert.equal(s.pod.mode, 'INR', 'coasting');
+        assert.ok(s.pod.spi.distanceTo(unit.pos) < 3, 'the coast (last velocity) keeps up with a unit that holds its course (' + s.pod.spi.distanceTo(unit.pos).toFixed(2) + ' m)');
+        // wings level: back on it
+        step(0, 1);
+        assert.equal(s.pod.mode, 'POINT', 're-acquired');
+        assert.equal(s.pod.unit, unit);
+        // masked for longer than the coast lasts: it settles into an area track where the unit was going
+        step(Math.PI, 10);
+        assert.equal(s.pod.mode, 'AREA', 'lost for good: area track');
+    });
+
     test('identification ranges: NARO beats WIDE, heat helps the FLIR at night, TV needs daylight, weather and nets cost', () => {
         const R = (o) => S.podIdentRange(o).identify;
         const naro = R({ fovDeg: 0.5, sensor: 'TV', light: 1 });

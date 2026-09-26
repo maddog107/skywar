@@ -169,14 +169,16 @@ export class MapKit {
         const h = Math.max(terrainHeight(w.x, w.z), 0);
         let txt = war.grid(w.x, w.z) + ' · ' + Math.round(h * M_TO_FT).toLocaleString('en-US') + ' FT';
         if (f) { const br = war.bearingRange(f, w); txt += ' · ' + String(br.brg).padStart(3, '0') + '° ' + br.km.toFixed(1) + ' KM FROM YOU'; }
+        // (top centre: between the tool strip and the panel, clear of the map's own labels at the bottom)
         ctx.font = '600 12px ' + FONT;
         const tw = ctx.measureText(txt).width;
-        ctx.fillStyle = 'rgba(6,12,18,0.75)'; ctx.fillRect(map.w / 2 - tw / 2 - 8, map.h - 30, tw + 16, 20);
+        ctx.fillStyle = 'rgba(6,12,18,0.8)'; ctx.fillRect(map.w / 2 - tw / 2 - 8, 14, tw + 16, 22);
+        ctx.strokeStyle = 'rgba(111,180,255,0.35)'; ctx.lineWidth = 1; ctx.strokeRect(map.w / 2 - tw / 2 - 7.5, 14.5, tw + 15, 21);
         ctx.fillStyle = '#cfe6ff'; ctx.textAlign = 'center';
-        ctx.fillText(txt, map.w / 2, map.h - 20);
+        ctx.fillText(txt, map.w / 2, 25);
         if (this.msg && this.game.time - this.msg.t < 3) {
             ctx.font = '700 13px ' + FONT; ctx.fillStyle = this.msg.color;
-            ctx.fillText(this.msg.text, map.w / 2, map.h - 44);
+            ctx.fillText(this.msg.text, map.w / 2, 50);
         }
     }
 

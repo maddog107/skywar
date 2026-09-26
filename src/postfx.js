@@ -805,7 +805,8 @@ const SENSOR_FRAG = /* glsl */`
             // apparent temperature: brightness about the frame's own mean (the FLIR's automatic gain); what only
             // shines (lamps, bright paint) doesn't saturate the picture — heat does, below
             float rel = (log(lum0) - st.r) / max(st.g, 0.3);
-            t = min(0.5 + 0.17 * rel, 0.96);
+            // (at night the land has given its heat back: a flatter background, and what's running stands out)
+            t = min(0.5 + 0.17 * rel * mix(1.0, 0.55, nightK), 0.96);
             float hi0 = max(c0.r, max(c0.g, c0.b)), sat0 = (hi0 - min(c0.r, min(c0.g, c0.b))) / max(hi0, 1e-5);
             // vegetation evaporates (cooler); dark bare surfaces (asphalt, rock) soak up the sun (warmer: a runway
             // shows light by day); water sits at its own temperature (cooler than the land by day, warmer at night)

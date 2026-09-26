@@ -164,7 +164,14 @@ const _hit = new THREE.Vector3(), _probe = new THREE.Vector3();
 const groundH = (x, z) => Math.max(terrainHeight(x, z), 0);
 const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const byAngle = (x, y) => x.ang - y.ang;
+// Where a unit is drawn: vehicles on a road ride the road's distance lift (roads.js keeps distant roads above the
+// coarse terrain), which the pod's narrow field shows; everything else is where it is
+export function drawnPos(u, out) {
+    if (u.route && u.mesh) return out.copy(u.mesh.position).setY(u.mesh.position.y + (u.radius || 5) * 0.4);
+    return out.copy(u.pos);
+}
 const HOT_CLS = new Set(['vehicle', 'convoy', 'tank', 'tel', 'artillery', 'aaa', 'sam', 'sam-radar', 'radar', 'command']);
+const FRONT_ENGINE = new Set(['truck', 'humvee', 'fueltruck', 'tel']); // (wheeled: the engine is up front)
 const FONT = '"Share Tech Mono", ui-monospace, monospace';
 const SYM = '#e9f2ea', SYM_DIM = 'rgba(233,242,234,0.62)', HMD = '#5dffa0', WARN = '#ffc23f';
 // what time it is on the imagery's time stamp, by the time of day (Zulu, a date-free clock)
@@ -312,7 +319,7 @@ export class Sensors {
     pointTrack(u) {
         const pod = this.pod;
         pod.mode = 'POINT'; pod.unit = u; pod.coast = null; pod.lost = 0;
-        pod.spi.copy(u.pos); pod.hasSpi = true;
+        drawnPos(u, pod.spi); pod.hasSpi = true;
     }
 
     // TMS up: point track what's under the cross, else hold the ground there
@@ -427,17 +434,22 @@ export class Sensors {
         if (seen) {
             if (pod.mode === 'INR') pod.mode = 'POINT';
             pod.lost = 0; pod.coast = null;
-            pod.spi.copy(u.pos);
+            drawnPos(u, pod.spi);
             return;
         }
         pod.lost += dt;
-        if (pod.lost < 0.4) { pod.spi.copy(u.pos); return; }
-        if (!pod.coast) pod.coast = { from: pod.spi.clone(), vel: (u.vel ? u.vel.clone() : new THREE.Vector3()).setY(0), t: 0 };
-        pod.mode = 'INR';
-        pod.coast.t += dt;
-        pod.spi.copy(pod.coast.from).addScaledVector(pod.coast.vel, pod.coast.t);
-        pod.spi.y = this.game.surfaceAt(pod.spi.x, pod.spi.z).h + (u.isGround && !u.isShip ? (u.radius || 4) * 0.4 : 0);
-        if (pod.coast.t > 8) this.areaTrack(pod.spi);
+        if (pod.lost < 0.4) { drawnPos(u, pod.spi); return; }
+        if (!pod.coast) pod.coast = { from: pod.spi.clone(), vel: (u.vel ? u.vel.clone() : new THREE.Vector3()).setY(0), t: 0, dy: 0 };
+        const c = pod.coast;
+        if (pod.mode !== 'INR') {
+            // (the height the coast keeps above the ground: the unit's own, including any road lift it's drawn with)
+            c.dy = c.from.y - this.game.surfaceAt(c.from.x, c.from.z).h;
+            pod.mode = 'INR';
+        }
+        c.t += dt;
+        pod.spi.copy(c.from).addScaledVector(c.vel, c.t);
+        pod.spi.y = this.game.surfaceAt(pod.spi.x, pod.spi.z).h + c.dy;
+        if (c.t > 8) this.areaTrack(pod.spi);
     }
 
     // keys the pod polls itself: arrows slew, +/- field of view, C slaves to the steerpoint / newest mark
@@ -476,7 +488,7 @@ export class Sensors {
         let best = null, bs = 1;
         for (const u of war.units) {
             if (u === p || u.removed) continue;
-            _v.subVectors(u.pos, pod.pos);
+            _v.subVectors(drawnPos(u, _v4), pod.pos);
             const d = _v.length();
             if (d < 30 || d > 32000) continue;
             const ang = Math.acos(clamp(_v.dot(pod.los) / d, -1, 1));
@@ -576,7 +588,7 @@ export class Sensors {
         list.length = 0;
         if (pod.sensor !== 2) for (const u of war.units) {
             if (u === g.player || u.removed) continue;
-            _v.subVectors(u.pos, pod.pos);
+            _v.subVectors(drawnPos(u, _v4), pod.pos);
             const d = _v.length();
             if (d > 30000) continue;
             const r = clamp((u.radius || 5) * 1.25, 2, 45);
@@ -592,8 +604,8 @@ export class Sensors {
             if (n >= POD.spots) break;
             const u = it.u, heat = this.heatOf(u, it.rec);
             if (heat < 0.14) continue;
-            const o = n * 4;
-            sv.spotA[o] = u.pos.x; sv.spotA[o + 1] = u.pos.y; sv.spotA[o + 2] = u.pos.z; sv.spotA[o + 3] = it.r;
+            const o = n * 4, at = drawnPos(u, _v3);
+            sv.spotA[o] = at.x; sv.spotA[o + 1] = at.y; sv.spotA[o + 2] = at.z; sv.spotA[o + 3] = it.r;
             // the ground it stands on (a plane through the base, the terrain's slope); aircraft in flight and
             // ships' hulls above the sea count all over
             let gy, nx = 0, nz = 0;
@@ -626,10 +638,11 @@ export class Sensors {
             return out;
         }
         if (u.isShip) { out.copy(u.pos).setY((u.deckY || 8) + 12); out.w = u.alive ? 0.7 : 0; return out; }
-        // vehicles: the engine deck at the back; a site's generator on the ground beside it
+        // vehicles: a tank's engine deck at the back, a truck's engine up front; a site's generator beside it
         const ry = u.mesh ? u.mesh.rotation.y : 0;
         const r = u.radius || 5, base = u.mesh ? u.mesh.position.y : u.pos.y - r * 0.4;
-        out.set(u.pos.x + Math.sin(ry) * r * 0.35, base + Math.min(r * 0.25, 1.8), u.pos.z + Math.cos(ry) * r * 0.35);
+        const k = (FRONT_ENGINE.has(u.type) ? -0.4 : 0.35) * r; // (+: behind; the mesh faces −Z)
+        out.set(u.pos.x + Math.sin(ry) * k, base + Math.min(r * 0.25, 1.8), u.pos.z + Math.cos(ry) * k);
         const moving = (u.route && u.route.speed > 0.5) || (u.vel && u.vel.lengthSq() > 0.8);
         out.w = moving ? 0.7 : HOT_CLS.has(cls) ? 0.32 : 0;
         if (u.firingT != null && this.game.war.time - u.firingT < 25) out.w = Math.max(out.w, 0.7);
@@ -1032,41 +1045,56 @@ export class Sensors {
         ctx.fillText('TGP ' + pod.mode, P.x + 11, P.y + 9);
     }
 
+    // JHMCS-style symbology on the visor: the aiming cross in its circle, a target designator box on what's under
+    // it, and a data block set well clear of the cross (airspeed left, altitude right, heading and how far off the
+    // nose above, the target below)
     drawHelmet(ctx, hud, h) {
         const pick = this.helmetPick(h);
-        const cx = hud.w / 2, cy = hud.h / 2, g = this.game, war = g.war;
-        ctx.strokeStyle = HMD; ctx.fillStyle = HMD; ctx.lineWidth = 1.6;
-        // the aiming cross, in a 25 mrad circle
-        const r = clamp(hud.h * 0.025 * 57.3 / g.camera.fov, 12, 34);
-        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(cx - 10, cy); ctx.lineTo(cx - 3, cy); ctx.moveTo(cx + 3, cy); ctx.lineTo(cx + 10, cy);
-        ctx.moveTo(cx, cy - 10); ctx.lineTo(cx, cy - 3); ctx.moveTo(cx, cy + 3); ctx.lineTo(cx, cy + 10);
-        ctx.stroke();
-        ctx.font = '600 11px ' + FONT; ctx.textBaseline = 'middle';
-        const p = g.player;
-        // data block: speed, altitude, how far off the nose
+        const cx = hud.w / 2, cy = hud.h / 2, g = this.game, war = g.war, p = g.player;
+        const r = clamp(hud.h * 0.03 * 57.3 / g.camera.fov, 16, 40);
+        ctx.lineWidth = 2; ctx.strokeStyle = HMD; ctx.fillStyle = HMD;
+        // (a dark rim under the lines so they read over the HUD's own labels and bright ground)
+        const cross = () => {
+            ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+            ctx.moveTo(cx - 13, cy); ctx.lineTo(cx - 4, cy); ctx.moveTo(cx + 4, cy); ctx.lineTo(cx + 13, cy);
+            ctx.moveTo(cx, cy - 13); ctx.lineTo(cx, cy - 4); ctx.moveTo(cx, cy + 4); ctx.lineTo(cx, cy + 13);
+            ctx.stroke();
+        };
+        ctx.strokeStyle = 'rgba(0,16,8,0.55)'; ctx.lineWidth = 4; cross();
+        ctx.strokeStyle = HMD; ctx.lineWidth = 2; cross();
+        ctx.textBaseline = 'middle';
+        ctx.font = '700 15px ' + FONT;
         ctx.textAlign = 'right';
-        ctx.fillText(Math.round(p.speed * MS_TO_KTS) + '', cx - r - 26, cy - 8);
+        ctx.fillText(Math.round(p.speed * MS_TO_KTS) + '', cx - r - 70, cy);
         ctx.textAlign = 'left';
-        ctx.fillText(Math.round(p.pos.y * M_TO_FT).toLocaleString('en-US'), cx + r + 26, cy - 8);
+        ctx.fillText(Math.round(p.pos.y * M_TO_FT).toLocaleString('en-US'), cx + r + 70, cy);
         ctx.textAlign = 'center';
-        ctx.fillText('HMCS · ' + Math.round(h.off / DEG) + '° OFF', cx, cy - r - 12);
+        const hdg = Math.round(((Math.atan2(h.look.x, -h.look.z) / DEG) + 360) % 360);
+        ctx.fillText(String(hdg).padStart(3, '0'), cx, cy - r - 44);
+        ctx.font = '600 12px ' + FONT;
+        ctx.fillText('HMCS · ' + Math.round(h.off / DEG) + '° OFF NOSE', cx, cy - r - 26);
         if (!pick) return;
         const d = pick.pos.distanceTo(p.pos);
+        let ty = cy + r + 24;
+        ctx.font = '700 13px ' + FONT;
         if (pick.unit) {
             // target designator box
             const P = hud.project(pick.unit.pos, g.camera, {});
-            const s = clamp(3000 / Math.max(d, 1), 8, 26);
-            if (P.front) { ctx.strokeRect(P.x - s, P.y - s, s * 2, s * 2); }
+            const s = clamp(3000 / Math.max(d, 1), 9, 28);
+            if (P.front) {
+                ctx.strokeStyle = 'rgba(0,16,8,0.55)'; ctx.lineWidth = 4; ctx.strokeRect(P.x - s, P.y - s, s * 2, s * 2);
+                ctx.strokeStyle = HMD; ctx.lineWidth = 2; ctx.strokeRect(P.x - s, P.y - s, s * 2, s * 2);
+            }
             const rec = war.recs.get(pick.unit);
             ctx.fillStyle = rec && rec.team === war.side ? '#6fb4ff' : rec && rec.known >= INTEL.IDENTIFIED ? '#ff9f5a' : '#ffd24a';
-            ctx.fillText(war.label(pick.unit), cx, cy + r + 13);
+            ctx.fillText('TD ' + war.label(pick.unit), cx, ty);
+            ty += 18;
             ctx.fillStyle = HMD;
         }
-        ctx.fillText((d / 1000).toFixed(1) + ' KM · ' + war.grid(pick.pos.x, pick.pos.z), cx, cy + r + (pick.unit ? 27 : 13));
-        ctx.fillStyle = 'rgba(93,255,160,0.6)';
-        ctx.fillText(', MARK', cx, cy + r + (pick.unit ? 41 : 27));
+        ctx.fillText((d / 1000).toFixed(1) + ' KM · ' + war.grid(pick.pos.x, pick.pos.z), cx, ty);
+        ctx.font = '600 11px ' + FONT;
+        ctx.fillStyle = 'rgba(93,255,160,0.7)';
+        ctx.fillText('COMMA: MARK', cx, ty + 17);
     }
 
     // The pod's display over its video (Sniper / LITENING page, full screen)
@@ -1101,7 +1129,7 @@ export class Sensors {
         // point track gate round the unit
         const cam = g.camera;
         if ((pod.mode === 'POINT' || pod.mode === 'INR') && pod.unit) {
-            const Pp = hud.project(pod.mode === 'INR' ? pod.spi : pod.unit.pos, cam, {});
+            const Pp = hud.project(pod.mode === 'INR' ? pod.spi : drawnPos(pod.unit, _v3), cam, {});
             if (Pp.front) {
                 const s = clamp((pod.unit.radius || 5) / Math.max(pod.range, 1) / (FOVS[pod.fov].deg * DEG) * H * 1.1, 9, S * 0.3);
                 ctx.lineWidth = 1.6;

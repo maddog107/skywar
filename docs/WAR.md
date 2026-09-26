@@ -124,7 +124,8 @@ and the conventions every part follows. Read it before touching the war systems.
   `hangar`, `shelter`, `fuel`, `ammo`, `tower`, `bunker`, `facility`, `entrance`, `silo`, `bridge`.
 - **Systems plug in, they don't sprawl.** New gameplay lives in its own module (`src/<name>.js`). The game
   creates it and calls optional hooks: `start(mode, opts)`, `update(dt)`, `clear()`, `onAction(a)` (return
-  true if consumed), `drawHud(ctx, hud)`, `drawMap(ctx, map)` and `commands()`. The registry is
+  true if consumed), `drawHud(ctx, hud)`, `drawMap(ctx, map)`, `mapActions(sel)`, `mapInfo(sel)`,
+  `mapPick(x, y, map)`, `commands()`, `updateCamera(cam, dt)` and `flyJet(dt, jet, stick, mouse)`. The registry is
   `src/systems.js`, one line per system. Keep edits to shared files (game.js, hud.js, input.js, main.js,
   config.js) small and surgical.
 - **Performance:** the game runs at 2–4 ms CPU per frame; keep it there.
@@ -166,7 +167,7 @@ and the conventions every part follows. Read it before touching the war systems.
 - **Tactical map:** backtick or F2.
 - **Command menu:** backslash or F3. 1–9 choose, 0 goes back, Esc closes.
 - **Mark target:** comma. It marks the HUD's locked target, or the ground under the nose (the crosshair on foot).
-- **Targeting pod:** period, reserved for the sensors plug-in.
+- **Targeting pod:** period (src/sensors.js; its keys are below).
 - **Missile camera:** K. While it's on, V cycles the view: chase, follow, side, target, impact.
 
 ### `game.war` (src/war.js), always present
@@ -200,9 +201,13 @@ and the conventions every part follows. Read it before touching the war systems.
   (`war.radioLog`) and speech, and emits `radio`.
 - **Geography:**
   - `war.grid(x, z)` gives a reference like "KD 412 883". `war.describePos(pos)` gives
-    "7.2 KM BRG 045 · GRID …".
+    "7.2 KM BRG 045 · GRID …". `war.parseGrid(ref)` (also exported as `parseGrid`) is the inverse:
+    "KD 412 883", "kd412883" or "KD 41 88" (1-4 digits a side) → `{ x, z, size }`, the centre of the square
+    it names, or null.
   - `war.sideAt(x, z)` returns 'red' or 'blue' from the front line (`war.front`: points west to east;
     change it with `war.setFront(points)`, which emits `warFront`).
+- **The player's radar** looks along the jet's nose (not the camera: the head or the targeting pod may look
+  elsewhere).
 - **Radar coverage:** `war.coverage(team, pos)` returns 0..1 for that team's radar network, from units of
   class `radar`, `sam-radar` or `awacs`, or any with `radarRange`. It accounts for the radar horizon,
   terrain masking and `jammed` (war.time until jamming ends).
@@ -241,3 +246,47 @@ and the conventions every part follows. Read it before touching the war systems.
 - **Tactical map:** plug-ins draw with `drawMap(ctx, map)` (`map.toScreen(x, z)`, `map.scale` in px/m)
   and add panel buttons for the selection with `mapActions(sel)`. `sel` is `{ kind: 'unit' | 'mark' |
   'report' | 'point', … }`.
+
+### `game.sensors` (src/sensors.js) and `game.mapkit` (src/mapkit.js)
+- **Targeting pod (Sniper / LITENING style):** period brings its video up full screen; the main camera becomes
+  the pod's (no second render pass), graded by `SensorPass` in src/postfx.js while `game.sensorView` is set.
+  - Keys with the video up: mouse or arrows slew; wheel or +/- field of view (WIDE 4°, MED 1.5°, NARO
+    0.5°); T, Tab or left click track (POINT on a unit in the gate, else AREA on the ground); right click or
+    M break the track (POINT → AREA → snowplow); C slaves to the steerpoint, else the newest mark; V (or I)
+    cycles WHOT / BHOT / TV; space fires the laser (exact range, `L` on the display); comma marks the unit in
+    the gate or the SPI (`war.designate(…, 'tgp')`); H toggles the autopilot's orbit round the SPI.
+  - Track modes: `SP` (snowplow: the ground ahead), `AREA`, `POINT`, `RATES` (space-stabilised, above the
+    horizon), `INR` (a point track coasting on the unit's last velocity while it's hidden; after 8 s it
+    settles into AREA).
+  - The gimbal stops 25° short of straight aft; the airframe masks it (`podMask`, `maskDepression`: the
+    pod hangs under the right side of the intake); clouds on the line of sight blind it
+    (`sensors.transmittance(a, b)`, from the clouds' own density field).
+  - With the video up it identifies what's in the picture at pod ranges (`podIdentRange`: ~25 km in NARO on
+    a clear day, less in WIDE, at night on TV, in rain; hot engines help the FLIR) through
+    `war.reveal(u, level, 'tgp')`.
+  - `sensors.pod` is its state: `{ on, mode, unit, spi, hasSpi, los, fov, sensor, lasing, masked, limit,
+    cloud, range }`. `sensors.slaveTo(unitOrPoint)` points it (the map's SLAVE TGP HERE and the command
+    menu's TARGETING POD entries use it). Closed, it keeps its track and the HUD shows a TGP box on the SPI.
+  - Heat for the FLIR comes from `sensors.heatOf(unit, rec)` (running engines, firing, fires); a unit can
+    set its own later if needed. Vehicles on roads are drawn with the road's distance lift, so the pod aims
+    at `drawnPos(u)`.
+- **Pod autopilot (`flyJet`):** while the video is up the jet holds altitude, attitude (wings level holds the
+  heading) and speed; A/D roll to a new bank that's held, W/S move the held altitude, Z/Shift the held speed;
+  H flies a right-hand orbit round the SPI. When the video goes down it keeps holding until the pilot
+  touches the controls. game.js calls `flyJet(dt, jet, stick, mouse)` on every system after the stick is
+  mapped, so a system can take the controls.
+- **Helmet sight:** with the head (cockpit) or the camera (chase) turned off the nose, a JHMCS-style aiming
+  cross shows what's under it; comma marks it (`'hmcs'`).
+- **Radar picture:** `sensors.tracks` (a Map unit → `{ vel, alt, speed, t }`): air contacts as a sensor last
+  had them. The map draws their heading and altitude; the HUD's scope shows only what the war layer knows.
+- **BDA imagery:** the pod pushes a watcher onto `strikes.watchers`; when a `bda` result comes in while the pod
+  (or the pilot) is looking, the frame is kept: `sensors.imagery` entries `{ canvas, pos, result, grid,
+  clock, source ('TGP' | 'HUD'), strike, aim, mark, unit }`, also set as `aim.imagery`; `bdaImagery` is
+  emitted.
+- **Map kit:** a tool strip (LEGEND, RULER, MARK BY COORDINATES, layer toggles in `tacmap.layers`: threats,
+  intel, roads, units, labels), the cursor's grid and bearing/range, SET STEERPOINT (`game.navTarget`,
+  `{ pos, label, steer: true }`) and SLAVE TGP HERE on any selection.
+- **Map hooks for plug-ins:** `mapInfo(sel)` returns panel lines `{ text, color, font }` or pictures
+  `{ image, caption }`; `mapPick(x, y, map)` returns a selection of the plug-in's own (tried after units and
+  marks); the panel shows plug-in info for kinds it doesn't know. The close-zoom background is a tile pyramid
+  (src/maptiles.js) painted by a pool of map workers.
