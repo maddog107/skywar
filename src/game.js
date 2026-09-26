@@ -96,7 +96,7 @@ export class Game {
         const steep = speed > 1 ? Math.min(1, Math.abs(v.y) / speed) : 1;
         const k = clamp(speed / 160, 0.45, 1.25), L = ac.spec.length || 15;
         const rb = clamp(L * 0.26, 3.5, 13) * k, ra = rb * (1 + 1.4 * (1 - steep));
-        const K = { r: ra, rb, depth: clamp(L * 0.1, 1.4, 4) * k * (0.6 + 0.4 * steep), rim: 0.9 * k, scorch: 1, reach: 2.8, clods: 12 };
+        const K = { r: ra, rb, depth: clamp(L * 0.15, 2, 5) * k * (0.7 + 0.3 * steep), rim: 0.75 * k, scorch: 1, reach: 2.8, clods: 12 };
         const at = _v.set(p.x, s.h, p.z);
         if (hs > 1) { at.x += v.x / hs * ra * 0.35; at.z += v.z / hs * ra * 0.35; } // it ploughs on a little
         this.weapons.addCrater(at, K, v);

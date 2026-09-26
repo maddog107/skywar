@@ -1484,7 +1484,12 @@ export class World {
     // Height and normal (out.nx, ny, nz) of the terrain as drawn (the tile mesh under x, z), which differs from
     // terrainHeight() by up to a metre or so between vertices; falls back to the true height off the tiles
     drawnSample(x, z, out) {
-        const T = this.TILE, t = this.tiles.get(this.tileKey(Math.floor(x / T), Math.floor(z / T)));
+        const T = this.TILE;
+        return this.drawnSampleIn(this.tiles.get(this.tileKey(Math.floor(x / T), Math.floor(z / T))), x, z, out);
+    }
+
+    // the same on a given tile (its entry in this.tiles, or undefined), for callers sampling many points on one
+    drawnSampleIn(t, x, z, out) {
         if (!t || !t.mesh.geometry.userData.V) { out.h = terrainHeight(x, z); out.ny = 1; out.nx = out.nz = 0; return out; }
         const g = t.mesh.geometry, u = g.userData, p = g.attributes.position.array, n = g.attributes.normal.array, V = u.V;
         const fx = clamp((x - u.x0) / u.step, 0, V - 1.0001), fz = clamp((z - u.z0) / u.step, 0, V - 1.0001);

@@ -23,6 +23,7 @@ const SLOTS = 8;                    // craters per cell (two RGBA8 texels side b
 const QMAX = 2.2;                   // the mesh's collar ends here (in hole radii), well under the ground
 const FORM = 0.18, FADE_OUT = 2.5;  // seconds to dig in / to fill in
 const HASH = 64;                    // physics lookup cell (m)
+const CGRID = 5;                    // ground colour samples per side of a crater (interpolated between)
 // mesh: rings (hole radii; dense at the rim) x segments, plus clods
 const RINGS = [0, 0.2, 0.38, 0.54, 0.68, 0.79, 0.88, 0.95, 1.0, 1.06, 1.14, 1.24, 1.37, 1.53, 1.72, 1.94, QMAX];
 const SEGS = 32, CLODS = 14, CV = 36;
@@ -54,11 +55,12 @@ export const CRATER_U = {
     craterGrid: { value: gridTex },
     craterData: { value: dataTex },
     craterInfo: { value: new THREE.Vector4(1 / CELL, 0, GRID, 0) }, // 1 / cell size, craters alive, grid size
+    craterBox: { value: new THREE.Vector4(1e9, 1e9, -1e9, -1e9) },  // bounds (x0, z0, x1, z1) of every crater's reach
 };
 
 export const CRATER_GLSL = /* glsl */`
     uniform highp sampler2D craterGrid, craterData;
-    uniform vec4 craterInfo;
+    uniform vec4 craterInfo, craterBox;
     // rim height wobble and hole outline wobble around a crater (seeded)
     float crWob(float a, float s) { return 0.5 * sin(3.0 * a + s) + 0.3 * sin(5.0 * a + 1.7 * s) + 0.2 * sin(11.0 * a + 2.9 * s); }
     float crRad(float a, float s) { return 1.0 + 0.07 * (0.6 * sin(2.0 * a + 0.7 * s) + 0.4 * sin(7.0 * a + 2.3 * s)); }
@@ -84,7 +86,8 @@ export const CRATER_GLSL = /* glsl */`
     // y = turned earth (1 on the rim, broken rays further out), z = scorching, w = 1 in a bowl
     vec4 craterAt(vec2 xz) {
         vec4 r = vec4(99.0, 0.0, 0.0, 0.0);
-        if (craterInfo.y < 0.5) return r;
+        // (most of the ground is nowhere near a crater: one comparison, no texture read)
+        if (xz.x < craterBox.x || xz.y < craterBox.y || xz.x > craterBox.z || xz.y > craterBox.w) return r;
         ivec2 cell = ivec2(mod(floor(xz * craterInfo.x), craterInfo.z));
         cell.x *= 2;
         vec4 s0 = texelFetch(craterGrid, cell, 0);
@@ -223,6 +226,8 @@ export class Craters {
         this.serial = 0;
         this._ds = { h: 0, nx: 0, ny: 1, nz: 0 };
         this._col = [0, 0, 0];
+        this._cg = new Float32Array(CGRID * CGRID * 3);
+        this.reconform = [];                   // craters whose ground changed, re-laid a couple a frame
         active = this;
         this.buildMesh(material);
     }
@@ -333,6 +338,7 @@ export class Craters {
 
     clear() {
         for (let i = this.list.length - 1; i >= 0; i--) this.free(this.list[i]);
+        this.reconform.length = 0;
     }
 
     // remove a crater now
@@ -364,7 +370,8 @@ export class Craters {
     collapse(s, upload) {
         const b = s * VPS;
         this.aPos.array.fill(0, b * 3, (b + VPS) * 3);
-        for (let v = 0; v < VPS; v++) this.aCr.array.set([0, 0, s, 2], (b + v) * 4);
+        const cr = this.aCr.array;
+        for (let v = (b) * 4, e = (b + VPS) * 4; v < e; v += 4) { cr[v] = 0; cr[v + 1] = 0; cr[v + 2] = s; cr[v + 3] = 2; }
         if (upload) this.touch(s);
     }
 
@@ -382,6 +389,12 @@ export class Craters {
             top = Math.max(top, c.slot);
         }
         CRATER_U.craterInfo.value.y = this.list.length;
+        const box = CRATER_U.craterBox.value;
+        box.set(1e9, 1e9, -1e9, -1e9);
+        for (const c of this.list) {
+            const R = Math.max(c.ra, c.rb) * c.reach * 1.1;
+            box.x = Math.min(box.x, c.x - R); box.y = Math.min(box.y, c.z - R); box.z = Math.max(box.z, c.x + R); box.w = Math.max(box.w, c.z + R);
+        }
         this.geo.setDrawRange(0, (top + 1) * IPS);
         if (!this.list.length) this.mesh.visible = false;
     }
@@ -453,19 +466,35 @@ export class Craters {
         const P = this.aPos.array, N = this.aNor.array, Col = this.aCol.array, CR = this.aCr.array;
         const ds = this._ds, col = this._col, p = { x: 0, z: 0 };
         for (let k = 0; k < c.tileKeys.length; k++) { const t = w.tiles.get(c.tileKeys[k]); c.tileGeos[k] = t && t.mesh ? t.mesh.geometry : null; }
-        const towns = w.towns;
+        const towns = w.towns, T = w.TILE;
+        let ltx = NaN, ltz = NaN, lt;
         const ground = (x, z) => {
-            w.drawnSample(x, z, ds);
+            const tx = Math.floor(x / T), tz = Math.floor(z / T);
+            if (tx !== ltx || tz !== ltz) { ltx = tx; ltz = tz; lt = w.tiles.get(w.tileKey(tx, tz)); }
+            w.drawnSampleIn(lt, x, z, ds);
             // the drawn ground is pulled just under a road; the tarmac lies on it (roads.js UNDER)
             if (towns && towns.onStreet && towns.onStreet(x, z)) ds.h += 0.25;
             return ds;
+        };
+        // the ground's colour (as the terrain tiles paint it) varies slowly: sampled on a coarse grid over the
+        // crater and interpolated, rather than worked out at every vertex
+        const R = Math.max(c.ra, c.rb) * 2.9, G = CGRID, cg = this._cg;
+        if (colours) for (let j = 0; j < G; j++) for (let i = 0; i < G; i++) {
+            const x = c.x - R + (2 * R * i) / (G - 1), z = c.z - R + (2 * R * j) / (G - 1);
+            ground(x, z);
+            w.colorAt(x, ds.h, z, ds.ny, cg, (j * G + i) * 3);
+        }
+        const colourAt = (x, z, out, o) => {
+            const fx = Math.min(Math.max((x - c.x + R) / (2 * R) * (G - 1), 0), G - 1.001), fz = Math.min(Math.max((z - c.z + R) / (2 * R) * (G - 1), 0), G - 1.001);
+            const i = Math.floor(fx), j = Math.floor(fz), a = fx - i, bb = fz - j, k = (j * G + i) * 3;
+            for (let e = 0; e < 3; e++) out[o + e] = (cg[k + e] * (1 - a) + cg[k + 3 + e] * a) * (1 - bb) + (cg[k + G * 3 + e] * (1 - a) + cg[k + G * 3 + 3 + e] * a) * bb;
         };
         const put = (v, lx, lz, kind) => {
             this.toWorld(c, lx, lz, p);
             ground(p.x, p.z);
             P[v * 3] = p.x; P[v * 3 + 1] = ds.h; P[v * 3 + 2] = p.z;
             N[v * 3] = ds.nx; N[v * 3 + 1] = ds.ny; N[v * 3 + 2] = ds.nz;
-            if (colours) { w.colorAt(p.x, ds.h, p.z, ds.ny, col, 0); Col[v * 3] = col[0]; Col[v * 3 + 1] = col[1]; Col[v * 3 + 2] = col[2]; }
+            if (colours) colourAt(p.x, p.z, Col, v * 3);
             CR[v * 4] = lx; CR[v * 4 + 1] = lz; CR[v * 4 + 2] = s; CR[v * 4 + 3] = kind;
         };
         put(b, 0, 0, 0);
@@ -479,13 +508,17 @@ export class Craters {
         const v0 = b + 1 + (NR - 1) * SEGS;
         for (let k = 0; k < CLODS; k++) {
             const base = v0 + k * CV;
-            if (k >= c.clods) { for (let v = 0; v < CV; v++) { P.fill(0, (base + v) * 3, (base + v) * 3 + 3); CR.set([0, 0, s, 2], (base + v) * 4); } continue; }
+            if (k >= c.clods) {
+                P.fill(0, base * 3, (base + CV) * 3);
+                for (let v = base * 4, e = (base + CV) * 4; v < e; v += 4) { CR[v] = 0; CR[v + 1] = 0; CR[v + 2] = s; CR[v + 3] = 2; }
+                continue;
+            }
             const a = rnd() * Math.PI * 2 - Math.PI, u = rnd();
             const q = 0.97 + 1.7 * Math.pow(u, 1.6);
             const lx = q * Math.cos(a), lz = q * Math.sin(a);
             this.toWorld(c, lx, lz, p);
             ground(p.x, p.z);
-            if (colours) w.colorAt(p.x, ds.h, p.z, ds.ny, col, 0);
+            if (colours) colourAt(p.x, p.z, col, 0);
             const size = rmax * (0.04 + 0.05 * rnd()) * (1.3 - 0.3 * (q - 1));
             // a lump: a jittered box, tumbled, flat shaded, a third of it in the ground
             const e1 = _eu.set((rnd() - 0.5) * 0.9, rnd() * 6.283, (rnd() - 0.5) * 0.9), m = _m4.makeRotationFromEuler(e1).elements;
@@ -529,11 +562,18 @@ export class Craters {
                 this.writeData(c);
                 if (c.fade <= 0 && c.target <= 0) { this.free(c); continue; }
             }
+            if (c.queued) continue;
             const tiles = this.world.tiles;
             for (let k = 0; k < c.tileKeys.length; k++) {
                 const t = tiles.get(c.tileKeys[k]);
-                if ((t && t.mesh ? t.mesh.geometry : null) !== c.tileGeos[k]) { this.conform(c, false); break; }
+                if ((t && t.mesh ? t.mesh.geometry : null) !== c.tileGeos[k]) { c.queued = true; this.reconform.push(c); break; }
             }
+        }
+        // (a tile under many craters changing resolution mustn't re-lay them all in one frame)
+        for (let n = 0; n < 3 && this.reconform.length; n++) {
+            const c = this.reconform.shift();
+            c.queued = false;
+            if (c.slot >= 0) this.conform(c, false);
         }
         if (this.dataDirty) { dataTex.needsUpdate = true; this.dataDirty = false; }
     }
