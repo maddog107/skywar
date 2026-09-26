@@ -15,6 +15,8 @@
 //   skin: 0 (default) cut through the whole thickness, walls close the cut (flaps); +1 / −1 a panel of the
 //         upper / lower skin (outer / inner for a side outline), a floor `depth` below closes the bay
 //   depth: bay depth for a skin panel (default 0.004)
+//   split: true for one half of a split surface whose halves are separate bodies meeting face to face (a B-2
+//          drag rudder): each half takes its skin and inner face, and no bay is made behind it
 // travel: { flap, brake } seconds for full travel, when it differs from the category default (surfaces.js)
 // Flap notches: the game has two (takeoff, landing); a surface's angle is its landing (full) deflection and
 // the takeoff notch is half of it. How to measure and check a new aircraft: tools/aircraft/SURFACES.md.
