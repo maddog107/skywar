@@ -7,6 +7,7 @@ const ACTIONS = {
     KeyV: 'camera', KeyT: 'target', Tab: 'target', KeyG: 'gear', KeyH: 'hook', F1: 'help', Slash: 'help', Escape: 'pause', KeyP: 'pause',
     KeyM: 'missile', Enter: 'confirm', KeyR: 'flares', KeyF: 'flaps', KeyJ: 'eject', KeyN: 'spawn', KeyL: 'loadout',
     KeyX: 'weapon', KeyK: 'missilecam', KeyB: 'spoilers', KeyY: 'autoland', KeyU: 'autotakeoff', KeyO: 'photo', KeyI: 'nvg',
+    Backquote: 'map', F2: 'map', Backslash: 'command', F3: 'command', Comma: 'designate', Period: 'tgp',
     Digit1: 'thr1', Digit2: 'thr2', Digit3: 'thr3', Digit4: 'thr4', Digit5: 'thr5', Digit6: 'thr6', Digit7: 'thr7', Digit8: 'thr8', Digit9: 'thr9', Digit0: 'thr10',
 };
 
@@ -22,7 +23,7 @@ export class Input {
 
         window.addEventListener('keydown', (e) => {
             if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT')) return;
-            if (['Space', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+            if (['Space', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'F2', 'F3'].includes(e.code)) e.preventDefault();
             if (!this.keys[e.code] && ACTIONS[e.code]) this.emit(ACTIONS[e.code]);
             this.keys[e.code] = true;
         });

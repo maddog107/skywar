@@ -162,6 +162,82 @@ and the conventions every part follows. Read it before touching the war systems.
 
 ## The war layer (Phase B), for plug-ins
 
-Filled in as it's built: `src/war.js` (registry, intel, radio, designations), `src/strikes.js` (strike
-requests, launch sources, strategic missiles, missile camera), `src/command.js` (the in-flight command
-menu).
+### Controls
+- **Tactical map:** backtick or F2.
+- **Command menu:** backslash or F3. 1–9 choose, 0 goes back, Esc closes.
+- **Mark target:** comma. It marks the HUD's locked target, or the ground under the nose (the crosshair on foot).
+- **Targeting pod:** period, reserved for the sensors plug-in.
+- **Missile camera:** K. While it's on, V cycles the view: chase, follow, side, target, impact.
+
+### `game.war` (src/war.js), always present
+- **Registry:**
+  - `war.add(unit, { cls, name, known, conceal, hardened, value, contactName })` returns the record `{ id,
+    unit, cls, team, name, contactName, known, lastPos, lastSeen, source, conceal, hardened }`.
+  - `war.remove(unit)`, `war.rec(unit)`, `war.known(unit)`.
+  - Ground targets, ships and aircraft are picked up automatically every 0.5 s (`sync`). Plug-ins add
+    their own units directly. Dead units stay registered, so damage persists and BDA can check them. A
+    unit with `removed = true` is dropped.
+- **Queries:** `war.near(pos, r, { cls, team, minKnown })` returns `[{ u, rec, d2 }]`, nearest first.
+  `war.label(unit)` gives what the player's side calls it: its real name once IDENTIFIED, the contact name
+  before.
+- **Intel:**
+  - `INTEL.UNKNOWN (0) → CONTACT (1) → IDENTIFIED (2) → CONFIRMED (3)`.
+  - `war.reveal(unit, level, source)` only ever raises the level. Sensors call it: the TGP, AWACS,
+    drones, recon aircraft and radar.
+  - The player's eyes and air-to-air radar are built in (`updateSensors`). They take into account range
+    by size, daylight, weather, the view cone, terrain line of sight, and a unit's `conceal`. A unit whose
+    `firingT` (war.time) was in the last 3 s is easy to spot.
+  - New contacts and identifications are announced on the radio and emitted as `warContact` and
+    `warIdentified`.
+- **Intel reports (search areas):** `war.report({ text, center, radius, unit, cls })`. It's resolved
+  automatically when `unit` is identified: the radio says "TARGET IDENTIFIED" and `warReportResolved` is
+  emitted.
+- **Marks:**
+  - `war.designate(unitOr{x, z}, source)` returns `{ id, unit, pos, fixed, label, grid, transmitted }`.
+    A point gets the ground's height. Marking a unit confirms it.
+  - `war.undesignate(d)`, `war.transmit(list)`. At most 8 marks.
+- **Radio:** `war.radio(from, text, { color, say, priority })` goes to the HUD feed, the log
+  (`war.radioLog`) and speech, and emits `radio`.
+- **Geography:**
+  - `war.grid(x, z)` gives a reference like "KD 412 883". `war.describePos(pos)` gives
+    "7.2 KM BRG 045 · GRID …".
+  - `war.sideAt(x, z)` returns 'red' or 'blue' from the front line (`war.front`: points west to east;
+    change it with `war.setFront(points)`, which emits `warFront`).
+- **Radar coverage:** `war.coverage(team, pos)` returns 0..1 for that team's radar network, from units of
+  class `radar`, `sam-radar` or `awacs`, or any with `radarRange`. It accounts for the radar horizon,
+  terrain masking and `jammed` (war.time until jamming ends).
+- **Clearings:** `war.addClearing(x, z, r)` keeps an installation's ground free of trees and replants
+  nearby tiles.
+
+### `game.strikes` (src/strikes.js)
+- **Missiles:** `MISSILES` (tlam, kalibr, harpoon, atacms, penetrator, scud, gmlrs, grad) and
+  `STRIKE_TYPES` (cruise, naval, hardened, ballistic, rocket, antiship, runway, multi, air). Each strike
+  type says which launcher kinds can fly it.
+- **Requests:**
+  - `strikes.request(type, marks, team)` finds the nearest sources with stock and range, and queues their
+    launches. The shooter reports on the radio.
+  - The result is known only when someone sees it (`observed`). Otherwise a BDA request waits until the
+    player looks at it within about 6 km for 2 s. Plug-ins can push watcher functions (`pos → bool`) to
+    `strikes.watchers`, e.g. drones.
+  - Events: `strikeRequested`, `strategicLaunch`, `strategicImpact`, `strikeDone`, `bda`.
+- **Launch sources:** register with `strikes.addSource(src)`. Each keeps a stock and runs its launch
+  sequence.
+  - `new ShipVLS(mgr, ship, { stock, cells })`: set `cellOpen(cell, k)` to animate real VLS doors.
+  - `new SiloSite(mgr, {x, z}, { stock, count })`.
+  - `new GroundLauncher(mgr, vehicle, { kind: 'launcher' | 'artillery' | 'battery', stock, elev, muzzle,
+    prepare })`: `prepare` is the hook to erect a TEL's launcher before firing.
+  - `new SubLauncher(mgr, sub, { stock, tubes })`.
+  - Or subclass `LaunchSource`: `launchFrame(out, dir, q)`, `prepTime(specKey)`, `launchEffects`.
+- **Strategic missiles:** they have `pos`, `vel`, `team`, `alive`, `hp` and `damage(amount)`, so air
+  defences can shoot them down (`intercepted`). `strikes.missiles` lists those in flight.
+- **Already in place:** a blue escort destroyer (USS Mason, 8 TLAM and 4 Harpoon) with the home carrier,
+  and a blue missile field near the home base (TLAM, ATACMS, penetrators). The Phase C plug-ins replace or
+  extend these.
+
+### `game.command` (src/command.js) and `game.tacmap` (src/tacmap.js)
+- **Command menu:** plug-ins add entries through `commands()`: `[{ path: ['SUPPORT'], label, hint,
+  enabled, run, keepOpen, badge }]`. Categories are listed in a fixed order: TASKS, TACTICAL SUPPORT,
+  DESIGNATION, SUPPORT, WINGMEN, MISSILE CAMERA, SANDBOX, then any others.
+- **Tactical map:** plug-ins draw with `drawMap(ctx, map)` (`map.toScreen(x, z)`, `map.scale` in px/m)
+  and add panel buttons for the selection with `mapActions(sel)`. `sel` is `{ kind: 'unit' | 'mark' |
+  'report' | 'point', … }`.

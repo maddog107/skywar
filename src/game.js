@@ -22,6 +22,8 @@ import { readStick, rampAxis, expo, STICK_EXPO } from './input.js';
 import { clamp, damp, lerp, rand, pick, formatTime, G } from './util.js';
 import { BASES, RUNWAY, terrainHeight, isOnRunway, baseToWorld } from './world.js';
 import { craterAdj } from './craters.js';
+import { War } from './war.js';
+import { SYSTEMS } from './systems.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
 const _q = new THREE.Quaternion(), _m = new THREE.Matrix4();
@@ -61,6 +63,9 @@ export class Game {
         this.ground = new GroundForces(this);
         this.naval = new Naval(this);
         this.autopilot = new Autopilot(this);
+        // the war layer and its plug-ins (war.js, systems.js, docs/WAR.md)
+        this.war = new War(this);
+        this.systems = SYSTEMS.map(([name, S]) => (this[name] = new S(this)));
         this.pilotMode = null;
         this.lives = 0;
         this.slot = 0;
@@ -247,6 +252,8 @@ export class Game {
         }
         this.tip = this.makeTip();
         this.world.updateTerrain(p.pos, true);
+        this.war.start(this.mode);
+        for (const s of this.systems) if (s.start) s.start(this.mode, opts);
         this.input.lock();
     }
 
@@ -660,6 +667,8 @@ export class Game {
         this.weapons.clear();
         this.wreckage.clear();
         this.effects.clear();
+        for (const s of this.systems) if (s.clear) s.clear();
+        this.war.clear();
         this.ground.clear();
         this.naval.clear();
         if (this.rings) { this.rings.remove(); this.rings = null; }
@@ -935,6 +944,8 @@ export class Game {
     }
 
     onAction(a) {
+        // the war plug-ins see actions first (the command menu takes the digits while it's open, the map Esc…)
+        if (this.state === 'playing' && !this.photo) for (const s of this.systems) if (s.onAction && s.onAction(a)) return;
         if (a === 'photo' && (this.state === 'playing' || this.photo)) { this.togglePhoto(); return; }
         if (this.photo && a !== 'pause' && a !== 'lockLost') return; // frozen: no flying while taking pictures
         if (a === 'lockLost') {
@@ -1404,6 +1415,8 @@ export class Game {
         this.updateSeats();
         this.ground.update(dt);
         this.naval.update(dt);
+        this.war.update(dt);
+        for (const s of this.systems) if (s.update) s.update(dt);
         if (this.world.towns) { this.world.towns.update(dt, this.camera.position); this.world.towns.traffic.update(dt, this); }
         if (this.world.airbases) this.world.airbases.update(dt, this.world.towns && this.world.towns.traffic, this.wind, this.camera.position);
         if (this.world.airTraffic) this.world.airTraffic.update(dt);
@@ -1617,6 +1630,7 @@ export class Game {
     updateCamera(dt, mouse) {
         const cam = this.camera, p = this.player;
         if (!p) return;
+        for (const s of this.systems) if (s.updateCamera && s.updateCamera(cam, dt)) return;
         const pm = this.pilotMode;
         if (this.groundStart) {
             p.root.visible = true;
