@@ -307,6 +307,20 @@ export const AIRCRAFT = {
         health: 220, gun: null, missiles: 0, flares: 0, fuelTime: 7200,
         proc: { airliner: true, engines: 4, body: [0.09, 0.095], paint: 0x7d858b, accent: 0x2b2e31 },
     },
+    a50: {
+        name: 'A-50U Mainstay', role: 'AWACS', country: 'RUS', length: 49.59, span: 50.5, category: 'support',
+        desc: 'The Russian answer to the E-3: an Il-76MD carrying the Shmel-M radar in a 10 m rotodome. Sees low fliers 300 km out and guides the fighters onto them.',
+        flight: { speed: 205, mach: 0.74, afterburner: false, accel: 3.7, lift: 0.85, gLimit: 2.5, roll: 0.65, alpha: 14 },
+        health: 240, gun: null, missiles: 0, flares: 0, fuelTime: 5400,
+        proc: { airliner: true, highWing: true, engines: 4, body: [0.1, 0.1], paint: 0xe2e4e3, accent: 0xa4a9ac },
+    },
+    il78: {
+        name: 'Il-78M Midas', role: 'Aerial Tanker', country: 'RUS', length: 46.59, span: 50.5, category: 'support',
+        desc: 'The Russian tanker: an Il-76 with three UPAZ-1 hose-and-drogue pods, two under the wings and one on the rear fuselage, 26 m of hose each.',
+        flight: { speed: 215, mach: 0.78, afterburner: false, accel: 3.7, lift: 0.8, gLimit: 2.5, roll: 0.65, alpha: 14 },
+        health: 230, gun: null, missiles: 0, flares: 0, fuelTime: 7200,
+        proc: { airliner: true, highWing: true, engines: 4, body: [0.1, 0.1], paint: 0xd9dcdc, accent: 0x55606b },
+    },
 };
 
 // Which aircraft can appear as hostiles, and what they're worth

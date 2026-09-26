@@ -20,6 +20,8 @@ const { makeAircraft } = await import('./helpers/flight.mjs');
 const RIGS = {
     e3: { rotodome: null },
     kc135: { boom: null, boom_ext: 'boom', boom_nozzle: 'boom_ext', drogue_l: null, drogue_r: null, hose_l: 'drogue_l', hose_r: 'drogue_r', basket_l: 'drogue_l', basket_r: 'drogue_r' },
+    a50: { rotodome: null },
+    il78: { drogue_l: null, drogue_r: null, drogue_c: null, hose_l: 'drogue_l', hose_r: 'drogue_r', hose_c: 'drogue_c', basket_l: 'drogue_l', basket_r: 'drogue_r', basket_c: 'drogue_c' },
 };
 
 // node name → parent node name, from a GLB's JSON chunk

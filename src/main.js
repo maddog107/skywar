@@ -619,6 +619,8 @@ function buildCredits() {
         ['MiG-31, MiG-25, J-20, J-10, J-8, F-5E, MiG-21, Mirage III, Jaguar', 'SKYWAR / Blender (tools/aircraft_kit.py)', 'CC0', 'tools/aircraft/'],
         // support aircraft, drones and bombers (models/aircraft/CREDITS.md, last section)
         ['KC135R (kc135; the e3 E-3G Sentry is derived from it)', 'Adastra', 'CC BY 4.0', 'https://sketchfab.com/3d-models/kc135r-95fedbaed45b492e8dfa9d1a8f76b25f'],
+        ['Ilyushin Il-76 (a50: A-50U Mainstay)', 'helijah (Emmanuel Baranger)', 'CC BY 4.0', 'https://sketchfab.com/3d-models/ilyushin-il-76-ab71a5f790f940798cc755246a7a8a7f'],
+        ['Il78 (il78)', 'manilov.ap', 'CC BY 4.0', 'https://sketchfab.com/3d-models/il78-0c0da2cc1b4c441dadc2510212c25fb7'],
         ['Aircraft carrier and destroyer', 'SKYWAR / Blender (tools/ships)', 'CC0', 'tools/ships/'],
         ['Helicopter (military)', 'Zsky', 'CC BY 3.0', 'https://poly.pizza/m/hG2Qr0A3zR'],
         ['Helicopter (civil)', 'jeremy', 'CC BY 3.0', 'https://poly.pizza/m/eb7b31pjGtQ'],

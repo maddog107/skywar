@@ -51,6 +51,8 @@ export the moving parts as separate named nodes for `src/rigparts.js`):
 |---|---|---|
 | kc135 | `kc135.py` | Objaverse `glbs/000-081/95fedbaed45b492e8dfa9d1a8f76b25f.glb` ("KC135R" by Adastra) |
 | e3 | `e3.py` | the same KC-135R file |
+| a50 | `a50.py` | Objaverse `glbs/000-050/ab71a5f790f940798cc755246a7a8a7f.glb` ("Ilyushin Il-76" by helijah) |
+| il78 | `il78.py` | Objaverse `glbs/000-025/0c0da2cc1b4c441dadc2510212c25fb7.glb` ("Il78" by manilov.ap) |
 
 Each script's header lists what it changes; sources and licences are in the last section of
 `models/aircraft/CREDITS.md`.

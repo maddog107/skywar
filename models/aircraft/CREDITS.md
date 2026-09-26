@@ -90,10 +90,16 @@ Reference drawings and photographs were used only to measure.
 |---|---|---|---|---|
 | `kc135.glb` | KC-135R Stratotanker (MPRS) | "KC135R" by Adastra | CC BY 4.0 | https://sketchfab.com/3d-models/kc135r-95fedbaed45b492e8dfa9d1a8f76b25f |
 | `e3.glb` | E-3G Sentry (AWACS), derived from the same KC-135R model | "KC135R" by Adastra | CC BY 4.0 | https://sketchfab.com/3d-models/kc135r-95fedbaed45b492e8dfa9d1a8f76b25f |
+| `a50.glb` | A-50U Mainstay (AWACS), an Il-76MD airframe | "Ilyushin Il-76" by helijah (Emmanuel Baranger) | CC BY 4.0 | https://sketchfab.com/3d-models/ilyushin-il-76-ab71a5f790f940798cc755246a7a8a7f |
+| `il78.glb` | Il-78M Midas (tanker) | "Il78" by manilov.ap | CC BY 4.0 | https://sketchfab.com/3d-models/il78-0c0da2cc1b4c441dadc2510212c25fb7 |
 
 References: USAF E-3 line drawing (https://commons.wikimedia.org/wiki/File:AWACS_Line_drawing.jpg, public domain),
 USAF KC-135 line drawing (File:Boeing_KC-135_Stratotanker_line_drawing_-_USAF_medium_res.png), photographs of
 E-3C 81-0005 and RAF E-3Ds on Wikimedia Commons, US patents 4072283 and 7850121 (the KC-135 boom).
+A-50: Commons "Beriev A-50 3-view line drawing.png" and photographs of A-50U RF-94268 (Zhukovsky 2012), RF-93966 and
+the A-50 at MAKS-2013.
 
 Attribution lines:
 - "KC135R" (https://sketchfab.com/3d-models/kc135r-95fedbaed45b492e8dfa9d1a8f76b25f) by Adastra, CC BY 4.0. Changes (kc135.glb): repainted with panel lines, unit markings and the HF wire removed, a new articulated flying boom and two MPRS hose-and-drogue pods added. Changes (e3.glb): lengthened and re-winged into a Boeing 707-320B (E-3G), new TF33 nacelles, rotodome and antennas, KC-135 details removed.
+- "Ilyushin Il-76" (https://sketchfab.com/3d-models/ilyushin-il-76-ab71a5f790f940798cc755246a7a8a7f) by helijah (Emmanuel Baranger), CC BY 4.0. Changes (a50.glb): landing gear and cockpit interior removed, repainted in the A-50U scheme with Russian stars, navigator glazing faired over, rotodome, refuelling probe, blisters and antennas added.
+- "Il78" (https://sketchfab.com/3d-models/il78-0c0da2cc1b4c441dadc2510212c25fb7) by manilov.ap, CC BY 4.0. Changes (il78.glb): landing gear removed, hose-and-drogue units rigged.

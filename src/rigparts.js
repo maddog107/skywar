@@ -47,6 +47,7 @@ export const REFUEL = {
     f14: { at: [0.031, 0.012, -0.32], kind: 'probe' },        // retractable, right side of the nose
     gripen: { at: [-0.043, -0.035, -0.3], kind: 'probe' },    // retractable, left side of the cockpit
     su35: { at: [-0.024, -0.05, -0.33], kind: 'probe' },      // retractable, left of the windscreen
+    a50: { at: [0, -0.0143, -0.5], kind: 'probe' },           // fixed probe over the nose: its tip
 };
 
 const _m = new THREE.Matrix4(), _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _s = new THREE.Vector3();
@@ -183,8 +184,8 @@ export function rigPoint(ac, name, out = new THREE.Vector3()) {
 }
 
 // Per-frame upkeep of an aircraft's rig parts (Aircraft.updateVisuals): the rotodome turns while the jet is
-// alive (6 rpm airborne, 1/4 rpm on the ground); ac.radarRpm overrides it.
+// alive (airborne at the model's rotodome.userData.rpm, default 6; 1/4 rpm on the ground); ac.radarRpm overrides it.
 export function updateRigParts(ac, dt) {
     const p = ac.rig.parts;
-    if (p.rotodome) spinRotodome(ac.rig, dt, ac.radarRpm ?? (!ac.alive ? 0 : ac.onGround ? 0.25 : 6));
+    if (p.rotodome) spinRotodome(ac.rig, dt, ac.radarRpm ?? (!ac.alive ? 0 : ac.onGround ? 0.25 : p.rotodome.userData.rpm ?? 6));
 }
