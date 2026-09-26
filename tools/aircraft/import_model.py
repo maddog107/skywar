@@ -13,9 +13,14 @@
 #   --tex N                downscale textures to at most N px (default 1024)
 #   --glass REGEX          make matching materials alpha-blended canopy glass
 #   --decimate RATIO       collapse-decimate every mesh (0..1)
+#   --decimate-sym         ...keeping left and right identical (mirror about x = 0)
+#   --fix-flipped K        flip faces that can only be seen from their back side from outside (K view directions)
 #   --keep-gear            skip the gear heuristics
 #   --keep-abs x0,y0,z0,x1,y1,z1   keep only objects inside this box (file coordinates, see --list)
 #   --box-delete f,f,f,f,f,f       delete loose parts fully inside this box (fractions of the bbox)
+#   --weld-first           merge coincident (seam-split) vertices straight after import: loose parts are then whole
+#                          parts for --box-delete & co., and --decimate no longer tears the surface open at seams
+#   --wires FRAC           delete antenna wires (loose parts of <= 16 vertices longer than FRAC of the length)
 #   --rotate-part REGEX:axis:fx,fy,fz:deg   rotate matching objects about a hinge (e.g. close a canopy)
 #   --level-roll / --level-pitch   auto-level a model that was exported banked / nose-up
 #   --weld ANGLE           merge split vertices and re-smooth with sharp edges above ANGLE (smaller files)
@@ -82,6 +87,19 @@ def bbox(objs=None):
 
 def tris(objs=None):
     return sum(len(p.vertices) - 2 for o in (objs or meshes()) for p in o.data.polygons)
+
+# ── weld first: glTF files split vertices at every UV / normal seam. Merging them before anything else
+#    makes each part one connected surface, so --box-delete & co. see whole parts and --decimate collapses
+#    across seams instead of tearing the surface open along them (cracks and folded, flipped triangles) ──
+if flag('--weld-first'):
+    mn0, mx0 = bbox()
+    d0 = 1e-5 * (mx0 - mn0).length
+    for o in meshes():
+        bm = bmesh.new(); bm.from_mesh(o.data)
+        n0 = len(bm.verts)
+        bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=d0)
+        print('weld-first', o.name, n0, '->', len(bm.verts), 'verts')
+        bm.to_mesh(o.data); bm.free()
 
 if flag('--list'):
     mn0, mx0 = bbox()
@@ -199,7 +217,7 @@ def split_loose():
     return meshes()
 
 def delete_loose(pred):
-    """Delete connected components (loose parts) for which pred(min, max) is true. Fast (bmesh union-find)."""
+    """Delete connected components (loose parts) for which pred(min, max, vertex count) is true. Fast (bmesh union-find)."""
     n_parts = n_tris = 0
     for o in meshes():
         bm = bmesh.new(); bm.from_mesh(o.data)
@@ -219,7 +237,7 @@ def delete_loose(pred):
         for vs in comps.values():
             a = Vector((min(v.co.x for v in vs), min(v.co.y for v in vs), min(v.co.z for v in vs)))
             b = Vector((max(v.co.x for v in vs), max(v.co.y for v in vs), max(v.co.z for v in vs)))
-            if pred(a, b):
+            if pred(a, b, len(vs)):
                 kill.extend(vs); n_parts += 1
         if kill:
             fs = {f for v in kill for f in v.link_faces}
@@ -238,16 +256,20 @@ if (below is not None or outx is not None) and not flag('--keep-gear'):
     hs = max(-mn.x, mx.x)
     lim = opt('--below-max', 0.25, float) * L
     if below is not None:
-        print('deleted low parts (parts, tris):', delete_loose(lambda a, b: b.z < mn.z + below * H and (b - a).length < lim))
+        print('deleted low parts (parts, tris):', delete_loose(lambda a, b, n: b.z < mn.z + below * H and (b - a).length < lim))
     if outx is not None:
-        print('deleted outboard parts:', delete_loose(lambda a, b: a.x > outx * hs or b.x < -outx * hs))
+        print('deleted outboard parts:', delete_loose(lambda a, b, n: a.x > outx * hs or b.x < -outx * hs))
 box_del = opt('--box-delete')   # "x0,y0,z0,x1,y1,z1" in fractions of the bbox (0..1): delete loose parts fully inside
 if box_del:
     mn, mx = bbox()
     f = [float(v) for v in box_del.split(',')]
     lo = Vector((mn.x + f[0] * (mx.x - mn.x), mn.y + f[1] * (mx.y - mn.y), mn.z + f[2] * (mx.z - mn.z)))
     hi = Vector((mn.x + f[3] * (mx.x - mn.x), mn.y + f[4] * (mx.y - mn.y), mn.z + f[5] * (mx.z - mn.z)))
-    print('deleted parts in box:', delete_loose(lambda a, b: all(lo[i] <= a[i] and b[i] <= hi[i] for i in range(3))))
+    print('deleted parts in box:', delete_loose(lambda a, b, n: all(lo[i] <= a[i] and b[i] <= hi[i] for i in range(3))))
+wires = opt('--wires', None, float)   # thin antenna wires: tiny loose parts longer than FRAC of the length (they alias into dotted lines)
+if wires is not None:
+    mn, mx = bbox()
+    print('deleted wires:', delete_loose(lambda a, b, n: n <= 16 and (b - a).length > wires * (mx.y - mn.y)))
 
 # ── glass ──
 g = opt('--glass')
@@ -359,8 +381,64 @@ if dec:
     for o in meshes():
         md = o.modifiers.new('dec', 'DECIMATE')
         md.ratio = dec
+        if flag('--decimate-sym'):   # keep left and right identical (mirror about the model's x = 0 plane)
+            md.use_symmetry = True; md.symmetry_axis = 'X'
         bpy.context.view_layer.objects.active = o
         bpy.ops.object.modifier_apply(modifier=md.name)
+
+# ── fix flipped faces by what can be seen from outside: every face is looked at from many directions
+#    (a ray from far outside to its centre); a face that is only ever seen from its back is inside-out
+#    (the sky shows through it with single-sided materials) and gets flipped. --fix-flipped K = directions. ──
+def fix_flipped(k_dirs):
+    from mathutils.bvhtree import BVHTree
+    objs = meshes()
+    bms = []
+    verts, polys, owner = [], [], []
+    for o in objs:
+        bm = bmesh.new(); bm.from_mesh(o.data)
+        bm.verts.index_update(); bm.faces.ensure_lookup_table(); bm.normal_update()
+        base = len(verts)
+        verts += [v.co.copy() for v in bm.verts]
+        for f in bm.faces:
+            polys.append([base + v.index for v in f.verts]); owner.append((len(bms), f.index))
+        bms.append(bm)
+    tree = BVHTree.FromPolygons(verts, polys, epsilon=0.0)
+    mn0, mx0 = bbox()
+    far = (mx0 - mn0).length * 2
+    dirs = []
+    for i in range(k_dirs):   # Fibonacci sphere
+        y = 1 - 2 * (i + 0.5) / k_dirs
+        r = math.sqrt(max(0.0, 1 - y * y)); th = i * math.pi * (3 - math.sqrt(5))
+        dirs.append(Vector((r * math.cos(th), r * math.sin(th), y)))
+    n_flip = n_both = 0
+    for gi, (bi, fi) in enumerate(owner):
+        f = bms[bi].faces[fi]
+        if f.calc_area() <= 0:
+            continue
+        c = f.calc_center_median(); nrm = f.normal
+        seen_front = seen_back = 0
+        for d in dirs:   # d = viewing direction (from the eye toward the face)
+            dn = d.dot(nrm)
+            if abs(dn) < 0.08:
+                continue
+            loc, _n, idx, dist = tree.ray_cast(c - d * far, d, far * 1.01)
+            if idx == gi or (loc is not None and (loc - c).length < 1e-7 * far):
+                if dn < 0: seen_front += 1
+                else: seen_back += 1
+        if seen_back and not seen_front:
+            f.normal_flip(); n_flip += 1
+        elif seen_back and seen_front:
+            n_both += 1
+    for o, bm in zip(objs, bms):
+        bm.to_mesh(o.data); bm.free()
+        if n_flip and o.data.has_custom_normals:   # imported split normals would still point inward
+            bpy.context.view_layer.objects.active = o
+            bpy.ops.mesh.customdata_custom_splitnormals_clear()
+    print('fix-flipped: flipped %d faces (%d more are seen from both sides)' % (n_flip, n_both))
+
+kff = opt('--fix-flipped', None, int)
+if kff:
+    fix_flipped(kff)
 
 # ── weld split vertices (flat-shaded / split-normal meshes export 3 vertices per triangle) and
 #    re-derive smooth normals with sharp edges above the given angle ──

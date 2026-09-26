@@ -20,6 +20,10 @@ function regionOf(cx, cz, L, W, hs) {
     if (cz > 0.28 * L) return 'tail';
     return 'center';
 }
+// the region segmentModel() puts a point (model space) in, for a model of this length and half span
+export function regionAt(x, z, length, halfSpan) {
+    return regionOf(x, z, length, Math.max(0.085 * length, 1.0), halfSpan);
+}
 
 // Split every mesh in `holder` into region groups. Returns a new Group.
 export function segmentModel(holder, length) {

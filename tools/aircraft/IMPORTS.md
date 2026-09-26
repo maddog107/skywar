@@ -22,7 +22,7 @@ Each was cleaned with
 | b747 | `4eadf04e705b41a2b272ee5aed4d01d5.glb` | `--nose -Y --weld 35 --paint 'phong1=~f2f2ef' --length 70.6 --img JPEG` |
 | racer | `36f0f3e71d2a4c18b479db1ae8f9e7a7.glb` | `--nose -Y --delete 'BLADES\|back_wheels\|CANNON' --tex 1024 --img JPEG` |
 | pitts | `be48f3f906ed431b98b1bf03ab7aadd6.glb` | `--nose -Y --pitch -11 --img JPEG --tex 1024` |
-| c130 | `C130_WFF_AIR_0626.glb` (NASA) | `--nose -Y --tex 1024 --strip-maps --mono '#737b6c' --img JPEG --decimate 0.6 --weld 35` (the monochrome repaint removes the NASA worm/meatball) |
+| c130 | `C130_WFF_AIR_0626.glb` (NASA) | `--nose -Y --weld-first --box-delete 0,0.695,0,1,0.7101,1 --wires 0.1 --tex 1024 --strip-maps --mono '#737b6c' --img JPEG --decimate 0.66 --decimate-sym --fix-flipped 48 --weld 35` (the monochrome repaint removes the NASA worm/meatball; `--weld-first` before decimating keeps the skin closed and facing out, where decimating the seam-split import tore it open and flipped faces; the box drops the 16 static prop blades, spinners kept, and the game spins four six-bladed props of its own; `--wires` drops the HF antenna wires) |
 | f14 | `9d2d0c87539046aa8c2198fcc47cdcf8.glb` | `--nose +X` |
 | f15 | `f874bffa8e314743b4a7cb9ad4b9f3a8.glb` | `--nose +X --delete 'TomGroup_[2345]_'` |
 | f4 | `666403b893024c8c88409f9feb2277eb.glb` | `--nose -Y --paint 'Fuselage=#6f7a62,Main_Wing=#6f7a62,Tail_FIn=#6f7a62,Cannon_Housing=#2a2d30,Cockpit_Frame=#5d6754,Cockpit_WIndow=~1c252d' --glass 'Cockpit_WIndow' --length 19.2 --uv0 --one-uv --weld 40 --img JPEG` |
