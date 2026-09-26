@@ -24,9 +24,13 @@ SK.begin('kc135', L, paint='#7d858b', paint2='#737b81', radome='#2b2e31', dark='
 K.material('Metal', '#b7babc', 0.75, 0.35)
 K.material('Hose', '#1a1b1c', 0.1, 0.8)
 K.material('Stripe', '#e4e2da', 0.1, 0.5)
-air = SK.load(SRC, nose='+Y')
+air = SK.load(SRC, nose='+Y', weld_first=True)   # (welded first: decimation then collapses across the seams)
 SK.fit(air, L)            # nose tip at s = 0; the file is already in metres (scale 0.9975)
 obj = {o.name[len('src_'):]: o for o in air}
+# the wing (with fin, stabilisers, nacelles) and the fuselage are far denser than the game needs: 77k → 45k triangles
+SK.decimate(0.4, [obj['Object_27']], sym=True)
+SK.decimate(0.6, [obj['Object_37']], sym=True)
+SK.weld([obj['Object_27'], obj['Object_37']], angle=35)
 
 # ── clean-up ──
 # the model's boom (tube, nozzle, ruddevators) is part of the fuselage object: loose parts behind s 33.5 below the tail

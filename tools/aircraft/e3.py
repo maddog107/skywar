@@ -31,9 +31,13 @@ K.material('Metal', '#b4b7b9', 0.7, 0.38)
 K.material('CoreCowl', '#8e9294', 0.45, 0.45)
 K.material('DomeBlack', '#1b1e23', 0.1, 0.5)
 K.material('DomeWhite', '#dcddd9', 0.05, 0.55)
-air = SK.load(SRC, nose='+Y')
+air = SK.load(SRC, nose='+Y', weld_first=True)
 SK.fit(air, 41.53)        # the KC-135's scale (as kc135.py), then stretched below
 obj = {o.name[len('src_'):]: o for o in air}
+# as kc135.py: the dense wing and fuselage meshes decimated (symmetrically)
+SK.decimate(0.4, [obj['Object_27']], sym=True)
+SK.decimate(0.6, [obj['Object_37']], sym=True)
+SK.weld([obj['Object_27'], obj['Object_37']], angle=35)
 ALL = lambda: SK.meshes()
 
 # ── clean-up: KC-135-only parts ──
