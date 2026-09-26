@@ -41,6 +41,156 @@ export const VEHICLES = {
         parts: ['body', 'door_l', 'door_r', 'erector', 'canister_1', 'canister_2', 'muzzle_1', 'muzzle_2', 'jack_fl', 'jack_fr', 'jack_rl', 'jack_rr', 'ram_l', 'ram_r', 'exhaust', 'seat_driver', 'hatch_entry'],
         deploy: ['door', 'jack', 'raise'],
     },
+    m270: {
+        name: 'M270A1 Multiple Launch Rocket System', short: 'M270 MLRS', cls: 'artillery', team: 'blue', file: 'm270.glb', paint: 'blue_green',
+        chassis: 'M993 carrier (lengthened Bradley), tracked', dims: { length: 6.97, width: 2.97, height: 2.59 }, crew: 3, mass: 24, speed: 64,
+        arm: '2 pods × 6 GMLRS / M26 227 mm rockets (or 2 × ATACMS), 70+ km', muzzles: 12,
+        // turret: the launcher-loader module, rot y (full circle); launcher: the cage, rot x about its rear pivot 0 → 60°
+        // (muzzles face forwards when stowed); muzzle_1-6 left pod, 7-12 right pod (top row first); door_l/door_r: cab
+        // doors; hatch_roof; road wheels wheel_1..6<l|r>, sprocket_<l|r>, idler_<l|r>; track_l/track_r scroll with roll()
+        parts: ['body', 'turret', 'launcher', 'ram_l', 'ram_r', 'door_l', 'door_r', 'hatch_roof', 'track_l', 'track_r', 'sprocket_l', 'sprocket_r', 'idler_l', 'idler_r', 'exhaust', 'seat_driver', 'hatch_entry'],
+        deploy: [],
+    },
+    sentinel: {
+        name: 'AN/MPQ-64 Sentinel air-defence radar', short: 'SENTINEL', cls: 'radar', team: 'blue', file: 'sentinel.glb', paint: 'blue_green',
+        chassis: 'two-wheel trailer (towed by a HMMWV)', dims: { length: 3.4, width: 2.2, height: 3.4 }, crew: 3, mass: 3.4, speed: 88,
+        arm: 'X-band 3-D surveillance radar, 40 km instrumented range, IFF; cues short-range air defence', muzzles: 0,
+        // antenna: spin about the pedestal axis at 30 rpm (spin(rig, dt)); jack_fl/fr/rl/rr: levelling jacks, jack_nose: the
+        // drawbar leg with its caster (all group 'jack'); door_box: operator door; kingpin: the towing eye (−z to the tow vehicle)
+        parts: ['body', 'antenna', 'jack_fl', 'jack_fr', 'jack_rl', 'jack_rr', 'jack_nose', 'door_box', 'wheel_1l', 'wheel_1r', 'kingpin', 'hatch_entry'],
+        deploy: ['jack'],
+    },
+    osa: {
+        name: '9A33BM3 TELAR, 9K33M3 Osa-AKM (SA-8 Gecko)', short: 'OSA', cls: 'sam', team: 'red', file: 'osa.glb', paint: 'red_green',
+        chassis: 'BAZ-5937 6×6 amphibious', dims: { length: 9.14, width: 2.75, height: 4.2 }, crew: 5, mass: 17.5, speed: 80,
+        arm: '6 × 9M33M3 missiles in two packs of three ribbed containers, 10 km; 1S51M3 search / tracking radar', muzzles: 6,
+        // turret: rot y, full circle; launcher: both container packs, rot x about their rear pivots 0 → 62° (+ up, muzzles
+        // face forwards when stowed); mast: the search radar, folded back when stowed (raise 0 → 90°); antenna: spins on
+        // the mast (33 rpm); muzzle_1-3 left pack (outer → inner), 4-6 right pack; hatch_l/hatch_r: cab roof lids
+        parts: ['body', 'turret', 'launcher', 'mast', 'antenna', 'muzzle_1', 'muzzle_6', 'hatch_l', 'hatch_r', 'exhaust', 'seat_driver', 'hatch_entry'],
+        deploy: ['raise'],
+    },
+    s300: {
+        name: '5P85S launcher, S-300PS (SA-10B Grumble)', short: 'S-300 TEL', cls: 'sam', team: 'red', file: 's300.glb', paint: 'red_camo',
+        chassis: 'MAZ-543M 8×8', dims: { length: 13.11, width: 3.15, height: 3.8 }, crew: 4, mass: 42.15, speed: 60,
+        arm: '4 × 5V55 missiles in transport-launch canisters, 75 km', muzzles: 4,
+        // erector: the lifting frame, rot x about the rear hinge 0 → 90° (canisters vertical, bases on the ground);
+        // canister_1..4 (children of the erector, origin on the base, muzzle end along −z): 1-2 upper row left/right,
+        // 3-4 lower row; muzzle_n on the canister caps (−z = launch direction, straight up when erected)
+        parts: ['body', 'erector', 'canister_1', 'canister_2', 'canister_3', 'canister_4', 'muzzle_1', 'muzzle_4', 'jack_fl', 'jack_fr', 'jack_rl', 'jack_rr', 'ram_l', 'ram_r', 'exhaust', 'seat_driver', 'hatch_entry'],
+        deploy: ['jack', 'raise'],
+    },
+    grad: {
+        name: 'BM-21 Grad 122 mm multiple rocket launcher (Ural-4320)', short: 'GRAD', cls: 'artillery', team: 'red', file: 'grad.glb', paint: 'red_green',
+        chassis: 'Ural-4320 6×6', dims: { length: 7.35, width: 2.4, height: 3.09 }, crew: 3, mass: 13.7, speed: 75,
+        arm: '40 × 122 mm 9M22U rockets (4 rows of 10 tubes, 3 m long), 20 km; full salvo in 20 s', muzzles: 40,
+        // turret: the traversing base over the rear bogie, rot y, 70° right (−) … 102° left (+); launcher: the tube pack,
+        // rot x about its trunnions 0 → 55° (+ = muzzles up; they face forwards over the cab when stowed); muzzle_1..40
+        // row by row from the top, left to right seen from behind; ram_l/ram_r: elevation rams (turret → pack)
+        parts: ['body', 'turret', 'launcher', 'muzzle_1', 'muzzle_40', 'ram_l', 'ram_r', 'wheel_1l', 'wheel_1r', 'exhaust', 'seat_driver', 'hatch_entry'],
+        deploy: [],
+    },
+    ammo_red: {
+        name: 'Ural-4320 cargo truck (ammunition)', short: 'URAL AMMO', cls: 'ammo', team: 'red', file: 'ammo_red.glb', paint: 'red_green',
+        chassis: 'Ural-4320 6×6', dims: { length: 7.37, width: 2.5, height: 3.0 }, crew: 2, mass: 13.2, speed: 85,
+        arm: 'none; 4.5 t of ammunition crates under the tilt', muzzles: 0,
+        // door_tail: the tailgate, rot x about the floor's rear edge 0 → 90° (down); the tilt's rear flap is rolled up
+        parts: ['body', 'door_tail', 'wheel_1l', 'wheel_1r', 'wheel_3l', 'wheel_3r', 'exhaust', 'seat_driver', 'hatch_entry'],
+        deploy: ['door'],
+    },
+    patriot_ln: {
+        name: 'M903 launching station, MIM-104 Patriot (PAC-2), on the M860A1 semi-trailer', short: 'PATRIOT LS', cls: 'sam', team: 'blue', file: 'patriot_ln.glb', paint: 'blue_tan',
+        chassis: 'M860A1 semi-trailer (towed by the M983A4 HEMTT: see hemtt)', dims: { length: 12.2, width: 2.9, height: 3.9 }, crew: 3, mass: 25, speed: 80,
+        arm: '4 × PAC-2 GEM-T missiles in canisters (6.1 × 1.09 × 0.99 m), 160 km; launched at a fixed 38° elevation', muzzles: 4,
+        // turret: rot y ±110° about the rear turntable; launcher: the canister stack, rot x about its rear pivot 0 → 38° (the
+        // canister fronts face forwards when stowed); canister_1..4 (children of the launcher: 1-2 upper left/right, 3-4 lower,
+        // seen from behind) with muzzle_n on their front covers; ram_l/ram_r: elevation rams; mast: the data-link antenna mast
+        // (slide up 2.4 m, group 'raise'); outrigger_fl/fr/rl/rr swing out 45° and jack_* screw down to the ground (both group
+        // 'jack'); landing_gear: slide up 0.42 m for towing (group 'gear'); kingpin: empty on the gooseneck, match it to a
+        // tractor's `hitch`; exhaust: the generator's
+        parts: ['body', 'turret', 'launcher', 'canister_1', 'canister_2', 'canister_3', 'canister_4', 'muzzle_1', 'muzzle_4', 'ram_l', 'ram_r', 'mast',
+            'outrigger_fl', 'outrigger_fr', 'outrigger_rl', 'outrigger_rr', 'jack_fl', 'jack_fr', 'jack_rl', 'jack_rr', 'landing_gear', 'kingpin', 'wheel_1l', 'wheel_2r', 'exhaust', 'hatch_entry'],
+        deploy: ['jack', 'raise', 'launcher'],
+    },
+    smerch: {
+        name: '9A52-2 BM-30 Smerch 300 mm multiple rocket launcher', short: 'SMERCH', cls: 'artillery', team: 'red', file: 'smerch.glb', paint: 'red_green',
+        chassis: 'MAZ-543M 8×8', dims: { length: 12.1, width: 3.05, height: 3.05 }, crew: 4, mass: 43.7, speed: 60,
+        arm: '12 × 9M55 300 mm rockets (7.6 m), 70–90 km; a full salvo in 38 s', muzzles: 12,
+        // turret: the rear turntable, rot y ±30°; launcher: the tube pack, rot x about its rear trunnions 0 → 55° (muzzles
+        // face forwards when stowed; elevate before traversing); muzzle_1-4 top row left → right, 5-8 middle, 9-12 bottom;
+        // ram_l/ram_r: elevating rams; jack_rl/jack_rr between the last two axles
+        parts: ['body', 'turret', 'launcher', 'muzzle_1', 'muzzle_12', 'ram_l', 'ram_r', 'jack_rl', 'jack_rr', 'exhaust', 'seat_driver', 'hatch_entry'],
+        deploy: ['jack', 'launcher'],
+    },
+    buk: {
+        name: '9A310M1 TELAR, 9K37M1 Buk-M1 (SA-11 Gadfly)', short: 'BUK', cls: 'sam', team: 'red', file: 'buk.glb', paint: 'red_camo',
+        chassis: 'GM-569 tracked', dims: { length: 9.3, width: 3.25, height: 3.8 }, crew: 4, mass: 32.4, speed: 65,
+        arm: '4 × 9M38M1 missiles on the launcher arm, 35 km; 9S35 Fire Dome fire-control radar', muzzles: 4,
+        // turret: the turntable with the 9S35 radome at its front, rot y full circle; launcher: the missile arm, rot x about its
+        // rear pivot 0 → 70° (+ = noses up); missile_1..4 (children of the launcher, origin at the tail, nose −z; 1-2 upper
+        // inner, 3-4 lower outer) each with nozzle_n; muzzle_n at the noses; road wheels wheel_1..6<l|r>, sprocket_<l|r> (rear
+        // drive), idler_<l|r> (front); track_l/track_r scroll with roll(); hatch_driver
+        parts: ['body', 'turret', 'launcher', 'missile_1', 'missile_4', 'muzzle_1', 'muzzle_4', 'track_l', 'track_r', 'sprocket_l', 'sprocket_r', 'idler_l', 'idler_r', 'hatch_driver', 'exhaust', 'seat_driver', 'hatch_entry'],
+        deploy: ['launcher'],
+    },
+    cmd_blue: {
+        name: 'M1113 HMMWV command post with S-788 shelter', short: 'COMMAND HMMWV', cls: 'command', team: 'blue', file: 'cmd_blue.glb', paint: 'blue_tan',
+        chassis: 'M1113 HMMWV 4×4 (heavy variant)', dims: { length: 4.95, width: 2.16, height: 2.65 }, crew: 4, mass: 5.2, speed: 113,
+        arm: 'command post: tactical radios (whip antennas) and a telescopic antenna mast; unarmed', muzzles: 0,
+        // mast / mast_2 / mast_3: telescopic mast sections (slide +y 1.35 m each, group 'raise'; mast_head = the antenna top);
+        // door_l / door_r: cab doors; door_shelter: the shelter's rear door; wheels 1l/1r steer
+        parts: ['body', 'mast', 'mast_2', 'mast_3', 'mast_head', 'door_l', 'door_r', 'door_shelter', 'spare', 'exhaust', 'seat_driver', 'hatch_entry'],
+        deploy: ['raise'],
+    },
+    patriot_radar: {
+        name: 'AN/MPQ-65 radar set, MIM-104 Patriot, on the M860 semi-trailer', short: 'PATRIOT RADAR', cls: 'sam-radar', team: 'blue', file: 'patriot_radar.glb', paint: 'blue_tan',
+        chassis: 'M860 semi-trailer (towed by the M983A4 HEMTT: see hemtt)', dims: { length: 12.2, width: 2.9, height: 4.1 }, crew: 0, mass: 26, speed: 80,
+        arm: 'C-band passive phased-array multifunction radar (search, track, missile guidance), 150+ km; IFF; guides the launchers\' PAC-2 / PAC-3 missiles', muzzles: 0,
+        // mast: the antenna, rot about −x at the hinge on the shelter's front 0 → 71.6° (flat on the roof face-up for travel →
+        // leaning back 18.4° from vertical, facing forward: aim the trailer at the threat sector); outrigger_fl/fr/rl/rr swing out
+        // and jack_* screw down (group 'jack'); landing_gear: slide up for towing (group 'gear'); kingpin for a tractor's hitch
+        parts: ['body', 'mast', 'outrigger_fl', 'outrigger_fr', 'outrigger_rl', 'outrigger_rr', 'jack_fl', 'jack_fr', 'jack_rl', 'jack_rr', 'landing_gear', 'kingpin', 'wheel_1l', 'wheel_2r', 'hatch_entry'],
+        deploy: ['jack', 'raise'],
+    },
+    flaplid: {
+        name: '30N6E engagement / illumination radar (Flap Lid B), S-300PMU', short: 'FLAP LID', cls: 'sam-radar', team: 'red', file: 'flaplid.glb', paint: 'red_camo',
+        chassis: 'MAZ-7910 8×8', dims: { length: 12.0, width: 3.1, height: 3.7 }, crew: 4, mass: 40, speed: 60,
+        arm: 'X-band phased-array fire-control radar: tracks 12 targets, guides 6 missiles; the post turns a full circle, array about 3.2 × 2.9 m', muzzles: 0,
+        // mast / mast_s1: the telescopic mast, slide up 2.2 / 1.1 m (group 'raise'); turret: the antenna post on top of the
+        // mast, rot y full circle (aim yaw); array: the phased array, rot x about its hinge on the post's front edge 0 → 105°
+        // (folded face-down over the cabin roof → leaning back 15° past vertical, facing −z at yaw 0; group 'raise')
+        parts: ['body', 'mast_s1', 'mast', 'turret', 'array', 'jack_fl', 'jack_fr', 'jack_rl', 'jack_rr', 'exhaust', 'seat_driver', 'hatch_entry'],
+        deploy: ['jack', 'raise'],
+    },
+    p18: {
+        name: 'P-18 "Spoon Rest D" VHF search radar, antenna vehicle (Ural-4320)', short: 'P-18 RADAR', cls: 'radar', team: 'red', file: 'p18.glb', paint: 'red_green',
+        chassis: 'Ural-4320 6×6', dims: { length: 7.37, width: 2.5, height: 3.6 }, crew: 4, mass: 14.5, speed: 75,
+        arm: 'VHF (150–170 MHz) 2-D early-warning radar, 16 Yagi antennas, 250 km, 6 rpm; the array stands about 9.7 m up', muzzles: 0,
+        // mast: rot x about the hinge at the rear of the body, 0 → 90° (lies forward over the cab when stowed); antenna: spins
+        // about the mast at 6 rpm (spin only when raised); array_l / array_r: the boom halves fold back along the mast,
+        // post_<l|r><1-4> turn, yagi_<l|r><1-4><t|b> roll flat for travel — all in group 'raise', so raise(rig, k) unfolds it all
+        parts: ['body', 'mast', 'antenna', 'array_l', 'array_r', 'post_l1', 'post_r4', 'yagi_l1t', 'yagi_r4b', 'jack_fl', 'jack_fr', 'jack_rl', 'jack_rr', 'exhaust', 'seat_driver', 'hatch_entry'],
+        deploy: ['jack', 'raise'],
+    },
+    stryker: {
+        name: 'M1126 Stryker Infantry Carrier Vehicle', short: 'STRYKER', cls: 'vehicle', team: 'blue', file: 'stryker.glb', paint: 'blue_tan',
+        chassis: 'Stryker 8×8 (LAV III family)', dims: { length: 6.95, width: 2.72, height: 2.64 }, crew: 2, troops: 9, mass: 16.5, speed: 97,
+        arm: 'M151 Protector remote weapon station with a 12.7 mm M2 machine gun, smoke grenade launchers', muzzles: 1,
+        // turret: the RWS, rot y full circle; launcher: the M2 cradle, rot x −20° → 60°; muzzle_1: the M2 muzzle; door_ramp: rear
+        // ramp, rot x about its bottom hinge 0 → 116° (onto the ground); hatch_driver, hatch_cmd; wheels 1 and 2 steer (1.0, 0.55)
+        parts: ['body', 'turret', 'launcher', 'muzzle_1', 'door_ramp', 'hatch_driver', 'hatch_cmd', 'exhaust', 'seat_driver', 'hatch_entry'],
+        deploy: [],
+    },
+    btr80: {
+        name: 'BTR-80 armoured personnel carrier', short: 'BTR-80', cls: 'vehicle', team: 'red', file: 'btr80.glb', paint: 'red_green',
+        chassis: 'BTR-80 8×8 amphibious', dims: { length: 7.65, width: 2.9, height: 2.41 }, crew: 3, troops: 7, mass: 13.6, speed: 80,
+        arm: 'BPU-1 turret: 14.5 mm KPVT and 7.62 mm PKT machine guns; six 902V smoke-grenade launchers', muzzles: 2,
+        // turret: rot y full circle; launcher: the gun mantlet, rot x −4° → 60°; muzzle_1: KPVT, muzzle_2: PKT; door_l/door_r:
+        // side doors between axles 2 and 3 (rot about their front edges, 0 → 100°); hatch_l/hatch_r: driver's and commander's
+        // roof hatches; hatch_turret; wheels 1 and 2 steer (1.0, 0.6)
+        parts: ['body', 'turret', 'launcher', 'muzzle_1', 'muzzle_2', 'door_l', 'door_r', 'hatch_l', 'hatch_r', 'hatch_turret', 'exhaust', 'seat_driver', 'hatch_entry'],
+        deploy: [],
+    },
 };
 
 // Paint schemes: models/vehicles/tex/paint_<scheme>.jpg (tools/vehicles/textures.py)
@@ -90,27 +240,45 @@ function trackMaterial() {
 }
 
 // ── loading ──
-// opts.fetchBuffer(url) → ArrayBuffer lets tests load the files without a browser; opts.textures = false skips images.
+// opts.background: return at once and load once the page is idle (after the boot's own work), so the vehicles never
+// hold up the boot; await vehiclesReady() before createVehicle(). opts.fetchBuffer(url) → ArrayBuffer lets tests
+// load the files without a browser; opts.textures = false skips images; opts.ids limits the set.
+const stats = { start: 0, end: 0, files: 0, bytes: 0, parseMs: 0 };
+export function vehicleLoadStats() { return { ...stats }; }
+let readyResolve = null;
+const ready = new Promise(r => (readyResolve = r));
 export function preloadVehicles(opts = {}) {
-    if (loading) return loading;
+    if (loading) return opts.background ? Promise.resolve() : loading;
+    loading = ready;
+    const run = () => loadAll(opts).then(readyResolve);
+    if (!opts.background) { run(); return loading; }
+    const idle = globalThis.requestIdleCallback || ((f) => setTimeout(f, 200));
+    idle(run, { timeout: 4000 });
+    return Promise.resolve();
+}
+async function loadAll(opts) {
     if (opts.textures !== false && typeof document !== 'undefined' && document.createElementNS) texLoader = new THREE.TextureLoader();
     const loader = new GLTFLoader();
-    const load = async (file) => {
-        if (opts.fetchBuffer) return loader.parseAsync(await opts.fetchBuffer(BASE + file), BASE);
-        return loader.loadAsync(BASE + file);
-    };
+    const now = () => (globalThis.performance ? performance.now() : Date.now());
+    stats.start = now();
     const ids = opts.ids || Object.keys(VEHICLES);
-    loading = Promise.all(ids.map(async (id) => {
+    await Promise.all(ids.map(async (id) => {
         try {
-            const gltf = await load(VEHICLES[id].file);
+            const url = BASE + VEHICLES[id].file;
+            const buf = opts.fetchBuffer ? await opts.fetchBuffer(url) : await (await fetch(url)).arrayBuffer();
+            const t0 = now();
+            const gltf = await loader.parseAsync(buf, BASE);
             cache[id] = prepare(id, gltf.scene);
+            stats.parseMs += now() - t0;
+            stats.files++;
+            stats.bytes += buf.byteLength;
         } catch (e) {
             console.warn('[vehicles] failed to load', id, e && e.message);
         }
     }));
-    return loading;
+    stats.end = now();
 }
-export function vehiclesReady() { return loading || Promise.resolve(); }
+export function vehiclesReady() { return loading || ready; }
 export function hasVehicle(id) { return !!cache[id]; }
 
 function prepare(id, scene) {

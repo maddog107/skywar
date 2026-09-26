@@ -155,7 +155,8 @@ async function boot() {
     world.setTime(settings.time);
     world.updateTerrain(new THREE.Vector3(0, 0, 0), true);
     $('loadText').textContent = 'LOADING AIRFRAMES…';
-    await Promise.all([preloadModels((f) => { $('loadFill').style.width = (10 + f * 60) + '%'; }), preloadProps(), preloadCharacter(), preloadShips(), vehicles.preloadVehicles()]);
+    await Promise.all([preloadModels((f) => { $('loadFill').style.width = (10 + f * 60) + '%'; }), preloadProps(), preloadCharacter(), preloadShips()]);
+    vehicles.preloadVehicles({ background: true }); // after the airframes; parsed once the page is idle (vehiclesReady())
     $('loadText').textContent = 'BUILDING TOWNS & ROADS…';
     await new Promise(r => setTimeout(r, 20));
     world.towns = new Towns(scene, world);

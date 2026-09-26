@@ -37,7 +37,7 @@ function renderer(w, h) {
         R.toneMapping = THREE.ACESFilmicToneMapping;
         R.toneMappingExposure = 1.0;
         R.shadowMap.enabled = true;
-        R.shadowMap.type = THREE.PCFSoftShadowMap;
+        R.shadowMap.type = THREE.PCFShadowMap;
         const pm = new THREE.PMREMGenerator(R);
         envTex = skyEnvironment(pm);
     }
@@ -51,7 +51,7 @@ export async function init(opts = {}) {
 }
 
 export function applyPose(rig, p = {}) {
-    for (const g of ['jack', 'pad', 'raise', 'door', 'hatch']) if (p[g] != null) V.pose(rig, g, p[g]);
+    for (const g of Object.keys(rig.byGroup)) if (p[g] != null && !['turret', 'launcher', 'spin'].includes(g)) V.pose(rig, g, p[g]);
     if (p.yaw != null || p.pitch != null) V.aim(rig, p.yaw || 0, p.pitch || 0);
     if (p.spin) V.spin(rig, p.spin);
     if (p.steer) V.steer(rig, p.steer);
@@ -169,6 +169,25 @@ export async function closeup(id, o = {}) {
     c.width = w; c.height = h;
     c.getContext('2d').drawImage(r.domElement, 0, 0, w, h);
     return c;
+}
+
+// The deployed pose of a vehicle: every group of its deploy sequence at 1, the launcher aimed up and a little left,
+// antennas turned a bit
+export function deployedPose(id) {
+    const spec = V.VEHICLES[id] || {};
+    const p = {};
+    for (const g of spec.deploy || ['jack', 'pad', 'raise']) p[g] = 1;
+    const { rig } = V.createVehicle(id);
+    const t = rig.byGroup.turret?.[0]?.j, l = rig.byGroup.launcher?.[0]?.j;
+    if (t) p.yaw = Math.min(t.max, 0.45);
+    if (l) p.pitch = Math.min(l.max, 0.7);
+    if (rig.byGroup.spin) p.spin = 0.7;
+    return p;
+}
+
+// The standard sheet: stowed and deployed rows from four sides, next to a humvee
+export async function standardSheet(id, opts = {}) {
+    return vehicleSheet(id, [['stowed / travel', {}], ['deployed', deployedPose(id)]], { views: ['front34', 'side', 'rear34', 'top'], ...opts });
 }
 
 // A standard sheet for one vehicle: rows of posed views. poses: [[label, pose], ...]

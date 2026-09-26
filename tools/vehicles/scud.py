@@ -98,7 +98,11 @@ def build_erector(v):
         e.box('dark', sx * rx - 0.05, sx * rx + 0.05, y0 - 0.12, y0, 9.05, 9.35)
     # hinge tube and bearings
     e.cyl('dark', (-0.72, hy, hz), (0.72, hy, hz), 0.09, 0.09, 12)
-    # cross members and X bracing between the beams
+    # ladder rungs along the boom (it reads as a ladder when erected), cross members and X bracing
+    z = 3.7
+    while z < 10.4:
+        e.cyl('dark', (-rx + 0.06, y1 - 0.03, z), (rx - 0.06, y1 - 0.03, z), 0.018, 0.018, 6, smooth=False)
+        z += 0.45
     zs = [3.45, 4.9, 6.3, 7.7, 9.1, 10.5]
     for z in zs:
         e.box('paint', -rx, rx, y0 + 0.02, y1 - 0.04, z - 0.05, z + 0.05)
@@ -138,26 +142,32 @@ def build_pad(v):
     hx, hy, hz = PAD_HINGE
     p = Part(v, 'pad', pivot=PAD_HINGE, joint=rot('x', 0.0, math.pi / 2, group='pad'))
     tc = Vector((0, 0.81, 12.10))       # table top centre when deployed (the missile base rests on it)
-    s = 0.58                             # half size of the table
-    # four splayed legs with screw feet (on the ground when deployed)
-    for (x, z) in ((-s, -s), (s, -s), (s, s), (-s, s)):
-        p.cyl('dark', (x * 1.12, 0.0, tc.z + z * 1.12), (x * 1.12, 0.05, tc.z + z * 1.12), 0.1, 0.09, 10)     # foot pads
-        p.cyl('steel', (x * 1.12, 0.05, tc.z + z * 1.12), (x * 1.12, 0.3, tc.z + z * 1.12), 0.035, 0.035, 8)  # screws
-        p.beam('dark', (x * 1.12, 0.28, tc.z + z * 1.12), (x * 0.8, tc.y - 0.1, tc.z + z * 0.8), 0.09, 0.09)  # legs
-    # table: a square plate with a raised ring collar and the central opening
-    p.box('paint', -s * 0.85, s * 0.85, tc.y - 0.12, tc.y - 0.04, tc.z - s * 0.85, tc.z + s * 0.85, bev=0.02)
-    p.lathe((0, tc.y - 0.04, tc.z), (0, 1, 0), [(0, 0.5, 'paint'), (0.04, 0.5, 'paint'), (0.04, 0.3, 'dark'), (0.0, 0.3, 'blast')], n=20, smooth=False)
-    p.disc('blast', (0, tc.y - 0.035, tc.z), (0, 1, 0), 0.3, 16)
-    # blast deflector: a cone under the table, apex down
-    p.cyl('blast', (0, tc.y - 0.13, tc.z), (0, 0.18, tc.z), 0.46, 0.02, 16, cap0=False)
-    # support pads on the table for the missile's base ring (4) and the fin guides
+    R = 0.62                             # table radius
+    t0 = tc.y - 0.14                     # table underside
+    # the round table: a thick rim, a raised collar that takes the missile's base ring, the blast opening
+    p.cyl('paint', (0, t0, tc.z), (0, tc.y, tc.z), R, R, 24, smooth=True)
+    p.cyl('paint', (0, tc.y, tc.z), (0, tc.y + 0.035, tc.z), 0.5, 0.48, 24, cap1=False, smooth=True)
+    p.disc('dark', (0, tc.y + 0.036, tc.z), (0, 1, 0), 0.48, 24)
+    p.disc('blast', (0, tc.y + 0.038, tc.z), (0, 1, 0), 0.3, 16)
     for k in range(4):
         a = math.radians(45 + 90 * k)
-        c = Vector((math.cos(a) * 0.42, tc.y, tc.z + math.sin(a) * 0.42))
-        p.box('dark', c.x - 0.06, c.x + 0.06, tc.y - 0.04, tc.y + 0.06, c.z - 0.06, c.z + 0.06)
-    # hinge arms from the table's front edge to the hinge
+        c = Vector((math.cos(a) * 0.4, 0, tc.z + math.sin(a) * 0.4))
+        p.box('dark', c.x - 0.06, c.x + 0.06, tc.y + 0.03, tc.y + 0.09, c.z - 0.06, c.z + 0.06)    # base-ring shoes
+    # blast deflector under the table (apex down)
+    p.cyl('blast', (0, t0, tc.z), (0, 0.24, tc.z), 0.36, 0.02, 16, cap0=False)
+    # four straight screw-jack legs under the rim (sleeve, screw, foot) and a ring brace
+    for k in range(4):
+        a = math.radians(45 + 90 * k)
+        x, z = math.cos(a) * 0.5, tc.z + math.sin(a) * 0.5
+        p.cyl('dark', (x, 0.34, z), (x, t0, z), 0.065, 0.065, 10)
+        p.cyl('steel', (x, 0.05, z), (x, 0.36, z), 0.035, 0.035, 8)
+        p.cyl('dark', (x, 0.0, z), (x, 0.05, z), 0.11, 0.1, 12)
+        p.cyl('dark', (x - 0.09, 0.36, z), (x + 0.09, 0.36, z), 0.02, 0.02, 6)      # screw handle
+    ring = [(math.cos(math.radians(360 * k / 16)) * 0.5, 0.42, tc.z + math.sin(math.radians(360 * k / 16)) * 0.5) for k in range(17)]
+    p.tube('dark', ring, 0.022, 4)
+    # hinge lugs from the table's front edge to the hinge
     for sx in (-1, 1):
-        p.beam('paint', (sx * 0.4, tc.y - 0.08, tc.z - s * 0.85), (sx * 0.4, hy, hz), 0.1, 0.1)
+        p.beam('paint', (sx * 0.4, t0 + 0.05, tc.z - R + 0.1), (sx * 0.4, hy, hz), 0.1, 0.12)
         p.cyl('dark', (sx * 0.5, hy, hz), (sx * 0.3, hy, hz), 0.08, 0.08, 10)
     # turn into the stowed position (folded up behind the vehicle)
     p.rotate_about(PAD_HINGE, (1, 0, 0), -math.pi / 2)
@@ -257,6 +267,8 @@ def build_body(v, b):
         b.tube('dark', [(1.05 + math.cos(a) * 0.14, 3.28 + math.sin(a) * 0.14, 1.02), (1.05 + math.cos(a) * 0.15, 3.28 + math.sin(a) * 0.15, 0.82)], 0.006, 4)
     b.cyl('dark', (-1.1, 2.92, 1.35), (-1.1, 3.0, 1.35), 0.04, 0.04, 6)
     b.cyl('dark', (-1.1, 3.0, 1.35), (-1.1, 3.04, 1.12), 0.03, 0.09, 10)
+    # tow cable looped across the bumper
+    b.tube('dark', [(-1.05, 1.32, -0.02), (-0.6, 1.14, -0.07), (0.25, 1.12, -0.07), (0.95, 1.3, -0.02)], 0.022, 5)
     # radio antenna on the left cab's rear corner
     vkit.whip_antenna(b, (-1.35, 2.92, 2.75), h=2.6)
     # engine exhaust: behind the left cab, pointing up and out
