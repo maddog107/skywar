@@ -125,7 +125,7 @@ function box(w, h, d, mat, x, y, z, parent) {
 // procedural ship below is used instead.
 const SHIP_FILES = {
     carrier: 'models/ships/carrier.glb', destroyer: 'models/ships/destroyer.glb',
-    ssn: 'models/ships/ssn.glb', ssgn: 'models/ships/ssgn.glb', rhib: 'models/ships/rhib.glb', cb90: 'models/ships/cb90.glb', supply: 'models/ships/supply.glb', slava: 'models/ships/slava.glb',
+    cruiser: 'models/ships/cruiser.glb', ssn: 'models/ships/ssn.glb', ssgn: 'models/ships/ssgn.glb', rhib: 'models/ships/rhib.glb', cb90: 'models/ships/cb90.glb', supply: 'models/ships/supply.glb', slava: 'models/ships/slava.glb',
 };
 const shipGltf = {};
 export async function preloadShips() {

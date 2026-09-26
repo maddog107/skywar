@@ -465,14 +465,18 @@ def plate_with_holes(part, mat, x0, x1, z0, z1, y, holes, depth=0.35, wall='Dark
 
 # ═════════════ Mk 41 vertical launching system ═════════════
 MK41 = {
-    'pitch_u': 0.80,     # cell pitch across a module's two columns (m)
-    'pitch_v': 0.80,     # cell pitch along its four rows
-    'hatch': 0.70,       # cell hatch plate (square) side
-    'mouth': 0.60,       # the cell opening under the hatch
-    'uptake_w': 0.62,    # exhaust uptake between the two columns
-    'gap': 0.12,         # between modules
+    # United Defense / Lockheed Martin data sheets, and measured launch photographs: a module in a launcher is
+    # 3.16 × 2.18 m: two rows of four cells (0.79 m pitch along a row) either side of a 0.24 m exhaust-uptake
+    # slot; across it: hinge strip 0.20 | lid 0.77 | uptake 0.24 | lid 0.77 | hinge strip 0.20. Canisters are 25 in
+    # (0.64 m) square. An 8-module launcher is 8.71 × 6.32 m.
+    'pitch_u': 0.97,     # one row's share of the module width (hinge strip + lid)
+    'pitch_v': 0.79,     # cell pitch along a row
+    'hatch': 0.77,       # lid (square)
+    'mouth': 0.64,       # the cell opening (the canister top) under the lid
+    'uptake_w': 0.24,    # exhaust-uptake slot between the two rows
+    'gap': 0.0,          # modules are packed edge to edge in a launcher
     'depth': 7.7,        # strike-length module (the missile's start point is the cell mouth; the canister goes this deep)
-    'open': -1.92,       # hatch opening angle (rad) about its hinge: swings up and over, outboard (~110°)
+    'open': -1.66,       # lid opening angle (rad): swings up and outward about its outer edge and stands ~95°
 }
 
 def mk41_module_size():
@@ -490,30 +494,30 @@ def mk41_door_mesh(name='mk41_hatch', mat='VLS', dark='Dark'):
     top at y ≈ 0.09 (flush-ish with the module top); shared by every cell door node"""
     h = MK41['hatch']
     p = Part(name)
-    t = 0.07
-    p.box(mat, -h / 2, h / 2, 0.02, 0.02 + t, 0.02, h - 0.02)
-    # stiffeners, latch and the hinge knuckles
-    for x in (-h * 0.25, h * 0.25):
-        p.box(mat, x - 0.03, x + 0.03, 0.02 + t, 0.02 + t + 0.03, 0.08, h - 0.08)
-    p.box(dark, -0.08, 0.08, 0.02 + t, 0.02 + t + 0.035, h - 0.12, h - 0.04)
-    for x in (-h * 0.35, h * 0.35):
-        p.cyl(mat, (0, 0.055, 0.0), 0.045, 0.045, x - 0.07, x + 0.07, 6, axis='x')   # hinge knuckles
+    t = 0.08                     # a raised plate about 8 cm thick
+    p.box(mat, -h / 2, h / 2, 0.01, 0.01 + t, 0.02, h - 0.02)
+    p.box(mat, -h / 2 + 0.05, h / 2 - 0.05, 0.01 + t, 0.01 + t + 0.015, 0.07, h - 0.07)   # the raised centre
+    p.box(dark, -0.08, 0.08, 0.01 + t, 0.01 + t + 0.035, h - 0.12, h - 0.04)             # latch
+    # the hinge: two brackets and a bar (~0.5 m × 0.1 m) along the lid's outer edge
+    p.cyl(mat, (0, 0.05, 0.0), 0.05, 0.05, -0.25, 0.25, 8, axis='x')
+    for x in (-0.2, 0.2):
+        p.box(mat, x - 0.04, x + 0.04, 0.0, 0.09, -0.02, 0.1)
     return p.mesh(origin=(0, 0, 0))
 
 def mk41_uptake_mesh(name='mk41_uptake', mat='VLS', dark='Dark'):
     """a module's exhaust-uptake hatch: long narrow plate over the plenum, hinge along local z at x = 0,
     plate towards +x (turned 90° about its hinge to vent)"""
-    L = MK41['pitch_v'] * 4 - 0.1
-    w = MK41['uptake_w'] - 0.06
+    L = MK41['pitch_v'] * 4 - 0.16        # ~3.0 m
+    w = MK41['uptake_w'] - 0.02           # ~0.24 m
     p = Part(name)
-    p.box(mat, 0.0, w, 0.03, 0.09, -L / 2, L / 2)
-    for k in range(5):
-        zz = -L / 2 + (k + 0.5) * L / 5
-        p.box(dark, 0.08, w - 0.08, 0.09, 0.11, zz - 0.02, zz + 0.02)
+    p.box(mat, 0.0, w, 0.01, 0.07, -L / 2, L / 2)
+    for k in range(6):
+        zz = -L / 2 + (k + 0.5) * L / 6
+        p.box(dark, 0.04, w - 0.04, 0.07, 0.085, zz - 0.02, zz + 0.02)
     return p.mesh(origin=(0, 0, 0))
 
 def mk41_launcher(part, root, x0, z0, nx, nz, y, cell_no, uptake_no, door_mesh, uptake_mesh,
-                  crane=None, along='z', mat='VLS', deck='Dark'):
+                  crane=None, along='z', mat='VLS', deck='Dark', plinth=None, plinth_mat='Super'):
     """A Mk 41 launcher of nx × nz 8-cell modules (nx across the ship, nz along it). Each module is 4 rows of
     2 cells with the exhaust uptake between the two columns; `along` = the direction of its rows ('z' fore-aft,
     'x' athwartships). (x0, z0) = the forward-port corner, y = the top of the modules. Static plating goes into
@@ -531,6 +535,17 @@ def mk41_launcher(part, root, x0, z0, nx, nz, y, cell_no, uptake_no, door_mesh, 
         part.box(mat, sx - 0.08, sx + 0.08, y - 0.4, y + 0.1, z0 - 0.33, z0 + Lz + 0.33)
     for sz in (z0 - 0.25, z0 + Lz + 0.25):
         part.box(mat, x0 - 0.33, x0 + W + 0.33, y - 0.4, y + 0.1, sz - 0.08, sz + 0.08)
+    if plinth is not None:
+        # the launcher stands on a plinth: its walls from the deck (a callable z → height, or a number) up to the coaming
+        py = plinth if callable(plinth) else (lambda zz: plinth)
+        xa, xb, za, zb = x0 - 0.33, x0 + W + 0.33, z0 - 0.33, z0 + Lz + 0.33
+        n = 6
+        for i in range(n):
+            z_a, z_b = za + (zb - za) * i / n, za + (zb - za) * (i + 1) / n
+            for xs, sg in ((xa, -1), (xb, 1)):
+                part.g(plinth_mat).face([(xs, py(z_a) - 0.3, z_a), (xs, py(z_b) - 0.3, z_b), (xs, y - 0.38, z_b), (xs, y - 0.38, z_a)], None, (sg, 0, 0))
+        for zs, sg in ((za, -1), (zb, 1)):
+            part.g(plinth_mat).face([(xa, py(zs) - 0.3, zs), (xb, py(zs) - 0.3, zs), (xb, y - 0.38, zs), (xa, y - 0.38, zs)], None, (0, 0, sg))
     cells = []
     for iz in range(nz):
         for ix in range(nx):
@@ -540,16 +555,22 @@ def mk41_launcher(part, root, x0, z0, nx, nz, y, cell_no, uptake_no, door_mesh, 
             def R(u0, v0, u1, v1):             # module rectangle → ship (x0, x1, z0, z1)
                 (a, b), (c, d) = S(u0, v0), S(u1, v1)
                 return (min(a, c), max(a, c), min(b, d), max(b, d))
-            has_crane = crane is not None and (ix, iz) == tuple(crane)
+            # crane = (ix, iz) or (ix, iz, col, rows): the module whose folded strikedown crane takes three adjacent
+            # cells of one row (default: the first row's first three)
+            has_crane = crane is not None and (ix, iz) == tuple(crane[:2])
+            crane_col = crane[2] if has_crane and len(crane) > 2 else 0
+            crane_rows = tuple(crane[3]) if has_crane and len(crane) > 3 else (0, 1, 2)
             holes = []
             for col in (0, 1):
                 for row in range(4):
-                    uc, vc = pu / 2 + col * (pu + uw), pv / 2 + row * pv
-                    if has_crane and col == 0 and row < 3:
+                    # the lid sits against the uptake slot, the hinge strip outboard of it
+                    uc = (pu - hs / 2) if col == 0 else (pu + uw + hs / 2)
+                    vc = pv / 2 + row * pv
+                    if has_crane and col == crane_col and row in crane_rows:
                         continue
                     cx, cz = S(uc, vc)
                     holes.append(R(uc - mo / 2, vc - mo / 2, uc + mo / 2, vc + mo / 2))
-                    # hinge on the cell's outer edge; the plate reaches in towards the uptake
+                    # hinge on the lid's outer edge; the plate reaches in towards the uptake
                     # (R_y(θ) takes local +z to (sin θ, 0, cos θ))
                     hx, hz = S(uc - hs / 2 if col == 0 else uc + hs / 2, vc)
                     if along == 'z':
@@ -562,23 +583,28 @@ def mk41_launcher(part, root, x0, z0, nx, nz, y, cell_no, uptake_no, door_mesh, 
                           depth=MK41['depth'])
                     cells.append((n, cx, cz))
                     cell_no += 1
-            # module top with the cell mouths (canister tops 0.3 m down) and the sooty uptake opening
-            holes.append(R(pu + 0.05, 0.06, pu + uw - 0.05, ml - 0.06))
+            # module top with the cell mouths (canister tops 0.3 m down) and the sooty uptake slot
+            holes.append(R(pu + 0.01, 0.08, pu + uw - 0.01, ml - 0.08))
             plate_with_holes(part, mat, *R(0, 0, mw, ml), y, holes, 0.3, 'Dark', 'Canister')
             ua = holes[-1]
             part.g('Dark').face([(ua[0], y - 0.29, ua[2]), (ua[0], y - 0.29, ua[3]), (ua[1], y - 0.29, ua[3]), (ua[1], y - 0.29, ua[2])], None, (0, 1, 0))
             if has_crane:
-                # the folded strikedown crane over the three forward cells of the first column
-                part.box(mat, *R(0.08, 0.08, pu - 0.08, 3 * pv - 0.08)[:2], y, y + 0.28, *R(0.08, 0.08, pu - 0.08, 3 * pv - 0.08)[2:])
-                part.box(mat, *R(0.2, 0.3, pu - 0.2, 1.2)[:2], y + 0.28, y + 0.6, *R(0.2, 0.3, pu - 0.2, 1.2)[2:])
-            # uptake hatch: hinge along the module's rows (local z), plate towards the far side of the uptake
+                # the folded strikedown crane under one long cover over its three cells
+                u0 = (pu - hs - 0.02) if crane_col == 0 else (pu + uw)
+                u1 = pu if crane_col == 0 else (pu + uw + hs + 0.02)
+                v0, v1 = min(crane_rows) * pv + 0.06, (max(crane_rows) + 1) * pv - 0.06
+                c0 = R(u0, v0, u1, v1)
+                part.box(mat, c0[0], c0[1], y, y + 0.22, c0[2], c0[3])
+                c1 = R(u0 + 0.14, v0 + 0.25, u1 - 0.14, v0 + 1.35)
+                part.box(mat, c1[0], c1[1], y + 0.22, y + 0.42, c1[2], c1[3])
+            # uptake hatch: hinge along one long edge of the slot, it turns up 90° and stands as a low fence
             if along == 'z':
-                ux, uz = S(pu + 0.03, ml / 2)
+                ux, uz = S(pu + 0.01, ml / 2)
                 rot = None
             else:
-                ux, uz = S(pu + uw - 0.03, ml / 2)
+                ux, uz = S(pu + uw - 0.01, ml / 2)
                 rot = ((0, 1, 0), math.pi / 2)
-            rig_node('uptake_%d' % uptake_no, uptake_mesh, (ux, y, uz), root, rot, {'t': 'door', 'hinge': [0, 0, 1], 'open': 1.2})
+            rig_node('uptake_%d' % uptake_no, uptake_mesh, (ux, y, uz), root, rot, {'t': 'door', 'hinge': [0, 0, 1], 'open': 1.57})
             uptake_no += 1
     return cell_no, uptake_no, cells
 

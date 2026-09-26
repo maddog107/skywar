@@ -18,7 +18,7 @@ except ImportError:
 HULLS = {
     'destroyer': dict(z0=-78.0, z1=78.0, y0=-10.0, y1=12.0, boot=(-0.6, 1.1), hawse=[(-66.0, 8.4)], drafts=(-70.0, 72.0),
                       paint='usn', seed=51),
-    'cruiser': dict(z0=-87.0, z1=87.0, y0=-10.0, y1=10.0, boot=(-0.6, 1.1), hawse=[(-76.0, 6.9)], drafts=(-80.0, 83.0),
+    'cruiser': dict(z0=-87.0, z1=87.0, y0=-10.5, y1=10.5, boot=(-0.6, 1.1), hawse=[(-80.2, 7.2)], drafts=(-78.0, 84.0),
                     paint='usn', seed=52),
     'supply': dict(z0=-115.0, z1=115.0, y0=-12.5, y1=15.0, boot=(-0.8, 1.6), hawse=[(-104.0, 11.0)], drafts=(-108.0, 110.0),
                    paint='usn', seed=6),
@@ -152,10 +152,18 @@ def flight_deck(m, P, s, x_half, z0, z1, circle_z, r=3.6, lineup=True):
     m.line([P(-3.0, z0 + 0.6), P(3.0, z0 + 0.6)], fill=YELLOW, width=max(1, int(0.3 * s)))
 
 def cruiser_deck(m, P, s):
-    # flight deck aft (CG-47: z 55..85 in the model), anchor chains forward, VLS safety lines
-    flight_deck(m, P, s, 7.0, 57.0, 84.0, 70.0)
-    for sg in (-1, 1):
-        m.line([P(sg * 1.1, -70.0), P(sg * 4.8, -80.5)], fill=BLACK, width=max(1, int(0.35 * s)))
+    # CG-47 (z = x − 86.4, x from the bow tip): the raised flight deck (02 level) x 125–146, 12.5 m wide, landing
+    # circle x 134; VERTREP squares forward (x 24.8–31.7) and aft on the fantail (x 162–168, a little to
+    # starboard); stem and starboard anchor chains
+    flight_deck(m, P, s, 6.0, 125.0 - 86.4, 146.0 - 86.4, 134.0 - 86.4)
+    for (x0, x1, xc) in ((24.8, 31.7, 0.0), (162.0, 168.0, 1.0)):
+        z0, z1 = x0 - 86.4, x1 - 86.4
+        h = (x1 - x0) / 2
+        m.rectangle([P(xc - h, z0)[0], P(xc - h, z0)[1], P(xc + h, z1)[0], P(xc + h, z1)[1]], outline=WHITE, width=max(1, int(0.2 * s)))
+        m.line([P(xc - h, z0), P(xc + h, z1)], fill=WHITE, width=max(1, int(0.15 * s)))
+        m.line([P(xc + h, z0), P(xc - h, z1)], fill=WHITE, width=max(1, int(0.15 * s)))
+    m.line([P(0.0, -76.0), P(0.0, -84.5)], fill=BLACK, width=max(1, int(0.35 * s)))
+    m.line([P(1.6, -75.0), P(4.2, -81.5)], fill=BLACK, width=max(1, int(0.35 * s)))
 
 def supply_deck(m, P, s):
     # flight deck aft (z 88..113), RAS station markings along both edges, forecastle chains

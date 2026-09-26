@@ -42,7 +42,7 @@ const parse = (ab) => new Promise((res, rej) => new GLTFLoader().parse(ab, '', r
 const EXPECT = {
     carrier: { elevators: 4, doors: ['island_1', 'island_2', 'island_3', 'island_4', 'island_5', 'accom'], points: ['hatch_entry'] },
     destroyer: { cells: 96, uptakes: 12, vertical: true, doors: ['hangar_1', 'hangar_2'] },
-    cruiser: { cells: 122, uptakes: 16, vertical: true },
+    cruiser: { cells: 122, uptakes: 16, vertical: true, doors: ['hangar_1'] },
     ssn: { cellsMin: 12, masts: ['periscope_1', 'periscope_2'], hatches: ['escape'], points: ['hatch_entry'], sub: true },
     ssgn: { cells: 154, masts: ['periscope_1'], hatches: ['escape'], points: ['hatch_entry'], sub: true },
     rhib: { seats: ['driver', 'nav', '1', '8', 'gunner'], seatsMin: 10, wheel: true, points: ['jet_1', 'jet_2', 'hatch_entry'] },

@@ -1,5 +1,19 @@
 # Ships: integration notes for the lead
 
+## Fleet models and rigs (second pass)
+
+New vessels: `cruiser`, `ssn`, `ssgn`, `supply`, `rhib`, `cb90`, `slava` (models/ships/*.glb, scripts
+`tools/ships/<type>_model.py` and `sub_model.py`, shared blocks in `navkit.py`, textures `fleet_textures.py`).
+The destroyer was rebuilt to the Flight IIA arrangement with rigged Mk 41 launchers; the carrier gained elevator,
+door and boarding-point nodes. `tools/ships/RIG.md` is the contract for the fleet code: node names, pose helpers,
+per-vessel notes. Shared-file edits are small: `src/naval.js` (TYPES, SHIP_FILES, rig discovery and instancing
+in `buildFromGltf`/`makeShip`, the pose helpers, `Naval.spawn`, `ship.cls`/`ship.depth`/`ship.rig`),
+`src/shipfx.js` (SEA_MOTION entries, `layout.fx` sizes, no foam for a submerged boat), `src/main.js` (one
+credits row). Checks: `tests/ships.test.mjs`; previews: `tools/ships/sheets.js`, `tools/ships/ingame.js`;
+costs: `tools/ships/measure.js`.
+
+## First pass (carrier and destroyer)
+
 New files (commit as-is): `models/ships/carrier.glb`, `models/ships/destroyer.glb`, `models/ships/CREDITS.md`,
 `src/shipfx.js`, `tools/ships/*` (Blender/texture scripts, `build.sh`, this file).
 

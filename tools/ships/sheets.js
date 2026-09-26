@@ -15,9 +15,9 @@ const all = (...f) => (m, N) => f.forEach(g => g(m, N));
 export const SPECS = {
     destroyer: () => [
         ['VLS fore / aft\n(all cells open)', [
-            { at: [0, 9.5, -46], dir: [1.1, 1.2, -0.9], dist: 18, pose: openVent(1) },
-            { at: [0, 12.2, 44], dir: [-1.2, 1.1, 0.7], dist: 22, pose: openVent(1) },
-            { at: [0, 9.5, -46], dir: [0.5, 1.2, 1.0], dist: 14, pose: openVent(2) }]],
+            { at: [0, 9.2, -42], dir: [1.1, 1.3, -0.9], dist: 16, pose: openVent(1) },
+            { at: [0, 11.7, 43], dir: [0.7, 1.6, 0.35], dist: 17, pose: openVent(1) },
+            { at: [-1.5, 9.2, -42], dir: [0.5, 0.9, 1.0], dist: 9, pose: openVent(3) }]],
         ['details', [
             { at: [0, 17, -18], dir: [1, 0.35, -1], dist: 42 },
             { at: [0, 12, 40], dir: [-1, 0.45, 0.6], dist: 46 },
@@ -25,9 +25,9 @@ export const SPECS = {
     ],
     cruiser: () => [
         ['VLS fore / aft\n(all cells open)', [
-            { at: [0, 8, -52], dir: [1.1, 1.2, -0.9], dist: 22, pose: openVent(1) },
-            { at: [0, 8, 44], dir: [-1.2, 1.1, 0.7], dist: 22, pose: openVent(1) },
-            { at: [0, 8, -52], dir: [0.5, 1.2, 1.0], dist: 16, pose: openVent(2) }]],
+            { at: [0, 8.8, -38.9], dir: [1.1, 1.3, -0.9], dist: 19, pose: openVent(1) },
+            { at: [0, 8.3, 66.8], dir: [1.0, 1.5, 0.6], dist: 19, pose: openVent(1) },
+            { at: [-1.2, 8.8, -38.9], dir: [0.5, 0.9, 1.0], dist: 10, pose: openVent(3) }]],
         ['details', [
             { at: [0, 16, -22], dir: [1, 0.35, -1], dist: 48 },
             { at: [0, 14, 30], dir: [-1, 0.45, 0.6], dist: 52 },
