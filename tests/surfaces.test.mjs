@@ -88,6 +88,101 @@ describe('surfaces: cutting flaps and brakes out of a model', () => {
         assert.ok(wells >= 2, 'a bay floor on the airframe and an inside face on the panel');
     });
 
+    test('wells are hidden while their surface is stowed and shown once it moves', () => {
+        const obj = model();
+        S.cutSurfaces(obj, '__test', L);
+        const wells = [];
+        obj.traverse(o => { if (o.userData.surfaceWell) wells.push(o); });
+        const ids = new Set(pivots(obj).map(p => p.userData.surface.id));
+        assert.ok(wells.length >= 4, 'flap walls and the brake bay');
+        for (const w of wells) {
+            assert.ok(ids.has(w.userData.surfaceWell), 'every well belongs to a surface');
+            assert.equal(w.visible, false, 'hidden when stowed');
+        }
+        S.poseSurfaces(obj, 1, 0);
+        const flapIds = new Set(pivots(obj).filter(p => p.userData.surface.kind === 'flap').map(p => p.userData.surface.id));
+        for (const w of wells) assert.equal(w.visible, flapIds.has(w.userData.surfaceWell), 'flap wells shown, brake wells still hidden');
+        S.poseSurfaces(obj, 0, 0);
+        for (const w of wells) assert.equal(w.visible, false, 'hidden again when stowed');
+    });
+
+    test('a flap wall follows a narrow fairing under the wing instead of spilling past its sides', () => {
+        // a 0.1 m wide strut fairing under the wing (x 3.0..3.1, y −0.5..−0.2), running through the flap's front face
+        const g = new THREE.Group();
+        const wing = new THREE.Mesh(new THREE.BoxGeometry(12, 0.4, 2, 12, 1, 4), new THREE.MeshStandardMaterial());
+        wing.position.set(0, 0, 1);
+        const strut = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.3, 1.3), new THREE.MeshStandardMaterial());
+        strut.position.set(3.05, -0.35, 1.15);
+        const body = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1, 10, 2, 2, 10), new THREE.MeshStandardMaterial());
+        body.position.set(0, 0.5, 0);
+        g.add(wing, strut, body);
+        const obj = segmentModel(g, L);
+        D.SURFACE_DEFS.__strut = { flaps: [{ top: [[0.2, 0.14], [0.45, 0.14], [0.45, 0.25], [0.2, 0.25]], y: [-0.06, 0.005], hinge: [[0.2, 0.02, 0.14], [0.45, 0.02, 0.14]], angle: 30, mirror: false }] };
+        assert.equal(S.cutSurfaces(obj, '__strut', L), 1);
+        obj.updateMatrixWorld(true);
+        // any wall triangle reaching below the wing must lie wholly across the strut
+        const t = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+        let below = 0;
+        obj.traverse(o => {
+            if (!o.userData.surfaceWell) return;
+            const pos = o.geometry.attributes.position;
+            for (let i = 0; i < pos.count; i += 3) {
+                for (let k = 0; k < 3; k++) t[k].fromBufferAttribute(pos, i + k).applyMatrix4(o.matrixWorld);
+                if (!t.some(p => p.y < -0.21)) continue;
+                below++;
+                for (const p of t) assert.ok(p.x > 2.99 && p.x < 3.11, `wall below the wing only across the strut (x ${p.x.toFixed(3)})`);
+            }
+        });
+        assert.ok(below > 0, 'the strut\'s section is closed off');
+        delete D.SURFACE_DEFS.__strut;
+    });
+
+    test('split surface: each half takes its skin and the inner face turned its way, with no bay floor', () => {
+        // two slabs meeting face to face at y = 0 (upper y 0..0.2, lower y −0.2..0), like the halves of a drag rudder
+        const g = new THREE.Group();
+        const up = new THREE.Mesh(new THREE.BoxGeometry(12, 0.2, 2, 12, 1, 4), new THREE.MeshStandardMaterial());
+        up.position.set(0, 0.1, 1);
+        const dn = new THREE.Mesh(new THREE.BoxGeometry(12, 0.2, 2, 12, 1, 4), new THREE.MeshStandardMaterial());
+        dn.position.set(0, -0.1, 1);
+        g.add(up, dn);
+        const obj = segmentModel(g, L);
+        const out = { top: [[0.2, 0.14], [0.45, 0.14], [0.45, 0.25], [0.2, 0.25]], y: [-0.03, 0.03], split: true, mirror: false };
+        D.SURFACE_DEFS.__split = { brakes: [
+            { ...out, hinge: [[0.2, 0.02, 0.14], [0.45, 0.02, 0.14]], angle: -45, skin: 1 },
+            { ...out, hinge: [[0.2, -0.02, 0.14], [0.45, -0.02, 0.14]], angle: 45, skin: -1 },
+        ] };
+        assert.equal(S.cutSurfaces(obj, '__split', L), 2);
+        obj.updateMatrixWorld(true);
+        const halves = pivots(obj);
+        const p = new THREE.Vector3(), n = new THREE.Vector3();
+        for (const h of halves) {
+            const dir = h.userData.surface.angle < 0 ? 1 : -1;   // the upper half rises
+            const ys = new Set();
+            h.traverse(m => {
+                if (!m.isMesh || m.userData.surfaceWell) return;
+                const pos = m.geometry.attributes.position, nrm = m.geometry.attributes.normal;
+                for (let i = 0; i < pos.count; i++) {
+                    ys.add(Math.round(p.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld).y * 10) / 10 || 0);
+                    assert.ok(n.fromBufferAttribute(nrm, i).y * dir > 0.9, 'only faces turned its way');
+                }
+            });
+            assert.deepEqual([...ys].sort(), dir > 0 ? [0, 0.2] : [-0.2, 0], 'its outer skin and the inner face');
+        }
+        // no floor: every well triangle stands on one of the region's faces (none lies flat under a half)
+        obj.traverse(o => {
+            if (!o.userData.surfaceWell) return;
+            const pos = o.geometry.attributes.position;
+            const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+            for (let i = 0; i < pos.count; i += 3) {
+                a.fromBufferAttribute(pos, i); b.fromBufferAttribute(pos, i + 1); c.fromBufferAttribute(pos, i + 2);
+                const t = new THREE.Triangle(a, b, c);
+                if (t.getArea() < 1e-9) continue;
+                assert.ok(Math.abs(t.getNormal(n).y) < 0.1, 'walls only');
+            }
+        });
+        delete D.SURFACE_DEFS.__split;
+    });
+
     test('actuator travel times: fighters quick, airliners slow', () => {
         const fighter = S.surfaceTravel('f15', { category: 'fighter' });
         const civil = S.surfaceTravel('b737', { category: 'civil' });

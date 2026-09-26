@@ -68,7 +68,11 @@ The F-15 (plain flaps, dorsal brake) and the 737 (Fowler flaps, spoilers, dihedr
   normalised.
 - **Split surfaces** (A-10 decelerons, B-2 drag rudders, clamshell tail brakes): use two brake defs on the
   same outline. The upper skin gets `skin: 1` and a negative angle; the lower skin gets `skin: -1` and a
-  positive angle.
+  positive angle. When the model builds the surface as two bodies meeting face to face (the B-2), add
+  `split: true` to both: each half then takes the inner face turned its way too, and gets walls across its
+  own section instead of a bay floor, so nothing is left between the halves when they open.
+- **Stowed wells:** the walls and floors closing an opening are shown only while their surface is out of
+  its stowed position, so a stowed surface can't show a dark line where its cut meets.
 - **Centreline surfaces** (dorsal, ventral, beaver-tail brakes) need `mirror: false`.
 - **Count:** keep it to about 6 surfaces per aircraft. Each is a couple of extra draw calls on every jet
   of that type.

@@ -14,7 +14,7 @@ import { createAircraftModel } from './models.js';
 import { clamp, damp, lerp, rand, G, DEG, makeRadialTexture } from './util.js';
 import { groundHeight, terrainHeight, isOnRunway } from './world.js';
 import { createEngineFlame } from './afterburner.js';
-import { surfaceTravel } from './surfaces.js';
+import { surfaceTravel, surfaceWells } from './surfaces.js';
 
 const LIFT_K = 0.0016;
 const CL_MAX = 1.65;
@@ -363,12 +363,14 @@ export class Aircraft {
         const t = surfaceTravel(this.type, this.spec);
         this.flapRate = 1 / t.flap; this.brakeRate = 1 / t.brake;
         this.surfaces = [];
+        const wells = surfaceWells(this.model);
         this.model.traverse(o => {
             const s = o.userData.surface;
             if (!s) return;
             this.surfaces.push({
                 pivot: o, kind: s.kind, axis: new THREE.Vector3().fromArray(s.axis), angle: s.angle * DEG,
                 slide: s.slide ? new THREE.Vector3().fromArray(s.slide) : null, base: o.position.clone(), k: -1,
+                wells: wells.get(s.id) || [],
             });
         });
     }
@@ -383,6 +385,7 @@ export class Aircraft {
             s.pivot.quaternion.setFromAxisAngle(s.axis, s.angle * k);
             s.pivot.position.copy(s.base);
             if (s.slide) s.pivot.position.addScaledVector(s.slide, k);
+            for (const w of s.wells) w.visible = k > 0;
         }
     }
 
