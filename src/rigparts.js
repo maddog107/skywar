@@ -31,8 +31,22 @@ const PART_ROOT = /^(rotodome|boom|drogue_[lrc]|rig_.+)$/;
 // kind 'boom': the receptacle (a flying boom's nozzle goes in there); 'probe': the probe tip (extended), which
 // goes into a drogue basket. Read off the models with tools/aircraft/preview.js blueprint().
 export const REFUEL = {
-    // support aircraft
+    // USAF types: flying-boom receptacles
+    f16: { at: [0, -0.0135, -0.05], kind: 'boom' },           // spine, just aft of the canopy
+    f2: { at: [0, -0.0112, -0.04], kind: 'boom' },            // spine, just aft of the canopy (as the F-16)
+    f15: { at: [-0.066, 0.009, -0.1], kind: 'boom' },         // left wing-root extension, above the intake
+    f22: { at: [0, -0.0085, -0.11], kind: 'boom' },           // spine behind the canopy (under doors)
+    f35: { at: [0, 0.0369, -0.12], kind: 'boom' },            // spine behind the canopy (under doors)
+    f4: { at: [0, 0.018, 0.01], kind: 'boom' },               // spine behind the rear cockpit
+    a10: { at: [0, 0.043, -0.365], kind: 'boom' },            // top of the nose, ahead of the windscreen
+    b2: { at: [0, 0.082, -0.19], kind: 'boom' },              // top, behind the cockpit
     e3: { at: [0, -0.0229, -0.3756], kind: 'boom' },          // UARRSI on the spine behind the cockpit
+    // probe-and-drogue receivers: the tip of the (extended) probe
+    rafale: { at: [0.0294, -0.085, -0.4056], kind: 'probe' }, // fixed probe (modelled), right of the windscreen: its tip
+    typhoon: { at: [0.031, -0.034, -0.35], kind: 'probe' },   // retractable, right side ahead of the canopy
+    f14: { at: [0.031, 0.012, -0.32], kind: 'probe' },        // retractable, right side of the nose
+    gripen: { at: [-0.043, -0.035, -0.3], kind: 'probe' },    // retractable, left side of the cockpit
+    su35: { at: [-0.024, -0.05, -0.33], kind: 'probe' },      // retractable, left of the windscreen
 };
 
 const _m = new THREE.Matrix4(), _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _s = new THREE.Vector3();

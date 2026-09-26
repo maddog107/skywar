@@ -296,4 +296,32 @@ export const SURFACE_DEFS = {
         flaps: [{ top: [[0.052, -0.0050], [0.366, -0.051], [0.3781, 0.0], [0.052, 0.070]], y: [-0.1058, -0.080], dihedral: 4.3, hinge: [[0.052, -0.0848, -0.0050], [0.366, -0.0640, -0.051]], angle: 45 }],
     },
 
+    // ── Support aircraft, drones and bombers (the living war) ──
+    // KC-135R (Boeing 717 wing): Fowler flaps inboard (root fillet to the inboard aileron) and outboard (to the
+    // outboard aileron), the inboard aileron between them left alone; spoiler groups on the upper skin ahead of each
+    // flap, rising 40° (they are its speed brakes). Traced from the model's own panel lines (the flap leading edge
+    // kinks at the inboard aileron); the band tilts with the model's dihedral. (tools/aircraft/kc135.py)
+    kc135: {
+        flaps: [
+            { top: [[0.0865, -0.0258], [0.0993, -0.034], [0.1886, 0.0119], [0.1687, 0.0443], [0.0865, 0.0075]], y: [-0.106, -0.077], dihedral: 8.7, hinge: [[0.0993, -0.082, -0.034], [0.1886, -0.0715, 0.0119]], angle: 35, slide: [0, -0.004, 0.024] },
+            { top: [[0.2345, 0.0355], [0.3305, 0.0786], [0.3163, 0.1112], [0.2173, 0.0658]], y: [-0.086, -0.058], dihedral: 8.7, hinge: [[0.2345, -0.066, 0.0355], [0.3305, -0.0505, 0.0786]], angle: 35, slide: [0, -0.003, 0.0225] },
+        ],
+        brakes: [
+            { top: [[0.1113, -0.0522], [0.174, -0.0214], [0.167, 0.0008], [0.0993, -0.034]], y: [-0.092, -0.071], dihedral: 8.7, hinge: [[0.1113, -0.082, -0.0522], [0.174, -0.0725, -0.0214]], angle: -40, skin: 1 },
+            { top: [[0.251, 0.0165], [0.3208, 0.0508], [0.3088, 0.0677], [0.2435, 0.0348]], y: [-0.072, -0.055], dihedral: 8.7, hinge: [[0.251, -0.0645, 0.0165], [0.3208, -0.0535, 0.0508]], angle: -40, skin: 1 },
+        ],
+    },
+    // E-3G: the same wing, stretched spanwise into the 707-320B's and moved aft by the forward fuselage plug
+    // (tools/aircraft/e3.py): the KC-135's defs carried through the same transform
+    e3: {
+        flaps: [
+            { top: [[0.0812, 0.0093], [0.0939, 0.0019], [0.1826, 0.0431], [0.1628, 0.0722], [0.0812, 0.0392]], y: [-0.1, -0.0739], dihedral: 7.8772, hinge: [[0.0939, -0.0784, 0.0019], [0.1826, -0.069, 0.0431]], angle: 35, slide: [0, -0.0036, 0.0215] },
+            { top: [[0.2282, 0.0643], [0.3235, 0.103], [0.3094, 0.1323], [0.2111, 0.0915]], y: [-0.082, -0.0569], dihedral: 7.8772, hinge: [[0.2282, -0.0641, 0.0643], [0.3235, -0.0502, 0.103]], angle: 35, slide: [0, -0.0027, 0.0202] },
+        ],
+        brakes: [
+            { top: [[0.1058, -0.0145], [0.1681, 0.0132], [0.1611, 0.0332], [0.0939, 0.0019]], y: [-0.0874, -0.0686], dihedral: 7.8772, hinge: [[0.1058, -0.0784, -0.0145], [0.1681, -0.0699, 0.0132]], angle: -40, skin: 1 },
+            { top: [[0.2445, 0.0472], [0.3138, 0.0781], [0.3019, 0.0932], [0.2371, 0.0637]], y: [-0.0695, -0.0542], dihedral: 7.8772, hinge: [[0.2445, -0.0627, 0.0472], [0.3138, -0.0528, 0.0781]], angle: -40, skin: 1 },
+        ],
+    },
+
 };
