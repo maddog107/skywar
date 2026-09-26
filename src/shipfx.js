@@ -25,6 +25,13 @@ const _v = new THREE.Vector3(), _v2 = new THREE.Vector3();
 export const SEA_MOTION = {
     carrier: { heave: 0.28, pitch: 0.12, roll: 0.2 },
     destroyer: { heave: 0.55, pitch: 0.45, roll: 1.4 },
+    cruiser: { heave: 0.5, pitch: 0.4, roll: 1.2 },
+    slava: { heave: 0.5, pitch: 0.4, roll: 1.2 },
+    supply: { heave: 0.4, pitch: 0.25, roll: 0.7 },
+    ssn: { heave: 0.35, pitch: 0.3, roll: 0.9 },
+    ssgn: { heave: 0.3, pitch: 0.25, roll: 0.8 },
+    rhib: { heave: 0.18, pitch: 2.2, roll: 3.0 },
+    cb90: { heave: 0.16, pitch: 1.6, roll: 2.2 },
 };
 export function seaMotion(t, seed = 0, amp = SEA_MOTION.carrier, out = { heave: 0, pitch: 0, roll: 0 }) {
     const s = seed * 12.9898;
@@ -599,6 +606,7 @@ function shipGeom(ship, layout) {
         bowWave: isCarrier ? 22 : 14, sternWave: isCarrier ? 10 : 7, contact: isCarrier ? 4.5 : 3.2,
         pile: isCarrier ? 1.5 : 1.1, occlusion: isCarrier ? 11 : 7,
         maxLen: isCarrier ? 1800 : 1400, seg: 8,
+        ...(layout && layout.fx), // per-model sizes (boats and submarines are much smaller than a destroyer)
     };
 }
 
@@ -674,7 +682,8 @@ export class ShipFX {
         const fx = game && game.effects;
         for (const [ship, e] of this.entries) {
             const sinking = ship.alive === false ? Math.min(1, (ship.sinkT || 0) / 25) : 0;
-            env.fade = 1 - sinking;
+            const under = ship.depth > 0 ? Math.min(1, ship.depth / 6) : 0; // a submarine going down leaves no foam
+            env.fade = (1 - sinking) * (1 - under);
             e.follow.position.set(ship.mesh.position.x, 0, ship.mesh.position.z);
             e.follow.rotation.set(0, ship.heading, 0);
             e.follow.visible = env.fade > 0.01;
@@ -685,15 +694,16 @@ export class ShipFX {
             e.shadow.update(ship, env, sunDir);
             // bow spray: a few puffs where the bow wave breaks (more for fast, fine-bowed escorts)
             e.sprayT -= dt;
-            if (fx && fx.smoke && e.sprayT <= 0 && ship.alive !== false && speed > 4) {
+            if (fx && fx.smoke && e.sprayT <= 0 && ship.alive !== false && speed > 4 && under < 0.5) {
                 e.sprayT = ship.type === 'carrier' ? 0.35 : 0.14;
                 const side = Math.random() < 0.5 ? -1 : 1;
-                const lz = e.geom.bowZ + 4 + Math.random() * 10;
+                const sk = e.geom.spray ?? 1; // (layout.fx.spray: a boat's bow throws much smaller puffs)
+                const lz = e.geom.bowZ + (4 + Math.random() * 10) * sk;
                 const c = Math.cos(ship.heading), sn = Math.sin(ship.heading);
-                const lx = side * (2 + Math.random() * 3);
+                const lx = side * (2 + Math.random() * 3) * sk;
                 const p = _v.set(ship.mesh.position.x + lx * c + lz * sn, 0.6, ship.mesh.position.z - lx * sn + lz * c);
                 const vx = side * c * 3 + (ship.vel ? ship.vel.x * 0.6 : 0), vz = -side * sn * 3 + (ship.vel ? ship.vel.z * 0.6 : 0);
-                const k = ship.type === 'carrier' ? 1 : 0.8;
+                const k = (ship.type === 'carrier' ? 1 : 0.8) * sk;
                 fx.smoke.emit(p, new THREE.Vector3(vx, 2.5 + Math.random() * 2, vz), 1.6, 2 * k, 7 * k, [0.95, 0.97, 1], [0.9, 0.94, 0.97], 0.35, 0, 0.8, -4);
             }
         }
