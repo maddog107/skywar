@@ -20,6 +20,8 @@ import { mergeStaticModel } from './meshmerge.js';
 
 // cls: the war layer's class strings (docs/WAR.md). dims: metres (the models are built to them; rig.dims has the
 // measured box). crew: seats. speed: road km/h. arm: what it carries (the launcher nodes the rig exposes).
+// muzzles: how many muzzle_n empties. parts: the named rig nodes. deploy: the pose groups to run, in order, to go
+// from travel to firing (pose(rig, group, 1) each; reverse order to stow).
 export const VEHICLES = {
     scud: {
         name: '9P117M1 TEL, 9K72 Elbrus (SS-1C Scud-B)', short: 'SCUD TEL', cls: 'tel', team: 'red', file: 'scud.glb', paint: 'red_camo',
@@ -28,6 +30,16 @@ export const VEHICLES = {
         // erector: rot x about the rear hinge, 0 → 90°; missile: child of the erector, origin on its base, nose along −z;
         // nozzle: empty, −z along the exhaust; pad: the launch table, swung down 90° under the erected missile
         parts: ['body', 'erector', 'missile', 'nozzle', 'pad', 'jack_fl', 'jack_fr', 'jack_rl', 'jack_rr', 'ram_l', 'ram_r', 'exhaust', 'seat_driver', 'hatch_entry'],
+        deploy: ['jack', 'pad', 'raise'],
+    },
+    bastion: {
+        name: 'K-340P launcher, K-300P Bastion-P (SSC-5 Stooge)', short: 'BASTION', cls: 'tel', team: 'red', file: 'bastion.glb', paint: 'red_green',
+        chassis: 'MZKT-7930 8×8', dims: { length: 12.7, width: 3.07, height: 3.6 }, crew: 3, mass: 44, speed: 70,
+        arm: '2 × P-800 Oniks (SS-N-26) supersonic anti-ship missiles in transport-launch canisters, 300 km', muzzles: 2,
+        // door_l/door_r: the housing's roof halves (gull-wing, 0 → 125°); erector: the canister cradle, rot x about the
+        // rear trunnions 0 → 90° (canisters vertical, bases near the ground); muzzle_n on the canisters' front covers
+        parts: ['body', 'door_l', 'door_r', 'erector', 'canister_1', 'canister_2', 'muzzle_1', 'muzzle_2', 'jack_fl', 'jack_fr', 'jack_rl', 'jack_rr', 'ram_l', 'ram_r', 'exhaust', 'seat_driver', 'hatch_entry'],
+        deploy: ['door', 'jack', 'raise'],
     },
 };
 

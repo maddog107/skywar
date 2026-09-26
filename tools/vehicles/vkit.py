@@ -221,8 +221,11 @@ def export(out):
     print('EXPORTED', out, os.path.getsize(out), 'bytes')
 
 
+AXES = {'x': [1, 0, 0], 'y': [0, 1, 0], 'z': [0, 0, 1], '-x': [-1, 0, 0], '-y': [0, -1, 0], '-z': [0, 0, -1]}
+
+
 def rot(axis, lo, hi, stow=0.0, deploy=None, group=None, **extra):
-    ax = {'x': [1, 0, 0], 'y': [0, 1, 0], 'z': [0, 0, 1], '-x': [-1, 0, 0], '-y': [0, -1, 0], '-z': [0, 0, -1]}.get(axis, axis)
+    ax = AXES[axis] if isinstance(axis, str) else [float(c) for c in axis]
     j = {'type': 'rot', 'axis': ax, 'min': lo, 'max': hi, 'stow': stow, 'deploy': hi if deploy is None else deploy}
     if group:
         j['group'] = group
@@ -232,14 +235,14 @@ def rot(axis, lo, hi, stow=0.0, deploy=None, group=None, **extra):
 
 def spinj(axis='y', rpm=6.0, **extra):
     """a continuously turning joint (radar antennas): vehicles.js spin(rig, dt) advances it at rpm"""
-    ax = {'x': [1, 0, 0], 'y': [0, 1, 0], 'z': [0, 0, 1]}.get(axis, axis)
+    ax = AXES[axis] if isinstance(axis, str) else [float(c) for c in axis]
     j = {'type': 'spin', 'axis': ax, 'min': 0, 'max': 6.283185307179586, 'stow': 0, 'deploy': 0, 'rpm': rpm, 'group': 'spin'}
     j.update(extra)
     return j
 
 
 def slide(axis, dist, group=None, **extra):
-    ax = {'x': [1, 0, 0], 'y': [0, 1, 0], 'z': [0, 0, 1], '-x': [-1, 0, 0], '-y': [0, -1, 0], '-z': [0, 0, -1]}.get(axis, axis)
+    ax = AXES[axis] if isinstance(axis, str) else [float(c) for c in axis]
     j = {'type': 'slide', 'axis': ax, 'min': 0, 'max': dist, 'stow': 0, 'deploy': dist}
     if group:
         j['group'] = group
