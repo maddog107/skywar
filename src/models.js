@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { AIRCRAFT } from './config.js';
-import { segmentModel } from './damage.js';
+import { segmentModel, regionAt } from './damage.js';
 import { cutSurfaces } from './surfaces.js';
 
 // Loaded GLB models. rot = Euler to bring nose to -Z / up to +Y.
@@ -26,7 +26,11 @@ export const MODEL_FILES = {
     f35: { file: 'aircraft/f35.glb', rot: [0, 0, 0], cockpit: [0.027, -0.295] },
     f35n: { file: 'f35a.glb', rot: [0, 0, 0], nozzles: [[0, -0.056, 0.405]], nozzleR: 0.036, cockpit: [0.01, -0.29] },
     b747: { file: 'aircraft/b747.glb', rot: [0, 0, 0], cockpit: [-0.009, -0.459] },
-    c130: { file: 'aircraft/c130.glb', rot: [0, 0, 0], cockpit: [-0.061, -0.43] },
+    // four six-bladed Dowty R391 props, 4.11 m across, on the nacelles' own spinners (the model's blades are cut out)
+    c130: {
+        file: 'aircraft/c130.glb', rot: [0, 0, 0], cockpit: [-0.061, -0.43],
+        props: [[-0.3465, -0.0671], [-0.1689, -0.0727], [0.1689, -0.0727], [0.3465, -0.0671]].map(([x, y]) => ({ x, y, z: -0.2023, r: 0.069, blades: 6, style: 'scimitar' })),
+    },
     mig21: { file: 'aircraft/mig21.glb', rot: [0, 0, 0], nozzles: [[0.0, -0.0511, 0.4945]], nozzleR: 0.0288, cockpit: [0.0044, -0.2016] },
     mig25: { file: 'aircraft/mig25.glb', rot: [0, 0, 0], nozzles: [[0.0333, -0.0598, 0.4952], [-0.0333, -0.0598, 0.4952]], nozzleR: 0.0317, cockpit: [-0.0088, -0.2229] },
     j10: { file: 'aircraft/j10.glb', rot: [0, 0, 0], nozzles: [[0.0, -0.0635, 0.4675]], nozzleR: 0.0278, cockpit: [-0.0107, -0.2337] },
@@ -141,23 +145,112 @@ function normaliseGLTF(root, id, info) {
         cockpit: new THREE.Vector3(0, (info.cockpit?.[0] ?? 0.05) * spec.length, (info.cockpit?.[1] ?? -0.27) * spec.length),
         fixedGear: !!info.fixedGear, // the model has its own (non-retracting) wheels
     };
-    // propeller planes: a separate spinning prop at the nose (the model's own prop is static)
-    if (info.prop) {
-        const L = spec.length, R = info.prop.r * L;
-        const prop = new THREE.Group();
-        const bladeMat = new THREE.MeshStandardMaterial({ color: 0x1c1c1c, roughness: 0.5, metalness: 0.4 });
-        for (let k = 0; k < info.prop.blades; k++) {
-            const b = new THREE.Mesh(new THREE.BoxGeometry(0.07 * R, R, 0.03 * R), bladeMat);
-            b.position.y = R / 2;
-            const piv = new THREE.Group(); piv.rotation.z = (k / info.prop.blades) * Math.PI * 2; piv.add(b); prop.add(piv);
-        }
-        const disc = new THREE.Mesh(new THREE.CircleGeometry(R, 28), new THREE.MeshBasicMaterial({ color: 0x222222, transparent: true, opacity: 0.18, depthWrite: false, side: THREE.DoubleSide }));
-        disc.userData.noPaint = true; bladeMat.userData.noPaint = true;
-        prop.add(disc);
-        prop.position.set(0, info.prop.y * L, box2.min.z - 0.015 * L);
-        rig.propTemplates = [prop];
+    // propellers: separate spinning props (the model's own blades are removed at import, or static).
+    // props: [{ x, y, z, r, blades, style }] in fractions of the length (a turboprop's engines), or the older
+    // prop: { y, r, blades } for a single prop just ahead of the nose. aircraft.js spins them (updateProps).
+    const L = spec.length;
+    const hs = Math.max(-box2.min.x, box2.max.x);
+    const props = info.props || (info.prop ? [{ ...info.prop, x: 0, z: (box2.min.z - 0.015 * L) / L }] : []);
+    if (props.length) {
+        rig.propTemplates = props.map((p) => {
+            const prop = makeProp(p.r * L, p.blades, p);
+            prop.position.set((p.x ?? 0) * L, p.y * L, p.z * L);
+            // the airframe section it rides on (an outboard engine goes with its wing when that is shot off)
+            prop.userData.region = regionAt(prop.position.x, prop.position.z, L, hs);
+            return prop;
+        });
     }
     return { object: holder, rig };
+}
+
+// ── Propellers ──
+// A prop is `blades` twisted, two-sided blades plus a blur disc, built facing forward: the disc lies in the local
+// xy plane and the prop turns about local z (the aircraft's long axis), clockwise seen from behind. The disc starts
+// hidden and the blades opaque (parked aircraft merge them as they are); aircraft.js fades the blades and shows the
+// disc as the prop speeds up. Blade stations: [radius, chord, sweep back, pitch in degrees], radius / chord / sweep as
+// fractions of the prop radius. 'scimitar': the C-130J's six-bladed Dowty R391, wide blades with swept-back tips.
+const PROP_BLADES = {
+    paddle: [[0.12, 0.07, 0, 42], [0.3, 0.095, 0, 34], [0.55, 0.095, 0, 27], [0.8, 0.085, 0, 21], [0.95, 0.065, 0, 18], [1, 0.035, 0, 17]],
+    scimitar: [[0.14, 0.075, 0, 50], [0.26, 0.11, -0.012, 43], [0.45, 0.14, -0.006, 34], [0.63, 0.145, 0.015, 27], [0.78, 0.13, 0.045, 23],
+        [0.89, 0.105, 0.08, 20], [0.96, 0.075, 0.115, 18], [1, 0.035, 0.14, 17]],
+};
+function makeProp(R, n, opts = {}) {
+    const st = PROP_BLADES[opts.style] || PROP_BLADES.paddle;
+    const pos = [], idx = [];
+    for (let k = 0; k < n; k++) {
+        const a = (k / n) * Math.PI * 2, ca = Math.cos(a), sa = Math.sin(a);
+        const base = pos.length / 3;
+        for (const [r, chord, sweep, pitch] of st) {
+            // along the chord: leading edge (+x, the way the blade moves) 45 %, trailing edge 55 %; the pitch turns
+            // the chord about the blade's own axis, leading edge forward (-z)
+            const p = pitch * Math.PI / 180, cp = Math.cos(p), sp = Math.sin(p);
+            for (const u of [0.45 * chord, -0.55 * chord]) {
+                const x = (u * cp - sweep) * R, y = r * R, z = -u * sp * R;
+                pos.push(x * ca - y * sa, x * sa + y * ca, z);
+            }
+        }
+        for (let i = 0; i < st.length - 1; i++) {
+            const q = base + i * 2;
+            idx.push(q, q + 1, q + 2, q + 1, q + 3, q + 2);
+        }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+    const bladeMat = new THREE.MeshStandardMaterial({ color: opts.color ?? 0x1c1d1f, roughness: 0.55, metalness: 0.25, side: THREE.DoubleSide });
+    const discMat = new THREE.MeshBasicMaterial({ color: 0x1d1f22, map: propBlurTexture(n), transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide });
+    bladeMat.userData.noPaint = discMat.userData.noPaint = true;
+    const blades = new THREE.Mesh(geo, bladeMat);
+    blades.name = 'propBlades';
+    const disc = new THREE.Mesh(new THREE.RingGeometry(0.1 * R, R, 48, 1), discMat);
+    disc.name = 'propDisc';
+    disc.visible = false;
+    const prop = new THREE.Group();
+    prop.add(blades, disc);
+    prop.userData.isProp = true;
+    prop.userData.blades = n;
+    return prop;
+}
+
+// The blur disc: a smear behind each blade (densest right behind it, the prop turns clockwise seen from behind),
+// clear over the hub, a soft rim. Drawn as seen from behind: canvas x → +x, canvas up → +y.
+const _propBlur = new Map();
+function propBlurTexture(n) {
+    if (_propBlur.has(n)) return _propBlur.get(n);
+    const S = 256, c = document.createElement('canvas');
+    c.width = c.height = S;
+    const g = c.getContext('2d');
+    const cg = g.createConicGradient(-Math.PI / 2, S / 2, S / 2); // offsets run clockwise from +y (blade 0)
+    for (let k = 0; k < n; k++) {
+        cg.addColorStop(k / n, 'rgba(255,255,255,0.4)');
+        cg.addColorStop((k + 0.985) / n, 'rgba(255,255,255,1)');
+    }
+    g.fillStyle = cg;
+    g.fillRect(0, 0, S, S);
+    g.globalCompositeOperation = 'destination-in';
+    const rg = g.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+    rg.addColorStop(0, 'rgba(0,0,0,0)'); rg.addColorStop(0.13, 'rgba(0,0,0,0)'); rg.addColorStop(0.24, 'rgba(0,0,0,0.75)');
+    rg.addColorStop(0.85, 'rgba(0,0,0,0.9)'); rg.addColorStop(0.96, 'rgba(0,0,0,1)'); rg.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = rg;
+    g.fillRect(0, 0, S, S);
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    _propBlur.set(n, t);
+    return t;
+}
+
+// A fresh instance of a model's props, with materials of their own (each prop fades as it spins up or down),
+// hung on the airframe section it sits in, or on the model itself.
+function addProps(object, templates) {
+    return (templates || []).map((t) => {
+        const c = t.clone(true);
+        c.traverse(o => { if (o.isMesh) o.material = o.material.clone(); });
+        const g = (t.userData.region && object.children.find(ch => ch.userData.region === t.userData.region)) || object;
+        if (g !== object) c.position.sub(g.position);
+        g.add(c);
+        return c;
+    });
 }
 
 // Find the engine exhausts from the geometry: the rear-most vertices close to the
@@ -235,13 +328,17 @@ export function createAircraftModel(id) {
         }
         const object = src.object.clone(true);
         const rig = cloneRig(src.rig);
-        rig.props = (src.rig.propTemplates || []).map(t => { const c = t.clone(true); object.add(c); return c; });
+        rig.props = addProps(object, src.rig.propTemplates);
         return { object, rig, fromFile: true };
     }
     if (!cache['proc_' + id]) {
         const r = buildProcedural(id);
         // spinning props stay separate so segmentation doesn't bake them into the airframe
-        r.rig.propTemplates = (r.rig.props || []).map(pr => { pr.parent && pr.parent.remove(pr); return pr; });
+        r.rig.propTemplates = (r.rig.props || []).map(pr => {
+            pr.parent && pr.parent.remove(pr);
+            pr.userData.region = regionAt(pr.position.x, pr.position.z, AIRCRAFT[id].length, AIRCRAFT[id].span / 2);
+            return pr;
+        });
         r.rig.props = [];
         r.object = safeSegment(r.object, id);
         cache['proc_' + id] = r;
@@ -249,7 +346,7 @@ export function createAircraftModel(id) {
     const src = cache['proc_' + id];
     const object = src.object.clone(true);
     const rig = cloneRig(src.rig);
-    rig.props = (src.rig.propTemplates || []).map(t => { const c = t.clone(true); object.add(c); return c; });
+    rig.props = addProps(object, src.rig.propTemplates);
     return { object, rig, fromFile: false };
 }
 
@@ -643,12 +740,7 @@ function buildTransport(spec, paint, accent, rig) {
 
     const n = p.engines || 1;
     if (p.prop) {
-        const prop = new THREE.Group();
-        for (let k = 0; k < 2; k++) {
-            const b = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.9, 0.05), darkMat);
-            b.rotation.z = k * Math.PI / 2;
-            prop.add(b);
-        }
+        const prop = makeProp(0.95, 4);
         prop.position.set(0, 0, -0.51 * L);
         g.add(prop);
         rig.props.push(prop);
@@ -663,11 +755,7 @@ function buildTransport(spec, paint, accent, rig) {
             const nac = add(loft([[z - 0.07 * L, engR, engR, 0, 2], [z, engR * 1.05, engR * 1.05, 0, 2], [z + 0.06 * L, engR * 0.7, engR * 0.7, 0, 2]], 16), white, x, y, 0);
             void nac;
             if (p.turboprop) {
-                const prop = new THREE.Group();
-                for (let k = 0; k < 6; k++) {
-                    const b = new THREE.Mesh(new THREE.BoxGeometry(0.25, 2.1, 0.08), darkMat);
-                    b.position.y = 1.05; const piv = new THREE.Group(); piv.add(b); piv.rotation.z = k * Math.PI / 3; prop.add(piv);
-                }
+                const prop = makeProp(2.1, 6, { style: 'scimitar' });
                 prop.position.set(x, y, z - 0.075 * L);
                 g.add(prop);
                 rig.props.push(prop);

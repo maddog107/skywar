@@ -204,6 +204,12 @@ export class Aircraft {
         const rig = this.rig;
         // exhaust plume per nozzle (afterburner.js): military power → full afterburner with shock diamonds
         this.flames = rig.nozzles.map(n => { const f = createEngineFlame(rig.nozzleR); f.position.copy(n); this.model.add(f); return f; });
+        // propellers (models.js makeProp): blades, blur disc, and a spin rate (rad/s) that follows the engine;
+        // they start at running speed (a spawn in the air shouldn't spool up)
+        this.propParts = (rig.props || []).map(p => ({
+            p, blades: p.getObjectByName('propBlades'), disc: p.getObjectByName('propDisc'),
+            gap: 2 * Math.PI / (p.userData.blades || 2), rate: this.propTarget(),
+        }));
         // nav lights
         const mk = (color, pos, scale) => {
             const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: navTex, color, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
@@ -989,6 +995,7 @@ export class Aircraft {
         // free per-instance GPU resources (shared geometries/materials are kept)
         for (const f of this.flames) f.dispose();
         for (const s of [this.navL, this.navR, this.strobe]) s && s.material.dispose();
+        for (const pp of this.propParts) for (const m of [pp.blades, pp.disc]) m && m.material.dispose(); // per-prop materials (the geometry is shared)
         this.model.traverse(o => { if (o.isMesh && o.userData.origMat && o.material !== o.userData.origMat) o.material.dispose(); });
         for (const l of this.gearLegs || []) l.traverse(o => { if (o.isMesh) o.geometry.dispose(); });
         // the hook owns its geometry (materials are shared, except the hook tip's; flaps and brakes share the model's)
@@ -1027,6 +1034,36 @@ export class Aircraft {
         this.updateVisuals(dt);
     }
 
+    // Prop speed (rad/s) the engine drives toward: a running engine holds the prop near its governed speed (a bit
+    // more with power); a dead one lets it windmill in the airflow, and on the ground it stops.
+    propTarget() {
+        if (this.alive && !this.flameout && !this.bellied) return 75 + this.throttle * 35;
+        return this.onGround || this.bellied ? 0 : Math.min(this.speed * 0.2, 25);
+    }
+
+    updateProps(dt) {
+        const target = this.propTarget();
+        for (const pp of this.propParts) {
+            // a prop on a shot-off wing winds down with it
+            const tgt = this.lostRegions.has(pp.p.parent?.userData.region) ? 0 : target;
+            pp.rate += (tgt - pp.rate) * Math.min(1, dt * (tgt > pp.rate ? 0.6 : 0.3));
+            // a real prop turns more than one blade gap per frame, which strobes (the blades stand still or turn
+            // backwards): draw at most 0.3 of a gap per frame and let the blur disc carry the speed
+            pp.p.rotation.z -= Math.min(pp.rate * dt, pp.gap * 0.3);
+            const blur = clamp((pp.rate - 15) / 35, 0, 1);
+            if (pp.blades) {
+                const m = pp.blades.material, fade = blur > 0.01;
+                m.opacity = 1 - 0.8 * blur;
+                // an opaque material's shader forces alpha to 1: switching needs the other program variant
+                if (m.transparent !== fade) { m.transparent = fade; m.needsUpdate = true; }
+            }
+            if (pp.disc) {
+                pp.disc.material.opacity = 0.32 * blur;
+                pp.disc.visible = blur > 0.01;
+            }
+        }
+    }
+
     updateVisuals(dt) {
         const fx = this.game.effects;
         const now = this.game.time;
@@ -1035,8 +1072,7 @@ export class Aircraft {
         const power = this.alive && !this.flameout && !this.bellied ? clamp((this.throttle - 0.42) / 0.48, 0, 1) : 0;
         const ab = this.afterburner && this.alive && !this.flameout ? 1 : 0;
         for (const f of this.flames) f.update(power, ab, this.mach || 0, dt, now + this.id, this.game.camera);
-        // Props
-        if (this.rig.props) for (const p of this.rig.props) p.rotation.z += dt * (8 + this.throttle * 60);
+        if (this.propParts.length) this.updateProps(dt);
         // Nav lights
         const blink = (now * 1.1 + this.id * 0.37) % 1.2 < 0.06;
         this.strobe.visible = blink && this.alive;
