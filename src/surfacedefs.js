@@ -335,5 +335,10 @@ export const SURFACE_DEFS = {
             { top: [[0.242, -0.0009], [0.3529, 0.0404], [0.3529, 0.0687], [0.242, 0.0273]], y: [-0.0375, -0.0254], dihedral: -3.4, hinge: [[0.242, -0.0315, -0.0009], [0.3529, -0.0375, 0.0404]], angle: -50, skin: 1 },
         ],
     },
+    // MQ-9A: the inboard trailing-edge surfaces (0.55-4.46 m out, closed solids of their own in the model) droop as
+    // flaps; the band stops just under the upper skin so the actuator fairing on top of the wing stays put
+    mq9: {
+        flaps: [{ top: [[0.05, 0.0805], [0.4058, 0.0752], [0.4058, 0.1062], [0.05, 0.1168]], y: [-0.033, -0.0093], whole: true, hinge: [[0.0502, -0.0205, 0.0805], [0.4056, -0.0205, 0.0753]], angle: 30 }],
+    },
 
 };
