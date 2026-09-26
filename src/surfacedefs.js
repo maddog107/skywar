@@ -38,6 +38,15 @@ export const SURFACE_DEFS = {
             { top: [[0.14, -0.020], [0.29, 0.037], [0.29, 0.0585], [0.14, 0.0015]], y: [-0.103, -0.08], dihedral: 5, hinge: [[0.14, -0.097, -0.020], [0.29, -0.081, 0.037]], angle: -40, skin: 1 },
         ],
     },
+    // C-130: Lockheed-Fowler flaps from the fuselage to the ailerons, in an inboard and an outboard section; they
+    // run aft on their tracks as they go down (hydraulic, ~10 s full travel). No spoilers.
+    c130: {
+        flaps: [
+            { top: [[0.066, 0.005], [0.25, 0.0], [0.25, 0.058], [0.066, 0.062]], y: [-0.08, -0.035], dihedral: 1.5, hinge: [[0.066, -0.053, 0.005], [0.25, -0.054, 0.0]], angle: 35, slide: [0, -0.004, 0.025] },
+            { top: [[0.255, 0.002], [0.465, -0.022], [0.465, 0.025], [0.255, 0.055]], y: [-0.08, -0.035], dihedral: 1.5, hinge: [[0.255, -0.054, 0.002], [0.465, -0.056, -0.022]], angle: 35, slide: [0, -0.004, 0.022] },
+        ],
+        travel: { flap: 10 },
+    },
 
     // ── US fighters and attack jets ──
 
