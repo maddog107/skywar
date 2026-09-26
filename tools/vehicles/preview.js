@@ -51,7 +51,7 @@ export async function init(opts = {}) {
 }
 
 export function applyPose(rig, p = {}) {
-    for (const g of Object.keys(rig.byGroup)) if (p[g] != null && !['turret', 'launcher', 'spin'].includes(g)) V.pose(rig, g, p[g]);
+    for (const g of Object.keys(rig.byGroup)) if (p[g] != null && g !== 'spin') V.pose(rig, g, p[g]);   // (aim below overrides turret / launcher if yaw / pitch are given)
     if (p.yaw != null || p.pitch != null) V.aim(rig, p.yaw || 0, p.pitch || 0);
     if (p.spin) V.spin(rig, p.spin);
     if (p.steer) V.steer(rig, p.steer);

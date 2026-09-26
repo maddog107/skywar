@@ -253,6 +253,19 @@ export const VEHICLES = {
         parts: ['body', 'turret', 'launcher', 'muzzle_1', 'muzzle_6', 'ram_l', 'ram_r', 'door_l', 'door_r', 'wheel_1l', 'wheel_1r', 'wheel_3l', 'wheel_3r', 'exhaust', 'seat_driver', 'hatch_entry'],
         deploy: ['launcher'],
     },
+    ammo_blue: {
+        name: 'M985A4 HEMTT A4 guided missile transporter (Patriot)', short: 'HEMTT GMT', cls: 'ammo', team: 'blue', file: 'ammo_blue.glb', paint: 'blue_tan',
+        chassis: 'Oshkosh HEMTT A4 8×8 cargo', dims: { length: 10.4, width: 2.44, height: 3.0 }, crew: 2, mass: 31, speed: 100,
+        arm: 'none; two PAC-3 four-round missile packs (reloads for the launching stations) and a knuckle-boom crane', muzzles: 0,
+        // turret: the crane's slewing column at the rear of the bed, rot y (full circle); boom: main boom rot x 0 → 70° and
+        // boom_2: the outer boom bending −100° at the knuckle, boom_3: its extension sliding out 1.6 m, hook: hangs plumb
+        // (all group 'raise'; stowed forward over the load); ram_l / ram_k: lift and knuckle rams; jack_rl / jack_rr:
+        // stabilisers ('jack'); door_side_l / door_side_r: drop sides fold down 90° ('side'); canister_1 / canister_2: the
+        // missile packs as separate nodes (detach them to animate a reload); door_l/door_r: cab doors; front tandem steers
+        parts: ['body', 'turret', 'boom', 'boom_2', 'boom_3', 'hook', 'ram_l', 'ram_k', 'jack_rl', 'jack_rr', 'door_side_l', 'door_side_r',
+            'canister_1', 'canister_2', 'door_l', 'door_r', 'wheel_1l', 'wheel_4r', 'exhaust', 'seat_driver', 'hatch_entry'],
+        deploy: ['side', 'jack', 'raise'],
+    },
 };
 
 // Paint schemes: models/vehicles/tex/paint_<scheme>.jpg (tools/vehicles/textures.py)

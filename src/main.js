@@ -618,7 +618,7 @@ function buildCredits() {
         ['Airplane biplane (pitts)', 'BlueHour', 'CC BY 4.0', 'https://sketchfab.com/3d-models/airplane-biplane-be48f3f906ed431b98b1bf03ab7aadd6'],
         ['MiG-31, MiG-25, J-20, J-10, J-8, F-5E, MiG-21, Mirage III, Jaguar', 'SKYWAR / Blender (tools/aircraft_kit.py)', 'CC0', 'tools/aircraft/'],
         ['Aircraft carrier and destroyer', 'SKYWAR / Blender (tools/ships)', 'CC0', 'tools/ships/'],
-        ['Military vehicles: 9P117M1 Scud TEL (see models/vehicles/CREDITS.md)', 'SKYWAR / Blender (tools/vehicles)', 'CC0', 'tools/vehicles/'],
+        ['Military vehicles: Scud, Bastion, S-300, Osa, Buk, Smerch, Grad, Flap Lid, P-18 and Soviet support trucks; Patriot, HIMARS, M270, Sentinel, Stryker, HEMTT and US support vehicles (see models/vehicles/CREDITS.md)', 'SKYWAR / Blender (tools/vehicles)', 'CC0', 'tools/vehicles/'],
         ['Helicopter (military)', 'Zsky', 'CC BY 3.0', 'https://poly.pizza/m/hG2Qr0A3zR'],
         ['Helicopter (civil)', 'jeremy', 'CC BY 3.0', 'https://poly.pizza/m/eb7b31pjGtQ'],
         ['Humvee', 'madtrollstudio', 'CC BY 3.0', 'https://poly.pizza/m/Ebryot9iKM'],
