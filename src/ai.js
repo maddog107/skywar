@@ -315,6 +315,16 @@ export class Pilot {
     pickTarget() {
         const ac = this.ac;
         if (this.passive) { this.target = null; return; }
+        // an order (a wingman's brain, wingmen.js; a director flight's, director.js) chooses first: a target, null
+        // for none, or undefined to leave it to the usual choice below
+        if (this.brain && this.brain.pick) {
+            const t = this.brain.pick(this);
+            if (t !== undefined) {
+                if (t !== this.target) { this.lockT = 0; this.strafePhase = null; }
+                this.target = t;
+                return;
+            }
+        }
         const fwd = ac.getForward(_f);
         let best = null, bestScore = Infinity;
         for (const e of this.enemiesOf()) {
@@ -414,6 +424,7 @@ export class Pilot {
         let throttle = 0.85;
         let wantGuns = false;
         let gCap = lerp(0.72, 1, sk); // skill-limited G tolerance (share of the pull range)
+        let steer = null;
 
         const FL = this.formation && this.formation.leader;
         if (FL && FL !== this.game.player) this.formation.leader = this.game.player; // follow whatever jet the player flies
@@ -447,13 +458,17 @@ export class Pilot {
             }
             wantDir = _t.copy(ac.getForward(_f)).addScaledVector(this.jinkDir, 1.8).normalize();
             throttle = 1;
+        } else if (!this.target && this.brain && this.brain.steer && (steer = this.brain.steer(this, dt))) {
+            // an order with nothing to shoot at: fly where it says (an orbit, an escort slot)
+            wantDir = _t.copy(steer.dir); throttle = steer.throttle ?? 0.8;
         } else if (this.state === 'extend') {
             // run away from the nearest enemy, low and fast
             const t = this.target;
             if (t) wantDir = _t.subVectors(ac.pos, t.pos).setY(0).normalize().setY(-0.05).normalize();
             throttle = 1;
         } else if (this.target) {
-            const r = this.target === g.pilotMode ? this.strafe(dt) : this.engage(dt);
+            // gun runs on something on the ground (the ejected player; a vehicle an order points at), a fight otherwise
+            const r = this.target === g.pilotMode || this.target.isGround ? this.strafe(dt) : this.engage(dt);
             wantDir = r.dir; throttle = r.throttle; wantGuns = r.guns; gCap = Math.min(gCap, r.gCap);
         } else {
             // patrol: orbit the anchor
@@ -469,9 +484,9 @@ export class Pilot {
         // flares against anything closing in, whatever else we're doing
         this.flares();
 
-        // stay near the fight
+        // stay near the fight (unless an order says where to be)
         const centre = g.pilotMode?.alive ? g.pilotMode.pos : g.player?.pos;
-        if (!this.leash && centre && ac.pos.distanceTo(centre) > 14000) {
+        if (!this.leash && !this.brain && centre && ac.pos.distanceTo(centre) > 14000) {
             wantDir = _t.subVectors(centre, ac.pos).normalize();
         }
 
@@ -490,7 +505,7 @@ export class Pilot {
         }
 
         const minAGL = lerp(260, 120, sk);
-        const gunRun = this.target && this.target === g.pilotMode && this.strafePhase === 'in' && this.target.pos.distanceTo(ac.pos) < 3500;
+        const gunRun = this.target && (this.target === g.pilotMode || this.target.isGround) && this.strafePhase === 'in' && this.target.pos.distanceTo(ac.pos) < 3500;
         if (avoidTerrain(ac, c, minAGL, gunRun)) { wantGuns = false; if (gunRun) this.strafePhase = 'out'; }
 
         // short aimed bursts with a pause to re-aim between them (aces fire longer and re-engage sooner):

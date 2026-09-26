@@ -175,7 +175,7 @@ export class Game {
         if (this.nvg) { this.nvg = false; this.onNvg && this.onNvg(false); }
         if (this.rings) { this.rings.remove(); this.rings = null; }
         this.navTarget = null;
-        this.lives = this.mission ? (this.mission.lives ?? 0) : ['freeflight', 'sandbox', 'practice', 'rings'].includes(this.mode) ? Infinity : 2;
+        this.lives = this.mission ? (this.mission.lives ?? 0) : ['freeflight', 'sandbox', 'practice', 'rings', 'war'].includes(this.mode) ? Infinity : 2;
         if (this.mode === 'rings') this.rings = new RingCourse(this, 7);
         this.input.consumeMouse();
         this.input.spoilersOn = false;
@@ -192,10 +192,11 @@ export class Game {
             if (this.world.towns.buildings) this.world.towns.buildings.reset(); // rebuilt town for every sortie
             this.hookBuildings();
         }
-        if (this.mode === 'strike' || this.mode === 'sandbox') this.ground.spawnEnemyBase();
+        const liveBase = this.mode === 'strike' || this.mode === 'sandbox' || this.mode === 'war';
+        if (liveBase) this.ground.spawnEnemyBase();
         // enemy parked jets are real targets when the enemy base is live, decoration otherwise
-        if (this.world.airbases) this.world.airbases.setEnemyParkedVisible(!(this.mode === 'strike' || this.mode === 'sandbox'));
-        if (this.mode === 'naval' || this.mode === 'sandbox') this.naval.spawnEnemyGroup();
+        if (this.world.airbases) this.world.airbases.setEnemyParkedVisible(!liveBase);
+        if (this.mode === 'naval' || this.mode === 'sandbox' || this.mode === 'war') this.naval.spawnEnemyGroup();
         else if (this.mode === 'freeflight') this.naval.spawnEnemyGroup(true); // unarmed target ships to shoot at for fun
         if (this.mode === 'practice' || this.mode === 'sandbox') this.spawnPractice(this.mode === 'practice' ? 16 : 10);
         const p = this.spawnPlayer();
@@ -223,6 +224,8 @@ export class Game {
             this.slot = 3;
         } else if (this.mode === 'mission') {
             // custom missions set themselves up below
+        } else if (this.mode === 'war') {
+            // the Living War: the war plug-ins (director.js, front.js, tasks.js…) set it up in their start()
         } else if (this.mode === 'rings') {
             this.placeAtRing();
             this.showBanner('RING RACE', this.rings.rings.length + ' rings through the valleys. Crashing respawns you at your last ring (+5 s).', 5);
@@ -311,16 +314,17 @@ export class Game {
     // Where the player starts: air, runway, apron (taxi) or carrier catapult
     startPoint() {
         let w = this.mission ? this.mission.start : this.settings.start || 'auto';
-        if (w === 'auto') w = this.mode === 'freeflight' || this.mode === 'sandbox' ? 'runway' : this.mode === 'naval' ? 'carrier' : 'air';
+        if (w === 'auto') w = this.mode === 'freeflight' || this.mode === 'sandbox' || this.mode === 'war' ? 'runway' : this.mode === 'naval' ? 'carrier' : 'air';
         return w;
     }
 
-    spawnPlayer(where = this.startPoint()) {
+    // base: which friendly airfield a runway / apron start uses (the home base by default)
+    spawnPlayer(where = this.startPoint(), base = null) {
         const p = this.player = new Aircraft(this, this.aircraftId, { team: 'blue', isPlayer: true, name: this.callsign });
         this.aircraft.push(p);
         this.rearm(p);
         this.applyLivery && this.applyLivery(p);
-        const home = BASES[0];
+        const home = base || BASES[0];
         const carrier = this.naval.homeCarrier;
         if (where === 'carrier' && carrier) {
             p.spawnDeck(carrier);
@@ -382,8 +386,10 @@ export class Game {
             // an unmanned jet left circling forever would clutter the sky: let it go
             if (old.alive) { old.alive = false; old.explode(false); }
         }
-        const w = this.startPoint();
-        this.spawnPlayer(w === 'air' ? 'air' : w);
+        let w = this.startPoint(), base = null;
+        // a plug-in may pick where the new jet starts (the Living War: the friendly field nearest the last one)
+        for (const s of this.systems) { const r = s.respawnPoint && s.respawnPoint(); if (r) { w = r.where; base = r.base || null; } }
+        this.spawnPlayer(w === 'air' ? 'air' : w, base);
         if (this.mode === 'rings') { this.placeAtRing(); this.missionTime += 5; this.addFeed('+5 s PENALTY', '#ffc23f'); }
         this.state = 'playing';
         this.deathT = 0;
@@ -1590,7 +1596,7 @@ export class Game {
         }
         // soft combat boundary
         // (the heist's escape target, 22 km from Miramar, is outside the 30 km box on purpose)
-        this.outOfBounds = !['freeflight', 'sandbox', 'naval'].includes(this.mode) && !(this.mission && this.mission.start === 'heist') && Math.hypot(p.pos.x, p.pos.z - (this.mode === 'strike' ? -8000 : 0)) > 30000;
+        this.outOfBounds = !['freeflight', 'sandbox', 'naval', 'war'].includes(this.mode) && !(this.mission && this.mission.start === 'heist') && Math.hypot(p.pos.x, p.pos.z - (this.mode === 'strike' ? -8000 : 0)) > 30000;
         if (p.pos.y > 14000 && p.vel) p.vel.y -= 10 * dt;
     }
 
@@ -1622,7 +1628,7 @@ export class Game {
             mission: this.mission ? this.mission.title : null, missionId: this.missionId, daily: this.isDaily, seconds: this.missionTime,
             reason: victory ? 'victory' : this.lastDeath || 'ended', // for the results title: 'shot down' | 'crashed' | 'killed in action' | 'ended'
         });
-        if (victory) this.audio.say(this.mission ? 'Mission accomplished. Outstanding work.' : 'Mission complete. All targets destroyed. Return to base.', true);
+        if (victory) this.audio.say(this.mission ? 'Mission accomplished. Outstanding work.' : this.mode === 'war' ? 'Sortie complete. Good work out there.' : 'Mission complete. All targets destroyed. Return to base.', true);
         else if (this.mission) this.audio.say('Mission failed.', true);
     }
 
