@@ -70,6 +70,9 @@ export const MODEL_FILES = {
         file: 'aircraft/il78.glb', rot: [0, 0, 0], cockpit: [-0.0575, -0.427], flame: false, nozzleR: 0.012,
         nozzles: [[0.1352, -0.0775, -0.1222], [-0.1352, -0.0775, -0.1222], [0.2254, -0.0816, -0.0742], [-0.2254, -0.0816, -0.0742]],
     },
+    // Hartzell three-blade pusher, 3.1 m across, spun on the model's spinner behind the tail; the eye is the nose camera
+    mq9: { file: 'aircraft/mq9.glb', rot: [0, 0, 0], cockpit: [0.0116, -0.4591], flame: false, nozzles: [], props: [{ x: 0, y: 0.0025, z: 0.4619, r: 0.1407, blades: 3 }] },
+    rq4: { file: 'aircraft/rq4.glb', rot: [0, 0, 0], cockpit: [-0.055, -0.4517], flame: false, nozzleR: 0.0207, nozzles: [[0.0, 0.0158, 0.3731]] },
 };
 
 const cache = {};

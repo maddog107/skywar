@@ -22,6 +22,8 @@ const RIGS = {
     kc135: { boom: null, boom_ext: 'boom', boom_nozzle: 'boom_ext', drogue_l: null, drogue_r: null, hose_l: 'drogue_l', hose_r: 'drogue_r', basket_l: 'drogue_l', basket_r: 'drogue_r' },
     a50: { rotodome: null },
     il78: { drogue_l: null, drogue_r: null, drogue_c: null, hose_l: 'drogue_l', hose_r: 'drogue_r', hose_c: 'drogue_c', basket_l: 'drogue_l', basket_r: 'drogue_r', basket_c: 'drogue_c' },
+    mq9: {},
+    rq4: {},
 };
 
 // node name → parent node name, from a GLB's JSON chunk
@@ -58,6 +60,20 @@ describe('support types: config and model entries', () => {
             }
         });
     }
+    test('props: the Reaper\'s pusher sits behind the tail; every prop is a sane size inside the model', () => {
+        for (const id of Object.keys(RIGS)) {
+            for (const p of MODEL_FILES[id].props || []) {
+                assert.ok([p.x, p.y, p.z].every(v => Math.abs(v) <= 0.6), `${id} prop position`);
+                assert.ok(p.r > 0.01 && p.r < 0.25 && p.blades >= 2, `${id} prop size`);
+                assert.ok(p.dir == null || p.dir === 1 || p.dir === -1, `${id} prop direction`);
+            }
+        }
+        const [pusher] = MODEL_FILES.mq9.props;
+        assert.equal(MODEL_FILES.mq9.props.length, 1);
+        assert.equal(pusher.blades, 3);
+        assert.ok(pusher.z > 0.4, 'behind the tail');
+        assert.ok(Math.abs(pusher.r * 2 * AIRCRAFT.mq9.length - 3.1) < 0.1, '3.1 m across');
+    });
     test('nobody ejects from an AWACS, a tanker or a drone; fighters and bombers keep their seats', () => {
         assert.equal(hasEjectionSeat(AIRCRAFT.e3), false);
         assert.equal(hasEjectionSeat(AIRCRAFT.kc135), false);

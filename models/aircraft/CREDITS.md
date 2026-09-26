@@ -92,6 +92,8 @@ Reference drawings and photographs were used only to measure.
 | `e3.glb` | E-3G Sentry (AWACS), derived from the same KC-135R model | "KC135R" by Adastra | CC BY 4.0 | https://sketchfab.com/3d-models/kc135r-95fedbaed45b492e8dfa9d1a8f76b25f |
 | `a50.glb` | A-50U Mainstay (AWACS), an Il-76MD airframe | "Ilyushin Il-76" by helijah (Emmanuel Baranger) | CC BY 4.0 | https://sketchfab.com/3d-models/ilyushin-il-76-ab71a5f790f940798cc755246a7a8a7f |
 | `il78.glb` | Il-78M Midas (tanker) | "Il78" by manilov.ap | CC BY 4.0 | https://sketchfab.com/3d-models/il78-0c0da2cc1b4c441dadc2510212c25fb7 |
+| `mq9.glb` | MQ-9A Reaper (ER wing) | "MQ-9 Reaper" by Tyler V Howell (TVHowell) | CC BY 4.0 | https://sketchfab.com/3d-models/mq-9-reaper-eff549610fee4f20904f7b388a3a0830 |
+| `rq4.glb` | RQ-4B Global Hawk | NASA 3D Resources "Global Hawk" | Public domain (US Government work; NASA insignia removed) | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Global%20Hawk |
 
 References: USAF E-3 line drawing (https://commons.wikimedia.org/wiki/File:AWACS_Line_drawing.jpg, public domain),
 USAF KC-135 line drawing (File:Boeing_KC-135_Stratotanker_line_drawing_-_USAF_medium_res.png), photographs of
@@ -103,3 +105,5 @@ Attribution lines:
 - "KC135R" (https://sketchfab.com/3d-models/kc135r-95fedbaed45b492e8dfa9d1a8f76b25f) by Adastra, CC BY 4.0. Changes (kc135.glb): repainted with panel lines, unit markings and the HF wire removed, a new articulated flying boom and two MPRS hose-and-drogue pods added. Changes (e3.glb): lengthened and re-winged into a Boeing 707-320B (E-3G), new TF33 nacelles, rotodome and antennas, KC-135 details removed.
 - "Ilyushin Il-76" (https://sketchfab.com/3d-models/ilyushin-il-76-ab71a5f790f940798cc755246a7a8a7f) by helijah (Emmanuel Baranger), CC BY 4.0. Changes (a50.glb): landing gear and cockpit interior removed, repainted in the A-50U scheme with Russian stars, navigator glazing faired over, rotodome, refuelling probe, blisters and antennas added.
 - "Il78" (https://sketchfab.com/3d-models/il78-0c0da2cc1b4c441dadc2510212c25fb7) by manilov.ap, CC BY 4.0. Changes (il78.glb): landing gear removed, hose-and-drogue units rigged.
+- "MQ-9 Reaper" (https://sketchfab.com/3d-models/mq-9-reaper-eff549610fee4f20904f7b388a3a0830) by Tyler V Howell, CC BY 4.0. Changes (mq9.glb): re-oriented, rescaled, outer wing shortened to the ER wing's 24 m, static propeller removed (the game spins its own), stores decimated, textures reduced and darkened.
+- Global Hawk model courtesy of NASA (3D Resources). Changes (rq4.glb): landing gear and NASA markings removed, repainted USAF grey, wing lengthened to the RQ-4B's 39.9 m.

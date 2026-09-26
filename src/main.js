@@ -621,6 +621,8 @@ function buildCredits() {
         ['KC135R (kc135; the e3 E-3G Sentry is derived from it)', 'Adastra', 'CC BY 4.0', 'https://sketchfab.com/3d-models/kc135r-95fedbaed45b492e8dfa9d1a8f76b25f'],
         ['Ilyushin Il-76 (a50: A-50U Mainstay)', 'helijah (Emmanuel Baranger)', 'CC BY 4.0', 'https://sketchfab.com/3d-models/ilyushin-il-76-ab71a5f790f940798cc755246a7a8a7f'],
         ['Il78 (il78)', 'manilov.ap', 'CC BY 4.0', 'https://sketchfab.com/3d-models/il78-0c0da2cc1b4c441dadc2510212c25fb7'],
+        ['MQ-9 Reaper (mq9)', 'Tyler V Howell', 'CC BY 4.0', 'https://sketchfab.com/3d-models/mq-9-reaper-eff549610fee4f20904f7b388a3a0830'],
+        ['NASA 3D Resources Global Hawk (rq4)', 'NASA', 'Public domain (NASA)', 'https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Global%20Hawk'],
         ['Aircraft carrier and destroyer', 'SKYWAR / Blender (tools/ships)', 'CC0', 'tools/ships/'],
         ['Helicopter (military)', 'Zsky', 'CC BY 3.0', 'https://poly.pizza/m/hG2Qr0A3zR'],
         ['Helicopter (civil)', 'jeremy', 'CC BY 3.0', 'https://poly.pizza/m/eb7b31pjGtQ'],

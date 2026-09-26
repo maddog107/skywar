@@ -321,6 +321,21 @@ export const AIRCRAFT = {
         health: 230, gun: null, missiles: 0, flares: 0, fuelTime: 7200,
         proc: { airliner: true, highWing: true, engines: 4, body: [0.1, 0.1], paint: 0xd9dcdc, accent: 0x55606b },
     },
+    // drones: maxBank is the AI's bank limit (ai.js), sedate like the real autopilots
+    mq9: {
+        name: 'MQ-9A Reaper', role: 'Hunter-Killer Drone', country: 'USA', length: 11.0, span: 24.0, category: 'drone',
+        desc: 'Remotely piloted hunter-killer: a day on station, a sensor ball that sees everything, Hellfires and laser-guided bombs for what it finds.',
+        flight: { speed: 105, mach: 0.42, afterburner: false, accel: 3.0, lift: 3.0, gLimit: 3.5, roll: 1.2, alpha: 15 },
+        health: 70, gun: null, missiles: 4, flares: 0, fuelTime: 9000, maxBank: 0.6,
+        proc: { airliner: true, turboprop: true, engines: 2, body: [0.1, 0.1], paint: 0xa3a8ab, accent: 0x2a2d30 },
+    },
+    rq4: {
+        name: 'RQ-4B Global Hawk', role: 'High-Altitude ISR Drone', country: 'USA', length: 14.5, span: 39.9, category: 'drone',
+        desc: 'Unmanned high-altitude reconnaissance: 30+ hours at 60,000 ft, mapping a whole theatre with radar and cameras.',
+        flight: { speed: 150, mach: 0.58, afterburner: false, accel: 3.5, lift: 1.8, gLimit: 2.5, roll: 0.6, alpha: 14 },
+        health: 90, gun: null, missiles: 0, flares: 0, fuelTime: 12000, maxBank: 0.5,
+        proc: { airliner: true, engines: 2, body: [0.1, 0.1], paint: 0xb3b8bb, accent: 0x2a2d30 },
+    },
 };
 
 // Which aircraft can appear as hostiles, and what they're worth
