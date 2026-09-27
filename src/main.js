@@ -26,6 +26,7 @@ import { AirTraffic } from './airtraffic.js';
 import { preloadProps } from './props.js';
 import { preloadCharacter } from './character.js';
 import { preloadShips } from './naval.js';
+import * as vehicles from './vehicles.js';
 import { setupTouch, isTouchDevice } from './touch.js';
 import { Aircraft, refSpeeds } from './aircraft.js';
 import { Pilot } from './ai.js';
@@ -155,6 +156,7 @@ async function boot() {
     world.updateTerrain(new THREE.Vector3(0, 0, 0), true);
     $('loadText').textContent = 'LOADING AIRFRAMES…';
     await Promise.all([preloadModels((f) => { $('loadFill').style.width = (10 + f * 60) + '%'; }), preloadProps(), preloadCharacter(), preloadShips()]);
+    vehicles.preloadVehicles({ background: true }); // after the airframes; parsed once the page is idle (vehiclesReady())
     $('loadText').textContent = 'BUILDING TOWNS & ROADS…';
     await new Promise(r => setTimeout(r, 20));
     world.towns = new Towns(scene, world);
@@ -180,6 +182,7 @@ async function boot() {
     game.onSettingsChange = () => { save(); document.querySelectorAll('.seg').forEach(sg => { const k = sg.dataset.key; if (k) sg.querySelectorAll('button').forEach(b => b.classList.toggle('sel', b.dataset.val === String(settings[k]))); }); };
     game.applyLivery = (ac) => applyLivery(ac.model, settings.livery, ac.type);
     window.skywar = { game, settings, world, effects, cockpit, camera, Pilot, renderer, post: { composer, bloom, grade, postfx } };
+    window.skywar.vehicles = vehicles; // debug / test hook: spawn and pose rigged ground vehicles from the console
     applyQuality();
     audio.setVolume(settings.volume);
     audio.callouts = settings.callouts;
@@ -615,6 +618,7 @@ function buildCredits() {
         ['Airplane biplane (pitts)', 'BlueHour', 'CC BY 4.0', 'https://sketchfab.com/3d-models/airplane-biplane-be48f3f906ed431b98b1bf03ab7aadd6'],
         ['MiG-31, MiG-25, J-20, J-10, J-8, F-5E, MiG-21, Mirage III, Jaguar', 'SKYWAR / Blender (tools/aircraft_kit.py)', 'CC0', 'tools/aircraft/'],
         ['Aircraft carrier and destroyer', 'SKYWAR / Blender (tools/ships)', 'CC0', 'tools/ships/'],
+        ['Military vehicles: Scud, Bastion, S-300, Osa, Buk, Smerch, Grad, Flap Lid, P-18 and Soviet support trucks; Patriot, HIMARS, M270, Sentinel, Stryker, HEMTT and US support vehicles (see models/vehicles/CREDITS.md)', 'SKYWAR / Blender (tools/vehicles)', 'CC0', 'tools/vehicles/'],
         ['Helicopter (military)', 'Zsky', 'CC BY 3.0', 'https://poly.pizza/m/hG2Qr0A3zR'],
         ['Helicopter (civil)', 'jeremy', 'CC BY 3.0', 'https://poly.pizza/m/eb7b31pjGtQ'],
         ['Humvee', 'madtrollstudio', 'CC BY 3.0', 'https://poly.pizza/m/Ebryot9iKM'],

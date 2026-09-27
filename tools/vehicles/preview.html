@@ -1,0 +1,34 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<base href="/">
+<title>SKYWAR vehicle preview</title>
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"
+} }
+</script>
+</head>
+<body style="background:#222;color:#ddd;font:14px sans-serif">
+<p>Vehicle preview harness (does not start the game): <code>P = window.P</code> once the title reads READY, then
+<code>P.setUpload('http://localhost:8117/'); await P.save(await P.vehicleSheet('scud', [['stowed', {}], ['erected', { jack: 1, pad: 1, raise: 1 }]]), 'scud.png')</code>
+(see tools/vehicles/preview.js; PNGs go to the upload server, tools/aircraft/upload.mjs).</p>
+<pre id="log"></pre>
+<script type="module">
+    const log = (s) => { document.getElementById('log').textContent += s + '\n'; };
+    try {
+        const P = await import('/tools/vehicles/preview.js?t=' + Date.now());
+        window.P = P;
+        const t0 = performance.now();
+        await P.init();
+        log('loaded in ' + Math.round(performance.now() - t0) + ' ms');
+        document.title = 'READY';
+    } catch (e) {
+        log('ERROR ' + e.stack);
+        document.title = 'ERROR';
+    }
+</script>
+</body>
+</html>

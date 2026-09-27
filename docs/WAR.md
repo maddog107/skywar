@@ -160,6 +160,25 @@ and the conventions every part follows. Read it before touching the war systems.
   big ship. JPEG/WebP textures up to 1024 (2048 for a hero model), one or two materials. Keep glass and
   paint material names meaningful; liveries skip `glass|canopy|tyre|wheel|…`.
 
+## Ground vehicles (`src/vehicles.js`)
+
+Rigged military vehicles built by `tools/vehicles/` (Blender scripts, `models/vehicles/*.glb`, CC0). The
+`VEHICLES` table gives each one's real name, `cls`, team, paint, real dimensions, crew, armament, its rig `parts`
+and its `deploy` sequence (the pose groups to run, in order, from travel to firing).
+
+- Loading: main.js starts `preloadVehicles({ background: true })` after the boot's preloads; `await
+  vehiclesReady()` before `createVehicle(id, { paint })`, which returns `{ object, rig }` (geometry and materials
+  shared, so copies are cheap). `staticVehicle(object)` merges a posed copy into a few draw calls for parked or
+  distant vehicles.
+- Posing (every input 0..1 unless noted; nothing allocates): `pose(rig, group, k)` for any group, with
+  `deployJacks`, `deployPad`, `raise` (erector / mast / lifting frame), `openDoors`, `openHatches`;
+  `aim(rig, yaw, pitch)` (radians: + yaw left, + pitch up; clamped to the joint limits); `spin(rig, dt)` (radar
+  antennas at their own rpm); `roll(rig, metres[, metresRight])` and `steer(rig, angle)` (wheels, track
+  scroll); `stow(rig)`. Hydraulic rams follow on their own.
+- Launch points: `muzzleWorld(rig, i, pos, dir)` for tube / rail / canister `i` (the `muzzle_n` empties, −z along
+  the launch direction). TEL missiles are nodes (`rig.missile`, `missile_n`): hide or reparent them at launch;
+  `nozzle` empties mark their exhausts.
+
 ## The war layer (Phase B), for plug-ins
 
 ### Controls
