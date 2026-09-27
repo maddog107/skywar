@@ -335,6 +335,20 @@ export const SURFACE_DEFS = {
             { top: [[0.242, -0.0009], [0.3529, 0.0404], [0.3529, 0.0687], [0.242, 0.0273]], y: [-0.0375, -0.0254], dihedral: -3.4, hinge: [[0.242, -0.0315, -0.0009], [0.3529, -0.0375, 0.0404]], angle: -50, skin: 1 },
         ],
     },
+    // Il-78M (another Il-76 model): the same Fowler flaps and spoilers as the A-50, measured on this model: the trailing
+    // edge (kinked at 11.2 m out, where the two flap sections meet) and skin heights probed from the mesh, the chords
+    // from the A-50's panel lines (2 m inboard; outboard tapering 1.7 to 1.4 m, its hinge passing just behind the
+    // UPAZ pod's tail). The aft ends of the flap-track fairings go down with the flaps.
+    il78: {
+        flaps: [
+            { top: [[0.079, -0.0363], [0.2395, -0.0109], [0.2395, 0.0426], [0.079, 0.0172]], y: [-0.048, -0.0135], dihedral: -3.8, hinge: [[0.079, -0.0176, -0.0363], [0.2395, -0.0309, -0.0109]], angle: 40, slide: [0, -0.0053, 0.03] },
+            { top: [[0.2405, -0.0044], [0.396, 0.0518], [0.396, 0.0925], [0.2405, 0.0441]], y: [-0.0553, -0.0275], dihedral: -4.5, hinge: [[0.2405, -0.031, -0.0044], [0.396, -0.0465, 0.0518]], angle: 40, slide: [0, -0.0047, 0.0258] },
+        ],
+        brakes: [
+            { top: [[0.087, -0.069], [0.2275, -0.0468], [0.2275, -0.0168], [0.087, -0.039]], y: [-0.026, -0.009], dihedral: -3.8, hinge: [[0.087, -0.0142, -0.069], [0.2275, -0.0286, -0.0468]], angle: -50, skin: 1 },
+            { top: [[0.2455, -0.0326], [0.3756, 0.0145], [0.3756, 0.0435], [0.2455, -0.0036]], y: [-0.0375, -0.024], dihedral: -4.5, hinge: [[0.2455, -0.0303, -0.0326], [0.3756, -0.044, 0.0145]], angle: -50, skin: 1 },
+        ],
+    },
     // MQ-9A: the inboard trailing-edge surfaces (0.55-4.46 m out, closed solids of their own in the model) droop as
     // flaps; the band stops just under the upper skin so the actuator fairing on top of the wing stays put
     mq9: {
