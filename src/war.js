@@ -26,6 +26,7 @@ const CONTACT_NAMES = {
     radar: 'UNKNOWN INSTALLATION', sam: 'UNKNOWN SITE', silo: 'UNKNOWN STRUCTURE', airbase: 'AIRFIELD',
     hangar: 'UNKNOWN STRUCTURE', shelter: 'UNKNOWN STRUCTURE', fuel: 'UNKNOWN STRUCTURE', ammo: 'UNKNOWN STRUCTURE',
     tower: 'UNKNOWN STRUCTURE', command: 'UNKNOWN STRUCTURE', infantry: 'TROOPS',
+    runway: 'RUNWAY', taxiway: 'TAXIWAYS', power: 'UNKNOWN STRUCTURE',
 };
 const contactName = (cls) => CONTACT_NAMES[cls] || 'UNKNOWN VEHICLE';
 
@@ -142,7 +143,7 @@ export class War {
         const u = rec.unit;
         if (rec.cls === 'airbase') return INTEL.IDENTIFIED;
         // fixed installations at a known airfield are on pre-war imagery; everything mobile starts unknown
-        if (u.isGround && !u.route && ['hangar', 'fuel', 'command', 'radar', 'tower', 'shelter', 'ammo'].includes(rec.cls)) return INTEL.IDENTIFIED;
+        if (u.isGround && !u.route && ['hangar', 'fuel', 'command', 'radar', 'tower', 'shelter', 'ammo', 'power', 'runway', 'taxiway'].includes(rec.cls)) return INTEL.IDENTIFIED;
         if (rec.cls === 'sam' && u.isGround && !u.route && u.type === 'sam') return INTEL.CONTACT; // suspected sites
         return INTEL.UNKNOWN;
     }
@@ -447,6 +448,7 @@ export class War {
             const rec = this.recs.get(u);
             if (rec.cls !== 'radar' && rec.cls !== 'sam-radar' && rec.cls !== 'awacs' && !u.radarRange) continue;
             if (u.jammed && this.time < u.jammed) continue;
+            if (u.unpowered) continue; // (its airfield's power plant is down: bases.js)
             const R = u.radarRange || (rec.cls === 'awacs' ? 250000 : rec.cls === 'sam-radar' ? 60000 : 90000);
             const d = u.pos.distanceTo(pos);
             if (d > R) continue;

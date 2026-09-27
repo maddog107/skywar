@@ -413,8 +413,10 @@ class GroundTarget {
             }
             return;
         }
-        if (this.parts.dish) this.parts.dish.rotation.y += dt * 1.2;
+        if (this.parts.dish && !this.unpowered) this.parts.dish.rotation.y += dt * 1.2;
         if (this.route) this.driveRoute(dt);
+        // an airbase's SAM launcher raises its rack when the base goes to alert, lowers it after (bases.js readiness)
+        if (this.readiness !== undefined && this.parts.rack && this.type === 'sam') { const r = this.parts.rack.rotation; r.x += ((this.readiness >= 1 ? 0.6 : 0.06) - r.x) * Math.min(1, dt * 0.25); }
         if (!g.player) return;
         if (this.role !== 'aaa' && this.role !== 'sam') return;
         const targets = g.aircraft.filter(a => a.alive && a.team !== this.team && !a.onGround);
@@ -425,6 +427,8 @@ class GroundTarget {
         const dist = Math.sqrt(bd);
         const agl = t.pos.y - groundHeight(t.pos.x, t.pos.z);
         const diff = g.difficulty;
+        // crews at readiness (an airbase at alert: bases.js) react at once; stood down, it takes them a while
+        const ready = this.readiness ?? 1;
 
         if (this.role === 'aaa' && dist < 2800) {
             // aim with lead and jitter
@@ -435,7 +439,7 @@ class GroundTarget {
                 aim.x += rand(-40, 40); aim.y += rand(-30, 40); aim.z += rand(-40, 40);
                 const dir = aim.sub(this.pos).normalize();
                 if (this.parts.turret) this.parts.turret.rotation.y = Math.atan2(-dir.x, -dir.z) - this.mesh.rotation.y;
-                this.fireT -= dt;
+                this.fireT -= dt * ready;
                 if (this.fireT <= 0) {
                     this.fireT = 0.09;
                     this.burst = (this.burst || 0) + 1;
@@ -448,8 +452,8 @@ class GroundTarget {
         }
 
         if (this.role === 'sam' && this.ammo > 0 && dist < WEAPONS.sam.range && dist > 600 && agl > 50) {
-            const radarsUp = this.type === 'msam' || this.sys.targets.some(x => x.alive && x.type === 'radar');
-            this.lockT += dt * (radarsUp ? 1 : 0.4);
+            const radarsUp = this.type === 'msam' || this.sys.targets.some(x => x.alive && x.type === 'radar' && !x.unpowered);
+            this.lockT += dt * (radarsUp ? 1 : 0.4) * ready;
             t.lockedBy = t.lockedBy || new Set();
             t.lockedBy.add(this);
             this.fireT -= dt;

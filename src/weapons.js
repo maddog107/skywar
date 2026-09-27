@@ -554,6 +554,7 @@ export class Weapons {
             }
             g.audio.boom(g.camera.position.distanceTo(at), 1.6);
             if (g.camera.position.distanceTo(at) < 800) g.shake = Math.min(1.5, g.shake + 0.6);
+            g.events.emit('bombImpact', b, { at, water: !!(s.water && !hitShip), ship: hitShip }); // (bases.js: runway craters)
             // splash damage
             if (g.ground) for (const t of g.ground.targets) {
                 if (!t.alive || t.team === b.team) continue;

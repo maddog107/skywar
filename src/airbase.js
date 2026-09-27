@@ -18,6 +18,8 @@ import { makeRadialTexture, clamp, rand, freezeStatic, freezeLocal, offsetUnits 
 import { roadMaterial } from './roads.js';
 import { registerAirTarget, Downed, AIR } from './softtargets.js';
 import { WORLD_BUILDINGS } from './buildings.js';
+import { AirfieldLights } from './airfieldlights.js';
+import { baseLayout } from './baselayout.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler(0, 0, 0, "YXZ"), _v3 = new THREE.Vector3(), _v4 = new THREE.Vector3();
 
@@ -258,6 +260,11 @@ export class Airbases {
         for (const b of BASES) this.bases.push(this.buildBase(b));
         this.buildHelis();
         if (WORLD_BUILDINGS.current) WORLD_BUILDINGS.current.index();
+        // every field's lights (airfieldlights.js), in place of world.js's edge-light sprites and the tower beacons
+        for (const b of BASES) for (const rw of b.runways) if (rw.holder) for (const o of [...rw.holder.children]) if (o.isSprite) rw.holder.remove(o);
+        for (const s of this.beacons) s.parent && s.parent.remove(s);
+        this.beacons.length = 0;
+        this.lights = new AirfieldLights(scene, this.bases.map(i => ({ base: i.base, layout: baseLayout(i.base), paved: baseLayout(i.base)?.paved || i.group.userData.paved || [] })));
     }
 
     // ── Solid, destructible structures (buildings.js records, found by the same queries as the town's) ──
@@ -480,7 +487,9 @@ export class Airbases {
             cyl(0.12, 0.15, 9, MAT.steel, 22, 0, z, gate, 6);
             const lamp = box(0.8, 0.4, 0.6, MAT.dark, 22, 9, z, gate);
             lamp.castShadow = false;
-            this.floods.push(this.glow(gate, new THREE.Vector3(22, 8.9, z), 0xfff1c8, 14));
+            const fl = this.glow(gate, new THREE.Vector3(22, 8.9, z), 0xfff1c8, 14);
+            this.floods.push(fl);
+            (info.floods || (info.floods = [])).push(fl);
         }
         info.gatePos = (() => { const w = baseToWorld(b, gx, gz); return new THREE.Vector3(w.x, b.h + y, w.z); })();
         // dozens of little meshes → one per material (the barrier arms and the flag move, so they stay apart)
@@ -581,7 +590,7 @@ export class Airbases {
         g.add(r);
         info.radar = head;
         if (b) this.near(b, r);
-        if (b) this.solid(b, 'radar', [r], [{ lx: x, lz: z, y0: 0, y1: 10.5, w: 3.6, d: 3.6 }, { lx: x, lz: z, y0: 9, y1: 13.5, w: 9.4, d: 9.4 }]);
+        if (b) info.radarRec = this.solid(b, 'radar', [r], [{ lx: x, lz: z, y0: 0, y1: 10.5, w: 3.6, d: 3.6 }, { lx: x, lz: z, y0: 9, y1: 13.5, w: 9.4, d: 9.4 }]);
     }
 
     // Dorm blocks outside the fence by the gate road (the Ready Room start)
@@ -747,6 +756,8 @@ export class Airbases {
         m.position.set(x, y, z);
         m.receiveShadow = true;
         g.add(m);
+        // (base-local rects of the pavement: craters and taxiway lights, bases.js / airfieldlights.js)
+        (g.userData.paved || (g.userData.paved = [])).push({ kind: Math.min(w, d) < 40 ? 'taxiway' : 'apron', x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2, mesh: m });
         return m;
     }
 
@@ -950,6 +961,8 @@ export class Airbases {
         for (const i of this.bases) if (i.cabLight) i.cabLight.material.emissive.setHex(on ? 0x3a5a44 : 0x000000);
         MAT.glass.emissive.setHex(0x000000);
         if (this._wireMat) this._wireMat.color.setHex(on ? 0x202224 : 0x9a9a98);
+        if (this.lights) this.lights.setNight(on);
+        for (const i of this.bases) i.darkShown = null; // (update() re-applies each field's blackout)
     }
 
     update(dt, traffic, wind, cam) {
@@ -962,8 +975,16 @@ export class Airbases {
         for (const h of this.helis) h.update(dt);
         const blink = Math.floor(t * 1.2) % 2 === 0;
         for (const b of this.beacons) { b.visible = !!this.night && (!b.userData.rec || b.userData.rec.alive); b.material.color.setHex(blink ? 0x6dff8a : 0xffffff); }
+        if (this.lights) this.lights.update(dt, cam);
         for (const info of this.bases) {
-            if (info.radar) info.radar.rotation.y += dt * 1.6;
+            // a field blacked out under air attack, or without power (bases.js): gate floods and the tower cab go dark
+            const dark = !!(info.blackout || (this.lights && !this.lights.lit(info.base.id)));
+            if (info.darkShown !== dark) {
+                info.darkShown = dark;
+                for (const s of info.floods || []) s.visible = !!this.night && !dark;
+                if (info.cabLight) info.cabLight.material.emissive.setHex(this.night && !dark ? 0x3a5a44 : 0x000000);
+            }
+            if (info.radar && !info.radarStopped) info.radar.rotation.y += dt * 1.6;
             if (info.sock) {
                 const wx = wind ? wind.x : 3, wz = wind ? wind.z : -2;
                 const yawW = Math.atan2(wx, wz) + info.base.heading;

@@ -16,6 +16,8 @@ import { FrontLine } from './front.js';
 import { Director } from './director.js';
 import { TaskManager } from './tasks.js';
 import { Wingmen } from './wingmen.js';
+import { Bases } from './bases.js';
+import { CoastalDefence } from './coastal.js';
 
 export const SYSTEMS = [
     ['tacmap', TacticalMap],
@@ -23,8 +25,10 @@ export const SYSTEMS = [
     ['mapkit', MapKit],     // map tools: legend, layers, ruler, coordinates, steerpoint, air tracks, imagery
     ['command', CommandMenu],
     ['strikes', StrikeManager],
+    ['bases', Bases],            // airbases alive: alert states, installations, craters and repairs, scrambles, life
     ['front', FrontLine],        // the front line and the ground war
     ['director', Director],      // enemy and friendly activity, the Living War mode
     ['tasks', TaskManager],      // dynamic tasks
     ['wingmen', Wingmen],        // wingmen that take orders
+    ['coastal', CoastalDefence], // coastal anti-ship missile batteries (Bastion-P, Harpoon)
 ];

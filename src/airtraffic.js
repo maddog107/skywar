@@ -193,6 +193,8 @@ class Flight {
         switch (this.state) {
             case 'approach': {
                 const d = this.distToTouch();
+                // the runway's been closed under us (craters: bases.js): go around and leave
+                if (this.sys.runwayClosed && d > 600 && this.sys.runwayClosed(this.b, this.rw)) { this.goAround(); return; }
                 // spacing: a faster jet closing on a slower one ahead slows to its speed (never below its own stall margin)
                 let want = P.vapp;
                 for (const f of this.sys.flights) {
@@ -258,7 +260,7 @@ class Flight {
             }
             case 'hold': {
                 this.holdT -= dt;
-                if (this.holdT <= 0 && !this.sys.runwayBusy(this)) {
+                if (this.holdT <= 0 && !this.sys.runwayBusy(this) && !(this.sys.runwayClosed && this.sys.runwayClosed(this.b, this.rw))) {
                     this.state = 'lineup';
                     this.route = [this.thr.clone().addScaledVector(this.fwd, 70), this.thr.clone().addScaledVector(this.fwd, 160)];
                 }
@@ -400,6 +402,7 @@ export class AirTraffic {
         for (const ap of this.airports) {
             ap.nextT -= dt;
             const mine = this.flights.filter(f => f.ap === ap && !f.done);
+            if (ap.nextT <= 0 && this.runwayClosed && this.runwayClosed(ap.base, ap.base.runways[ap.arrRw])) { ap.nextT = 20; continue; } // (closed: no arrivals)
             if (ap.nextT <= 0 && mine.length < 5) {
                 // mostly arrivals (they turn round and leave again); a departure now and then if the stands are empty
                 const deps = mine.filter(f => f.kind === 'departure').length;
