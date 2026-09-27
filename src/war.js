@@ -270,7 +270,9 @@ export class War {
                 // air-to-air radar: contacts to ~45 km in front, the type (NCTR) closer
                 if (hasRadar && airborne && d < 45000) {
                     const inCone = _v.subVectors(u.pos, eye).divideScalar(d).dot(nose) > 0.35;
-                    if (inCone) { this.bump(rec, d < 18000 ? INTEL.IDENTIFIED : INTEL.CONTACT, 'radar', step); continue; }
+                    // (a jammer hides behind its noise strobe until the radar burns through, closer in)
+                    const jf = inCone ? this.jamFactor(this.side, p.pos, u.pos) : 1;
+                    if (inCone && d < 45000 * jf) { this.bump(rec, d < 18000 * jf ? INTEL.IDENTIFIED : INTEL.CONTACT, 'radar', step); continue; }
                 }
                 spotR = 9000; idR = 3500;
             } else {
@@ -447,18 +449,42 @@ export class War {
             const rec = this.recs.get(u);
             if (rec.cls !== 'radar' && rec.cls !== 'sam-radar' && rec.cls !== 'awacs' && !u.radarRange) continue;
             if (u.jammed && this.time < u.jammed) continue;
-            const R = u.radarRange || (rec.cls === 'awacs' ? 250000 : rec.cls === 'sam-radar' ? 60000 : 90000);
+            const R0 = u.radarRange || (rec.cls === 'awacs' ? 250000 : rec.cls === 'sam-radar' ? 60000 : 90000);
             const d = u.pos.distanceTo(pos);
+            if (d > R0) continue;
+            // noise jamming shrinks what's left of the range (burn-through inside it)
+            const R = R0 * this.jamFactor(team, u.pos, pos);
             if (d > R) continue;
-            // radar horizon (4/3 earth): ~4.12 (√h1 + √h2) km
+            // radar horizon (4/3 earth): ~4.12 (√h1 + √h2) km — an airborne radar's from its altitude
             const h1 = Math.max(u.pos.y - Math.max(terrainHeight(u.pos.x, u.pos.z), 0), 0) + 10;
             const h2 = Math.max(pos.y - Math.max(terrainHeight(pos.x, pos.z), 0), 0);
-            if (rec.cls !== 'awacs' && d > 4120 * (Math.sqrt(h1) + Math.sqrt(h2))) continue;
-            if (rec.cls !== 'awacs' && !this.lineOfSight(_v3.copy(u.pos).setY(u.pos.y + 12), pos)) continue;
-            best = Math.max(best, 1 - (d / R) * 0.6);
+            if (d > 4120 * (Math.sqrt(h1) + Math.sqrt(h2))) continue;
+            // terrain in the way: a low flyer behind a ridge is hidden from an AWACS too
+            if (!this.radarLOS(_v3.copy(u.pos).setY(u.pos.y + 12), pos)) continue;
+            best = Math.max(best, 1 - (d / R0) * 0.6);
         }
         return best;
     }
+
+    // line of sight for a radar: the usual samples, plus closer ones over the last few km before the target (where
+    // a low flyer's cover is: the samples of a 100 km look are too far apart to find a ridge)
+    radarLOS(a, b) {
+        if (!this.lineOfSight(a, b)) return false;
+        const d = a.distanceTo(b);
+        if (d < 4000) return true;
+        const span = Math.min(6000, d * 0.4) / d;
+        for (let i = 1; i <= 8; i++) {
+            const t = 1 - span * i / 9;
+            const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t, z = a.z + (b.z - a.z) * t;
+            if (terrainHeight(x, z) > y + 2) return false;
+        }
+        return true;
+    }
+
+    // Electronic warfare: the share of its range a `team` radar at `from` keeps looking at `to` through the other
+    // side's jamming (1: none). The air-support plug-in (airsupport.js / ew.js) sets war.jam; coverage, the
+    // player's radar and SAM fire control go through here.
+    jamFactor(team, from, to) { return this.jam ? this.jam(team, from, to) : 1; }
 
     // ═════════════ Clearings ═════════════
     // Ground kept free of trees for an installation (a missile site, a SAM battery, a hidden compound's yard):

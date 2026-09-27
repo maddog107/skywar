@@ -753,7 +753,8 @@ export class Director {
         const txt = what + ', BRG ' + String(brg).padStart(3, '0') + ' FOR ' + Math.round(km) + ' KM, ANGELS ' + alt + ', HEADING ' + String(hd).padStart(3, '0') + tgt;
         const urgent = f.role === 'raid' || f.role === 'cas' || f.role === 'recon';
         if (!urgent && km > 60) return; // a CAP far off: nothing to say
-        this.say('MAGIC', (f.role === 'raid' ? 'RAID ALERT — ' : f.role === 'recon' ? 'UNKNOWN AIRCRAFT — ' : 'NEW PICTURE — ') + txt, { color: urgent ? '#ff9f5a' : '#ffd24a', say: urgent ? (f.role === 'raid' ? 'Raid alert. ' : 'Magic, new contact. ') + what.toLowerCase() + ', bearing ' + brg + ', ' + Math.round(km) + ' kilometres.' : false, priority: f.role === 'raid' });
+        // with an AWACS on station, its controller makes the call, in brevity (airsupport.js)
+        if (!(g.air && g.air.announceFlight && g.air.announceFlight(f))) this.say('MAGIC', (f.role === 'raid' ? 'RAID ALERT — ' : f.role === 'recon' ? 'UNKNOWN AIRCRAFT — ' : 'NEW PICTURE — ') + txt, { color: urgent ? '#ff9f5a' : '#ffd24a', say: urgent ? (f.role === 'raid' ? 'Raid alert. ' : 'Magic, new contact. ') + what.toLowerCase() + ', bearing ' + brg + ', ' + Math.round(km) + ' kilometres.' : false, priority: f.role === 'raid' });
         g.events.emit(f.role === 'recon' ? 'reconDetected' : f.role === 'raid' || f.role === 'cas' ? 'raidDetected' : 'flightDetected', f);
     }
 
@@ -949,6 +950,8 @@ export class Director {
         const f = this.spawnFlight({ team: 'red', role: 'raid', types: Array(n).fill(type), bombs: 4, pos: start, speed: 215, skill: this.redSkill(),
             route: [{ p: ip }, { p: tgtPt, attack: true }, { p: over }, { p: egress }], target: t, callsign: 'RAID', tag: low ? 'low' : 'high' });
         f.home = this.homeFor('red', origin);
+        // a cruise-missile carrier (the Tu-95MS) stands off and launches through the strike system (airsupport.js)
+        if (g.air && g.air.standoffRaid) g.air.standoffRaid(f);
         // escorts from veteran up
         if (this.intensity() > 0.95) {
             const e = this.spawnFlight({ team: 'red', role: 'escort', types: [pick(RED_FIGHTERS), pick(RED_FIGHTERS)], pos: start.clone().add(_v2.set(800, 300, 600)), speed: 215, skill: this.redSkill(), escortOf: f, callsign: 'ESCORT' });
