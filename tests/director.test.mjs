@@ -93,7 +93,7 @@ describe('the front line', () => {
     });
 
     test('a sector where we dominate pushes the front into enemy ground, smoothly', () => {
-        const g = frontGame(), fr = g.front, s = fr.sectors[2];
+        const g = frontGame(), fr = g.front, s = fr.landSectors[1];
         const probe = new THREE.Vector3(s.center.x + s.normal.x * 400, 0, s.center.z + s.normal.z * 400);
         assert.equal(g.war.sideAt(probe.x, probe.z), 'red');
         fr.offensiveT = 1e9; // (no random offensives in this test)
@@ -116,7 +116,7 @@ describe('the front line', () => {
     });
 
     test("kills near the line weaken their side's sector; the ground war's own fire doesn't count twice", () => {
-        const g = frontGame(), fr = g.front, s = fr.sectors[3];
+        const g = frontGame(), fr = g.front, s = fr.landSectors[2];
         const at = new THREE.Vector3(s.center.x + s.normal.x * 800, 0, s.center.z + s.normal.z * 800);
         const red0 = s.red;
         for (let k = 0; k < 4; k++) g.events.emit('groundKilled', { team: 'red', pos: at, cls: 'tank' }, { source: {} });
@@ -130,7 +130,7 @@ describe('the front line', () => {
     });
 
     test('a bridge down behind their lines cuts their supply for as long as it is down', () => {
-        const g = frontGame(), fr = g.front, s = fr.sectors[4];
+        const g = frontGame(), fr = g.front, s = fr.landSectors[0];
         const bpos = new THREE.Vector3(s.center.x + s.normal.x * 5000, 0, s.center.z + s.normal.z * 5000);
         g.world.towns = { towns: [], bridges: [{ alive: false, pos: bpos }] };
         fr.updateSupply();
@@ -139,6 +139,28 @@ describe('the front line', () => {
         g.world.towns.bridges[0].alive = true;
         fr.updateSupply();
         assert.equal(s.supply.red, 1, 'repaired: supply back');
+    });
+
+    test('stretches of front over the sea stay quiet; near the player, real units fight on land', () => {
+        const g = frontGame(), fr = g.front;
+        assert.ok(fr.landSectors.length >= 3, fr.landSectors.length + ' land sectors');
+        fr.offensiveT = 1e9;
+        const sea = fr.sectors.find(s => s.sea);
+        if (sea) { step(g, 120, 1, () => { sea.blue = 100; sea.red = 10; }); assert.equal(sea.off, 0, 'a sea stretch does not move'); }
+        const s = fr.landSectors[1];
+        g.player = { pos: new THREE.Vector3(s.center.x - s.normal.x * 3000, 1500, s.center.z - s.normal.z * 3000), alive: true };
+        step(g, 4);
+        assert.ok(fr.zones.length >= 1, 'an engagement zone near the player');
+        const z = fr.zones[0];
+        const reds = z.units.filter(u => u.team === 'red'), blues = z.units.filter(u => u.team === 'blue');
+        assert.ok(reds.length >= 2 && blues.length >= 2, reds.length + ' red, ' + blues.length + ' blue');
+        assert.ok(reds.filter(u => g.war.sideAt(u.pos.x, u.pos.z) === 'red').length >= 2, 'theirs on their side');
+        assert.ok(blues.filter(u => g.war.sideAt(u.pos.x, u.pos.z) === 'blue').length >= 2, 'ours on ours');
+        for (const u of z.units) assert.ok(world.terrainHeight(u.pos.x, u.pos.z) > 1, 'on land');
+        g.player.pos.set(0, 1500, 70000);
+        step(g, 3);
+        assert.equal(fr.zones.length, 0, 'gone when the player left');
+        assert.ok(g.ground.targets.every(u => !u.frontZone || u.removed), 'its vehicles taken away');
     });
 
     test('red artillery batteries sit behind their lines and add to their firepower', () => {

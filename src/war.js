@@ -191,11 +191,17 @@ export class War {
         if (quiet || rec.team === this.side || !this.enabled) return;
         const g = this.game;
         const where = this.describePos(rec.unit.pos);
+        // (through the director's pacing when a war runs: flying over a base spots a dozen things at once)
+        const call = (text, color, group) => {
+            const d = g.director;
+            if (d && d.enabled && d.say) d.say('INTEL', text, { color, say: false, group, merge: (n) => n + ' MORE ' + (group === 'contact' ? 'NEW CONTACTS' : 'TARGETS IDENTIFIED') + ' NEAR GRID ' + this.grid(rec.unit.pos.x, rec.unit.pos.z) + ' — SEE THE MAP' });
+            else this.radio('INTEL', text, { color, say: false });
+        };
         if (level === INTEL.CONTACT && was < INTEL.CONTACT && !['aircraft', 'helicopter'].includes(rec.cls)) {
-            this.radio('INTEL', 'NEW CONTACT: ' + rec.contactName + ' — ' + where, { color: '#ffd24a', say: false });
+            call('NEW CONTACT: ' + rec.contactName + ' — ' + where, '#ffd24a', 'contact');
             g.events.emit('warContact', rec.unit, { rec });
         } else if (level >= INTEL.IDENTIFIED && was < INTEL.IDENTIFIED && !['aircraft', 'helicopter'].includes(rec.cls)) {
-            this.radio('INTEL', 'IDENTIFIED: ' + rec.name + ' — ' + where, { color: '#ff9f5a', say: false });
+            call('IDENTIFIED: ' + rec.name + ' — ' + where, '#ff9f5a', 'ident');
             g.events.emit('warIdentified', rec.unit, { rec });
             // an intel report whose facility this was is resolved
             for (const rp of this.reports) if (rp.unit === rec.unit && !rp.resolved) this.resolveReport(rp);

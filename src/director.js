@@ -30,7 +30,7 @@ import { GroundLauncher } from './strikes.js';
 import { findOcean } from './naval.js';
 import { clamp, rand, pick, lerp } from './util.js';
 
-const MAT_R = 20000, DEMAT_R = 30000; // flights become real jets this close to the player, abstract past that
+const MAT_R = 18000, DEMAT_R = 27000; // flights become real jets this close to the player, abstract past that
 const SPACING = 32;                     // convoy vehicle spacing (m)
 const RED_FIGHTERS = ['su35', 'mig29', 'j10', 'su57', 'j20', 'mig21', 'mirage'];
 const RED_STRIKERS = ['su35', 'j10', 'mig29', 'j8'];
@@ -215,10 +215,16 @@ export class Director {
     }
 
     // ═════════════ Radio (paced) ═════════════
-    // opts: war.radio's (color, say, priority) plus ttl (s a line may wait before it's stale)
+    // opts: war.radio's (color, say, priority) plus ttl (s a line may wait before it's stale), and group + merge:
+    // lines of a group that pile up while they wait become one (merge(count) gives its text) — a burst of new
+    // contacts is one call, not six
     say(from, text, opts = {}) {
         const g = this.game, now = g.time;
         const o = { voice: voiceFor(from), ...opts };
+        if (o.group && !o.priority) {
+            const q = this.queue.find(x => x.o.group === o.group && x.from === from);
+            if (q) { q.count = (q.count || 1) + 1; q.text = o.merge ? o.merge(q.count, text) : text; q.o.say = false; return; }
+        }
         if (o.priority || (!this.queue.length && now - this.lastRadio > 3.5)) { this.send(from, text, o); return; }
         if (this.queue.length >= 6) this.queue.shift();
         this.queue.push({ from, text, o, t: now });
@@ -388,7 +394,8 @@ export class Director {
     updateLOD() {
         const g = this.game, P = this.focus(), war = g.war;
         const k = this.intensity();
-        const budget = Math.round(6 + k * 4), fighterCap = Math.round(1 + k * 3);
+        // (each real jet costs ~0.2 ms a frame: rookie 5 / veteran 6 / ace 8, and 2 / 3 / 4 enemy fighters)
+        const budget = Math.round(k * 6), fighterCap = Math.round(k * 3);
         let live = 0, redFighters = 0;
         for (const f of this.flights) if (f.members) { live += f.n; if (f.team !== war.side && f.fighters) redFighters += f.n; }
         // nearest first
@@ -664,10 +671,11 @@ export class Director {
             for (const b of fl) {
                 if (b === a || b.done || b.members || b.n === 0 || b.team === a.team || a.team !== war.side) continue;
                 if (Math.hypot(a.pos.x - b.pos.x, a.pos.z - b.pos.z) > 8000) continue;
-                // a = ours, b = theirs: fighters shoot, bombers and recon don't
+                // a = ours, b = theirs: fighters shoot, bombers and recon don't; an escort ties our fighters up
                 const ours = a.fighters ? a.n : 0, theirs = b.fighters ? b.n : 0;
-                if (ours && Math.random() < 0.09 * ours * (b.fighters ? 1 : 1.6)) this.abstractLoss(b, a);
-                if (theirs && a.n && Math.random() < 0.075 * theirs) this.abstractLoss(a, b);
+                const escorted = !b.fighters && fl.some(e => e.escortOf === b && !e.done && e.n > 0);
+                if (ours && Math.random() < 0.05 * ours * (b.fighters ? 0.9 : escorted ? 0.7 : 1.3)) this.abstractLoss(b, a);
+                if (theirs && a.n && Math.random() < 0.045 * theirs) this.abstractLoss(a, b);
                 if (!a.engagedCall && ours && theirs) {
                     a.engagedCall = true;
                     this.supportCall(a, b);
@@ -823,7 +831,7 @@ export class Director {
             if (f.team !== war.side || f.role !== 'cap' || f.done || f.state === 'rtb' || !f.loiter) continue;
             if (f.vector && (f.vector.done || f.vector.n === 0)) f.vector = null;
             if (f.vector) continue;
-            let best = null, bd = 45000;
+            let best = null, bd = 30000;
             for (const e of this.flights) {
                 if (e.team === war.side || e.done || !e.detected || e.n === 0 || !(e.role === 'raid' || e.role === 'cas' || e.role === 'recon')) continue;
                 const d = Math.hypot(e.pos.x - f.loiter.center.x, e.pos.z - f.loiter.center.z);

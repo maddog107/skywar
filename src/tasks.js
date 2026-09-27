@@ -285,17 +285,26 @@ export class TaskManager {
                 const g = self.game, fr = g.front, war = g.war;
                 if (!fr || !fr.batteries || self.recentHas('artillery') || !self.canOffer()) return null;
                 const P = self.focus();
-                const bts = fr.batteries.filter(b => b.units.some(u => u.alive) && !b.tasked);
+                // (a battery whose offer was passed up waits a few minutes before it's offered again)
+                const bts = fr.batteries.filter(b => b.units.some(u => u.alive) && !b.tasked && war.time - (b.offeredT ?? -1e9) > 420);
                 if (!bts.length) return null;
-                bts.sort((a, b) => (a.sector.blue - a.sector.red) - (b.sector.blue - b.sector.red) || a.at.distanceTo(P) - b.at.distanceTo(P));
+                // the nearest, preferring a sector where we're losing (10 strength points ≈ 5 km)
+                const score = (b) => b.at.distanceTo(P) / 1000 + (b.sector.blue - b.sector.red) * 0.5;
+                bts.sort((a, b) => score(a) - score(b));
                 const bt = bts[0];
-                const center = bt.at.clone().add(new THREE.Vector3(rand(-1300, 1300), 0, rand(-1300, 1300)));
+                // one search area per battery, kept until it's found
+                const known = bt.report && !bt.report.resolved ? bt.report : null;
+                const center = known ? known.center : bt.at.clone().add(new THREE.Vector3(rand(-1300, 1300), 0, rand(-1300, 1300)));
                 return {
                     type: 'artillery', key: 'artillery:' + (war.rec(bt.units[0])?.id ?? bt.sector.id), title: 'SILENCE THE ARTILLERY IN SECTOR ' + bt.sector.name,
                     brief: 'A HOWITZER BATTERY IS SHELLING ' + fr.sectorLabel(bt.sector) + '. SEARCH AREA ' + war.grid(center.x, center.z) + ' — MUZZLE FLASHES GIVE IT AWAY. DESTROY ALL THREE GUNS.',
                     units: bt.units.slice(), area: { center, radius: 2600 }, reward: 700, label: 'ARTILLERY', expires: 300,
                     progress: (t) => t.units.filter(u => !u.alive).length + '/' + t.units.length + ' GUNS',
-                    onOffer: (t) => { bt.tasked = true; t.report = war.report({ text: 'ENEMY ARTILLERY SHELLING ' + fr.sectorLabel(bt.sector), center, radius: 2600, unit: bt.units[0], cls: 'artillery', say: false }); t.report.tasked = true; },
+                    onOffer: (t) => {
+                        bt.tasked = true; bt.offeredT = war.time;
+                        if (!known) { bt.report = war.report({ text: 'ENEMY ARTILLERY SHELLING ' + fr.sectorLabel(bt.sector), center, radius: 2600, unit: bt.units[0], cls: 'artillery', say: false }); bt.report.tasked = true; }
+                        t.report = bt.report;
+                    },
                     onEnd: () => { bt.tasked = false; },
                     check: (t) => (t.units.every(u => !u.alive) ? 'done:THE SHELLING HAS STOPPED IN SECTOR ' + bt.sector.name : null),
                 };

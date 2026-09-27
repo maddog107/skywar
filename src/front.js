@@ -162,6 +162,11 @@ export class FrontLine {
                 town: null, redFirepower: 1,
             };
             for (let i = i0; i <= i1; i++) pts[i].sec = j;
+            // how much of it is land: a stretch of front that runs over the sea has no ground war
+            let land = 0, probes = 0;
+            for (let i = i0; i <= i1; i++) for (const k of [-1500, -500, 0, 500, 1500]) { probes++; if (terrainHeight(pts[i].bx + pts[i].nx * k, pts[i].bz + pts[i].nz * k) > 3) land++; }
+            sec.land = land / probes;
+            sec.sea = sec.land < 0.3;
             this.sectors.push(sec);
         }
         this.describeSectors();
@@ -251,9 +256,10 @@ export class FrontLine {
 
     distToFront(pos) { const s = this.sectorAt(pos); return s ? s._dist : Infinity; }
 
-    // overall balance (0 = all red … 1 = all blue) and how far the front has moved in blue's favour (km, mean)
-    balance() { let q = 0; for (const s of this.sectors) q += s.blue / Math.max(s.blue + s.red, 1); return this.sectors.length ? q / this.sectors.length : 0.5; }
-    gainKm() { let o = 0; for (const s of this.sectors) o += s.off; return this.sectors.length ? o / this.sectors.length / 1000 : 0; }
+    // overall balance (0 = all red … 1 = all blue) and how far the front has moved in blue's favour (km, mean), on land
+    get landSectors() { return this.sectors.filter(s => !s.sea); }
+    balance() { const L = this.landSectors; let q = 0; for (const s of L) q += s.blue / Math.max(s.blue + s.red, 1); return L.length ? q / L.length : 0.5; }
+    gainKm() { const L = this.landSectors; let o = 0; for (const s of L) o += s.off; return L.length ? o / L.length / 1000 : 0; }
 
     zoneUnits(sector, team = null) {
         const out = [];
@@ -286,6 +292,7 @@ export class FrontLine {
         const diff = this.game.difficulty || { skill: 0.6 };
         const redBias = 0.9 + diff.skill * 0.2; // the enemy fights a little harder on higher difficulty
         for (const s of this.sectors) {
+            if (s.sea) { s.vel = 0; s.intensity = 0.05; s.contested = false; continue; } // (a stretch over the water: quiet)
             // offensives: the boost arrives over ~20 s, the push lasts a few minutes
             for (const team of ['blue', 'red']) {
                 if (s.boost[team] > 0) { const k = Math.min(s.boost[team], 1.3 * dt); s[team] += k; s.boost[team] -= k; }
@@ -383,11 +390,11 @@ export class FrontLine {
         if (!this.enabled || !t || !t.pos) return;
         if (source && source.isFront) return;
         const war = this.game.war;
-        if (t.isBridge) return; // (bridges work through supply)
+        if (t.isBridge || t.isShip) return; // (bridges work through supply; ships aren't the ground war)
         const team = t.team;
         if (team !== 'red' && team !== 'blue') return;
         const s = this.sectorAt(t.pos, 30000);
-        if (!s) return;
+        if (!s || s.sea) return;
         const rec = war.rec(t);
         const cls = rec ? rec.cls : t.cls || 'vehicle';
         let w = WORTH[cls] ?? 2;
@@ -441,7 +448,7 @@ export class FrontLine {
         const g = this.game, diff = g.difficulty || { skill: 0.6 };
         this.offensiveT = rand(260, 420) / (0.8 + diff.skill * 0.4);
         const focus = this.focus();
-        const cands = this.sectors.filter(s => !s.offensive);
+        const cands = this.sectors.filter(s => !s.offensive && !s.sea);
         if (!cands.length) return;
         const w = cands.map(s => 1 / (1 + (Math.hypot(s.center.x - focus.x, s.center.z - focus.z) / 25000) ** 2));
         let r = Math.random() * w.reduce((a, b) => a + b, 0), s = cands[0];
@@ -460,7 +467,7 @@ export class FrontLine {
 
     // ═════════════ Red artillery: real batteries behind the line ═════════════
     placeBatteries(n) {
-        const order = [...this.sectors].sort(() => Math.random() - 0.5);
+        const order = this.landSectors.sort(() => Math.random() - 0.5);
         // spread them: every other sector first
         const pickOrder = [...order.filter((s, i) => s.id % 2 === 1), ...order.filter(s => s.id % 2 === 0)];
         for (const s of pickOrder) {
@@ -510,7 +517,9 @@ export class FrontLine {
         const want = this.game.mode === 'war' ? 3 : 2;
         if (alive.length >= want) return;
         const used = new Set(alive.map(b => b.sector));
-        const s = pick(this.sectors.filter(x => !used.has(x))) || pick(this.sectors);
+        const land = this.landSectors;
+        const s = pick(land.filter(x => !used.has(x))) || pick(land);
+        if (!s) return;
         const bt = this.addBattery(s);
         if (bt) this.say('INTEL', 'NEW ENEMY ARTILLERY POSITIONS REPORTED BEHIND ' + this.sectorLabel(s), { color: '#ffd24a', say: false });
     }
@@ -601,6 +610,7 @@ export class FrontLine {
         const vis = this._vis || (this._vis = []);
         vis.length = 0;
         for (const s of this.sectors) {
+            if (s.sea) continue;
             const near = this.nearestPointDist(s, cam);
             if (near > VIS_R) continue;
             vis.push(s);
@@ -720,20 +730,24 @@ export class FrontLine {
 
     makeZone(s, focus) {
         const g = this.game, war = g.war, diff = g.difficulty || { skill: 0.6 };
-        // on the front in this sector, nearest the player, where the ground allows a fight
-        let best = null, bd = Infinity;
-        for (let i = s.i0; i <= s.i1; i++) {
-            const p = this.pts[i];
-            const d = Math.hypot(p.x - focus.x, p.z - focus.z);
-            if (d < bd && this.goodGround(p.x, p.z, 7) && this.goodGround(p.x + p.nx * 500, p.z + p.nz * 500, 9) && this.goodGround(p.x - p.nx * 500, p.z - p.nz * 500, 9)) { bd = d; best = i; }
-        }
-        if (best === null) { s.noZoneT = war.time; return null; }
-        const p = this.pts[best];
-        const zone = { sector: s, idx: best, center: new THREE.Vector3(p.x, groundHeight(p.x, p.z), p.z), units: [], slots: [], fireT: 2, reinfT: 30 };
         const nRed = 4 + Math.round(diff.skill * 2), nBlue = 4;
         const redTypes = ['tank', 'tank', 'spaag', 'tank', 'truck', 'tank'], blueTypes = ['tank', 'humvee', 'tank', 'truck', 'tank'];
-        for (let k = 0; k < nRed; k++) zone.slots.push({ team: 'red', type: redTypes[k % redTypes.length], along: (k - (nRed - 1) / 2) * 210 + rand(-50, 50), depth: rand(280, 700), unit: null });
-        for (let k = 0; k < nBlue; k++) zone.slots.push({ team: 'blue', type: blueTypes[k % blueTypes.length], along: (k - (nBlue - 1) / 2) * 230 + rand(-50, 50), depth: rand(280, 650), unit: null });
+        // on the front in this sector where the ground allows a fight (enough of the slots on dry, drivable
+        // land), the nearest such place to the player
+        const tries = [];
+        for (let i = s.i0; i <= s.i1; i++) tries.push({ i, d: Math.hypot(this.pts[i].x - focus.x, this.pts[i].z - focus.z) });
+        tries.sort((a, b) => a.d - b.d);
+        let zone = null;
+        for (const { i } of tries.slice(0, 5)) {
+            const p = this.pts[i];
+            const z = { sector: s, idx: i, center: new THREE.Vector3(p.x, groundHeight(p.x, p.z), p.z), units: [], slots: [], fireT: 2, reinfT: 30 };
+            for (let k = 0; k < nRed; k++) z.slots.push({ team: 'red', type: redTypes[k % redTypes.length], along: (k - (nRed - 1) / 2) * 210 + rand(-50, 50), depth: rand(280, 700), unit: null });
+            for (let k = 0; k < nBlue; k++) z.slots.push({ team: 'blue', type: blueTypes[k % blueTypes.length], along: (k - (nBlue - 1) / 2) * 230 + rand(-50, 50), depth: rand(280, 650), unit: null });
+            z.slots = z.slots.filter(sl => this.fitSlot(z, sl));
+            if (z.slots.filter(sl => sl.team === 'red').length >= 2 && z.slots.filter(sl => sl.team === 'blue').length >= 2) { zone = z; break; }
+        }
+        if (!zone) { s.noZoneT = war.time; return null; }
+        const p = this.pts[zone.idx];
         for (const sl of zone.slots) this.fillSlot(zone, sl, false);
         this.zones.push(zone);
         // our troops there report what they're facing
@@ -754,17 +768,41 @@ export class FrontLine {
         return out.set(x, groundHeight(x, z), z);
     }
 
+    // a slot on ground a vehicle can hold (dry land, not a cliff, not in a town or an airfield): nudged along the
+    // line and in depth until it fits, or false
+    fitSlot(zone, sl) {
+        const a0 = sl.along, d0 = sl.depth;
+        for (const [da, dd] of [[0, 0], [110, 0], [-110, 0], [0, 150], [220, 0], [-220, 0], [110, 150], [-110, 150], [0, -120]]) {
+            sl.along = a0 + da; sl.depth = Math.max(180, d0 + dd);
+            const at = this.slotPos(zone, sl, _v);
+            if (this.drivable(at.x, at.z)) return true;
+        }
+        sl.along = a0; sl.depth = d0;
+        return false;
+    }
+
+    drivable(x, z) {
+        const h = terrainHeight(x, z);
+        if (h < 3 || h > 1100) return false;
+        for (const [ox, oz] of [[25, 0], [-25, 0], [0, 25], [0, -25]]) { const d = terrainHeight(x + ox, z + oz); if (d < 1 || Math.abs(d - h) > 9) return false; }
+        if (BASES.some(b => Math.hypot(x - b.x, z - b.z) < b.r * 1.15)) return false;
+        const towns = this.game.world.towns;
+        if (towns && towns.towns && towns.towns.some(t => Math.hypot(x - t.x, z - t.z) < t.radius + 60)) return false;
+        return true;
+    }
+
     // put a unit in a slot: in place, or (reinforcements) driving up from further back
     fillSlot(zone, sl, drive) {
         const g = this.game, war = g.war;
         const at = this.slotPos(zone, sl, _v);
         const p = this.pts[zone.idx], dir = sl.team === 'red' ? 1 : -1;
         let x = at.x, z = at.z;
-        if (drive) { x += p.nx * dir * rand(1500, 2200); z += p.nz * dir * rand(1500, 2200); }
-        if (terrainHeight(x, z) < 1 || (!drive && !this.goodGround(x, z, 12))) {
-            if (!drive) { x = at.x; z = at.z; if (terrainHeight(x, z) < 1) return null; }
-            else return null;
+        if (drive) {
+            // up from behind, over land (or straight into the slot if the way back is water)
+            const bx = x + p.nx * dir * rand(1200, 2000), bz = z + p.nz * dir * rand(1200, 2000);
+            if (this.drivable(bx, bz)) { x = bx; z = bz; }
         }
+        if (terrainHeight(x, z) < 1) return null;
         const face = Math.atan2(p.nx * dir, p.nz * dir); // facing the enemy (−normal·dir)… (model forward is −Z)
         const u = g.ground.addTarget(sl.type, x, z, face, sl.team);
         u.name = (sl.team === 'red' ? RED_NAMES : BLUE_NAMES)[sl.type] || u.name;
@@ -814,7 +852,11 @@ export class FrontLine {
             zone.slotT = (zone.slotT || 0) - dt;
             if (zone.slotT <= 0) {
                 zone.slotT = 0.5;
-                for (const sl of zone.slots) (sl.to || (sl.to = new THREE.Vector3())).copy(this.slotPos(zone, sl, _v));
+                for (const sl of zone.slots) {
+                    const at = this.slotPos(zone, sl, _v);
+                    if (terrainHeight(at.x, at.z) < 1) continue; // (the line moved over water here: hold where you are)
+                    (sl.to || (sl.to = new THREE.Vector3())).copy(at);
+                }
             }
             // units drive to their slots (the line moves; reinforcements come up)
             for (const sl of zone.slots) {
@@ -906,12 +948,19 @@ export class FrontLine {
         }
         for (const s of this.sectors) {
             const q = s.blue / (s.blue + s.red);
+            if (s.sea) {
+                // a stretch over the water: just its name
+                map.toScreen(s.center.x - s.normal.x * 2600, s.center.z - s.normal.z * 2600, P);
+                ctx.font = '600 10px "Share Tech Mono", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                ctx.fillStyle = 'rgba(232,244,255,0.4)'; ctx.fillText(s.name + ' (SEA)', P.x, P.y);
+                continue;
+            }
             // contested stretches glow
             if (s.contested) {
                 ctx.beginPath();
                 for (let i = s.i0; i <= s.i1; i++) { map.toScreen(this.pts[i].x, this.pts[i].z, P); if (i > s.i0) ctx.lineTo(P.x, P.y); else ctx.moveTo(P.x, P.y); }
                 ctx.strokeStyle = 'rgba(255,160,60,' + (0.16 + 0.1 * Math.sin(t * 3 + s.id)) + ')';
-                ctx.lineWidth = Math.max(6, 1800 * map.scale); ctx.lineCap = 'round'; ctx.stroke(); ctx.lineCap = 'butt';
+                ctx.lineWidth = clamp(1800 * map.scale, 6, 26); ctx.lineCap = 'round'; ctx.stroke(); ctx.lineCap = 'butt';
             }
             // sector boundary ticks
             const a = this.pts[s.i0];
