@@ -380,7 +380,7 @@ class StrategicMissile {
             const big = this.kind === 'ballistic' ? 1.8 : this.kind === 'rocket' ? 0.8 : 1.2;
             fx.fire.emit(back, _v2.copy(this.vel).multiplyScalar(0.6), 0.07, 2.4 * big, 1.2 * big, [7, 5, 2.4], [3.5, 1.2, 0.2], 1, 0, 0, 0);
             if (Math.random() < 0.8) fx.smoke.emit(back, _v2.copy(this.vel).multiplyScalar(0.04), rand(2.5, 5), 2.2 * big, 10 * big, [0.9, 0.9, 0.88], [0.72, 0.72, 0.7], 0.45, 0, 1.2, 1);
-            if (this.game.world.timeKey !== 'day' || this.kind === 'ballistic') fx.light(back, this.kind === 'ballistic' ? 55 : 30, 0.08);
+            // (the motor's light on everything around it is weathersys.js's: it follows every burning missile)
         } else if (this.trail.emitting) this.trail.emitting = false;
         // ballistic re-entry: a glowing streak coming down fast
         if (this.kind === 'ballistic' && this.phase === 'fall' && this.vel.y < -250) {

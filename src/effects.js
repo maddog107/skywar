@@ -12,6 +12,7 @@
 import * as THREE from 'three';
 import { rand, clamp, smoothstep, fbm, makeRadialTexture } from './util.js';
 import { terrainHeight } from './world.js';
+import { fireLights, FIRE_VIEW_GLSL, fireUniforms } from './firelight.js'; // [night] light from fires, motors, flashes
 
 // Squash HDR colours from other systems (muzzle flashes of ~6) into a soft knee that tops out ~2.4:
 // hot enough to bloom, not enough to blow a white halo over half the screen. Keeps the hue.
@@ -111,8 +112,16 @@ const PARTICLE_VS = /* glsl */`
     attribute vec4 iVel;
     #endif
     varying vec2 vUv; varying vec4 vCol; varying float vDist; varying vec2 vRot; varying float vHeat;
+    #ifdef LIT
+    // [night] smoke lit from below by its fires (and by any flash or motor near it): firelight.js
+    ${FIRE_VIEW_GLSL}
+    varying vec3 vFire, vFireDir;
+    #endif
     void main() {
         vec4 mv = viewMatrix * vec4(iPos, 1.0);
+        #ifdef LIT
+        vFire = fireIrradiance(mv.xyz, vFireDir);
+        #endif
         float size = iParams.x;
         float c = cos(iParams.y), s = sin(iParams.y);
         vec2 q = vec2(c * position.x - s * position.y, s * position.x + c * position.y) * size;
@@ -140,6 +149,9 @@ const PARTICLE_FS = /* glsl */`
     uniform sampler2D map; uniform vec3 fogColor; uniform float fogDensity;
     uniform vec3 sunDirV, sunCol, ambTop, ambBot; uniform float addK;
     varying vec2 vUv; varying vec4 vCol; varying float vDist; varying vec2 vRot; varying float vHeat;
+    #ifdef LIT
+    varying vec3 vFire, vFireDir;
+    #endif
     // black-body-ish ramp: dull red → orange → yellow-white (linear, HDR at the top only)
     vec3 fireRamp(float h) {
         vec3 c = mix(vec3(0.25, 0.02, 0.0), vec3(0.95, 0.22, 0.02), smoothstep(0.0, 0.3, h));
@@ -160,6 +172,13 @@ const PARTICLE_FS = /* glsl */`
             float back = pow(clamp(-sunDirV.z, 0.0, 1.0), 3.0) * (1.0 - t.a) * 0.9;
             vec3 amb = mix(ambBot, ambTop, n.y * 0.5 + 0.5);
             vec3 col = vCol.rgb * max(amb + sunCol * (wrap + back), vec3(0.05, 0.055, 0.07)); // (a floor so night smoke isn't a black hole)
+            // [night] fire light: wrapped round the puff from where the flames are (the underside of a column glows)
+            float fl = dot(vFire, vec3(0.3, 0.59, 0.11));
+            if (fl > 1e-4) {
+                vec3 fd = normalize(vFireDir + vec3(0.0, 0.0, 1e-4));
+                float fw = clamp(dot(n, fd) * 0.55 + 0.45, 0.0, 1.0) + (1.0 - t.a) * 0.35;
+                col += vCol.rgb * vFire * (0.26 * fw);
+            }
             col = mix(col, fogColor, fogF);
         #else
             vec3 col = vCol.rgb * mix(vec3(1.0), vec3(t.b * 0.5 + 0.6), 0.6);
@@ -259,6 +278,7 @@ class ParticleSystem {
                 map: { value: texture }, fogColor: { value: new THREE.Color() }, fogDensity: { value: 0 }, addK: { value: addK },
                 sunDirV: L.sunDirV || { value: new THREE.Vector3(0, 1, 0) }, sunCol: L.sunCol || { value: new THREE.Color(0.5, 0.5, 0.5) },
                 ambTop: L.ambTop || { value: new THREE.Color(0.4, 0.4, 0.4) }, ambBot: L.ambBot || { value: new THREE.Color(0.2, 0.2, 0.2) },
+                ...(lit ? fireUniforms() : {}),
             },
             vertexShader: PARTICLE_VS,
             fragmentShader: PARTICLE_FS,
@@ -526,14 +546,10 @@ export class Effects {
         this.tracers.renderOrder = 9;
         scene.add(this.tracers);
 
-        // Pooled flash lights — fixed count so shaders never recompile mid-game
-        this.lights = [];
-        for (let i = 0; i < 3; i++) {
-            const l = new THREE.PointLight(0xff8840, 0, 600, 1.6);
-            l.userData.life = 0;
-            scene.add(l);
-            this.lights.push(l);
-        }
+        // [night] flash lights: the fixed-size fire-light list (firelight.js) instead of three.js point lights, on while
+        // this scene renders
+        this.fireLights = fireLights;
+        fireLights.attachScene(scene);
         // Pooled additive sprites: explosion flashes and shockwave rings
         this.flashTex = makeFlashTexture();
         this.ringTex = makeRingTexture();
@@ -557,12 +573,17 @@ export class Effects {
             forceSinglePass: additive, // (additive: the draw order of its faces doesn't matter, one pass is exact)
             blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
             defines: additive ? {} : { LIT: '' },
-            uniforms: { color: { value: new THREE.Color(...color) }, fogColor: { value: new THREE.Color() }, fogDensity: { value: 0 }, time: { value: 0 }, ...L },
+            uniforms: { color: { value: new THREE.Color(...color) }, fogColor: { value: new THREE.Color() }, fogDensity: { value: 0 }, time: { value: 0 }, ...L, ...fireUniforms() },
             vertexShader: /* glsl */`
-                attribute vec3 tdata; varying vec3 vD; varying float vDist;
-                void main() { vD = tdata; vec4 mv = modelViewMatrix * vec4(position, 1.0); vDist = -mv.z; gl_Position = projectionMatrix * mv; }`,
+                attribute vec3 tdata; varying vec3 vD; varying float vDist; varying vec3 vFire;
+                ${FIRE_VIEW_GLSL}
+                void main() {
+                    vD = tdata; vec4 mv = modelViewMatrix * vec4(position, 1.0); vDist = -mv.z; gl_Position = projectionMatrix * mv;
+                    vec3 fdir;
+                    vFire = fireIrradiance(mv.xyz, fdir); // [night] a motor lights its own smoke, fires the trails over them
+                }`,
             fragmentShader: /* glsl */`
-                uniform vec3 color, fogColor, sunCol, ambTop, ambBot; uniform float fogDensity, time; varying vec3 vD; varying float vDist;
+                uniform vec3 color, fogColor, sunCol, ambTop, ambBot; uniform float fogDensity, time; varying vec3 vD; varying float vDist; varying vec3 vFire;
                 float h1(float n) { return fract(sin(n) * 43758.5453); }
                 float vnoise(float x) { float i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f); return mix(h1(i), h1(i + 1.0), f); }
                 void main() {
@@ -572,7 +593,7 @@ export class Effects {
                     float n = vnoise(vD.z * 0.045 + across * 1.3) * 0.6 + vnoise(vD.z * 0.13 - time * 0.3) * 0.4;
                     float a = vD.x * smoothstep(0.0, 0.75, edge) * (0.55 + 0.6 * n);
                     #ifdef LIT
-                        vec3 c = color * (mix(ambBot, ambTop, 0.75) + sunCol * (0.7 + 0.3 * n));
+                        vec3 c = color * (mix(ambBot, ambTop, 0.75) + sunCol * (0.7 + 0.3 * n) + vFire * 0.24);
                     #else
                         vec3 c = color;
                     #endif
@@ -716,13 +737,10 @@ export class Effects {
 
     flash(pos, scale, life) { this.sprite(this.flashTex, pos, scale, life, 0.4, 1, [1, 0.9, 0.75]); }
 
-    light(pos, intensity, life) {
-        let l = this.lights.find(x => x.userData.life <= 0);
-        if (!l) l = this.lights.reduce((a, b) => (a.userData.life < b.userData.life ? a : b));
-        l.position.copy(pos);
-        l.userData.life = life; l.userData.max = life; l.userData.i = intensity * 45;
-        l.intensity = l.userData.i;
-    }
+    // a flash of light (explosions, launches, muzzle flashes) on everything around it: firelight.js (the intensity is
+    // the old point light's, whose falloff was d^1.6: ×200 is about the same light at 40 m in inverse square). A call
+    // every frame at a moving plume merges into one light that follows it. opts: firelight.js flash options
+    light(pos, intensity, life, opts) { return fireLights.flash(pos, intensity * 200, life, opts); }
 
     debrisBurst(pos, vel, count = 8, big = 1) {
         for (let i = 0; i < count; i++) {
@@ -815,6 +833,7 @@ export class Effects {
     puffFire(pos, vel, size, life = 0.35) {
         // flame that cools as it trails away: yellow at the root, dull red at the tips, then soot
         this.flame.emit(pos, vel, life * 1.6, size, size * 0.9, [0.08, 0.07, 0.06], [0.14, 0.13, 0.12], 0.85, 0, 1.5, 0, rand(0.75, 0.95), 0.55, 1.6);
+        fireLights.heat(pos, size); // [night] whatever burns lights its surroundings
     }
 
     // ── Tracers ──
@@ -903,7 +922,10 @@ export class Effects {
                     V.set(rand(-1.5, 1.5), rand(9, 15) * Math.sqrt(s), rand(-1.5, 1.5));
                     const d = 0.05 + k * 0.1;
                     this.smoke.emit(P, V, rand(7, 11), 5 * s, 34 * s, [d, d, d], [0.3, 0.29, 0.28], 0.75, 0, 0.12, 2.5, 0, 0.5, 0.5);
-                    if (k < 0.6 && Math.random() < 0.6) this.flame.emit(P, V.set(rand(-1, 1), rand(5, 9), rand(-1, 1)), rand(0.6, 1.1), 3 * s, 4 * s, [0.1, 0.09, 0.08], [0.2, 0.19, 0.18], 0.8, 0, 1, 2, rand(0.6, 0.85) * (1 - k), 0.6, 1.2);
+                    if (k < 0.6 && Math.random() < 0.6) {
+                        this.flame.emit(P, V.set(rand(-1, 1), rand(5, 9), rand(-1, 1)), rand(0.6, 1.1), 3 * s, 4 * s, [0.1, 0.09, 0.08], [0.2, 0.19, 0.18], 0.8, 0, 1, 2, rand(0.6, 0.85) * (1 - k), 0.6, 1.2);
+                        fireLights.heat(P, 3 * s * (1 - k)); // [night] the fire at the column's foot
+                    }
                 }
             }
             if (e.t >= e.life) this.emitters.splice(i, 1);
@@ -938,13 +960,7 @@ export class Effects {
             s.scale.setScalar(u.grow > 1 ? u.scale + (u.grow - u.scale) * (1 - (1 - t) * (1 - t)) : u.scale * (1 + t * u.grow));
             s.material.opacity = u.a * (u.grow > 1 ? k * k : Math.min(1, k * 1.6));
         }
-        for (const l of this.lights) {
-            if (l.userData.life > 0) {
-                l.userData.life -= dt;
-                const k = Math.max(0, l.userData.life / l.userData.max);
-                l.intensity = l.userData.i * k * k;
-            } else l.intensity = 0;
-        }
+        fireLights.update(dt, camera); // [night] decay, score and choose this frame's fire lights
         const V = this._tmpV;
         for (let i = this.debris.length - 1; i >= 0; i--) {
             const d = this.debris[i];
@@ -981,7 +997,7 @@ export class Effects {
         this.landed.forEach(m => this.scene.remove(m)); this.landed = [];
         this.emitters = [];
         this.sprites.forEach(s => { s.visible = false; s.userData.life = 0; });
-        this.lights.forEach(l => { l.userData.life = 0; l.intensity = 0; });
+        fireLights.clear();
         this.tracers.geometry.setDrawRange(0, 0);
     }
 }

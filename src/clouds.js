@@ -27,6 +27,8 @@
 // dims the sun on the ground, the water, buildings and ships under each cloud (installCloudShadows).
 import * as THREE from 'three';
 import { makeCloudNoise, sat, WEATHER_SIZE, WEATHER_RES, BASE_SIZE, BASE_RES, DETAIL_SIZE, DETAIL_RES } from './cloudnoise.js';
+import { fireLights, CLOUD_LIGHTS } from './firelight.js'; // [night] motors, fires and flashes light the clouds from inside
+import { RAIN_RATE_GLSL, RAIN_SIGMA_GLSL, WEATHER_KINDS, frontMix, rainTop } from './weather.js'; // [weather] rain shafts, fronts
 
 export const DECK_Y = 2400;          // base of the overcast deck in rain and storms (m)
 const DECK_THICK = 650;              // its thickness where fully covered (m)
@@ -50,9 +52,10 @@ const QUALITY = {
     // steps: primary march; light: light march; detail: small billows (0 none, 1 one octave, 2 two near the
     // camera); shadowRows: rows of the cloud-shadow map redrawn per frame; lightDither: how much of the light
     // march's sample offset is random per pixel (the rest is shared)
-    high:   { scale: 0.5, up: 2, steps: 120, light: 5, detail: 2, shadowRows: 32, lightDither: 1 },
-    medium: { scale: 0.42, up: 2, steps: 88, light: 4, detail: 1, shadowRows: 32, lightDither: 1 },
-    low:    { scale: 0.28, up: 1.5, steps: 56, light: 3, detail: 0, shadowRows: 16, lightDither: 0.3 },
+    // (rain: steps of the rain shafts below the clouds)
+    high:   { scale: 0.5, up: 2, steps: 120, light: 5, detail: 2, shadowRows: 32, lightDither: 1, rain: 12 },
+    medium: { scale: 0.42, up: 2, steps: 88, light: 4, detail: 1, shadowRows: 32, lightDither: 1, rain: 8 },
+    low:    { scale: 0.28, up: 1.5, steps: 56, light: 3, detail: 0, shadowRows: 16, lightDither: 0.3, rain: 6 },
 };
 const SHADOW_RES = 512;              // cloud-shadow map: the whole weather tile, 64 m a texel
 const SHADOW_STEPS = 24;
@@ -73,6 +76,19 @@ const FIELD_GLSL = /* glsl */`
     uniform vec4 cu;     // cumulus: coverage threshold, base altitude, tallest tops above the base, base variation
     uniform vec4 dk;     // deck: amount (0 = none), base altitude, thickness
     uniform vec2 slab;   // altitudes that can hold any cloud
+    // [weather] a front (weather.js): cuB / dkB is the weather behind the line (x, z, moving along nx, nz), mixed in
+    // over wFrontW metres either side of it; wFrontW 0: no front (all cu / dk)
+    uniform vec4 cuB, dkB, wFront;
+    uniform float wFrontW;
+    vec4 cuL, dkL;       // the cumulus / deck parameters where the current sample is (fieldAt)
+    float fk;            // how far behind the front it is (0 ahead … 1 behind)
+    void fieldAt(vec2 xz) {
+        if (wFrontW <= 0.0) { cuL = cu; dkL = dk; fk = 0.0; return; }
+        fk = 1.0 - smoothstep(-wFrontW, wFrontW, dot(xz - wFront.xy, wFront.zw));
+        cuL = mix(cu, cuB, fk);
+        // (a deck that comes or goes changes its amount, not its height)
+        dkL = vec4(mix(dk.x, dkB.x, fk), dk.x <= 0.0 ? dkB.yz : dkB.x <= 0.0 ? dk.yz : mix(dk.yz, dkB.yz, fk), 0.0);
+    }
     float pixFoot;       // metres one low-res pixel covers at the current sample (set by the march)
     // (the fine detail octave's lattice is turned against the others, so its short tile doesn't show in rows)
     const mat3 FINE_ROT = mat3(0.8, 0.6, 0.0, -0.36, 0.48, 0.8, 0.48, -0.64, 0.6);
@@ -106,13 +122,13 @@ const FIELD_GLSL = /* glsl */`
     // cauliflower, not the 2D blob drawn upward. A vertical profile gives it a flat base and rounds its top off,
     // it is fuller low down (a cumulus is one body, its turrets are at the top), and the weather says how tall
     // it grows. Density is soft (0..1), not a hard surface: thin edges and wisps let the light through.
-    float baseAlt(vec4 wm) { return cu.y + (wm.a - 0.5) * cu.w; }
+    float baseAlt(vec4 wm) { return cuL.y + (wm.a - 0.5) * cuL.w; }
     // the tallest the cumulus here can grow above its base (m)
-    float cloudTop(vec4 wm) { return min(cu.z * wm.g, cu.z + ${TOWER_MAX.toFixed(1)}); }
+    float cloudTop(vec4 wm) { return min(cuL.z * wm.g, cuL.z + ${TOWER_MAX.toFixed(1)}); }
     // cumulus before noise: returns the cover (0..1); hf: height fraction (0 base .. 1 top, unclamped),
     // prof: the vertical profile
     float cumulusShape(vec3 p, vec4 wm, out float hf, out float prof) {
-        float cov = clamp((wm.r - cu.x) / (1.0 - cu.x), 0.0, 1.0);
+        float cov = clamp((wm.r - cuL.x) / (1.0 - cuL.x), 0.0, 1.0);
         float h = p.y - baseAlt(wm);
         hf = h / (cloudTop(wm) * (0.35 + 0.65 * sqrt(cov)));
         prof = clamp(h * 0.035, 0.0, 1.0) * (1.0 - smoothstep(0.5, 1.0, hf));
@@ -120,16 +136,16 @@ const FIELD_GLSL = /* glsl */`
     }
     // deck before noise (field units: > 0 inside the layer, thinner where its cover is patchy)
     float deckShape(vec3 p, vec4 wm, out float hf) {
-        float cover = smoothstep(1.0 - dk.x, 1.35 - dk.x, wm.b);
-        float h = p.y - dk.y;
-        hf = clamp(h / dk.z, 0.0, 1.0);
-        return cover > 0.0 ? min(h + 90.0, dk.z * cover - h) * 0.002 : -1.0;
+        float cover = smoothstep(1.0 - dkL.x, 1.35 - dkL.x, wm.b);
+        float h = p.y - dkL.y;
+        hf = clamp(h / dkL.z, 0.0, 1.0);
+        return cover > 0.0 ? min(h + 90.0, dkL.z * cover - h) * 0.002 : -1.0;
     }
     // conservative distance (m) to where cloud could start, for skipping empty air
     float cloudGap(vec3 p, vec4 wm) {
         float h = p.y - baseAlt(wm);
-        float g = max((cu.x - wm.r) * 450.0, max(-h, h - cloudTop(wm)));
-        if (dk.x > 0.0) g = min(g, max(dk.y - 150.0 - p.y, p.y - dk.y - dk.z - 50.0));
+        float g = max((cuL.x - wm.r) * 450.0, max(-h, h - cloudTop(wm)));
+        if (dkL.x > 0.0) g = min(g, max(dkL.y - 150.0 - p.y, p.y - dkL.y - dkL.z - 50.0));
         return g;
     }
     // density 0..1; amb: height within the cloud (0 base .. 1 top) for the sky light. detail: add the small
@@ -182,6 +198,14 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
     uniform mat4 projInv, camWorld;
     uniform vec2 lowRes, jitter;
     uniform vec3 camPos, sunDir, litColor, shadowColor, fogColor;
+    // [night] lights in and under the clouds (firelight.js chooses them): world position + range; colour × intensity +
+    // core radius
+    uniform vec4 cLightA[${CLOUD_LIGHTS}], cLightB[${CLOUD_LIGHTS}];
+    uniform int cLightN;
+    // [weather] rain: mm/h under the deck and in a cell, ahead of a front (xy) and behind it (zw); on, the height it
+    // falls from
+    uniform vec4 rainP;
+    uniform vec3 rainInfo;
     layout(location = 0) out vec4 oColor;
     layout(location = 1) out vec4 oInfo;
     #include <packing>
@@ -235,6 +259,67 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
         return od * SIGMA;
     }
 
+    // [night] light from fires, motors and flashes scattered by the cloud here: inverse square to the light, dimmed by
+    // the cloud it crosses on the way (a light under the base enters through the base; one inside or above goes through
+    // the cloud between), with a weaker, less dimmed octave for the light that diffuses through (so a motor inside a
+    // cloud lights it up all round, and a burning town glows on the base above it)
+    vec3 cloudFireLight(vec3 p, vec4 wm, int lmask) {
+        float baseH = baseAlt(wm);
+        if (dkL.x > 0.0) baseH = min(baseH, dkL.y);
+        vec3 E = vec3(0.0);
+        for (int li = 0; li < ${CLOUD_LIGHTS}; li++) {
+            if (li >= cLightN) break;
+            if ((lmask & (1 << li)) == 0) continue;
+            vec4 la = cLightA[li];
+            vec3 dl = la.xyz - p;
+            float d2 = dot(dl, dl), r2 = la.w * la.w;
+            if (d2 >= r2) continue;
+            vec4 lb = cLightB[li];
+            float d = sqrt(d2);
+            float path = la.y < baseH ? max(p.y - baseH, 0.0) * d / max(p.y - la.y, 1.0) : d;
+            float od = SIGMA * 0.4 * min(path, 800.0);
+            float w = 1.0 - d2 / r2;
+            E += lb.rgb * (w * w / (d2 + lb.w * lb.w)) * (exp(-od) + 0.4 * exp(-od * 0.18));
+        }
+        return E;
+    }
+
+    // [weather] Rain shafts (weather.js rainRateOf: the rates the game sees through): below where it falls from, the
+    // rain dims and greys the view, lightly under the rain deck, a dark curtain under each thunderstorm cell. RAIN_STEPS
+    // jittered steps along the ray; premultiplied colour + alpha, its mean and entry distance
+    ${RAIN_RATE_GLSL}
+    ${RAIN_SIGMA_GLSL}
+    vec4 rainVeil(vec3 ro, vec3 rd, float tEnd, out float tMean, out float tEntry) {
+        tMean = 0.0; tEntry = NO_HIT;
+        float top = rainInfo.y, ta = 0.0, tb = tEnd;
+        if (ro.y > top) { if (rd.y > -1e-4) return vec4(0.0); ta = (top - ro.y) / rd.y; }
+        else if (rd.y > 1e-4) tb = min(tb, (top - ro.y) / rd.y);
+        if (tb <= ta) return vec4(0.0);
+        float dtR = (tb - ta) / float(RAIN_STEPS), jr = fract(pixHash(3u) + frame * GOLDEN);
+        vec3 col = vec3(0.0), rc = mix(shadowColor * 0.8, fogColor, 0.3) + vec3(0.75, 0.8, 1.0) * flash * 0.4;
+        float T = 1.0, w = 0.0, tw = 0.0;
+        for (int i = 0; i < RAIN_STEPS; i++) {
+            float t = ta + (float(i) + jr) * dtR;
+            vec3 p = ro + rd * t;
+            fieldAt(p.xz);
+            float R = wxRain(weatherAt(p), cuL.x, dkL.x, mix(rainP.x, rainP.z, fk), mix(rainP.y, rainP.w, fk));
+            if (R <= 0.0) continue;
+            float a = 1.0 - exp(-rainSigma(R) * dtR);
+            col += T * a * rc; tw += T * a * t; w += T * a;
+            if (tEntry == NO_HIT && 1.0 - T * (1.0 - a) > 0.03) tEntry = t;
+            T *= 1.0 - a;
+        }
+        tMean = w > 0.0 ? tw / w : 0.0;
+        return vec4(col, 1.0 - T);
+    }
+    // premultiplied colour with the aerial perspective at distance d along rd, faded before the march's far end
+    vec4 hazed(vec4 c, vec3 rd, float d) {
+        vec3 ray = rd * d;
+        vec2 fg = skyFogAmount(ray, camPos);
+        c.rgb = mix(c.rgb, skyFogColor(fogColor, ray, fg.y) * c.a, fg.x);
+        return c * (1.0 - smoothstep(maxDist * 0.8, maxDist, length(ray.xz)));
+    }
+
     void main() {
         // (jittered within the pixel, a different spot every frame: the resolve pass builds a finer image from them)
         vec2 uv = (gl_FragCoord.xy + jitter) / lowRes;
@@ -264,6 +349,15 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
         }
         oColor = vec4(0.0);
         oInfo = vec4(NO_HIT, limit, NO_HIT, 1.0);
+        float hd = length(rd.xz);
+        // [weather] the rain on the way (in front of the cloud when the camera is under where it falls from)
+        float rMean = 0.0, rEntry = NO_HIT;
+        vec4 rain = rainInfo.x > 0.5 ? rainVeil(ro, rd, min(limit, maxDist / max(hd, 1e-3)), rMean, rEntry) : vec4(0.0);
+        if (rain.a > 0.001) {
+            rain = hazed(rain, rd, rMean);
+            oColor = rain;
+            oInfo = vec4(rEntry == NO_HIT ? rMean : rEntry, limit, rMean, 1.0);
+        }
         // the slab of air that can hold cloud, up to where the haze has swallowed everything
         float t0, t1;
         if (abs(rd.y) < 1e-5) {
@@ -273,9 +367,16 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
             float ta = (slab.x - ro.y) / rd.y, tb = (slab.y - ro.y) / rd.y;
             t0 = max(min(ta, tb), 0.0); t1 = max(ta, tb);
         }
-        float hd = length(rd.xz);
         t1 = min(t1, min(limit, maxDist / max(hd, 1e-3)));
         if (t1 <= t0) return;
+        // [night] the lights this ray passes within reach of (most rays: none, and the march is as before)
+        int lmask = 0;
+        for (int li = 0; li < ${CLOUD_LIGHTS}; li++) {
+            if (li >= cLightN) break;
+            vec4 la = cLightA[li];
+            vec3 lq = ro + rd * clamp(dot(la.xyz - ro, rd), t0, t1) - la.xyz;
+            if (dot(lq, lq) < la.w * la.w) lmask |= 1 << li;
+        }
 
         // (on 'low', with only three long light steps, a fully random offset per pixel is too noisy: mostly the
         // shared one there)
@@ -296,6 +397,7 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
             // run out of them before it gets through)
             float mult = 1.0 + floor(inside / 20.0);
             float dt = (10.0 + t * 0.01) * mult;
+            fieldAt(p.xz); // [weather] the cloud parameters here (ahead of or behind a front)
             vec4 wm = weatherAt(p);
             float gap = cloudGap(p, wm);
             // clear air: skip whole steps (which keeps the ray on its grid)
@@ -325,9 +427,10 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
                 // sun: single scattering plus two weaker, less attenuated, flatter octaves standing in for the
                 // multiple scattering that makes the sunlit side of a thick cloud so bright
                 float sun = exp(-od) * ph0 + 0.45 * exp(-od * 0.35) * ph1 + 0.18 * exp(-od * 0.12) * ph2;
-                sun *= 1.0 - min(dk.x, 1.0) * 0.75 * step(p.y, dk.y); // under the rain deck the sun is mostly gone
+                sun *= 1.0 - min(dkL.x, 1.0) * 0.75 * step(p.y, dkL.y); // under the rain deck the sun is mostly gone
                 vec3 S = litColor * (sun * sunScale) + shadowColor * mix(0.2, 0.6, amb);
                 S += vec3(0.75, 0.8, 1.0) * (flash * (1.6 - amb));    // lightning inside the cloud
+                if (lmask != 0) S += cloudFireLight(p, wm, lmask);    // [night] fires, motors, flashes
                 C += T * a * S;
                 tw += T * a * t; aw += T * a;
                 if (entry == NO_HIT && 1.0 - T * (1.0 - a) > 0.03) entry = t;
@@ -344,14 +447,22 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
         float alpha = 1.0 - T;
         if (aw <= 0.0) return;
         // aerial perspective at the cloud's mean depth, and a fade before the march gives up
-        vec3 ray = rd * (tw / aw);
-        vec2 fg = skyFogAmount(ray, camPos.y);
-        C = mix(C, skyFogColor(fogColor, ray, fg.y) * alpha, fg.x);
-        float fade = 1.0 - smoothstep(maxDist * 0.8, maxDist, length(ray.xz));
-        oColor = vec4(C, alpha) * fade;
+        vec4 cloud = hazed(vec4(C, alpha), rd, tw / aw);
         // (a veil too thin to reach the entry opacity still needs a depth, or the composite's depth test would
         // hide it behind the terrain: its mean depth)
-        oInfo = vec4(entry == NO_HIT ? tw / aw : entry, limit, tw / aw, 1.0);
+        float cEntry = entry == NO_HIT ? tw / aw : entry, cMean = tw / aw;
+        if (rain.a > 0.001) {
+            // [weather] rain and cloud, nearest first: the camera under where the rain falls from sees the rain first
+            bool rainFirst = ro.y < rainInfo.y;
+            vec4 nearC = rainFirst ? rain : cloud, farC = rainFirst ? cloud : rain;
+            oColor = nearC + farC * (1.0 - nearC.a);
+            float wr = rain.a, wc = cloud.a * (1.0 - (rainFirst ? rain.a : 0.0));
+            float mean = (rMean * wr + cMean * wc) / max(wr + wc, 1e-4);
+            oInfo = vec4(min(rEntry == NO_HIT ? rMean : rEntry, cEntry), limit, mean, 1.0);
+        } else {
+            oColor = cloud;
+            oInfo = vec4(cEntry, limit, cMean, 1.0);
+        }
     }`;
 
 // The clamp box for the resolve: the lowest and highest value among each march sample's 3x3 neighbourhood,
@@ -521,6 +632,7 @@ const SHADOW_FRAG = /* glsl */`
         pixFoot = 100.0;
         for (int i = 0; i < ${SHADOW_STEPS}; i++) {
             vec3 p = p0 + L * (dt * (float(i) + 0.5));
+            fieldAt(p.xz);
             if (cloudGap(p, weatherAt(p)) > dl) continue;
             od += cloudDensity(p, weatherSmooth(p), 1.5, false, a) * dl;
         }
@@ -647,7 +759,12 @@ export class Clouds {
         this.fieldU = {
             tWeather: { value: weather }, tBase: { value: base }, tDetail: { value: detail },
             wind: { value: this.windOff }, cu: { value: new THREE.Vector4() }, dk: { value: new THREE.Vector4() }, slab: { value: new THREE.Vector2() },
+            // [weather] the weather behind a front, and the front (weather.js)
+            cuB: { value: new THREE.Vector4() }, dkB: { value: new THREE.Vector4() }, wFront: { value: new THREE.Vector4(0, 0, 1, 0) }, wFrontW: { value: 0 },
         };
+        this.front = null;
+        this.rainP = new THREE.Vector4();
+        this.rainInfo = new THREE.Vector3();
         const tri = fullScreenTriangle();
         const pass = (mat) => { const sc = new THREE.Scene(), m = new THREE.Mesh(tri, mat); m.frustumCulled = false; sc.add(m); return sc; };
         this.marchCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -660,7 +777,9 @@ export class Clouds {
                 projInv: { value: new THREE.Matrix4() }, camWorld: { value: new THREE.Matrix4() }, lowRes: { value: new THREE.Vector2(4, 4) }, jitter: { value: new THREE.Vector2() },
                 camPos: { value: new THREE.Vector3() }, sunDir: { value: new THREE.Vector3(0, 1, 0) },
                 litColor: { value: new THREE.Color(1, 1, 1) }, shadowColor: { value: new THREE.Color(0.5, 0.55, 0.6) }, fogColor: { value: new THREE.Color() },
-                skyFogA: { value: SKY_FOG.a }, skyFogB: { value: SKY_FOG.b }, skyFogC: { value: SKY_FOG.c }, skyFogD: { value: SKY_FOG.d },
+                ...SKY_FOG.uniforms(),
+                cLightA: { value: fireLights.cloud.a }, cLightB: { value: fireLights.cloud.b }, cLightN: { value: 0 },
+                rainP: { value: this.rainP }, rainInfo: { value: this.rainInfo },
             },
             vertexShader: TRI_VERT,
             fragmentShader: marchFrag(FOG_GLSL),
@@ -793,38 +912,62 @@ export class Clouds {
         this.q = Q;
         const ratio = Q.light >= 5 ? 2 : Q.light === 4 ? 2.3 : 3;
         const step0 = 680 * (ratio - 1) / (Math.pow(ratio, Q.light) - 1); // the light march reaches ~680 m
-        const d = { MAX_STEPS: Q.steps, LIGHT_STEPS: Q.light, LIGHT_STEP0: step0.toFixed(2), LIGHT_RATIO: ratio.toFixed(2), DETAIL: Q.detail, LIGHT_DITHER: Q.lightDither.toFixed(2) };
+        const d = { MAX_STEPS: Q.steps, LIGHT_STEPS: Q.light, LIGHT_STEP0: step0.toFixed(2), LIGHT_RATIO: ratio.toFixed(2), DETAIL: Q.detail, LIGHT_DITHER: Q.lightDither.toFixed(2), RAIN_STEPS: Q.rain || 8 };
         const m = this.marchMat;
         if (JSON.stringify(m.defines) !== JSON.stringify(d)) { m.defines = d; m.needsUpdate = true; if (this.resolveScene) this.compile(); }
     }
 
     // weather: 'clear' | 'cloudy' | 'rain' | 'storm'
     setWeather(key, overcast) {
-        const W = this.weather = WEATHER[key] || WEATHER.clear;
-        const f = this.fieldU;
-        f.cu.value.set(W.thr, W.base, W.thick, W.baseVar);
-        f.dk.value.set(W.deck, DECK_Y, DECK_THICK, 0);
-        let lo = W.base - W.baseVar * 0.7 - 30, hi = W.base + W.baseVar * 0.7 + Math.min(W.thick * TOWER, W.thick + TOWER_MAX) + 60;
-        if (W.deck > 0) { lo = Math.min(lo, DECK_Y - 160); hi = Math.max(hi, DECK_Y + DECK_THICK + 60); }
-        f.slab.value.set(lo, hi);
-        // shadows: rays from the bottom of the layer; a point up among the clouds has less of them above it
-        SHADOW.b[0] = lo; SHADOW.b[1] = W.base + W.thick * 0.25; SHADOW.b[2] = W.base + W.thick * 1.2;
+        const W = WEATHER_KINDS[key] ? { ...WEATHER_KINDS[key] } : { ...WEATHER.clear, deckY: DECK_Y, deckThick: DECK_THICK, rain: 0, cells: 0 };
+        this.setParams(W, W, null, true);
         this.overcast = overcast || 0;
-        this.resetHistory = true;
-        this.shadowAll = true;
     }
 
-    // palette from World.setTime (colours are linear)
-    setPalette({ lit, shadow, sunDir, overcast = 0 }) {
+    // [weather] the weather model's state (weather.js): the weather ahead of a front (A), behind it (B), and the front
+    // ({ x, z, nx, nz, w } or null). Each is { thr, base, thick, baseVar, deck, deckY, deckThick, rain, cells }. force:
+    // a jump rather than a blend (the temporal history and the cloud-shadow map start over); a blend keeps them and
+    // the shadow map catches up band by band
+    setParams(A, B, front, force = false) {
+        const f = this.fieldU;
+        this.weather = A;
+        f.cu.value.set(A.thr, A.base, A.thick, A.baseVar);
+        f.dk.value.set(A.deck, A.deckY ?? DECK_Y, A.deckThick ?? DECK_THICK, 0);
+        f.cuB.value.set(B.thr, B.base, B.thick, B.baseVar);
+        f.dkB.value.set(B.deck, B.deckY ?? DECK_Y, B.deckThick ?? DECK_THICK, 0);
+        this.front = front && front.w > 0 ? front : null;
+        if (this.front) { f.wFront.value.set(front.x, front.z, front.nx, front.nz); f.wFrontW.value = front.w; } else f.wFrontW.value = 0;
+        // the slab: the altitudes either weather can hold cloud in
+        let lo = Infinity, hi = -Infinity, base = Infinity, thick = 0;
+        for (const W of this.front ? [A, B] : [A]) {
+            let l = W.base - W.baseVar * 0.7 - 30, h = W.base + W.baseVar * 0.7 + Math.min(W.thick * TOWER, W.thick + TOWER_MAX) + 60;
+            if (W.deck > 0) { const dy = W.deckY ?? DECK_Y; l = Math.min(l, dy - 160); h = Math.max(h, dy + (W.deckThick ?? DECK_THICK) + 60); }
+            lo = Math.min(lo, l); hi = Math.max(hi, h); base = Math.min(base, W.base); thick = Math.max(thick, W.thick);
+        }
+        f.slab.value.set(lo, hi);
+        fireLights.cloudSlab = [lo, hi]; // [night] which lights are near enough the clouds to light them
+        // shadows: rays from the bottom of the layer; a point up among the clouds has less of them above it
+        SHADOW.b[0] = lo; SHADOW.b[1] = base + thick * 0.25; SHADOW.b[2] = base + thick * 1.2;
+        // rain shafts: where it rains either side of the front, and the height it falls from
+        this.rainP.set(A.rain || 0, A.cells || 0, this.front ? B.rain || 0 : A.rain || 0, this.front ? B.cells || 0 : A.cells || 0);
+        const raining = this.rainP.x + this.rainP.y + this.rainP.z + this.rainP.w > 0;
+        this.rainInfo.set(raining ? 1 : 0, Math.max(rainTop(A), this.front ? rainTop(B) : 0), 0);
+        if (force) { this.resetHistory = true; this.shadowAll = true; }
+    }
+
+    // palette from World.setTime (colours are linear). reset: the history starts over (a jump in time or weather)
+    setPalette({ lit, shadow, sunDir, overcast = 0, reset = true }) {
         const u = this.marchMat.uniforms;
         u.litColor.value.copy(lit).multiplyScalar(1 - overcast * 0.4);
         u.shadowColor.value.copy(shadow);
         // the HUD's white-out should be as bright as the cloud around you (dim at dusk, faint at night)
         this.whiteBright = Math.min(1, 0.3 * shadow.r + 0.59 * shadow.g + 0.11 * shadow.b + 0.6 * (0.3 * lit.r + 0.59 * lit.g + 0.11 * lit.b));
         u.sunDir.value.copy(sunDir).normalize();
-        if (!this.shadowMat.uniforms.sunDir.value.equals(u.sunDir.value)) { this.shadowMat.uniforms.sunDir.value.copy(u.sunDir.value); this.shadowAll = true; }
+        // (the sun creeping across the sky redraws the shadow map band by band; a jump redraws all of it)
+        const sd = this.shadowMat.uniforms.sunDir.value;
+        if (!sd.equals(u.sunDir.value)) { if (reset || sd.dot(u.sunDir.value) < 0.995) this.shadowAll = true; sd.copy(u.sunDir.value); }
         SHADOW.a[0] = u.sunDir.value.x; SHADOW.a[1] = u.sunDir.value.y; SHADOW.a[2] = u.sunDir.value.z;
-        this.resetHistory = true;
+        if (reset) this.resetHistory = true;
     }
 
     update(dt, camera, wind, fogColor) {
@@ -890,7 +1033,9 @@ export class Clouds {
         const R = this.resolveMat.uniforms;
         if (u.camPos.value.distanceToSquared(this.prevCamPos) > 400 * 400) this.resetHistory = true;
         R.reset.value = this.resetHistory ? 1 : 0;
-        R.minBlend.value = u.flash.value > 0.01 ? 0.5 : 0;
+        // (a lightning flash, or a fresh explosion lighting a cloud: take more of the new frame, or the history smears it)
+        u.cLightN.value = fireLights.cloud.n;
+        R.minBlend.value = u.flash.value > 0.01 ? 0.5 : fireLights.cloud.fast ? 0.3 : 0;
         this.resetHistory = false;
         R.projInv.value.copy(camera.projectionMatrixInverse);
         R.camWorld.value.copy(camera.matrixWorld);
@@ -949,8 +1094,18 @@ export class Clouds {
     // 0..1: cloud density at a world point (the same field the shader marches, minus the finest detail)
     densityAt(p) {
         if (!this.ready || !this.enabled) return 0;
-        const f = this.fieldU, cu = f.cu.value, dk = f.dk.value;
+        const f = this.fieldU;
+        let cu = f.cu.value, dk = f.dk.value;
         if (p.y < f.slab.value.x || p.y > f.slab.value.y) return 0;
+        // [weather] behind a front: the weather there (as the shader's fieldAt)
+        if (this.front) {
+            const k = frontMix(this.front, p.x, p.z);
+            if (k > 0) {
+                const a = f.dk.value, b = f.dkB.value;
+                cu = _cuL.copy(f.cu.value).lerp(f.cuB.value, k);
+                dk = _dkL.set(a.x + (b.x - a.x) * k, a.x <= 0 ? b.y : b.x <= 0 ? a.y : a.y + (b.y - a.y) * k, a.x <= 0 ? b.z : b.x <= 0 ? a.z : a.z + (b.z - a.z) * k, 0);
+            }
+        }
         const wm = this.weatherAt(p.x, p.z, _wm);
         const cov = sat((wm[0] - cu.x) / (1 - cu.x));
         const h = p.y - (cu.y + (wm[3] - 0.5) * cu.w);
@@ -980,4 +1135,5 @@ export class Clouds {
 }
 const _size = new THREE.Vector2();
 const _wm = [0, 0, 0, 0], _n = [0, 0];
+const _cuL = new THREE.Vector4(), _dkL = new THREE.Vector4();
 const ss = (a, b, x) => { const t = sat((x - a) / (b - a)); return t * t * (3 - 2 * t); };

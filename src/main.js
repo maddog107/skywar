@@ -8,6 +8,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { PostFX, ScenePass } from './postfx.js'; // [postfx] AO, water SSR, motion blur, DOF, flare, FXAA, adaptive resolution
+import { NightFX } from './nightfx.js'; // [night] glow in the air round lights, rain on the canopy, night-vision goggles
 import { AIRCRAFT, MODES, DIFFICULTY, TIMES } from './config.js';
 import { World, BASES, terrainHeight } from './world.js';
 import { Effects } from './effects.js';
@@ -107,10 +108,12 @@ composer.addPass(grade);
 // [postfx] inserts the scene effects (AO / water reflections / flare, motion blur, photo DOF) before the
 // cockpit pass and FXAA at the end; also owns the pixel ratio (adaptive resolution)
 const postfx = new PostFX({ renderer, composer, camera, scenePass: renderPass, cockpitPass });
+const nightfx = new NightFX({ composer, camera, scenePass: renderPass, cockpitPass, bloom, postfx }); // [night] nightfx.js
 
 function applyQuality() {
     const q = settings.quality;
     postfx.setQuality(q, settings); // [postfx] pixel ratio (fixed or adaptive), MSAA, AO, SSR, blur, flare
+    nightfx.setQuality(q);
     renderer.shadowMap.enabled = q !== 'low';
     bloom.enabled = q !== 'low';
     if (world) {
@@ -153,7 +156,7 @@ async function boot() {
     $('loadText').textContent = 'GENERATING TERRAIN…';
     await new Promise(r => setTimeout(r, 30));
     world = new World(scene, renderer);
-    world.weather = settings.weather || 'clear';
+    world.setWeather(settings.weather || 'clear'); // [weather] the sky model (weather.js)
     world.setTime(settings.time);
     world.updateTerrain(new THREE.Vector3(0, 0, 0), true);
     $('loadText').textContent = 'LOADING AIRFRAMES…';
@@ -173,7 +176,8 @@ async function boot() {
     $('loadFill').style.width = '95%';
     game = new Game({ scene, camera, world, effects, audio, input, hud, cockpit, settings });
     game.onGameOver = showGameOver;
-    game.onNvg = (on) => { renderer.domElement.style.filter = on ? 'grayscale(1) brightness(2.3) contrast(1.35) sepia(1) hue-rotate(55deg) saturate(3.5)' : ''; };
+    game.onNvg = (on) => nightfx.setNvg(on); // [night] the goggles are a pass now (nightfx.js), not a CSS filter
+    game.nvgGPU = true;
     career.attach(game);
     career.onChange(() => { refreshLocks(); renderPilotBadge(); });
     game.onPause = (on) => {
@@ -185,6 +189,7 @@ async function boot() {
     game.applyLivery = (ac) => applyLivery(ac.model, settings.livery, ac.type);
     window.skywar = { game, settings, world, effects, cockpit, camera, Pilot, renderer, post: { composer, bloom, grade, postfx } };
     window.skywar.vehicles = vehicles; // debug / test hook: spawn and pose rigged ground vehicles from the console
+    window.skywar.nightfx = nightfx; // [night] debug / test hook
     applyQuality();
     audio.setVolume(settings.volume);
     audio.callouts = settings.callouts;
@@ -267,7 +272,7 @@ function buildMenu() {
     seg('segDifficulty', Object.entries(DIFFICULTY).map(([k, v]) => [k, v.label]), 'difficulty', updateBest);
     seg('segTime', Object.entries(TIMES).map(([k, v]) => [k, v.label]), 'time', () => world.setTime(settings.time));
     seg('segWingmen', [[0, 'SOLO'], [1, '1'], [2, '2']], 'wingmen');
-    seg('segWeather', [['clear', 'CLEAR'], ['cloudy', 'CLOUDY'], ['rain', 'RAIN'], ['storm', 'STORM']], 'weather', () => world.setWeather(settings.weather));
+    seg('segWeather', [['clear', 'CLEAR'], ['cloudy', 'CLOUDY'], ['rain', 'RAIN'], ['storm', 'STORM'], ['fog', 'FOG'], ['overcast', 'LOW']], 'weather', () => world.setWeather(settings.weather));
     seg('segStart', [['auto', 'AUTO'], ['air', 'AIR'], ['runway', 'RWY'], ['apron', 'TAXI'], ['carrier', 'CVN'], ['water', 'WATER'], ['barracks', 'BARRACKS']], 'start'); // WATER: seaplanes afloat by a jetty
     seg('segLoadout', Object.entries(LOADOUT_LABELS).map(([k, v]) => [k, v.label.split(' ')[0]]), 'loadout');
     seg('segLivery', Object.entries(LIVERIES).map(([k, v]) => [k, v.label]), 'livery', () => { if (showcase) applyLivery(showcase.model, settings.livery, showcase.type); });
@@ -703,6 +708,7 @@ function frame(dt) {
     const agl = camera.position.y - Math.max(terrainHeight(camera.position.x, camera.position.z), 0);
     const near = clamp(agl / 80, 0.5, 6);
     if (Math.abs(camera.near - near) > 0.05) { camera.near = near; camera.updateProjectionMatrix(); }
+    nightfx.update(dt, game); // [night] which night / weather passes run this frame
     postfx.render(dt, game); // [postfx] composer.render + GPU timing for adaptive resolution
     hud.draw(game, dt);
     music.update(dt, game);

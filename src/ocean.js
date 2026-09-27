@@ -318,7 +318,7 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
             #endif
         }
         vec3 ray = vWorld - cameraPosition;
-        vec2 fg = skyFogAmount(ray, cameraPosition.y);
+        vec2 fg = skyFogAmount(ray, cameraPosition);
         col = mix(col, skyFogColor(fogColor, ray, fg.y), fg.x);
         #if TIER < 2
         alpha = mix(alpha, 1.0, fg.x);
@@ -353,7 +353,7 @@ export class Ocean {
             time: { value: 0 }, sunDir: { value: new THREE.Vector3(0, 1, 0) }, sunColor: { value: new THREE.Color() },
             skyColor: { value: new THREE.Color() }, horizonColor: { value: new THREE.Color() }, deepColor: { value: new THREE.Color() },
             fogColor: { value: new THREE.Color() }, detailMap: { value: detailTex }, foamMap: { value: foamTex },
-            skyFogA: { value: SKY_FOG.a }, skyFogB: { value: SKY_FOG.b }, skyFogC: { value: SKY_FOG.c }, skyFogD: { value: SKY_FOG.d },
+            ...SKY_FOG.uniforms(), // (the haze, the mist, and the ground fog and front: world.js FOG_GLSL)
             whitecap: { value: 0 }, foamJ: { value: 0.7 }, windU: { value: 5 }, underwater: { value: 0 }, windDir: { value: new THREE.Vector2(1, 0) },
             shoreInfo: { value: new THREE.Vector4() },
             // the wave field (water.js)
