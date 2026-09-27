@@ -24,6 +24,8 @@ const RIGS = {
     il78: { drogue_l: null, drogue_r: null, drogue_c: null, hose_l: 'drogue_l', hose_r: 'drogue_r', hose_c: 'drogue_c', basket_l: 'drogue_l', basket_r: 'drogue_r', basket_c: 'drogue_c' },
     mq9: {},
     rq4: {},
+    b52: {},
+    tu95: {},
 };
 
 // node name → parent node name, from a GLB's JSON chunk
@@ -68,6 +70,15 @@ describe('support types: config and model entries', () => {
                 assert.ok(p.dir == null || p.dir === 1 || p.dir === -1, `${id} prop direction`);
             }
         }
+        // the Tu-95's four contra-rotating pairs: coaxial, the rear prop just behind the front one, turning the other way
+        const tp = MODEL_FILES.tu95.props;
+        assert.equal(tp.length, 8);
+        for (let i = 0; i < 8; i += 2) {
+            const [f, r] = [tp[i], tp[i + 1]];
+            assert.ok(f.x === r.x && f.y === r.y && r.z > f.z && (r.z - f.z) * AIRCRAFT.tu95.length < 1.0, 'coaxial pair');
+            assert.equal(f.dir * r.dir, -1, 'contra-rotating');
+        }
+        assert.ok(Math.abs(tp[0].r * 2 * AIRCRAFT.tu95.length - 5.6) < 0.1, '5.6 m props');
         const [pusher] = MODEL_FILES.mq9.props;
         assert.equal(MODEL_FILES.mq9.props.length, 1);
         assert.equal(pusher.blades, 3);
@@ -79,6 +90,8 @@ describe('support types: config and model entries', () => {
         assert.equal(hasEjectionSeat(AIRCRAFT.kc135), false);
         assert.equal(hasEjectionSeat(AIRCRAFT.f16), true);
         assert.equal(hasEjectionSeat(AIRCRAFT.b2), true);
+        assert.equal(hasEjectionSeat(AIRCRAFT.b52), true);
+        assert.equal(hasEjectionSeat(AIRCRAFT.tu95), false, 'the Bear\'s crew bail out through a hatch');
         assert.equal(hasEjectionSeat(AIRCRAFT.b737), false);
         assert.equal(hasEjectionSeat({ category: 'support', eject: true }), true);
         assert.equal(hasEjectionSeat({ category: 'drone' }), false);
@@ -185,6 +198,20 @@ describe('rig parts', () => {
         const r2 = { parts: RP.attachRigParts(new THREE.Group(), [dome]) };
         RP.spinRotodome(r2, 2.5, 6);
         assert.ok(Math.abs(Math.abs(r2.parts.rotodome.rotation.y) - Math.PI / 2) < 1e-6, 'quarter turn in 2.5 s');
+    });
+
+    test('segmentModel keeps normalized vertex colours (byte colours in a GLB) as 0..1 floats', () => {
+        const geo = new THREE.BoxGeometry(2, 2, 20);
+        const n = geo.attributes.position.count;
+        const col = new Uint8Array(n * 4).fill(128);
+        geo.setAttribute('color', new THREE.BufferAttribute(col, 4, true));
+        const holder = new THREE.Group();
+        holder.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true })));
+        holder.updateMatrixWorld(true);
+        const seg = segmentModel(holder, 20);
+        let max = 0;
+        seg.traverse(o => { if (o.isMesh) for (const v of o.geometry.attributes.color.array) max = Math.max(max, v); });
+        assert.ok(Math.abs(max - 128 / 255) < 1e-6, `colour ${max}`);
     });
 
     test('refuel points: every receiver entry is a boom receptacle or a probe inside the airframe', () => {

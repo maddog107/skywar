@@ -101,8 +101,9 @@ export function steerToward(ac, dir, c, aggr = 1, keepUpright = true, maxBank = 
 
 // sedate turns for heavies and light aircraft (rad); AWACS, tankers and drones fly their orbits at ~30° of bank
 export function defaultMaxBank(ac) {
+    if (ac.spec.maxBank != null) return ac.spec.maxBank; // a type's own limit (a B-52 banks less than a B-2)
     const cat = ac.spec.category;
-    return cat === 'civil' ? 0.7 : cat === 'bomber' ? 0.87 : cat === 'support' || cat === 'drone' ? (ac.spec.maxBank ?? 0.6) : null;
+    return cat === 'civil' ? 0.7 : cat === 'bomber' ? 0.87 : cat === 'support' || cat === 'drone' ? 0.6 : null;
 }
 
 // ── Ground and building avoidance ──

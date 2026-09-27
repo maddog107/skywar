@@ -63,7 +63,8 @@ export function segmentModel(holder, length) {
                 const order = flip ? [0, 2, 1] : [0, 1, 2];
                 for (const n of names) {
                     const a = geo.attributes[n];
-                    for (const k of order) for (let c = 0; c < a.itemSize; c++) b.data[n].push(a.array[(t + k) * a.itemSize + c]);
+                    // getComponent: the value as a float (normalized byte colours / quantized uvs), interleaved or not
+                    for (const k of order) for (let c = 0; c < a.itemSize; c++) b.data[n].push(a.getComponent(t + k, c));
                 }
             }
         }

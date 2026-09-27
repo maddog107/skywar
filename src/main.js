@@ -623,6 +623,8 @@ function buildCredits() {
         ['Il78 (il78)', 'manilov.ap', 'CC BY 4.0', 'https://sketchfab.com/3d-models/il78-0c0da2cc1b4c441dadc2510212c25fb7'],
         ['MQ-9 Reaper (mq9)', 'Tyler V Howell', 'CC BY 4.0', 'https://sketchfab.com/3d-models/mq-9-reaper-eff549610fee4f20904f7b388a3a0830'],
         ['NASA 3D Resources Global Hawk (rq4)', 'NASA', 'Public domain (NASA)', 'https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Global%20Hawk'],
+        ['B52 (b52)', 'manilov.ap', 'CC BY 4.0', 'https://sketchfab.com/3d-models/b52-3ca2f507a0a749799e16a4eee12e456c'],
+        ['Tu95 (tu95)', 'manilov.ap', 'CC BY 4.0', 'https://sketchfab.com/3d-models/tu95-1eac97ec49ed4f1da8b7deb1e1b2cc7a'],
         ['Aircraft carrier and destroyer', 'SKYWAR / Blender (tools/ships)', 'CC0', 'tools/ships/'],
         ['Helicopter (military)', 'Zsky', 'CC BY 3.0', 'https://poly.pizza/m/hG2Qr0A3zR'],
         ['Helicopter (civil)', 'jeremy', 'CC BY 3.0', 'https://poly.pizza/m/eb7b31pjGtQ'],

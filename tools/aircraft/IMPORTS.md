@@ -55,6 +55,8 @@ export the moving parts as separate named nodes for `src/rigparts.js`):
 | il78 | `il78.py` | Objaverse `glbs/000-025/0c0da2cc1b4c441dadc2510212c25fb7.glb` ("Il78" by manilov.ap) |
 | mq9 | `mq9.py` | Objaverse `glbs/000-020/eff549610fee4f20904f7b388a3a0830.glb` ("MQ-9 Reaper" by TVHowell) |
 | rq4 | `rq4.py` | NASA 3D Resources `3D Models/Global Hawk/Global Hawk.glb` |
+| b52 | `b52.py` | Objaverse `glbs/000-078/3ca2f507a0a749799e16a4eee12e456c.glb` ("B52" by manilov.ap) |
+| tu95 | `tu95.py` | Objaverse `glbs/000-114/1eac97ec49ed4f1da8b7deb1e1b2cc7a.glb` ("Tu95" by manilov.ap) |
 
 Each script's header lists what it changes; sources and licences are in the last section of
 `models/aircraft/CREDITS.md`.

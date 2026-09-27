@@ -38,6 +38,7 @@
 //   drone    unmanned: nobody on board to eject
 //   racer, civil  racers and aerobatic planes; airliners, transports and light aircraft (no ejection seats)
 // `group` puts a type under another heading in the hangar list than its category's (main.js buildMenu).
+// `maxBank` (rad) caps the AI's bank for the type, instead of its category's default (ai.js defaultMaxBank).
 export const hasEjectionSeat = (spec) => spec.eject ?? !(spec.category === 'civil' || spec.category === 'support' || spec.category === 'drone');
 
 const FIGHTER = { speed: 400, mach: 1.8, cd0: 0.05, accel: 14, lift: 1.0, gLimit: 9, roll: 4.2, alpha: 24 };
@@ -335,6 +336,23 @@ export const AIRCRAFT = {
         flight: { speed: 150, mach: 0.58, afterburner: false, accel: 3.5, lift: 1.8, gLimit: 2.5, roll: 0.6, alpha: 14 },
         health: 90, gun: null, missiles: 0, flares: 0, fuelTime: 12000, maxBank: 0.5,
         proc: { airliner: true, engines: 2, body: [0.1, 0.1], paint: 0xb3b8bb, accent: 0x2a2d30 },
+    },
+    // heavy bombers (missiles / flares on the B-2's scale; maxBank: the AI flies them at ~35° of bank, not the B-2's
+    // 50°). The Tu-95 is a prop type (prop: true: the gentler thrust lapse of a turboprop; its sound comes from
+    // proc.turboprop) and has no ejection seats (eject: false)
+    b52: {
+        name: 'B-52H Stratofortress', role: 'Strategic Bomber', country: 'USA', length: 48.5, span: 56.39, category: 'bomber',
+        desc: 'Eight TF33s, 70 years in service and still the USAF\'s heavy hauler: cruise missiles by the dozen and bombs by the ton.',
+        flight: { speed: 262, mach: 0.86, afterburner: false, accel: 4.2, lift: 0.88, gLimit: 2.0, roll: 0.55, alpha: 14 },
+        health: 280, gun: null, missiles: 12, flares: 60, fuelTime: 7200, maxBank: 0.6,
+        proc: { airliner: true, engines: 4, body: [0.075, 0.08], paint: 0x55595d, accent: 0x3d4043 },
+    },
+    tu95: {
+        name: 'Tu-95MS Bear-H', role: 'Strategic Bomber', country: 'RUS', length: 48.9, span: 50.1, category: 'bomber', prop: true, eject: false,
+        desc: 'Four NK-12 turboprops with contra-rotating props: the fastest propeller aircraft ever and Russia\'s cruise-missile carrier.',
+        flight: { speed: 200, mach: 0.8, afterburner: false, accel: 4.0, lift: 0.86, gLimit: 2.0, roll: 0.6, alpha: 14 },
+        health: 260, gun: null, missiles: 6, flares: 48, fuelTime: 7200, maxBank: 0.6,
+        proc: { airliner: true, turboprop: true, engines: 4, body: [0.065, 0.065], paint: 0xb8bcbd, accent: 0x9ca1a3 },
     },
 };
 

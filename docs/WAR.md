@@ -173,12 +173,17 @@ parts are pulled out first and every instance gets its own copy, hung on the sec
 - **Helpers:** `setBoom(rig, pitch, yaw, ext)` (radians down / right, metres out), `stowBoom(rig)`,
   `trailDrogue(rig, 'l' | 'r' | 'c', k)` (0 reeled in … 1 trailed), `spinRotodome(rig, dt, rpm)` and
   `rigPoint(ac, name, out)` (a node's world position). The rotodome turns by itself while the aircraft is alive
-  (6 rpm airborne, ¼ rpm on the ground; `ac.radarRpm` overrides).
+  (its `userData.rpm`, 6 by default, airborne; ¼ rpm on the ground; `ac.radarRpm` overrides).
+- **The types:** E-3G and A-50U (`rotodome`); KC-135R (`boom` and wing drogues `l`/`r`); Il-78M (drogues `l`, `r`
+  and `c`, the centre one on the rear fuselage, 26 m of hose); MQ-9A (a spinning pusher) and RQ-4B; B-52H and
+  Tu-95MS (eight contra-rotating props: a MODEL_FILES prop's `dir: -1` turns it the other way).
+  `tests/supportac.test.mjs` lists each type's rig nodes.
 - **Receivers:** `REFUEL` in rigparts.js gives each receiver an empty named `refuel`: the boom receptacle
   (`userData.kind === 'boom'`) or the extended probe's tip (`'probe'`).
 - **Categories:** `support` (AWACS, tankers, reconnaissance and EW) and `drone` join `fighter`, `bomber`,
   `racer` and `civil`; `hasEjectionSeat(spec)` in config.js says who can eject. A type's `group` lists it
-  under another hangar heading (the EA-18G is a fighter listed with the support types).
+  under another hangar heading (the EA-18G is a fighter listed with the support types), and `maxBank` (rad)
+  caps the AI's bank for it (the heavies fly at about 35°).
 - **Frozen models:** a model frozen with `freezeLocal()` must pass its rig parts as `moving`.
 
 ## The war layer (Phase B), for plug-ins

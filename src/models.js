@@ -73,6 +73,17 @@ export const MODEL_FILES = {
     // Hartzell three-blade pusher, 3.1 m across, spun on the model's spinner behind the tail; the eye is the nose camera
     mq9: { file: 'aircraft/mq9.glb', rot: [0, 0, 0], cockpit: [0.0116, -0.4591], flame: false, nozzles: [], props: [{ x: 0, y: 0.0025, z: 0.4619, r: 0.1407, blades: 3 }] },
     rq4: { file: 'aircraft/rq4.glb', rot: [0, 0, 0], cockpit: [-0.055, -0.4517], flame: false, nozzleR: 0.0207, nozzles: [[0.0, 0.0158, 0.3731]] },
+    b52: {
+        file: 'aircraft/b52.glb', rot: [0, 0, 0], cockpit: [-0.0704, -0.4348], flame: false, nozzleR: 0.012,
+        nozzles: [[0.2117, -0.0841, -0.1457], [0.3746, -0.0885, -0.0235], [-0.3746, -0.0885, -0.0235], [-0.2117, -0.0841, -0.1457]],
+    },
+    // four NK-12s, each with a contra-rotating pair of 5.6 m four-blade props 0.75 m apart: front dir 1, rear dir -1
+    tu95: {
+        file: 'aircraft/tu95.glb', rot: [0, 0, 0], cockpit: [-0.0558, -0.37], flame: false, nozzleR: 0.01,
+        nozzles: [[-0.2499, -0.0932, -0.0721], [0.2493, -0.0932, -0.0724], [-0.1337, -0.0972, -0.1431], [0.1303, -0.0972, -0.1433]],
+        props: [[-0.2492, -0.209], [0.2492, -0.209], [-0.1301, -0.2778], [0.1301, -0.2778]].flatMap(([x, z]) => [
+            { x, y: -0.0873, z, r: 0.0573, blades: 4, dir: 1 }, { x, y: -0.0873, z: z + 0.0153, r: 0.0573, blades: 4, dir: -1 }]),
+    },
 };
 
 const cache = {};
