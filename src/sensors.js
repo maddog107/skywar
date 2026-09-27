@@ -128,6 +128,17 @@ export function rayGround(o, d, ground, maxT = 40000, out = new THREE.Vector3())
     return null;
 }
 
+// Terrain between two points, sampled finely enough (every ~150 m, 8-80 samples; the ends skipped) that a ridge
+// can't slip between samples at pod ranges (war.lineOfSight takes ten)
+export function terrainClear(a, b, ground = terrainHeight) {
+    const n = clamp(Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / 150), 8, 80);
+    for (let i = 1; i < n; i++) {
+        const t = i / n;
+        if (ground(a.x + (b.x - a.x) * t, a.z + (b.z - a.z) * t) > a.y + (b.y - a.y) * t + 2) return false;
+    }
+    return true;
+}
+
 // Identification by the pod (m). NARO on a clear day identifies a vehicle-sized target (radius ~7 m) at about
 // 25 km: pixels on target fall with the field of view (as its square root: the wide field's picture is sharper
 // per pixel). The TV camera needs daylight; the FLIR doesn't, and a hot engine stands out, most at night. Rain and
@@ -204,7 +215,7 @@ export class Sensors {
             pos: new THREE.Vector3(),
             fov: p ? p.fov : 0, sensor: p ? p.sensor : 0,
             lasing: false, masked: false, maskSoon: false, limit: false, cloud: false, cloudT: 0, maskK: 0,
-            coast: null, lost: 0, range: 0, lrange: 0,
+            coast: null, lost: 0, range: 0, lrange: 0, losT: 0, terrainOk: true,
             dwell: new Map(), under: null, underT: 0, keyT: 0, bda: null,
         };
         this.ap = null;
@@ -318,7 +329,7 @@ export class Sensors {
     }
     pointTrack(u) {
         const pod = this.pod;
-        pod.mode = 'POINT'; pod.unit = u; pod.coast = null; pod.lost = 0;
+        pod.mode = 'POINT'; pod.unit = u; pod.coast = null; pod.lost = 0; pod.losT = 0;
         drawnPos(u, pod.spi); pod.hasSpi = true;
     }
 
@@ -430,7 +441,10 @@ export class Sensors {
     updatePoint(dt) {
         const pod = this.pod, u = pod.unit;
         if (!u || u.removed) { this.areaTrack(pod.spi); return; }
-        const seen = !pod.masked && !pod.cloud && this.game.war.lineOfSight(pod.pos, _v2.copy(u.pos).setY(u.pos.y + 1.5));
+        // (the terrain check ten times a second)
+        pod.losT = (pod.losT || 0) - dt;
+        if (pod.losT <= 0) { pod.losT = 0.1; pod.terrainOk = terrainClear(pod.pos, _v2.copy(u.pos).setY(u.pos.y + 1.5)); }
+        const seen = !pod.masked && !pod.cloud && pod.terrainOk;
         if (seen) {
             if (pod.mode === 'INR') pod.mode = 'POINT';
             pod.lost = 0; pod.coast = null;
@@ -525,7 +539,7 @@ export class Sensors {
             if (st.check <= 0) {
                 st.check = 0.2;
                 _v2.copy(u.pos).setY(u.pos.y + Math.max((u.radius || 4) * 0.3, 1.5));
-                st.vis = war.lineOfSight(pod.pos, _v2) && this.transmittance(pod.pos, _v2) > 0.35 ? 1 : 0;
+                st.vis = terrainClear(pod.pos, _v2) && this.transmittance(pod.pos, _v2) > 0.35 ? 1 : 0;
             }
             if (!st.vis) { st.t = Math.max(0, st.t - dt); continue; }
             st.t += dt * (ang < fovR * 0.12 ? 2 : 1);
@@ -870,7 +884,8 @@ export class Sensors {
             const d = _v.length();
             if (d < 20 || d > 20000 || (rec.known < INTEL.CONTACT && d > 5000)) continue;
             const ang = Math.acos(clamp(_v.dot(look) / d, -1, 1));
-            const lim = Math.max(1.6 * DEG, (u.radius || 5) / d * 1.2);
+            // (a head is aimed less finely than a pod: a 3° gate, about the size of the cross's circle)
+            const lim = Math.max(3 * DEG, (u.radius || 5) / d * 1.2);
             if (ang > lim) continue;
             if (ang / lim < bs && war.lineOfSight(eye, _v2.copy(u.pos).setY(u.pos.y + 1.5))) { bs = ang / lim; best = u; }
         }
@@ -916,7 +931,7 @@ export class Sensors {
         if (d > 22000) return false;
         const fovR = FOVS[pod.fov].deg * DEG;
         if (Math.acos(clamp(_c.dot(pod.los) / d, -1, 1)) > fovR * 0.45) return false;
-        const ok = this.game.war.lineOfSight(pod.pos, _c.copy(pos).setY(pos.y + 4)) && this.transmittance(pod.pos, _c) > 0.35;
+        const ok = terrainClear(pod.pos, _c.copy(pos).setY(pos.y + 4)) && this.transmittance(pod.pos, _c) > 0.35;
         if (ok) { pod.bda = pos; pod.bdaT = this.game.time; }
         return ok;
     }
@@ -1049,7 +1064,14 @@ export class Sensors {
     // it, and a data block set well clear of the cross (airspeed left, altitude right, heading and how far off the
     // nose above, the target below)
     drawHelmet(ctx, hud, h) {
-        const pick = this.helmetPick(h);
+        // (what's under the cross, ten times a second: the ground ray is a march over the terrain)
+        const c = this._hmdPick || (this._hmdPick = { t: -1, pick: null, pos: new THREE.Vector3() });
+        if (this.game.time - c.t > 0.1 || this.game.time < c.t) {
+            c.t = this.game.time;
+            const pk = this.helmetPick(h);
+            c.pick = pk ? { unit: pk.unit, pos: c.pos.copy(pk.pos) } : null;
+        }
+        const pick = c.pick;
         const cx = hud.w / 2, cy = hud.h / 2, g = this.game, war = g.war, p = g.player;
         const r = clamp(hud.h * 0.03 * 57.3 / g.camera.fov, 16, 40);
         ctx.lineWidth = 2; ctx.strokeStyle = HMD; ctx.fillStyle = HMD;

@@ -89,6 +89,11 @@ describe('sensors: targeting pod, grid references, identification', () => {
         const h2 = S.rayGround(o, d, hill, 40000, new THREE.Vector3());
         assert.ok(h2 && h2.z > -2400 && h2.z < -1990, 'stops at the hill in the way: ' + h2.z.toFixed(0));
         assert.equal(S.rayGround(o, new THREE.Vector3(0, 0.1, -1).normalize(), flat(100), 40000), null, 'above the horizon: no ground');
+        // a narrow ridge (200 m wide) 7 km along an 11 km line of sight: the coarse check can miss it, the pod's can't
+        const ridge = (x, z) => (z < -6900 && z > -7100 ? 3200 : 50);
+        const a = new THREE.Vector3(0, 3500, 0), b = new THREE.Vector3(0, 50, -11000);
+        assert.equal(S.terrainClear(a, b, ridge), false, 'the ridge blocks the view');
+        assert.equal(S.terrainClear(a, b, flat(50)), true, 'flat ground does not');
     });
 
     test('track hold: the line of sight stays on a ground point while the jet flies, rolls and turns', () => {
