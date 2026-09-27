@@ -9,6 +9,7 @@ import * as THREE from 'three';
 import { Character } from './character.js';
 import { rand, clamp } from './util.js';
 import { Floater } from './float.js';
+import { hasEjectionSeat } from './config.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion();
 
@@ -63,7 +64,8 @@ export function segmentModel(holder, length) {
                 const order = flip ? [0, 2, 1] : [0, 1, 2];
                 for (const n of names) {
                     const a = geo.attributes[n];
-                    for (const k of order) for (let c = 0; c < a.itemSize; c++) b.data[n].push(a.array[(t + k) * a.itemSize + c]);
+                    // getComponent: the value as a float (normalized byte colours / quantized uvs), interleaved or not
+                    for (const k of order) for (let c = 0; c < a.itemSize; c++) b.data[n].push(a.getComponent(t + k, c));
                 }
             }
         }
@@ -235,7 +237,7 @@ export class Wreckage {
     }
 
     eject(ac) {
-        if (ac.ejected || ac.spec.category === 'civil') return;
+        if (ac.ejected || !hasEjectionSeat(ac.spec)) return;
         ac.ejected = true;
         const up = ac.getUp(new THREE.Vector3());
         const start = ac.rig.cockpit.clone().applyMatrix4(ac.model.matrixWorld).addScaledVector(up, 1.5);

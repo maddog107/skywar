@@ -1,0 +1,196 @@
+// ═══════════════════════════════════════════════════════════════
+// Rig parts: the moving parts of an aircraft model that code animates (support aircraft, bombers), and the
+// refuelling points of the receivers.
+//
+// A model file marks each moving part as a named node with its origin on its pivot (model space: x toward the
+// right wing, y up, z aft):
+//   rotodome                  radar rotodome, turns about its own +y (E-3, A-50)
+//   boom                      tanker flying boom: hinge at the origin, the boom lies along its local +z (aft).
+//                             setBoom() pitches it about x (down is +) and yaws it about y (right is +)
+//     boom_ext                  telescoping inner tube, slides out along the boom's +z
+//       boom_nozzle               (empty) the nozzle tip: where the boom plugs into a receptacle
+//   drogue_l / drogue_r / drogue_c   hose-and-drogue unit (wing pod, centreline drum): origin at the hose exit,
+//                             trailing along +z
+//     hose_<s>                  the hose, modelled 1 m long along +z (stretched to the length trailed)
+//     basket_<s>                the drogue basket; its origin is the coupling a probe plugs into
+//   rig_<anything>            any other part code wants to move (doors, hatches, radars, ...)
+// Node custom properties (glTF extras) arrive as userData, e.g. boom: { stow, pitchMin, pitchMax, yawMax },
+// boom_ext: { travel }, drogue_*: { hose, droop }.
+//
+// models.js pulls these nodes out of the model before the airframe is cut into damage sections (segmentModel
+// merges every mesh), bakes the file's scale into them so their positions are metres, and puts a fresh copy on
+// every instance, in the airframe section it sits in (a boom goes with a shot-off tail). The instance's
+// rig.parts maps every named node in them to the instance's own node (rig.parts.boom_nozzle, ...).
+// A model that is frozen with freezeLocal() (util.js) must pass its rig parts as `moving`.
+// ═══════════════════════════════════════════════════════════════
+import * as THREE from 'three';
+
+const PART_ROOT = /^(rotodome|boom|drogue_[lrc]|rig_.+)$/;
+
+// ── Receivers: where a tanker plugs in (fractions of the aircraft length, model space as above) ──
+// kind 'boom': the receptacle (a flying boom's nozzle goes in there); 'probe': the probe tip (extended), which
+// goes into a drogue basket. Read off the models with tools/aircraft/preview.js blueprint().
+export const REFUEL = {
+    // USAF types: flying-boom receptacles
+    f16: { at: [0, -0.0135, -0.05], kind: 'boom' },           // spine, just aft of the canopy
+    f2: { at: [0, -0.0112, -0.04], kind: 'boom' },            // spine, just aft of the canopy (as the F-16)
+    f15: { at: [-0.066, 0.009, -0.1], kind: 'boom' },         // left wing-root extension, above the intake
+    f22: { at: [0, -0.0085, -0.11], kind: 'boom' },           // spine behind the canopy (under doors)
+    f35: { at: [0, 0.0369, -0.12], kind: 'boom' },            // spine behind the canopy (under doors)
+    f4: { at: [0, 0.018, 0.01], kind: 'boom' },               // spine behind the rear cockpit
+    a10: { at: [0, 0.043, -0.365], kind: 'boom' },            // top of the nose, ahead of the windscreen
+    b2: { at: [0, 0.082, -0.19], kind: 'boom' },              // top, behind the cockpit
+    e3: { at: [0, -0.0229, -0.3756], kind: 'boom' },          // UARRSI on the spine behind the cockpit
+    b52: { at: [0, -0.0242, -0.3079], kind: 'boom' },         // UARRSI on the spine behind the cockpit
+    rc135: { at: [0, -0.0226, -0.3333], kind: 'boom' },       // receptacle on the spine behind the cockpit
+    // probe-and-drogue receivers: the tip of the (extended) probe
+    rafale: { at: [0.0294, -0.085, -0.4056], kind: 'probe' }, // fixed probe (modelled), right of the windscreen: its tip
+    typhoon: { at: [0.031, -0.034, -0.35], kind: 'probe' },   // retractable, right side ahead of the canopy
+    f14: { at: [0.031, 0.012, -0.32], kind: 'probe' },        // retractable, right side of the nose
+    gripen: { at: [-0.043, -0.035, -0.3], kind: 'probe' },    // retractable, left side of the cockpit
+    su35: { at: [-0.024, -0.05, -0.33], kind: 'probe' },      // retractable, left of the windscreen
+    a50: { at: [0, -0.0143, -0.5], kind: 'probe' },           // fixed probe over the nose: its tip
+    tu95: { at: [-0.0004, -0.0644, -0.5], kind: 'probe' },    // fixed probe on the nose: its tip
+    fa18: { at: [0.0293, 0.008, -0.3776], kind: 'probe' },    // retractable, right of the nose: its extended tip
+    ea18g: { at: [0.0293, 0.008, -0.3776], kind: 'probe' },   // the same airframe
+};
+
+const _m = new THREE.Matrix4(), _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _s = new THREE.Vector3();
+
+// Take the rig parts out of a normalised model (models.js normaliseGLTF: `holder` is in model space, metres).
+// Returns the part templates, each in model space with unit scale (models.js tags each with the airframe
+// section it rides on: userData.region).
+export function extractRigParts(holder) {
+    holder.updateMatrixWorld(true);
+    const roots = [];
+    holder.traverse((o) => {
+        if (o === holder || !PART_ROOT.test(o.name || '')) return;
+        for (let a = o.parent; a && a !== holder; a = a.parent) if (PART_ROOT.test(a.name || '')) return; // inside another part
+        roots.push(o);
+    });
+    const inv = new THREE.Matrix4().copy(holder.matrixWorld).invert();
+    return roots.map((o) => {
+        _m.multiplyMatrices(inv, o.matrixWorld).decompose(_p, _q, _s);
+        o.parent.remove(o);
+        const k = (_s.x + _s.y + _s.z) / 3;
+        if (Math.abs(_s.x - k) > 1e-3 * k || Math.abs(_s.y - k) > 1e-3 * k) console.warn('[rigparts] non-uniform scale on', o.name);
+        o.position.copy(_p);
+        o.quaternion.copy(_q);
+        o.scale.set(1, 1, 1);
+        bakeScale(o, k);
+        return o;
+    });
+}
+
+// Push a uniform scale k down into a subtree: every node below moves k times as far, every mesh is k times bigger
+function bakeScale(root, k) {
+    if (Math.abs(k - 1) < 1e-6) return;
+    root.traverse((o) => {
+        if (o !== root) o.position.multiplyScalar(k);
+        if (o.isMesh && o.geometry) { o.geometry = o.geometry.clone(); o.geometry.scale(k, k, k); }
+    });
+}
+
+// A refuelling point as a part template: an empty named 'refuel' ({ at: [x, y, z] in fractions of L, kind })
+export function refuelTemplate(def, length) {
+    const o = new THREE.Object3D();
+    o.name = 'refuel';
+    o.position.set(def.at[0] * length, def.at[1] * length, def.at[2] * length);
+    o.userData.kind = def.kind;
+    return o;
+}
+
+// A fresh copy of the part templates on a model instance, each hung on the airframe section it rides on.
+// Returns { name: node } for every named node in them. Every node remembers its rest pose (userData.rest: plain
+// arrays p, q, s, so the pose survives userData's JSON copy when a model is cloned).
+export function attachRigParts(object, templates) {
+    const parts = {};
+    for (const t of templates || []) {
+        const c = t.clone(true);
+        const g = (t.userData.region && object.children.find(ch => ch.userData.region === t.userData.region)) || object;
+        if (g !== object) c.position.sub(g.position);
+        g.add(c);
+        c.traverse((o) => {
+            o.userData.rest = { p: o.position.toArray(), q: o.quaternion.toArray(), s: o.scale.toArray() };
+            if (o.name) parts[o.name] = o;
+        });
+    }
+    // a stowed drogue: hose reeled in (hidden, so a parked copy doesn't merge it)
+    for (const s of ['l', 'r', 'c']) if (parts['drogue_' + s]) trailDrogue({ parts }, s, 0);
+    return parts;
+}
+
+// ── Pose helpers (for the air-support systems) ──
+
+// Turn the rotodome: rpm revolutions a minute, clockwise seen from above. An E-3's turns at 6 rpm with the radar
+// on, and at 1/4 rpm with it off (to keep the bearings lubricated). Returns false if the type has none.
+export function spinRotodome(rig, dt, rpm = 6) {
+    const r = rig.parts?.rotodome;
+    if (!r) return false;
+    r.rotateY(-dt * rpm * Math.PI / 30);
+    return true;
+}
+
+const _e = new THREE.Euler(0, 0, 0, 'YXZ');
+// Pose the flying boom: pitch (rad) down from the fuselage axis, yaw (rad) to the right, ext (m) of telescope
+// out. The KC-135's contact envelope is about 20-40° down and ±10° (±15° at most) across, with a 6 m telescope
+// (userData on the nodes: boom.pitchMin / pitchMax / yawMax in degrees, boom_ext.travel in m).
+// Returns false if the type has no boom.
+export function setBoom(rig, pitch, yaw = 0, ext = 0) {
+    const b = rig.parts?.boom;
+    if (!b) return false;
+    b.quaternion.setFromEuler(_e.set(pitch, yaw, 0, 'YXZ'));
+    const e = rig.parts.boom_ext;
+    if (e) {
+        const travel = e.userData.travel ?? 6;
+        e.position.fromArray(e.userData.rest.p);
+        e.position.z += Math.max(0, Math.min(travel, ext));
+    }
+    return true;
+}
+
+// The boom back in its stowed pose (as the model file has it)
+export function stowBoom(rig) {
+    const b = rig.parts?.boom;
+    if (!b) return false;
+    b.quaternion.fromArray(b.userData.rest.q);
+    if (rig.parts.boom_ext) rig.parts.boom_ext.position.fromArray(rig.parts.boom_ext.userData.rest.p);
+    return true;
+}
+
+// Trail a hose-and-drogue unit: side 'l', 'r' or 'c' (centreline), k 0 (reeled in) .. 1 (fully trailed). The hose
+// pays out to userData.hose metres (default 15) and, as it trails, the unit droops userData.droop degrees (the hose
+// sags below the pod; default 6). Returns false if the type has no such unit.
+export function trailDrogue(rig, side, k) {
+    const d = rig.parts?.['drogue_' + side];
+    if (!d) return false;
+    k = Math.max(0, Math.min(1, k));
+    const len = (d.userData.hose ?? 15) * k;
+    const hose = rig.parts['hose_' + side], basket = rig.parts['basket_' + side];
+    if (hose) {
+        hose.visible = len > 0.05;
+        hose.scale.set(1, 1, Math.max(len, 1e-3));
+    }
+    if (basket) {
+        const r = basket.userData.rest.p;
+        basket.position.set(r[0], r[1], r[2] + len);
+        basket.visible = k > 0; // stowed, the drogue is inside its pod
+    }
+    _q.setFromAxisAngle(_p.set(1, 0, 0), (d.userData.droop ?? 6) * Math.PI / 180 * k);
+    d.quaternion.fromArray(d.userData.rest.q).multiply(_q);
+    return true;
+}
+
+// World position of a rig node (boom_nozzle, basket_l, refuel, ...) of an aircraft; null if it has none
+export function rigPoint(ac, name, out = new THREE.Vector3()) {
+    const n = ac.rig?.parts?.[name];
+    if (!n) return null;
+    return n.getWorldPosition(out);
+}
+
+// Per-frame upkeep of an aircraft's rig parts (Aircraft.updateVisuals): the rotodome turns while the jet is
+// alive (airborne at the model's rotodome.userData.rpm, default 6; 1/4 rpm on the ground); ac.radarRpm overrides it.
+export function updateRigParts(ac, dt) {
+    const p = ac.rig.parts;
+    if (p.rotodome) spinRotodome(ac.rig, dt, ac.radarRpm ?? (!ac.alive ? 0 : ac.onGround ? 0.25 : p.rotodome.userData.rpm ?? 6));
+}

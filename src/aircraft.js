@@ -9,8 +9,9 @@
 // at altitude, while staying stable and fun.
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
-import { AIRCRAFT } from './config.js';
+import { AIRCRAFT, hasEjectionSeat } from './config.js';
 import { createAircraftModel } from './models.js';
+import { updateRigParts } from './rigparts.js';
 import { clamp, damp, lerp, rand, G, DEG, makeRadialTexture } from './util.js';
 import { groundHeight, terrainHeight, isOnRunway } from './world.js';
 import { craterAdj } from './craters.js';
@@ -49,9 +50,10 @@ export function waveShape(M, mmax) {
     if (M < 1.1) { const t = (M - 0.85) / 0.25; return t * t * (3 - 2 * t); }
     return 1 / (1 + 1.6 * (M - 1.1));
 }
-// jet engines lose thrust roughly as ρ^0.75 (ram recovery wins some back at speed); civil and prop types
-// keep a gentler curve (they cruise high on a much smaller thrust margin)
-const isJet = (spec) => !(spec.category === 'civil' || spec.prop);
+// jet engines lose thrust roughly as ρ^0.75 (ram recovery wins some back at speed); civil, support (airliner-derived
+// AWACS, tankers, high-flying recon) and drone types, and prop types, keep a gentler curve (they cruise high on a
+// much smaller thrust margin)
+const isJet = (spec) => !(spec.category === 'civil' || spec.category === 'support' || spec.category === 'drone' || spec.prop);
 export const thrustLapse = (rho, spec) => (isJet(spec) ? Math.pow(rho, 0.75) : 0.45 + 0.55 * rho);
 const ramX = (M) => clamp(M - 0.9, 0, 2);
 
@@ -207,8 +209,11 @@ export class Aircraft {
 
     initFX() {
         const rig = this.rig;
-        // exhaust plume per nozzle (afterburner.js): military power → full afterburner with shock diamonds
-        this.flames = rig.nozzles.map(n => { const f = createEngineFlame(rig.nozzleR); f.position.copy(n); this.model.add(f); return f; });
+        // exhaust plume per nozzle (afterburner.js): military power → full afterburner with shock diamonds (none for
+        // turbofans and turboprops, whose nozzles only mark the exhausts for contrails: rig.flame false)
+        this.flames = rig.flame === false ? [] : rig.nozzles.map(n => { const f = createEngineFlame(rig.nozzleR); f.position.copy(n); this.model.add(f); return f; });
+        // moving parts (rigparts.js): a rotodome turns by itself
+        this.rigAnim = !!rig.parts?.rotodome;
         // propellers (models.js makeProp): blades, blur disc, and a spin rate (rad/s) that follows the engine;
         // they start at running speed (a spawn in the air shouldn't spool up)
         this.propParts = (rig.props || []).map(p => ({
@@ -248,7 +253,8 @@ export class Aircraft {
         const strutLen = Math.max(0.4, bellyY - (-H + wheelR));
         this.gearLegs = [];
         const halfSpan = this.rig.halfSpan || this.spec.span / 2;
-        const mainX = this.spec.category === 'civil' || this.spec.category === 'bomber' ? Math.min(halfSpan * 0.25, L * 0.09) : Math.max(1.0, L * 0.075);
+        const heavy = this.spec.category === 'civil' || this.spec.category === 'bomber' || this.spec.category === 'support';
+        const mainX = heavy ? Math.min(halfSpan * 0.25, L * 0.09) : Math.max(1.0, L * 0.075);
         const legs = [
             { x: 0, z: -0.3 * L, axis: 'x', dir: -1, wheels: 1 },
             { x: -mainX, z: 0.04 * L, axis: 'z', dir: 1, wheels: this.spec.length > 30 ? 2 : 1 },
@@ -976,7 +982,7 @@ export class Aircraft {
         this.alive = false;
         this.health = 0;
         this.game.events.emit('killed', this, { source: source || this.lastHitBy, kind });
-        if (this.spec.category !== 'civil' && (this.isPlayer || Math.random() < 0.85)) this.ejectT = rand(0.15, 0.9);
+        if (hasEjectionSeat(this.spec) && (this.isPlayer || Math.random() < 0.85)) this.ejectT = rand(0.15, 0.9);
         // Big hits and missiles blow the jet apart; otherwise it falls burning
         if (kind === 'missile' && Math.random() < 0.55 || kind === 'crash') {
             this.explode(false);
@@ -1075,8 +1081,9 @@ export class Aircraft {
             const tgt = this.lostRegions.has(pp.p.parent?.userData.region) ? 0 : target;
             pp.rate += (tgt - pp.rate) * Math.min(1, dt * (tgt > pp.rate ? 0.6 : 0.3));
             // a real prop turns more than one blade gap per frame, which strobes (the blades stand still or turn
-            // backwards): draw at most 0.3 of a gap per frame and let the blur disc carry the speed
-            pp.p.rotation.z -= Math.min(pp.rate * dt, pp.gap * 0.3);
+            // backwards): draw at most 0.3 of a gap per frame and let the blur disc carry the speed. (dir -1: the
+            // rear prop of a contra-rotating pair turns the other way)
+            pp.p.rotation.z -= (pp.p.userData.dir || 1) * Math.min(pp.rate * dt, pp.gap * 0.3);
             const blur = clamp((pp.rate - 15) / 35, 0, 1);
             if (pp.blades) {
                 const m = pp.blades.material, fade = blur > 0.01;
@@ -1100,6 +1107,7 @@ export class Aircraft {
         const ab = this.afterburner && this.alive && !this.flameout ? 1 : 0;
         for (const f of this.flames) f.update(power, ab, this.mach || 0, dt, now + this.id, this.game.camera);
         if (this.propParts.length) this.updateProps(dt);
+        if (this.rigAnim) updateRigParts(this, dt);
         // Nav lights
         const blink = (now * 1.1 + this.id * 0.37) % 1.2 < 0.06;
         this.strobe.visible = blink && this.alive;

@@ -207,12 +207,15 @@ let showcase = null;
 let orbit = 0;
 
 function buildMenu() {
-    // aircraft list
+    // aircraft list (a type's `group` overrides its category's heading: the EA-18G is a fighter listed with support)
+    const grp = (k) => AIRCRAFT[k].group || AIRCRAFT[k].category;
     const groups = [
-        ['FIGHTERS', k => AIRCRAFT[k].category === 'fighter'],
-        ['BOMBER', k => AIRCRAFT[k].category === 'bomber'],
-        ['RACING & AEROBATIC', k => AIRCRAFT[k].category === 'racer'],
-        ['CIVIL & TRANSPORT', k => AIRCRAFT[k].category === 'civil'],
+        ['FIGHTERS', k => grp(k) === 'fighter'],
+        ['BOMBERS', k => grp(k) === 'bomber'],
+        ['AWACS, TANKERS, RECON & EW', k => grp(k) === 'support'],
+        ['DRONES', k => grp(k) === 'drone'],
+        ['RACING & AEROBATIC', k => grp(k) === 'racer'],
+        ['CIVIL & TRANSPORT', k => grp(k) === 'civil'],
     ];
     const list = $('acList');
     list.innerHTML = '';
@@ -621,6 +624,16 @@ function buildCredits() {
         ['Airplane biplane (pitts)', 'BlueHour', 'CC BY 4.0', 'https://sketchfab.com/3d-models/airplane-biplane-be48f3f906ed431b98b1bf03ab7aadd6'],
         ['cl415 (Canadair CL-415, cl415)', 'helijah', 'CC BY 4.0', 'https://sketchfab.com/3d-models/cl415-bf3eaa6a1f4f4fc18df9b05cf40de927'],
         ['MiG-31, MiG-25, J-20, J-10, J-8, F-5E, MiG-21, Mirage III, Jaguar', 'SKYWAR / Blender (tools/aircraft_kit.py)', 'CC0', 'tools/aircraft/'],
+        // support aircraft, drones and bombers (models/aircraft/CREDITS.md, last section)
+        ['KC135R (kc135; the e3 E-3G Sentry and rc135 RC-135W are derived from it)', 'Adastra', 'CC BY 4.0', 'https://sketchfab.com/3d-models/kc135r-95fedbaed45b492e8dfa9d1a8f76b25f'],
+        ['Ilyushin Il-76 (a50: A-50U Mainstay)', 'helijah (Emmanuel Baranger)', 'CC BY 4.0', 'https://sketchfab.com/3d-models/ilyushin-il-76-ab71a5f790f940798cc755246a7a8a7f'],
+        ['Il78 (il78)', 'manilov.ap', 'CC BY 4.0', 'https://sketchfab.com/3d-models/il78-0c0da2cc1b4c441dadc2510212c25fb7'],
+        ['MQ-9 Reaper (mq9)', 'Tyler V Howell', 'CC BY 4.0', 'https://sketchfab.com/3d-models/mq-9-reaper-eff549610fee4f20904f7b388a3a0830'],
+        ['NASA 3D Resources Global Hawk (rq4)', 'NASA', 'Public domain (NASA)', 'https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Global%20Hawk'],
+        ['B52 (b52)', 'manilov.ap', 'CC BY 4.0', 'https://sketchfab.com/3d-models/b52-3ca2f507a0a749799e16a4eee12e456c'],
+        ['Tu95 (tu95)', 'manilov.ap', 'CC BY 4.0', 'https://sketchfab.com/3d-models/tu95-1eac97ec49ed4f1da8b7deb1e1b2cc7a'],
+        ['Low poly 1:1 F/A-18F SuperHornet (ea18g: the EA-18G Growler, derived from fa18)', 'WTigerTw', 'CC BY 4.0', 'https://sketchfab.com/3d-models/low-poly-11-fa-18f-superhornet-635e68b7a0d24ac29c10f5fb9110129f'],
+        ['NASA Airborne Science ER-2 model (u2, U-2S)', 'NASA', 'Public domain', 'https://airbornescience.nasa.gov/3d-models'],
         ['Ships: Nimitz carrier, Arleigh Burke destroyer, Ticonderoga cruiser, Virginia and Ohio submarines, Supply-class AOE, NSW RHIB, CB90, Slava cruiser', 'SKYWAR / Blender (tools/ships; sources in models/ships/CREDITS.md)', 'CC0', 'tools/ships/'],
         ['Military vehicles: Scud, Bastion, S-300, Osa, Buk, Smerch, Grad, Flap Lid, P-18 and Soviet support trucks; Patriot, HIMARS, M270, Sentinel, Stryker, HEMTT and US support vehicles (see models/vehicles/CREDITS.md)', 'SKYWAR / Blender (tools/vehicles)', 'CC0', 'tools/vehicles/'],
         ['Helicopter (military)', 'Zsky', 'CC BY 3.0', 'https://poly.pizza/m/hG2Qr0A3zR'],

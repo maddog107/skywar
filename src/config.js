@@ -30,6 +30,17 @@
 //       drag-divergence ("wall") marker only.
 // ═══════════════════════════════════════════════════════════════
 
+// Categories (what the rest of the game makes of them):
+//   fighter  fighters and attack jets: ejection seats, a tail hook, fighter handling for the AI
+//   bomber   heavy bombers: four times the bomb load; ejection seats unless `eject: false`
+//   support  AWACS, tankers, reconnaissance and electronic-warfare aircraft: airliner-like engine lapse and AI
+//            handling, no ejection seats unless `eject: true` (the U-2 has one)
+//   drone    unmanned: nobody on board to eject
+//   racer, civil  racers and aerobatic planes; airliners, transports and light aircraft (no ejection seats)
+// `group` puts a type under another heading in the hangar list than its category's (main.js buildMenu).
+// `maxBank` (rad) caps the AI's bank for the type, instead of its category's default (ai.js defaultMaxBank).
+export const hasEjectionSeat = (spec) => spec.eject ?? !(spec.category === 'civil' || spec.category === 'support' || spec.category === 'drone');
+
 const FIGHTER = { speed: 400, mach: 1.8, cd0: 0.05, accel: 14, lift: 1.0, gLimit: 9, roll: 4.2, alpha: 24 };
 
 function jet(o) {
@@ -303,6 +314,95 @@ export const AIRCRAFT = {
         flight: { speed: 170, mach: 0.6, accel: 4.5, lift: 1.6, gLimit: 3, roll: 1.0, alpha: 16 },
         health: 220, gun: null, missiles: 0, flares: 60,
         proc: { airliner: true, turboprop: true, highWing: true, engines: 4, body: [0.14, 0.14], paint: 0x5b6556, accent: 0x4a5346 },
+    },
+
+    // ── Air support, special-mission aircraft, drones and heavy bombers (the living war: docs/WAR.md) ──
+    // Published dimensions and performance. Their moving parts (rotodome, flying boom, hose-and-drogue units) are
+    // nodes in the models, posed with src/rigparts.js. Thrust (`accel`) is scaled up from the real thrust-to-weight
+    // ratio like the airliners' so they take off and climb in a game-sized world; `lift` follows the wing loading
+    // (≈ 520 / (kg/m² at max weight), as for the 737 and 747). fuelTime: seconds of full power on internal fuel.
+    e3: {
+        name: 'E-3G Sentry', role: 'AWACS', country: 'USA', length: 46.61, span: 44.42, category: 'support',
+        desc: 'Airborne warning and control: a Boeing 707 carrying a 9 m radar rotodome that sees 400 km. Slow, huge and priceless.',
+        flight: { speed: 225, mach: 0.78, afterburner: false, accel: 3.8, lift: 0.95, gLimit: 2.5, roll: 0.7, alpha: 14 },
+        health: 230, gun: null, missiles: 0, flares: 0, fuelTime: 5400,
+        proc: { airliner: true, engines: 4, body: [0.08, 0.085], paint: 0xb2b6b7, accent: 0x2a2d30 },
+    },
+    kc135: {
+        name: 'KC-135R Stratotanker', role: 'Aerial Tanker', country: 'USA', length: 41.53, span: 39.88, category: 'support',
+        desc: 'The USAF\'s flying gas station since 1957: a flying boom for USAF jets, MPRS wing pods with hoses and drogues for probe-equipped fighters.',
+        flight: { speed: 238, mach: 0.86, afterburner: false, accel: 4.0, lift: 0.82, gLimit: 2.5, roll: 0.75, alpha: 14 },
+        health: 220, gun: null, missiles: 0, flares: 0, fuelTime: 7200,
+        proc: { airliner: true, engines: 4, body: [0.09, 0.095], paint: 0x7d858b, accent: 0x2b2e31 },
+    },
+    a50: {
+        name: 'A-50U Mainstay', role: 'AWACS', country: 'RUS', length: 49.59, span: 50.5, category: 'support',
+        desc: 'The Russian answer to the E-3: an Il-76MD carrying the Shmel-M radar in a 10 m rotodome. Sees low fliers 300 km out and guides the fighters onto them.',
+        flight: { speed: 205, mach: 0.74, afterburner: false, accel: 3.7, lift: 0.85, gLimit: 2.5, roll: 0.65, alpha: 14 },
+        health: 240, gun: null, missiles: 0, flares: 0, fuelTime: 5400,
+        proc: { airliner: true, highWing: true, engines: 4, body: [0.1, 0.1], paint: 0xe2e4e3, accent: 0xa4a9ac },
+    },
+    il78: {
+        name: 'Il-78M Midas', role: 'Aerial Tanker', country: 'RUS', length: 46.59, span: 50.5, category: 'support',
+        desc: 'The Russian tanker: an Il-76 with three UPAZ-1 hose-and-drogue pods, two under the wings and one on the rear fuselage, 26 m of hose each.',
+        flight: { speed: 215, mach: 0.78, afterburner: false, accel: 3.7, lift: 0.8, gLimit: 2.5, roll: 0.65, alpha: 14 },
+        health: 230, gun: null, missiles: 0, flares: 0, fuelTime: 7200,
+        proc: { airliner: true, highWing: true, engines: 4, body: [0.1, 0.1], paint: 0xd9dcdc, accent: 0x55606b },
+    },
+    // drones: maxBank is the AI's bank limit (ai.js), sedate like the real autopilots
+    mq9: {
+        name: 'MQ-9A Reaper', role: 'Hunter-Killer Drone', country: 'USA', length: 11.0, span: 24.0, category: 'drone',
+        desc: 'Remotely piloted hunter-killer: a day on station, a sensor ball that sees everything, Hellfires and laser-guided bombs for what it finds.',
+        flight: { speed: 105, mach: 0.42, afterburner: false, accel: 3.0, lift: 3.0, gLimit: 3.5, roll: 1.2, alpha: 15 },
+        health: 70, gun: null, missiles: 4, flares: 0, fuelTime: 9000, maxBank: 0.6,
+        proc: { airliner: true, turboprop: true, engines: 2, body: [0.1, 0.1], paint: 0xa3a8ab, accent: 0x2a2d30 },
+    },
+    rq4: {
+        name: 'RQ-4B Global Hawk', role: 'High-Altitude ISR Drone', country: 'USA', length: 14.5, span: 39.9, category: 'drone',
+        desc: 'Unmanned high-altitude reconnaissance: 30+ hours at 60,000 ft, mapping a whole theatre with radar and cameras.',
+        flight: { speed: 150, mach: 0.58, afterburner: false, accel: 3.5, lift: 1.8, gLimit: 2.5, roll: 0.6, alpha: 14 },
+        health: 90, gun: null, missiles: 0, flares: 0, fuelTime: 12000, maxBank: 0.5,
+        proc: { airliner: true, engines: 2, body: [0.1, 0.1], paint: 0xb3b8bb, accent: 0x2a2d30 },
+    },
+    // heavy bombers (missiles / flares on the B-2's scale; maxBank: the AI flies them at ~35° of bank, not the B-2's
+    // 50°). The Tu-95 is a prop type (prop: true: the gentler thrust lapse of a turboprop; its sound comes from
+    // proc.turboprop) and has no ejection seats (eject: false)
+    b52: {
+        name: 'B-52H Stratofortress', role: 'Strategic Bomber', country: 'USA', length: 48.5, span: 56.39, category: 'bomber',
+        desc: 'Eight TF33s, 70 years in service and still the USAF\'s heavy hauler: cruise missiles by the dozen and bombs by the ton.',
+        flight: { speed: 262, mach: 0.86, afterburner: false, accel: 4.2, lift: 0.88, gLimit: 2.0, roll: 0.55, alpha: 14 },
+        health: 280, gun: null, missiles: 12, flares: 60, fuelTime: 7200, maxBank: 0.6,
+        proc: { airliner: true, engines: 4, body: [0.075, 0.08], paint: 0x55595d, accent: 0x3d4043 },
+    },
+    tu95: {
+        name: 'Tu-95MS Bear-H', role: 'Strategic Bomber', country: 'RUS', length: 48.9, span: 50.1, category: 'bomber', prop: true, eject: false,
+        desc: 'Four NK-12 turboprops with contra-rotating props: the fastest propeller aircraft ever and Russia\'s cruise-missile carrier.',
+        flight: { speed: 200, mach: 0.8, afterburner: false, accel: 4.0, lift: 0.86, gLimit: 2.0, roll: 0.6, alpha: 14 },
+        health: 260, gun: null, missiles: 6, flares: 48, fuelTime: 7200, maxBank: 0.6,
+        proc: { airliner: true, turboprop: true, engines: 4, body: [0.065, 0.065], paint: 0xb8bcbd, accent: 0x9ca1a3 },
+    },
+    // electronic warfare and reconnaissance. The Growler is a fighter (a Super Hornet airframe: seats, hook, fighter
+    // handling) listed with the support types; the U-2's pilot has an ejection seat
+    ea18g: jet({
+        name: 'EA-18G Growler', role: 'Electronic Attack', country: 'USA', length: 18.31, span: 13.62, group: 'support',
+        desc: 'The Super Hornet turned radar killer: ALQ-99 jamming pods, ALQ-218 receivers on the wingtips and HARMs to finish the job. No gun.',
+        flight: { speed: 318, mach: 1.45, cd0: 0.062, aoaLimiter: true, accel: 12, gLimit: 7.5, roll: 3.3, alpha: 35, lift: 1.04 },
+        health: 120, missiles: 4, gun: null, flares: 60,
+        proc: { body: [0.09, 0.08], wing: { rc: 0.3, tc: 0.12, sweep: 28, z: 0.1 }, tail: 'twin', cant: 20, hstab: true, engines: 2, spacing: 0.06, intake: 'side', lerx: true, paint: 0x7b858e, accent: 0x68727b },
+    }),
+    u2: {
+        name: 'U-2S Dragon Lady', role: 'High-Altitude Reconnaissance', country: 'USA', length: 19.2, span: 31.4, category: 'support', eject: true,
+        desc: 'The Dragon Lady: a jet-powered glider that photographs and listens from 70,000 ft. Flies itself high, hates the ground.',
+        flight: { speed: 200, mach: 0.74, afterburner: false, accel: 5.5, lift: 2.7, gLimit: 2.5, roll: 0.8, alpha: 14 },
+        health: 90, gun: null, missiles: 0, flares: 0, fuelTime: 9000,
+        proc: { body: [0.06, 0.06], wing: { rc: 0.14, tc: 0.07, sweep: 5, z: 0.05 }, tail: 'single', hstab: true, engines: 1, intake: 'side', paint: 0x1e2023, accent: 0x161719 },
+    },
+    rc135: {
+        name: 'RC-135W Rivet Joint', role: 'SIGINT Reconnaissance', country: 'USA', length: 41.1, span: 39.88, category: 'support',
+        desc: 'A flying listening post: the hog-nosed, cheek-bulged C-135 that maps enemy radars and radios from 300 km away.',
+        flight: { speed: 236, mach: 0.84, afterburner: false, accel: 4.0, lift: 0.82, gLimit: 2.5, roll: 0.75, alpha: 14 },
+        health: 210, gun: null, missiles: 0, flares: 0, fuelTime: 7200,
+        proc: { airliner: true, engines: 4, body: [0.09, 0.095], paint: 0x8f969b, accent: 0x2a2d30 },
     },
 };
 

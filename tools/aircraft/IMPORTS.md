@@ -53,3 +53,27 @@ are listed in `models/aircraft/CREDITS.md` with their reference drawings.
 Previewing: `node server.mjs` (and `node tools/aircraft/upload.mjs` to save PNGs), then open `/tools/aircraft/preview.html` (see the comment at the top of
 `tools/aircraft/preview.js`). It renders models through the game's own loader/normaliser, with the nozzle
 (red), wingtip (blue) and cockpit (green) rig points as markers.
+
+## Support aircraft, drones and bombers
+
+Derived and built with `tools/aircraft/support_kit.py` (import, clean, stretch, add parts with `aircraft_kit.py`,
+export the moving parts as separate named nodes for `src/rigparts.js`):
+
+    /opt/homebrew/bin/blender -b -P tools/aircraft/<id>.py -- SRC.glb models/aircraft/<id>.glb
+
+| id | script | source file |
+|---|---|---|
+| kc135 | `kc135.py` | Objaverse `glbs/000-081/95fedbaed45b492e8dfa9d1a8f76b25f.glb` ("KC135R" by Adastra) |
+| e3 | `e3.py` | the same KC-135R file |
+| a50 | `a50.py` | Objaverse `glbs/000-050/ab71a5f790f940798cc755246a7a8a7f.glb` ("Ilyushin Il-76" by helijah) |
+| il78 | `il78.py` | Objaverse `glbs/000-025/0c0da2cc1b4c441dadc2510212c25fb7.glb` ("Il78" by manilov.ap) |
+| mq9 | `mq9.py` | Objaverse `glbs/000-020/eff549610fee4f20904f7b388a3a0830.glb` ("MQ-9 Reaper" by TVHowell) |
+| rq4 | `rq4.py` | NASA 3D Resources `3D Models/Global Hawk/Global Hawk.glb` |
+| b52 | `b52.py` | Objaverse `glbs/000-078/3ca2f507a0a749799e16a4eee12e456c.glb` ("B52" by manilov.ap) |
+| tu95 | `tu95.py` | Objaverse `glbs/000-114/1eac97ec49ed4f1da8b7deb1e1b2cc7a.glb` ("Tu95" by manilov.ap) |
+| ea18g | `ea18g.py` | `models/aircraft/fa18.glb` (the game's F/A-18F) |
+| u2 | `u2.py` | NASA `ER2_AFRC_AIR_0626.glb` (https://airbornescience.nasa.gov/3d-models/models/ER2_AFRC_AIR_0626.glb) |
+| rc135 | `rc135.py` | the same KC-135R file |
+
+Each script's header lists what it changes; sources and licences are in the last section of
+`models/aircraft/CREDITS.md`.

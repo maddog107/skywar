@@ -31,9 +31,9 @@ function gunProfile(gun) {
 }
 
 function engineKind(spec) {
+    if (spec.proc && spec.proc.turboprop) return 'turboprop'; // before `prop` (a Tu-95 is a prop type for the thrust lapse)
     if (spec.prop || (spec.proc && spec.proc.prop)) return 'piston';
-    if (spec.proc && spec.proc.turboprop) return 'turboprop';
-    if (spec.category === 'civil' || spec.category === 'bomber') return 'turbofan';
+    if (spec.category === 'civil' || spec.category === 'bomber' || spec.category === 'support' || spec.category === 'drone') return 'turbofan';
     return 'jet';
 }
 

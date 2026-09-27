@@ -37,13 +37,16 @@ export async function loadGameModels() {
 }
 
 // Register GLBs under 'new_<id>' using the game's loader/normaliser, without touching the real entries.
+// info.as: use another id's spec; info.spec: a spec of its own (a type not in config.js yet, e.g.
+// { length: 46.61, span: 44.42, category: 'support', flight: {...}, proc: {...} }).
 export async function loadNew(entries, prefix = 'new_') {
     const M = await import('/src/models.js');
     const C = await import('/src/config.js');
     const saved = { ...M.MODEL_FILES };
     for (const k of Object.keys(M.MODEL_FILES)) delete M.MODEL_FILES[k];
     for (const [id, info] of Object.entries(entries)) {
-        C.AIRCRAFT[prefix + id] = C.AIRCRAFT[info.as || id];   // 'as': test a variant file against another id's spec
+        C.AIRCRAFT[prefix + id] = info.spec ? { name: id, role: '', country: '', health: 100, gun: null, missiles: 0, flares: 0, category: 'support', ...info.spec, flight: { speed: 200, mach: 0.8, accel: 4, lift: 1, gLimit: 2.5, roll: 1, alpha: 15, ...(info.spec.flight || {}) } }
+            : C.AIRCRAFT[info.as || id];   // 'as': test a variant file against another id's spec
         M.MODEL_FILES[prefix + id] = { ...info, file: info.file + '?t=' + Date.now() };
     }
     await M.preloadModels();
@@ -78,6 +81,8 @@ export async function views(id, opts = {}) {
     } else {
         ({ object, rig } = M.createAircraftModel(id));
     }
+    // opts.pose(rig, object): pose the rig parts first (src/rigparts.js setBoom, trailDrogue, ...)
+    if (opts.pose) { const R = await import('/src/rigparts.js'); opts.pose(rig, object, R); }
     if (opts.livery) M.applyLivery(object, opts.livery);
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(opts.bg ?? 0x9aa6b2);
@@ -93,6 +98,13 @@ export async function views(id, opts = {}) {
         rig.nozzles.forEach(p => mk(p, 0xff2020, r));
         rig.wingtips.forEach(p => mk(p, 0x2060ff, r));
         mk(rig.cockpit, 0x20ff40, r);
+        // rig empties (boom nozzle, drogue couplings, the refuelling point): yellow; props' hubs: magenta
+        object.updateMatrixWorld(true);
+        for (const n of ['boom_nozzle', 'basket_l', 'basket_r', 'basket_c', 'refuel']) {
+            const o = rig.parts?.[n];
+            if (o) mk(o.getWorldPosition(new THREE.Vector3()), 0xffd400, r * 0.8);
+        }
+        for (const p of rig.props || []) mk(p.getWorldPosition(new THREE.Vector3()), 0xff30ff, r * 0.6);
     }
     object.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(object);
@@ -275,8 +287,9 @@ export async function closeup(id, flap, brake, o = {}) {
     const S = await import('/src/surfaces.js');
     const C = await import('/src/config.js');
     const L = C.AIRCRAFT[id].length;
-    const { object } = M.createAircraftModel(id);
+    const { object, rig } = M.createAircraftModel(id);
     S.poseSurfaces(object, flap, brake);
+    if (o.pose) { const R = await import('/src/rigparts.js'); o.pose(rig, object, R); } // rig parts (see views())
     const w = o.w ?? 640, h = o.h ?? 420;
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(o.bg ?? 0x9aa6b2);

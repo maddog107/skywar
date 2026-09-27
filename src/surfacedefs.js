@@ -305,4 +305,102 @@ export const SURFACE_DEFS = {
         flaps: [{ top: [[0.052, -0.0050], [0.366, -0.051], [0.3781, 0.0], [0.052, 0.070]], y: [-0.1058, -0.080], dihedral: 4.3, hinge: [[0.052, -0.0848, -0.0050], [0.366, -0.0640, -0.051]], angle: 45 }],
     },
 
+    // ── Support aircraft, drones and bombers (the living war) ──
+    // KC-135R (Boeing 717 wing): Fowler flaps inboard (root fillet to the inboard aileron) and outboard (to the
+    // outboard aileron), the inboard aileron between them left alone; spoiler groups on the upper skin ahead of each
+    // flap, rising 40° (they are its speed brakes). Traced from the model's own panel lines (the flap leading edge
+    // kinks at the inboard aileron); the band tilts with the model's dihedral. (tools/aircraft/kc135.py)
+    kc135: {
+        flaps: [
+            { top: [[0.0865, -0.0258], [0.0993, -0.034], [0.1886, 0.0119], [0.1687, 0.0443], [0.0865, 0.0075]], y: [-0.106, -0.077], dihedral: 8.7, hinge: [[0.0993, -0.082, -0.034], [0.1886, -0.0715, 0.0119]], angle: 35, slide: [0, -0.004, 0.024] },
+            { top: [[0.2345, 0.0355], [0.3305, 0.0786], [0.3163, 0.1112], [0.2173, 0.0658]], y: [-0.086, -0.058], dihedral: 8.7, hinge: [[0.2345, -0.066, 0.0355], [0.3305, -0.0505, 0.0786]], angle: 35, slide: [0, -0.003, 0.0225] },
+        ],
+        brakes: [
+            { top: [[0.1113, -0.0522], [0.174, -0.0214], [0.167, 0.0008], [0.0993, -0.034]], y: [-0.092, -0.071], dihedral: 8.7, hinge: [[0.1113, -0.082, -0.0522], [0.174, -0.0725, -0.0214]], angle: -40, skin: 1 },
+            { top: [[0.251, 0.0165], [0.3208, 0.0508], [0.3088, 0.0677], [0.2435, 0.0348]], y: [-0.072, -0.055], dihedral: 8.7, hinge: [[0.251, -0.0645, 0.0165], [0.3208, -0.0535, 0.0508]], angle: -40, skin: 1 },
+        ],
+    },
+    // E-3G: the same wing, stretched spanwise into the 707-320B's and moved aft by the forward fuselage plug
+    // (tools/aircraft/e3.py): the KC-135's defs carried through the same transform
+    e3: {
+        flaps: [
+            { top: [[0.0812, 0.0093], [0.0939, 0.0019], [0.1826, 0.0431], [0.1628, 0.0722], [0.0812, 0.0392]], y: [-0.1, -0.0739], dihedral: 7.8772, hinge: [[0.0939, -0.0784, 0.0019], [0.1826, -0.069, 0.0431]], angle: 35, slide: [0, -0.0036, 0.0215] },
+            { top: [[0.2282, 0.0643], [0.3235, 0.103], [0.3094, 0.1323], [0.2111, 0.0915]], y: [-0.082, -0.0569], dihedral: 7.8772, hinge: [[0.2282, -0.0641, 0.0643], [0.3235, -0.0502, 0.103]], angle: 35, slide: [0, -0.0027, 0.0202] },
+        ],
+        brakes: [
+            { top: [[0.1058, -0.0145], [0.1681, 0.0132], [0.1611, 0.0332], [0.0939, 0.0019]], y: [-0.0874, -0.0686], dihedral: 7.8772, hinge: [[0.1058, -0.0784, -0.0145], [0.1681, -0.0699, 0.0132]], angle: -40, skin: 1 },
+            { top: [[0.2445, 0.0472], [0.3138, 0.0781], [0.3019, 0.0932], [0.2371, 0.0637]], y: [-0.0695, -0.0542], dihedral: 7.8772, hinge: [[0.2445, -0.0627, 0.0472], [0.3138, -0.0528, 0.0781]], angle: -40, skin: 1 },
+        ],
+    },
+    // A-50 (Il-76MD): Fowler flaps in two sections a side, cut through the wing with the aft flap-track fairings, 40° with
+    // ~1.3 m aft travel; spoiler panels on the upper skin ahead of them rise 50° (tools/aircraft/a50.py)
+    a50: {
+        flaps: [
+            { top: [[0.0474, 0.0031], [0.2309, 0.0263], [0.2309, 0.0687], [0.0474, 0.0445]], y: [-0.0547, -0.0214], dihedral: -2.6, hinge: [[0.0474, -0.024, 0.0031], [0.2309, -0.0309, 0.0263]], angle: 40, slide: [0, -0.005, 0.0282] },
+            { top: [[0.2329, 0.0273], [0.3721, 0.0798], [0.3721, 0.111], [0.2329, 0.0687]], y: [-0.0627, -0.0288], dihedral: -3.4, hinge: [[0.2329, -0.0305, 0.0273], [0.3721, -0.0393, 0.0798]], angle: 40, slide: [0, -0.0044, 0.0242] },
+        ],
+        brakes: [
+            { top: [[0.0807, -0.0291], [0.2117, -0.01], [0.2117, 0.0182], [0.0807, -0.0009]], y: [-0.0295, -0.0163], dihedral: -2.6, hinge: [[0.0807, -0.022, -0.0291], [0.2117, -0.0276, -0.01]], angle: -50, skin: 1 },
+            { top: [[0.242, -0.0009], [0.3529, 0.0404], [0.3529, 0.0687], [0.242, 0.0273]], y: [-0.0375, -0.0254], dihedral: -3.4, hinge: [[0.242, -0.0315, -0.0009], [0.3529, -0.0375, 0.0404]], angle: -50, skin: 1 },
+        ],
+    },
+    // Il-78M (another Il-76 model): the same Fowler flaps and spoilers as the A-50, measured on this model: the trailing
+    // edge (kinked at 11.2 m out, where the two flap sections meet) and skin heights probed from the mesh, the chords
+    // from the A-50's panel lines (2 m inboard; outboard tapering 1.7 to 1.4 m, its hinge passing just behind the
+    // UPAZ pod's tail). The aft ends of the flap-track fairings go down with the flaps.
+    il78: {
+        flaps: [
+            { top: [[0.079, -0.0363], [0.2395, -0.0109], [0.2395, 0.0426], [0.079, 0.0172]], y: [-0.048, -0.0135], dihedral: -3.8, hinge: [[0.079, -0.0176, -0.0363], [0.2395, -0.0309, -0.0109]], angle: 40, slide: [0, -0.0053, 0.03] },
+            { top: [[0.2405, -0.0044], [0.396, 0.0518], [0.396, 0.0925], [0.2405, 0.0441]], y: [-0.0553, -0.0275], dihedral: -4.5, hinge: [[0.2405, -0.031, -0.0044], [0.396, -0.0465, 0.0518]], angle: 40, slide: [0, -0.0047, 0.0258] },
+        ],
+        brakes: [
+            { top: [[0.087, -0.069], [0.2275, -0.0468], [0.2275, -0.0168], [0.087, -0.039]], y: [-0.026, -0.009], dihedral: -3.8, hinge: [[0.087, -0.0142, -0.069], [0.2275, -0.0286, -0.0468]], angle: -50, skin: 1 },
+            { top: [[0.2455, -0.0326], [0.3756, 0.0145], [0.3756, 0.0435], [0.2455, -0.0036]], y: [-0.0375, -0.024], dihedral: -4.5, hinge: [[0.2455, -0.0303, -0.0326], [0.3756, -0.044, 0.0145]], angle: -50, skin: 1 },
+        ],
+    },
+    // MQ-9A: the inboard trailing-edge surfaces (0.55-4.46 m out, closed solids of their own in the model) droop as
+    // flaps; the band stops just under the upper skin so the actuator fairing on top of the wing stays put
+    mq9: {
+        flaps: [{ top: [[0.05, 0.0805], [0.4058, 0.0752], [0.4058, 0.1062], [0.05, 0.1168]], y: [-0.033, -0.0093], whole: true, hinge: [[0.0502, -0.0205, 0.0805], [0.4056, -0.0205, 0.0753]], angle: 30 }],
+    },
+    // B-52H: Fowler flaps in two sections a side (inboard and outboard of the inner engine pods), 35°; the spoiler
+    // group ahead of the outboard flap rises 50° (tools/aircraft/b52.py)
+    b52: {
+        flaps: [
+            { top: [[0.034, -0.0913], [0.195, -0.0053], [0.195, 0.0257], [0.034, -0.0603]], y: [-0.066, -0.052], hinge: [[0.034, -0.0565, -0.0913], [0.195, -0.0565, -0.0053]], angle: 35, slide: [0, -0.003, 0.016] },
+            { top: [[0.205, 0.0], [0.35, 0.0774], [0.35, 0.1084], [0.205, 0.031]], y: [-0.066, -0.052], hinge: [[0.205, -0.0565, 0.0], [0.35, -0.0565, 0.0774]], angle: 35, slide: [0, -0.003, 0.016] },
+        ],
+        brakes: [{ top: [[0.215, -0.0166], [0.345, 0.0528], [0.345, 0.0728], [0.215, 0.0034]], y: [-0.06, -0.05], hinge: [[0.215, -0.0556, -0.0166], [0.345, -0.0556, 0.0528]], angle: -50, skin: 1 }],
+    },
+    // Tu-95MS: flaps in two sections a side, inboard and outboard of the inner nacelle, 35° with a little aft
+    // travel (tools/aircraft/tu95.py)
+    tu95: {
+        flaps: [
+            { top: [[0.035, -0.0997], [0.105, -0.0707], [0.105, -0.0367], [0.035, -0.0657]], y: [-0.087, -0.068], hinge: [[0.035, -0.0725, -0.0997], [0.105, -0.0725, -0.0707]], angle: 35, slide: [0, -0.004, 0.01] },
+            { top: [[0.152, -0.0512], [0.295, 0.0081], [0.295, 0.0421], [0.152, -0.0172]], y: [-0.087, -0.068], hinge: [[0.152, -0.0725, -0.0512], [0.295, -0.0725, 0.0081]], angle: 35, slide: [0, -0.004, 0.01] },
+        ],
+    },
+    // U-2S: the trailing-edge flaps inboard and outboard of the superpods, each a closed solid of its own in the model
+    // (taken whole), 30° (tools/aircraft/u2.py)
+    u2: {
+        flaps: [
+            { top: [[0.0556, 0.0811], [0.0561, 0.0805], [0.2042, 0.0781], [0.2047, 0.0786], [0.2047, 0.1298], [0.2043, 0.1327], [0.0561, 0.1438], [0.0556, 0.1404]], y: [-0.1002, -0.0819], whole: true, hinge: [[0.0582, -0.0838, 0.0805], [0.2021, -0.0841, 0.0781]], angle: 30 },
+            { top: [[0.2512, 0.0784], [0.2516, 0.0779], [0.4704, 0.0741], [0.4707, 0.0745], [0.4707, 0.1109], [0.4704, 0.113], [0.2516, 0.1293], [0.2512, 0.1265]], y: [-0.0969, -0.0821], whole: true, hinge: [[0.2538, -0.0838, 0.0779], [0.4681, -0.084, 0.0741]], angle: 30 },
+        ],
+    },
+    // RC-135W: the KC-135's wing (rc135.py: the same file at the same scale, the airframe 1.47 m further aft for the hog
+    // nose): kc135's defs shifted (scratchpad rcdefs.mjs; re-derive them if either model changes)
+    rc135: {
+        flaps: [
+            { top: [[0.0866, 0.0101], [0.0995, 0.0019], [0.1889, 0.0479], [0.169, 0.0804], [0.0866, 0.0435]], y: [-0.1062, -0.0771], dihedral: 8.7, hinge: [[0.0995, -0.0821, 0.0019], [0.1889, -0.0716, 0.0479]], angle: 35, slide: [0, -0.004, 0.024] },
+            { top: [[0.2349, 0.0715], [0.331, 0.1147], [0.3168, 0.1474], [0.2177, 0.1019]], y: [-0.0861, -0.0581], dihedral: 8.7, hinge: [[0.2349, -0.0661, 0.0715], [0.331, -0.0506, 0.1147]], angle: 35, slide: [0, -0.003, 0.0225] },
+        ],
+        brakes: [
+            { top: [[0.1115, -0.0163], [0.1743, 0.0145], [0.1673, 0.0368], [0.0995, 0.0019]], y: [-0.0922, -0.0711], dihedral: 8.7, hinge: [[0.1115, -0.0821, -0.0163], [0.1743, -0.0726, 0.0145]], angle: -40, skin: 1 },
+            { top: [[0.2514, 0.0525], [0.3213, 0.0869], [0.3093, 0.1038], [0.2439, 0.0708]], y: [-0.0721, -0.0551], dihedral: 8.7, hinge: [[0.2514, -0.0646, 0.0525], [0.3213, -0.0536, 0.0869]], angle: -40, skin: 1 },
+        ],
+    },
+
 };
+// EA-18G: the F/A-18F airframe with the same bounding box (tools/aircraft/ea18g.py), so the Super Hornet's surfaces
+SURFACE_DEFS.ea18g = SURFACE_DEFS.fa18;
