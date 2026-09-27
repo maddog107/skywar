@@ -187,7 +187,7 @@ export class MobileForces {
         for (const s of bridgeSites(env, team).slice(0, 2)) B.hides.push(s);
         for (let k = 0; k < 6 && B.hides.length < tels + 3; k++) { const s = this.findSite('hide', team, near, 2000, 16000); if (s) B.hides.push(s); }
         // a compound (the transloader waits there with the reloads) and a hardened shelter
-        const cs = this.within(7000, 22000, () => this.findSite('compound', team, near, 1500, 14000));
+        const cs = this.within(5000, 22000, () => this.retry(() => this.findSite('compound', team, near, 1500, 14000))) || this.retry(() => this.findSite('compound', team, near, 1500, 16000));
         if (cs) {
             const c = this.buildSite('compound', cs);
             B.reload = { site: { kind: 'compound', x: c.spots[0].x, z: c.spots[0].z, heading: c.spots[0].heading, conceal: 0.8 }, reserves: tels + 1, crane: null };
@@ -198,7 +198,7 @@ export class MobileForces {
             const cmd = this.spawnVehicle(team === 'red' ? 'cmd_red' : 'cmd_blue', team, { x: cs.x + 22, z: cs.z + 30 }, { heading: cs.heading });
             cmd.state.raise = 1; cmd.setConceal(0.7); cmd.role = 'command';
         }
-        const ss = this.within(6000, 22000, () => this.findSite('shelter', team, near, 2000, 15000));
+        const ss = this.within(4000, 22000, () => this.retry(() => this.findSite('shelter', team, near, 2000, 15000))) || this.retry(() => this.findSite('shelter', team, near, 1500, 17000));
         if (ss) { const s = this.buildSite('shelter', ss); B.hides.push({ kind: 'shelter', x: s.inside.x, z: s.inside.z, heading: s.inside.heading, conceal: 0.97, approach: s.door, building: s }); }
         // pre-surveyed firing points a short drive from the hides (a TEL is in the open as briefly as it can be)
         for (const h of B.hides.slice(0, 7)) { const f = this.findSite('firing', team, h, 500, 1700); if (f) B.firing.push(f); }
@@ -605,16 +605,19 @@ export class MobileForces {
         else if (v.lod === 1) { v.copyKey = ''; this.setLod(v, 1); }
     }
 
-    // a radar lights up: our side's RWR hears it if the player is in range (a new SAM where it was quiet)
+    // a radar lights up, or the player flies into one's reach: our side's RWR hears it (a new SAM where it was
+    // quiet). SamGroup.think calls it every second while its radar is on.
     onRadarActive(gr) {
         const war = this.war, p = this.game.player;
-        if (gr.team === war.side || !p || !p.alive || this.game.pilotMode) return;
+        if (gr.team === war.side || !p || !p.alive || this.game.pilotMode || p.onGround) return;
         const eye = gr.radar || gr.launchers.find(l => l && l.alive) || gr.search;
         if (!eye) return;
         const d = eye.pos.distanceTo(p.pos);
         const R = (gr.T.radarRange || gr.T.own || 20000) * 1.2;
-        if (d > R) return;
-        if (gr.rwrT && war.time - gr.rwrT < 120) return;
+        // (once each time the player comes into its reach, or it comes on with him in it)
+        if (d > R) { if (d > R * 1.15) gr.rwrIn = false; return; }
+        if (gr.rwrIn) return;
+        gr.rwrIn = true;
         gr.rwrT = war.time;
         const br = war.bearingRange(p.pos, eye.pos);
         const rec = war.rec(eye);
@@ -633,7 +636,7 @@ export class MobileForces {
     // a launch order reached one of our TELs: intel may see it getting ready (a chance to stop it)
     onTelOrder(tel, aim) {
         const war = this.war, g = this.game;
-        if (tel.team === war.side || (this.search && this.search.tel === tel)) return;
+        if (tel.team === war.side || tel.searchOp) return;
         const eta = tel.prepEstimate();
         if (eta < 70 || Math.random() > 0.55) return;
         const launchAt = war.time + eta;
@@ -807,7 +810,9 @@ export class MobileForces {
         for (const v of this.units) {
             if (v.removed) continue;
             const d = v.base.distanceTo(cam);
-            let lod = d < (v.lod ? MESH_OUT : MESH_R) ? 1 : 0;
+            // (by size: a Ural is ~2 px wide at 4 km, a 12 m TEL twice that; the pod below sees further)
+            const R = clamp(v.L * 450, 2500, MESH_R);
+            let lod = d < (v.lod ? R + MESH_OUT - MESH_R : R) ? 1 : 0;
             // the targeting pod sees far: whatever's in its field of view gets a mesh
             if (!lod && pod && pod.los && d < 32000) { _v.subVectors(v.base, pod.pos || cam).normalize(); if (_v.dot(pod.los) > 0.9994) lod = 1; }
             if (!lod || !this.meshOK || !hasVehicle(v.vid)) { if (v.lod) this.setLod(v, 0); continue; }
@@ -1190,20 +1195,26 @@ class SearchOp {
         // where it's going (a firing point nearer the line) and where it comes from (a road deep in their ground, a
         // drive of several minutes away)
         const red = sys.anchor('red');
-        const fire = sys.within(3500, 11000, () => sys.findSite('firing', 'red', red, 1500, 16000));
-        if (!fire) return;
-        let entry = null;
-        for (let k = 0; k < 30 && !entry; k++) {
-            const s = sys.findSite('roadside', 'red', fire, 6500, 16000) || (k > 20 ? sys.findSite('hide', 'red', fire, 5000, 12000) : null);
-            if (s && sys.frontDist(s.x, s.z) > sys.frontDist(fire.x, fire.z) + 1500) entry = s;
+        // (the drive has to be plannable, and long enough to hunt it — a few minutes: 3.5–7.5 km)
+        let fire = null, entry = null;
+        for (let a = 0; a < 6 && !entry; a++) {
+            fire = sys.within(3500, 11000, () => sys.findSite('firing', 'red', red, 1500, 16000)) || sys.findSite('firing', 'red', red, 1500, 16000);
+            if (!fire) continue;
+            for (let k = 0; k < 12 && !entry; k++) {
+                const s = sys.findSite('roadside', 'red', fire, 3000, 7000) || (k > 7 ? sys.findSite('hide', 'red', fire, 3000, 6000) : null);
+                if (!s || sys.frontDist(s.x, s.z) < sys.frontDist(fire.x, fire.z) + 500) continue;
+                const r = sys.plan({ pos: s, u: { road: 14 } }, fire);
+                if (r && r.len > 3500 && r.len < 7500) entry = s;
+            }
         }
-        if (!entry) return;
+        if (!entry || !fire) return;
         war.addClearing(fire.x, fire.z, fire.clearing);
         const B = { team: 'red', hides: [], firing: [fire], occupied: new Set(), reload: null, tels: [] };
         for (const k of ['forest', 'valley', 'roadside']) { const h = sys.findSite(k, 'red', fire, 1500, 5000); if (h) { B.hides.push(h); if (h.clearing) war.addClearing(h.x, h.z, h.clearing); } }
         const tel = sys.spawnTEL('red', entry, { brigade: B, sourceName: 'SCUD TEL' });
         if (!tel) return;
         this.tel = tel;
+        tel.searchOp = this; // (its preparation is this operation's to announce)
         B.tels.push(tel);
         // the escort: an SA-8 following 120 m behind, its radar dark until someone comes close
         const esc = sys.spawnSAM('red', 'osa', { x: entry.x + rand(-40, 40), z: entry.z + rand(-40, 40), heading: entry.heading }, { launchers: 1, deployed: false, emcon: 'ambush', support: false, name: 'SA-8 ESCORT' });

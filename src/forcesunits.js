@@ -173,6 +173,25 @@ export class ForceVehicle {
     stop() { const R = this.route; R.r = null; R.speed = 0; R.lead = null; this.vel.set(0, 0, 0); this.parked = true; }
     get moving() { return !!this.route.r; }
 
+    // seconds left to the end of the current route at this vehicle's speeds (the route's limits, its own road and
+    // cross-country speeds, the column's cap): cumulative times cached on the route for this vehicle type
+    driveTime() {
+        const R = this.route, r = R.r;
+        if (!r) return 0;
+        const key = this.vid + ':' + (R.cap === Infinity ? 0 : R.cap);
+        if (!r._t || r._t.key !== key) {
+            const T = new Float32Array(r.n);
+            for (let i = 1; i < r.n; i++) {
+                const v = Math.max(1, Math.min(r.lim ? r.lim[i - 1] : 20, r.f[i - 1] & 1 ? this.u.road : this.u.off, R.cap));
+                T[i] = T[i - 1] + (r.s[i] - r.s[i - 1]) / (v * 0.85); // (the average runs a little under the limit)
+            }
+            r._t = { key, T };
+        }
+        const T = r._t.T, i = r.seg(R.s, R.i), j = Math.min(i + 1, r.n - 1);
+        const k = r.s[j] > r.s[i] ? (R.s - r.s[i]) / (r.s[j] - r.s[i]) : 0;
+        return Math.max(0, T[r.n - 1] - (T[i] + (T[j] - T[i]) * k)) + 8;
+    }
+
     // one frame of driving: speed toward what the road (and the vehicle ahead) allows, along the route
     driveStep(dt) {
         const R = this.route, r = R.r;

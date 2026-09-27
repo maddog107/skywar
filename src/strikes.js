@@ -334,6 +334,9 @@ class StrategicMissile {
         this.orient();
         this.eta = mgr.estimate(spec, pos, this.aim.pos);
         this.t0 = this.game.time;
+        // our ballistic missile on a marked unit: its aim point is updated in flight from the track (a datalink, like
+        // PrSM's retargeting), so a TEL on the move can still be hit (forces.js). The enemy's go where they were aimed.
+        this.tracked = spec.kind === 'ballistic' && !!(aim && aim.unit) && !!strike && team === (this.game.war && this.game.war.side);
     }
 
     get targetPos() { const u = this.aim.unit; return u && u.alive !== false && u.pos ? u.pos : this.aim.pos; }
@@ -487,7 +490,7 @@ class StrategicMissile {
             return;
         }
         this.vel.y -= G * dt;
-        if (s.dive && this.vel.y < 0) {
+        if ((s.dive || this.tracked) && this.vel.y < 0) {
             // penetrator: steer to come down steeply on the aim point (a hardened target needs a vertical hit)
             const T = this.targetPos, d = _v.subVectors(T, this.pos), dist = d.length();
             if (dist < 6000) this.vel.lerp(d.normalize().multiplyScalar(Math.max(this.vel.length(), 600)), clamp(dt * 1.5, 0, 1));

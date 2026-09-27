@@ -144,15 +144,20 @@ export class TelUnit extends Group {
 
     // ── the strike manager's side ──
     canTakeOrder() { return this.v.alive && !!(this.v.loaded & 1) && !this.order && !['stow', 'reload'].includes(this.state); }
+    // seconds to the launch: the rest of the drive (the planned route), the set-up still to run, the prep, ignition
     prepEstimate() {
         const v = this.v;
         if (this.state === 'ready') return 3;
         if (this.state === 'prep') return this.prepT + 3;
-        let t = 3 + this.prepTime() + DEPLOY_TIME.scud;
-        if (this.state !== 'setup') {
-            const f = this.pickFiring(true);
-            if (f) t += Math.hypot(f.x - v.pos.x, f.z - v.pos.z) * 1.35 / (v.u.off * 1.3) + 20;
+        let t = 3 + this.prepTime();
+        if (this.state === 'setup') {
+            for (const a of v.anim) if (a.g) t += Math.max(0, (a.dur || 0) - (a.t || 0));
+            return t;
         }
+        t += DEPLOY_TIME.scud;
+        if ((this.state === 'move' || this.state === 'freeze') && this.plan === 'fire' && v.route.r) return t + v.driveTime() + (this.state === 'freeze' ? this.freezeT : 0);
+        const f = this.pickFiring(true);
+        if (f) t += Math.hypot(f.x - v.pos.x, f.z - v.pos.z) * 1.3 / 8 + 15; // (a guess before the route's planned: ~8 m/s)
         return t;
     }
     prepTime() { return this.sys.difficultyK ? 40 + 20 / this.sys.difficultyK() : 50; } // gyros, targeting data, final checks
@@ -523,6 +528,9 @@ export class SamGroup extends Group {
         const want = this.state === 'ready' && (this.emcon === 'search' ? true : near || this.tracks.size > 0);
         if (want !== this.radarOn) this.setRadar(want);
         if (!this.radarOn) { this.tracks.clear(); return; }
+        // (the player's RWR hears a radar that's on once he's in its reach)
+        this.rwrAcc = (this.rwrAcc || 0) + dt;
+        if (this.rwrAcc > 1) { this.rwrAcc = 0; this.sys.onRadarActive(this); }
         // search and track
         const eyes = this.eyes(this._eyes || (this._eyes = []));
         const own = !!T.own;
@@ -562,6 +570,7 @@ export class SamGroup extends Group {
     engaged() { return [...this.tracks.values()].some(tr => tr.shots > 0 && tr.lockT > 0) || this.game.weapons.missiles.some(m => this.launchers.includes(m.owner)); }
     setRadar(on) {
         this.radarOn = on;
+        if (!on) this.rwrIn = false;
         for (const v of this.members) if (v.alive && (v.role === 'radar' || v.role === 'search' || (v.role === 'launcher' && this.T.own))) v.emitting = on;
         if (on) this.sys.onRadarActive(this);
     }
@@ -757,8 +766,9 @@ export class RocketBattery extends Group {
             const key = opts.missile && v.src.stock[opts.missile] > 0 ? opts.missile : Object.keys(v.src.stock).find(k => v.src.stock[k] > 0);
             if (!key || !v.src.canFire(key)) continue;
             if (Math.hypot(at.x - v.pos.x, at.z - v.pos.z) > v.src.range) continue;
-            // (the strike record, for the HUD and BDA, once someone's going to fire)
-            if (!strike) strike = this.sys.makeStrike(this.team, MISSILES[key].kind === 'rocket' ? 'rocket' : 'ballistic', aim);
+            // (the strike record, for our HUD and BDA, once someone's going to fire; the enemy's salvos don't need
+            // one — and a launch with one reads as a missile launch to find, tasks.js)
+            if (!strike && this.war && this.team === this.war.side) strike = this.sys.makeStrike(this.team, MISSILES[key].kind === 'rocket' ? 'rocket' : 'ballistic', aim);
             if (v.src.fire(key, 1, aim, strike)) { fired++; if (strike) { strike.planned += MISSILES[key].kind === 'rocket' ? MISSILES[key].count : 1; strike.sources.add(v.src); } }
         }
         if (fired) this.sys.emit('salvoOrdered', this, { target: aim, launchers: fired });

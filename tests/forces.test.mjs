@@ -58,7 +58,7 @@ describe('mobile forces: TELs', () => {
         assert.ok(atLaunch.pos.y > atLaunch.base.y + 4, 'from the erected missile, not the truck bed');
         assert.ok(atLaunch.vel.y > 0.95 * atLaunch.vel.length(), 'straight up off the pad');
         assert.ok(flat2(atLaunch.base, fire) < 30, 'fired from the surveyed firing point');
-        assert.ok(Math.abs(atLaunch.t - eta) < eta * 0.4, `ETA ${eta.toFixed(0)} s vs launch at ${atLaunch.t.toFixed(0)} s`);
+        assert.ok(Math.abs(atLaunch.t - eta) < eta * 0.2, `ETA ${eta.toFixed(0)} s vs launch at ${atLaunch.t.toFixed(0)} s`);
         assert.equal(tel.v.loaded, 0, 'the rail is empty'); assert.equal(tel.launcher.stock.scud, 0);
         assert.notEqual(tel.site, fire, 'moved off the firing point');
         assert.ok(flat2(tel.v.pos, atLaunch.base) > 800, 'relocated well away from the launch point');
@@ -315,13 +315,14 @@ describe('mobile forces: rocket artillery', () => {
         const target = new THREE.Vector3(site.x, 0, site.z + 14000);
         const n = bt.fireMission(target, { label: 'TEST' });
         assert.equal(n, 3);
-        const st = g.strikes.strikes[g.strikes.strikes.length - 1];
-        assert.equal(st.planned, 60, 'three salvos of 20');
+        assert.ok(bt.launchers.every(v => v.src.queue.length === 20), 'three salvos of 20 queued');
         const start = bt.launchers.map(v => v.pos.clone());
         let laid = null;
         g.run(60, 1 / 30, () => { const m = g.strikes.missiles.find(x => x.source && bt.launchers.includes(x.source.host)); if (m && !laid) laid = bt.launchers.map(v => v.aimPitch); return false; });
         assert.ok(laid && laid.every(p => p > 0.5), 'elevated before the first rocket: ' + (laid || []).map(p => p.toFixed(2)));
-        assert.ok(st.launched >= 55, 'the salvos rippled out: ' + st.launched);
+        const launched = g.events.log.filter(e => e.k === 'strategicLaunch' && e.a.source && bt.launchers.includes(e.a.source.host)).length;
+        assert.equal(launched, 60, 'the salvos rippled out');
+        assert.ok(!g.events.log.some(e => e.k === 'strategicLaunch' && e.a.strike), 'the enemy\'s salvos carry no strike record (not a "missile launch" to hunt)');
         g.run(120, 0.1);
         assert.ok(bt.launchers.every((v, i) => v.pos.distanceTo(start[i]) > 250), 'shoot and scoot: moved on');
     }));
@@ -333,12 +334,14 @@ describe('mobile forces: rocket artillery', () => {
         g.camera.position.set(-20000, 3000, 30000); // (far from both ends)
         const bt = F.spawnArtillery('red', 'grad', site, { count: 2 });
         const victim = F.spawnVehicle('hemtt', 'blue', { x: site.x, z: site.z + 12000 });
+        let impacts = 0;
+        const hit = F.rocketImpact.bind(F);
+        F.rocketImpact = (...a) => { impacts++; return hit(...a); };
         bt.fireMission(victim, { label: 'TEST' });
         let maxFlying = 0;
         g.run(160, 0.1, () => { maxFlying = Math.max(maxFlying, g.strikes.missiles.length); return false; });
         assert.equal(maxFlying, 0, 'no missile objects');
-        const st = g.strikes.strikes[g.strikes.strikes.length - 1];
-        assert.equal(st.impacts, st.planned, 'every rocket landed');
+        assert.equal(impacts, 40, 'every rocket landed');
         assert.ok(victim.hp < victim.maxHp, 'and the target felt it');
     }));
 });
@@ -363,6 +366,38 @@ describe('mobile forces: search and destroy', () => {
         op.tel.v.destroy(null);
         g.run(2, 0.25);
         assert.ok(op.done && op.why === 'killed', 'over once the TEL is dead');
+    }));
+});
+
+describe('mobile forces: strikes on the move', () => {
+    test('our ATACMS on a marked TEL that keeps driving follows the track and kills it; the enemy\'s missiles are not retargeted', () => seeded(71, () => {
+        const g = forcesGame();
+        const F = g.forces;
+        const blue = F.spawnArtillery('blue', 'atacms', { x: 3000, z: -2000, heading: Math.PI });
+        assert.ok(blue && blue.launchers.every(v => v.src && v.src.kind === 'launcher'), 'an ATACMS section (ballistic / hardened source)');
+        // a TEL driving across country, marked by our side
+        const tel = F.spawnVehicle('scud', 'red', { x: RED.x, z: RED.z });
+        const r = F.plan(tel, { x: RED.x + 2500, z: RED.z + 1500 }, {});
+        tel.drive(r, {});
+        g.war.reveal(tel, INTEL.IDENTIFIED, 'tgp');
+        const d = g.war.designate(tel, 'tgp');
+        const st = g.strikes.request('ballistic', [d], 'blue', true);
+        assert.ok(st && st.planned === 1, 'one ATACMS');
+        g.run(40, 0.1, () => g.strikes.missiles.length > 0);
+        const m = g.strikes.missiles[0];
+        assert.ok(m && m.tracked, 'ours: tracked');
+        const at0 = tel.pos.clone();
+        g.run(300, 1 / 30, () => !tel.alive || st.impacts > 0);
+        assert.ok(tel.pos.distanceTo(at0) > 150, 'it kept driving: ' + tel.pos.distanceTo(at0).toFixed(0) + ' m');
+        assert.equal(tel.alive, false, 'and the strike still got it');
+        // a red SCUD at a blue vehicle: where it was aimed, no datalink
+        const t2 = F.spawnTEL('red', { x: RED.x - 500, z: RED.z }, { brigade: { team: 'red', hides: [], firing: [{ kind: 'firing', x: RED.x - 500, z: RED.z + 500 }], occupied: new Set(), reload: null, tels: [] } });
+        const hemtt = F.spawnVehicle('hemtt', 'blue', { x: 0, z: 2000 });
+        g.strikes.request('ballistic', [hemtt], 'red', true);
+        g.run(400, 0.1, () => g.strikes.missiles.some(x => x.team === 'red'));
+        const rm = g.strikes.missiles.find(x => x.team === 'red');
+        assert.ok(rm && !rm.tracked, 'theirs: not retargeted');
+        void t2;
     }));
 });
 
