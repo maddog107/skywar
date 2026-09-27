@@ -441,7 +441,8 @@ class Wake {
         return out.set(s.mesh.position.x + lx * c + lz * sn, 0, s.mesh.position.z - lx * sn + lz * c);
     }
 
-    update(dt, env) {
+    // far: the wake can't reach the wake map — keep recording the path, skip rebuilding the strips
+    update(dt, env, far = false) {
         const s = this.ship;
         this.time += dt;
         const stern = this.local(0, this.g.sternZ, _v);
@@ -460,6 +461,7 @@ class Wake {
             m.uniforms.fade.value = fade;
             m.uniforms.speedK.value = speedK;
         }
+        if (far) return;
         this.buildWake(stern);
         this.buildKelvin(stern);
     }
@@ -789,7 +791,9 @@ export class ShipFX {
             e.follow.visible = env.fade > 0.01;
             const speed = ship.vel ? Math.hypot(ship.vel.x, ship.vel.z) : 10;
             const speedK = Math.min(1.2, Math.max(0.2, speed / 11));
-            e.wake.update(dt, env);
+            // (a wake that can't reach the wake map's square is drawn nowhere: record its path, don't rebuild it)
+            const wm = this.wakeMap, px = ship.mesh.position.x, pz = ship.mesh.position.z, M = e.wake.maxLen + 300;
+            e.wake.update(dt, env, !!wm && (px < wm.x0 - M || px > wm.x0 + wm.size + M || pz < wm.z0 - M || pz > wm.z0 + wm.size + M));
             e.foam.update(env, speedK);
             e.shadow.update(ship, env, sunDir);
             // bow spray: a few puffs where the bow wave breaks (more for fast, fine-bowed escorts)

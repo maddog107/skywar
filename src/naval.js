@@ -11,7 +11,7 @@
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { mergeInPlace } from './meshmerge.js';
+import { mergeInPlace, mergeStaticModel } from './meshmerge.js';
 import { ShipFX, deckHeightAt, foamTexture } from './shipfx.js';
 import { waterHeightLong } from './water.js';
 import { terrainHeight } from './world.js';
@@ -561,6 +561,20 @@ function underwaterMaterial(src) {
     return m;
 }
 
+// The far version of a ship (level of detail): the whole model at rest — mounts, radars, doors, elevators and their
+// parked jets included — merged into a handful of meshes (one per material), without the flush cell doors. Shown
+// instead of the full model once the ship is small on screen (Ship.updateLod): the same shapes, a tenth of the draws.
+function buildFar(group) {
+    const copy = group.clone(true);
+    const drop = [];
+    copy.traverse(o => { if (o.isInstancedMesh) drop.push(o); });
+    for (const o of drop) o.removeFromParent();
+    copy.updateMatrixWorld(true);
+    const far = mergeStaticModel(copy);
+    far.name = 'ship:far';
+    return far;
+}
+
 // Ships are built once per type and cloned: clones share geometry and materials, so a sortie that
 // rebuilds the home carrier (or sinks a group) allocates nothing on the GPU.
 const templates = {};
@@ -574,6 +588,7 @@ function makeShip(type) {
         t.mounts.forEach((m, i) => { m.turret.name = 'ship:mount' + i; });
         mergeStatic(t.group);
         if (TYPES[type] && TYPES[type].cls === 'sub') t.group.traverse(o => { if (o.isMesh) o.material = underwaterMaterial(o.material); });
+        t.far = buildFar(t.group);
     }
     const group = t.group.clone(true);
     const parts = {};
@@ -582,7 +597,7 @@ function makeShip(type) {
     const radar2 = group.getObjectByName('ship:radar2');
     if (radar2) parts.radar2 = radar2;
     const mounts = t.mounts.map((m, i) => ({ type: m.type, p: m.p.clone(), turret: group.getObjectByName('ship:mount' + i), fireT: rand(0, 2), lockT: 0 }));
-    return { group, parts, mounts, layout: t.layout || null, rig: bindRig(group) };
+    return { group, parts, mounts, layout: t.layout || null, rig: bindRig(group), far: t.far || null };
 }
 
 // A fresh model of a ship type with its rig, not in any scene and not simulated (previews, the hangar, tests):
@@ -631,9 +646,17 @@ export class Ship {
         this.wakeT = 0;
         this.ammo = { sam: type === 'carrier' ? 8 : 12 };
         this.nav = null;        // group steaming (steer()): a heading and speed instead of the circle
-        // level of detail: the parts too small to see from afar (mounts, radars, cell doors, small rig parts)
+        // level of detail: the parts too small to see from afar (mounts, radars, cell doors, small rig parts), and the
+        // whole model swapped for its merged far version (buildFar) once the ship is small on screen
         this.details = [...this.mounts.map(m => m.turret), this.parts.radar, this.parts.radar2].filter(Boolean);
         this.mesh.traverse(o => { if (o.isInstancedMesh && o.name.startsWith('ship:rigdoors')) this.details.push(o); });
+        this.near = [...this.mesh.children];
+        if (built.far) {
+            this.far = built.far.clone();
+            this.far.visible = false;
+            this.far.traverse(o => { o.matrixAutoUpdate = false; o.updateMatrix(); });
+            this.mesh.add(this.far);
+        }
         this.lodK = 1;
         this.place(0);
     }
@@ -868,6 +891,8 @@ export class Ship {
         this.mesh.visible = px > 1.2 && this.depth < 22;
         const detail = this.mesh.visible && px > 70;
         if (detail !== this.lodDetail) { this.lodDetail = detail; for (const o of this.details) o.visible = detail; }
+        const far = !!this.far && px < 120;
+        if (far !== this.lodFar) { this.lodFar = far; for (const c of this.near) c.visible = !far; this.far.visible = far; }
         this.lodPx = px;
     }
 

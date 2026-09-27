@@ -20,6 +20,7 @@ const O = await src('navalops.js');
 const { War } = await src('war.js');
 const { StrikeManager, MISSILES } = await src('strikes.js');
 const { terrainHeight } = await src('world.js');
+globalThis.__aircraftMod = await src('aircraft.js');
 const repo = fileURLToPath(new URL('../', import.meta.url));
 
 // ── helpers ──
@@ -244,6 +245,48 @@ describe('carrier deck (deckops.js)', () => {
         assert.ok(crewPoses.has('beckon'), 'a director walked it to the catapult');
         assert.ok(crewPoses.has('tension') || crewPoses.has('launch'), 'the shooter gave the signals');
         console.log('    launch: airborne after', airborneT.toFixed(1), 's, climbing to', maxY.toFixed(0), 'm');
+        g.naval.clear();
+    });
+});
+
+describe('carrier recoveries (deckops.js)', () => {
+    test('an AI jet flies the Case I pattern, bolters (a planned hook skip), traps on the next pass and is struck below', () => {
+        const g = navalGame();
+        const { Aircraft } = globalThis.__aircraftMod;
+        const sea = openSea(9000);
+        const cv = g.naval.spawn('carrier', 'blue', sea, { orbitR: 2600 });
+        cv.steer(1.2, 12); cv.nav.speed = 12; cv.heading = 1.2;
+        const deck = new D.DeckOps(g.navalops, cv, { launches: true, parked: false, crew: false });
+        const calls = [];
+        g.navalops.say = (from, text) => calls.push(from + ': ' + text);
+        g.player = { pos: cv.pos, alive: true }; // (the deck only talks with the player near)
+        const ac = new Aircraft(g, 'fa18', { team: 'blue', name: 'SUNDOWNER 201' });
+        ac.spawnAir(new THREE.Vector3(sea.x + 4000, 1500, sea.z + 3000), 1.0, 0.5);
+        g.aircraft.push(ac);
+        assert.ok(deck.recover(ac));
+        deck.jets[0].bolterPlan = true;
+        const touchdowns = [];
+        g.events = { on() {}, emit(k, a, b) { if (k === 'touchdown' && a === ac) touchdowns.push(b); } };
+        const states = [deck.jets[0].state];
+        const dt = 1 / 60;
+        let t = 0;
+        for (; t < 700; t += dt) {
+            g.time += dt;
+            for (const a of g.aircraft) if (a.pilot && a.alive) a.pilot.update(dt);
+            for (const a of g.aircraft) a.update(dt);
+            g.naval.update(dt); cv.steer(1.2, 12);
+            deck.update(dt); deck.postPhysics();
+            assert.ok(ac.alive, 'the jet survives the pattern (' + (states[states.length - 1] || '') + ')');
+            const dp = deck.jets[0];
+            if (!dp) break;
+            if (states[states.length - 1] !== dp.state) states.push(dp.state);
+        }
+        console.log('    recovery:', states.join(' → '), '·', t.toFixed(0), 's');
+        for (const s of ['marshal', 'initial', 'upwind', 'break', 'downwind', 'ninety', 'groove', 'final', 'bolter-up', 'rollout', 'trapped', 'taxi-in', 'strike']) assert.ok(states.includes(s), 'went through ' + s);
+        assert.ok(touchdowns.length >= 2 && !touchdowns[0].trap && touchdowns[touchdowns.length - 1].trap, 'a bolter, then a trap');
+        assert.ok(touchdowns.every(d => d.vs > -6), 'firm but safe touchdowns (' + touchdowns.map(d => d.vs.toFixed(1)).join(', ') + ' m/s)');
+        assert.ok(ac.removed && !g.aircraft.includes(ac), 'struck below: gone into the hangar');
+        assert.ok(calls.some(c => /BALL/.test(c)) && calls.some(c => /BOLTER/.test(c)) && calls.some(c => /WIRE/.test(c)), 'the ball call, the bolter call, the wire (' + calls.join(' | ') + ')');
         g.naval.clear();
     });
 });

@@ -29,6 +29,7 @@ const _m = new THREE.Matrix4(), _m2 = new THREE.Matrix4(), _m3 = new THREE.Matri
 const _s = new THREE.Vector3(1, 1, 1), _p = new THREE.Vector3();
 const wrapPi = (a) => { a %= Math.PI * 2; return a > Math.PI ? a - Math.PI * 2 : a < -Math.PI ? a + Math.PI * 2 : a; };
 const GLIDE = 3.5 * DEG;
+const GROOVE = 2600; // m of final approach (a long straight-in for the AI: time to line up)
 
 // flight-deck jersey colours (CV NATOPS)
 export const SHIRTS = { yellow: 0xf2c417, green: 0x2f9a45, blue: 0x2b5ccc, brown: 0x6e4526, purple: 0x7a3fb0, red: 0xc72e2a, white: 0xeeeeea };
@@ -374,12 +375,13 @@ export class DeckPilot {
     patternPoint(name, out) {
         const D = this.deck, s = D.ship, L = D.geo;
         switch (name) {
-            case 'initial': return s.toWorld(450, 0, 5200, out).setY(300);
-            case 'break': return s.toWorld(450, 0, -700, out).setY(250);
-            case 'downwind': return s.toWorld(-2100, 0, -200, out).setY(185);
-            case 'abeam': return s.toWorld(-2100, 0, 900, out).setY(185);
-            case 'ninety': return s.toWorld(-1100, 0, 1750, out).setY(140);
-            case 'groove': return s.toWorld(L.touch[0] + L.la[0] * -1350, 0, L.touch[1] + L.la[1] * -1350, out).setY(s.deckY + 1350 * Math.tan(GLIDE) + 8);
+            case 'initial': return s.toWorld(500, 0, 5000, out).setY(300);
+            case 'break': return s.toWorld(450, 0, -800, out).setY(250);
+            case 'downwind': return s.toWorld(-1800, 0, 0, out).setY(185);
+            case 'abeam': return s.toWorld(-1800, 0, 1800, out).setY(185);
+            // (the turn in: far enough aft and out to port that the leg to the groove meets the centreline at ~20°)
+            case 'ninety': return s.toWorld(L.touch[0] - L.la[0] * (GROOVE + 1600) + L.la[1] * 800, 0, L.touch[1] - L.la[1] * (GROOVE + 1600) - L.la[0] * 800, out).setY(s.deckY + (GROOVE + 1600) * Math.tan(GLIDE) + 20);
+            case 'groove': return s.toWorld(L.touch[0] - L.la[0] * GROOVE, 0, L.touch[1] - L.la[1] * GROOVE, out).setY(s.deckY + GROOVE * Math.tan(GLIDE) + 6);
         }
         return out.copy(s.pos);
     }
@@ -409,12 +411,16 @@ export class DeckPilot {
                 if (D.nextToLand(this)) { this.state = 'initial'; D.radio(this, 'initial'); }
                 return;
             }
-            case 'initial':
-                if (this.flyTo(dt, this.patternPoint('initial', _v2), 190, 0.7) < 600) this.state = 'upwind';
+            case 'initial': {
+                // to the initial, 5 km astern; into the pattern once there (or already in the corridor behind the ship)
+                const d = this.flyTo(dt, this.patternPoint('initial', _v2), 160, 1.1);
+                const L = D.localOf(ac.pos);
+                if (d < 1500 || (L.lz > -500 && L.lz < 5000 && Math.abs(L.lx - 500) < 2500)) this.state = 'upwind';
                 return;
+            }
             case 'upwind': case 'bolter-up': {
                 this.patternPoint('break', _v2);
-                const d = this.flyTo(dt, _v2, this.state === 'upwind' ? 180 : 120, 0.5);
+                const d = this.flyTo(dt, _v2, this.state === 'upwind' ? 150 : 110, 1.0);
                 if (this.state === 'bolter-up') { ac.gear = true; if (ac.pos.y > s.deckY + 60) ac.gear = false; }
                 if (d < 700 || D.localOf(ac.pos).lz < -600) { this.state = 'break'; this.t = 0; }
                 return;
@@ -428,19 +434,21 @@ export class DeckPilot {
                 return;
             }
             case 'downwind': {
-                const d = this.flyTo(dt, this.patternPoint('abeam', _v2), app + 8, 0.6);
+                const d = this.flyTo(dt, this.patternPoint('abeam', _v2), app + 8, 0.9);
                 ac.gear = true; ac.flaps = 2; ac.hook = !this.bolterPlan;
                 if (d < 500) this.state = 'ninety';
                 return;
             }
             case 'ninety': {
-                const d = this.flyTo(dt, this.patternPoint('ninety', _v2), app + 4, 0.75, 0.05);
-                if (d < 450) { this.state = 'groove'; this.called = false; }
+                const d = this.flyTo(dt, this.patternPoint('ninety', _v2), app + 6, 0.95, 0.05);
+                if (d < 500) { this.state = 'groove'; this.called = false; }
                 return;
             }
             case 'groove': {
-                const d = this.flyTo(dt, this.patternPoint('groove', _v2), app, 0.8, 0.05);
-                if (d < 350 || D.onFinal(ac) < 1500) { this.state = 'final'; this.t = 0; }
+                // onto the extended centreline of the angled deck, far enough out to settle before the ramp
+                const d = this.flyTo(dt, this.patternPoint('groove', _v2), app, 0.9, 0.05);
+                const lat = D.lateral(ac);
+                if (d < 400 || (D.onFinal(ac) < GROOVE + 200 && lat < 120)) { this.state = 'final'; this.t = 0; }
                 return;
             }
             case 'final': return this.final(dt, app);
@@ -497,15 +505,23 @@ export class DeckPilot {
         const hErr = ac.pos.y - ac.gearOffset - glideAlt;
         if (!this.called && along < 1400) { this.called = true; D.radio(this, 'ball'); }
         // wave-off: badly out of the groove close in (or the deck isn't clear)
-        if (along < 650 && along > 150 && (Math.abs(lateral) > 32 || Math.abs(hErr) > 22 || D.fouled(this))) {
+        if (along < 700 && along > 150 && (Math.abs(lateral) > 40 || Math.abs(hErr) > 25 || D.fouled(this))) {
             this.state = 'waveoff'; this.t = 0; D.radio(this, 'waveoff'); return;
         }
-        const look = clamp(along * 0.5, 350, 1200);
+        // lateral: a localizer-style intercept of the centreline — the heading off the landing course from the
+        // cross-track error and its rate over the moving deck (PD; at most 30°), so it captures without overshooting
         const shipVel = s.vel;
-        const aim = _v.copy(touch).addScaledVector(fwd, -(along - look)).addScaledVector(shipVel, look / Math.max(ac.speed, 50));
-        aim.y = touch.y + Math.max(along - look, 0) * Math.tan(GLIDE) + ac.gearOffset + clamp(-hErr * 5, -120, 150);
-        const dir = aim.sub(ac.pos).normalize();
-        steerToward(ac, dir, c, 1, true, 0.45);
+        const rv = _v.subVectors(ac.vel, shipVel);
+        const crossRate = rv.x * fwd.z - rv.z * fwd.x;
+        const off = clamp(-(lateral * 0.0035 + crossRate * 0.02), -0.52, 0.52);
+        const hL = s.heading + D.geo.ang + off;
+        // vertical: the glide slope (no flare on a carrier: it runs on into the deck, so the jet flies onto it at
+        // ~4 m/s), aiming a little ahead with a pull back onto the slope when high or low
+        const look = clamp(along * 0.35, 250, 800);
+        const wantY = touch.y + (along - look) * Math.tan(GLIDE) + ac.gearOffset + clamp(-hErr * 2, -60, 60);
+        const gam = clamp(Math.atan2(wantY - ac.pos.y, look), -0.13, 0.06);
+        const dir = _v.set(-Math.sin(hL) * Math.cos(gam), Math.sin(gam), -Math.cos(hL) * Math.cos(gam));
+        steerToward(ac, dir, c, 1, true, along > 1200 ? 0.6 : 0.4);
         c.yaw = clamp(c.yaw, -0.4, 0.4);
         const relSpeed = _v2.subVectors(ac.vel, shipVel).length();
         c.throttle = clamp(0.45 + (app - relSpeed) * 0.06, 0.05, ac.hasAB ? 0.9 : 1);
@@ -553,6 +569,12 @@ export class DeckOps {
     localOf(p) { return this.ship.toLocal(p.x, p.z); }
     landingDir(out) { const h = this.ship.heading + this.geo.ang; return out.set(-Math.sin(h), 0, -Math.cos(h)); }
     touchPoint(out) { return this.ship.toWorld(this.geo.touch[0], this.geo.deckY, this.geo.touch[1], out); }
+    // how far an aircraft is off the angled deck's extended centreline (m)
+    lateral(ac) {
+        const fwd = this.landingDir(_v3), touch = this.touchPoint(_v2);
+        const rel = _v.subVectors(ac.pos, touch);
+        return Math.abs(rel.x * fwd.z - rel.z * fwd.x);
+    }
     // along-track distance of an aircraft to the touchdown point (Infinity if it's not behind the ramp)
     onFinal(ac) {
         const fwd = this.landingDir(_v3), touch = this.touchPoint(_v2);
