@@ -1300,7 +1300,9 @@ export class Director {
         const o = cv.orbit;
         const spot = findOcean(o.cx, o.cz, 9000, 22000, 3200);
         if (!spot) return;
-        this.fleetMove = { to: new THREE.Vector3(spot.x, 0, spot.z), ships: g.naval.ships.filter(s => s.team === cv.team && s.orbit && Math.hypot(s.orbit.cx - o.cx, s.orbit.cz - o.cz) < 50) };
+        // a group the naval plug-in steams (navalops.js) goes there in formation; otherwise slide the circles along
+        if (g.navalops && g.navalops.moveGroupOf && g.navalops.moveGroupOf(cv, spot)) this.fleetMove = null;
+        else this.fleetMove = { to: new THREE.Vector3(spot.x, 0, spot.z), ships: g.naval.ships.filter(s => s.team === cv.team && s.orbit && Math.hypot(s.orbit.cx - o.cx, s.orbit.cz - o.cz) < 50) };
         if (war.known(cv) >= INTEL.CONTACT) this.say('INTEL', 'THE ENEMY CARRIER GROUP IS ON THE MOVE — LAST KNOWN ' + war.describePos(cv.pos), { color: '#ffd24a', say: false });
     }
 

@@ -344,7 +344,7 @@ export class Game {
         this.applyLivery && this.applyLivery(p);
         const home = base || BASES[0];
         const carrier = this.naval.homeCarrier;
-        if (where === 'carrier' && carrier) {
+        if (where === 'carrier' && carrier && carrier.alive) { // (on the port bow catapult: naval.js catSpot)
             p.spawnDeck(carrier);
             this.addFeed('FULL POWER (9 OR 0) ON DECK TO LAUNCH', '#5dffa0');
         } else if (where === 'water' && p.spec.seaplane && this.spawnOnWater(p)) {
@@ -1594,14 +1594,17 @@ export class Game {
             this.navalLaunchT -= dt;
             if (c && c.alive && this.navalLaunchT <= 0 && enemiesAlive < 4) {
                 this.navalLaunchT = rand(55, 85);
-                // deck launch: a fighter leaves the bow at flying speed
+                // deck launch: off a catapult when the naval plug-in runs the deck (navalops.js), else straight off
+                // the bow at flying speed
                 const e = new Aircraft(this, pick(['su35', 'su57', 'mig29', 'j20']), { team: 'red' });
-                const bow = c.toWorld(10, c.deckY + 12, -c.def.L * 0.55);
-                e.spawnAir(bow, c.heading, 0.35);
                 const pl = new Pilot(this, e, clamp(this.difficulty.skill + rand(-0.1, 0.1), 0.2, 1));
                 pl.home = c.pos; pl.leash = 14000;
                 this.aircraft.push(e);
-                this.effects.smoke.emit(bow, _v.set(0, 5, 0), 3, 10, 30, [1, 1, 1], [0.9, 0.9, 0.9], 0.6, 0, 1, 2);
+                if (!(this.navalops && this.navalops.catapultLaunch(c, e))) {
+                    const bow = c.toWorld(10, c.deckY + 12, -c.def.L * 0.55);
+                    e.spawnAir(bow, c.heading, 0.35);
+                    this.effects.smoke.emit(bow, _v.set(0, 5, 0), 3, 10, 30, [1, 1, 1], [0.9, 0.9, 0.9], 0.6, 0, 1, 2);
+                }
                 this.addFeed('ENEMY CARRIER LAUNCHING FIGHTERS', '#ff9f5a');
             }
             if (c && !c.alive && !this._navalWon) {
@@ -1860,6 +1863,7 @@ export class Game {
             // keep above terrain and the waves
             const gh = Math.max(terrainHeight(desired.x, desired.z), desired.y < WATER.maxCrest + 4 ? waterHeight(desired.x, desired.z) : 0) + 3;
             if (desired.y < gh) desired.y = gh;
+            if (this.naval.ships.length) this.naval.clearOfIslands(desired, p.pos); // (never inside a carrier's island)
             cam.position.copy(desired);
             cam.quaternion.copy(this.camQuat);
             // look slightly above the jet so it sits in the lower third

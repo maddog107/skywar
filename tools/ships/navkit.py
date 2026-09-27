@@ -379,6 +379,19 @@ def harpoon_quad(part, o, facing=1, mat='Super', can='Canister', dark='Dark'):
         part.beam(mat, (x - facing * 1.6, y + 0.9, z + dz), (x + facing * 1.1, y + 2.75, z + dz), 0.14)
     part.box(mat, x - 1.8, x + 1.3, y, y + 0.15, z - 1.0, z + 1.0)
 
+def harpoon_quad_mouths(o, facing=1):
+    """the four canister mouths of a harpoon_quad at o: [(mouth (x, y, z), angle about +z that turns +Y onto the
+    canister axis)] — for rig points whose +Y is the launch direction"""
+    x, y, z = o
+    el = math.radians(35)
+    Lc = 4.6
+    out = []
+    for (dz, dy) in ((-0.33, 0.0), (0.33, 0.0), (-0.33, 0.62), (0.33, 0.62)):
+        base = (x - facing * 1.6, y + 0.9 + dy, z + dz)
+        tip = (base[0] + facing * Lc * math.cos(el), base[1] + Lc * math.sin(el), base[2])
+        out.append((tip, -facing * (math.pi / 2 - el)))
+    return out
+
 def svtt(part, o, facing=1, mat='Super', dark='Dark'):
     """Mk 32 triple torpedo tubes (324 mm) on their training stand, tubes pointing outboard (facing ±1 in x)"""
     x, y, z = o

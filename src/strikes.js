@@ -28,6 +28,9 @@ export const MISSILES = {
     tlam: { kind: 'cruise', name: 'TOMAHAWK', short: 'TLAM', speed: 245, alt: 55, seaAlt: 18, boost: 9, warhead: 480, blast: 34, hard: 0.35, len: 6.25, dia: 0.52, span: 2.67, color: 0x7a7f84, nose: 0x2a2c2e },
     kalibr: { kind: 'cruise', name: 'KALIBR', short: 'KALIBR', speed: 250, alt: 45, seaAlt: 15, boost: 9, warhead: 450, blast: 32, hard: 0.35, len: 6.2, dia: 0.53, span: 3.1, color: 0x9aa39a, nose: 0x3a3d3a },
     harpoon: { kind: 'antiship', name: 'HARPOON', short: 'HARPOON', speed: 240, alt: 7, seaAlt: 7, boost: 3, warhead: 300, blast: 18, hard: 0.3, len: 4.6, dia: 0.34, span: 0.9, color: 0xd6d6d0, nose: 0x5a5a56 },
+    // the Slava's supersonic ship killer (navalops.js): out of its inclined container, high over the sea, down to the
+    // wave tops for the last few kilometres
+    p1000: { kind: 'antiship', name: 'P-1000 VULKAN', short: 'VULKAN', speed: 520, alt: 400, seaAlt: 400, boost: 5, warhead: 650, blast: 30, hard: 0.5, len: 11.7, dia: 0.88, span: 2.6, color: 0x8b9288, nose: 0x3a3f3a },
     atacms: { kind: 'ballistic', name: 'ATACMS', short: 'ATACMS', boost: 7, warhead: 420, blast: 40, hard: 0.5, len: 4.0, dia: 0.61, color: 0xe6e6e0, nose: 0x3a3a3a },
     penetrator: { kind: 'ballistic', name: 'ATACMS (HARDENED)', short: 'PENETRATOR', boost: 7, warhead: 520, blast: 18, hard: 1, len: 4.0, dia: 0.61, color: 0xcfcfc6, nose: 0x1f1f1f, dive: true },
     scud: { kind: 'ballistic', name: 'SCUD-B', short: 'SCUD', boost: 11, warhead: 700, blast: 55, hard: 0.5, len: 11.2, dia: 0.88, color: 0x55603f, nose: 0x3c4230 },
@@ -142,6 +145,24 @@ export class LaunchSource {
     }
     // start point and direction of a launch (world)
     launchFrame(out, dir) { out.copy(this.pos); dir.set(0, 1, 0); }
+    // A ship or submarine with a launch controller (navalops.js puts one on it: host.launcher, launchseq.js): the real
+    // sequence on its rig — the hatch opens, the motor lights, the missile climbs out of its cell (a capsule breaks the
+    // surface) — spawning the missile when it lights. False when it has none (or nothing loaded for this missile).
+    launchOnRig(q) {
+        const lc = this.host && this.host.launcher;
+        if (!lc || !lc.has(q.specKey)) return false;
+        if (lc.fire(q.specKey, (phase, p, d) => this.spawnFromRig(q, phase, p, d), { target: q.aim })) return true;
+        q.t = 0.5; this.queue.push(q); // (its hatch is busy with the last one: a moment later)
+        return true;
+    }
+    spawnFromRig(q, phase, p, d) {
+        const spec = MISSILES[q.specKey];
+        const m = this.mgr.spawnMissile(spec, this.team, p, d, q.aim, this, q.strike, phase);
+        this.fired++;
+        if (this.host) this.host.firingT = this.mgr.game.war.time;
+        this.mgr.audioLaunch(p, spec);
+        return m;
+    }
     launch(q) {
         const spec = MISSILES[q.specKey];
         const p = new THREE.Vector3(), d = new THREE.Vector3();
@@ -179,6 +200,7 @@ export class ShipVLS extends LaunchSource {
         this.cellOpen = null; // rig hook: (i, k) opens cell i (naval plug-ins set it)
     }
     prepTime() { return 4; }
+    launch(q) { return this.launchOnRig(q) ? null : super.launch(q); }
     launchFrame(out, dir) {
         const s = this.host, c = this.cells[this.cellIx++ % this.cells.length];
         s.toWorld(c.lx + rand(-1, 1), s.def.deckY + 1, c.lz + rand(-2, 2), out);
@@ -293,6 +315,7 @@ export class SubLauncher extends LaunchSource {
         this.ix = 0;
     }
     prepTime() { return 6; }
+    launch(q) { return this.launchOnRig(q) ? null : super.launch(q); }
     launchFrame(out, dir) {
         const s = this.host, t = this.tubes[this.ix++ % this.tubes.length];
         if (s.toWorld) s.toWorld(t.lx, 0, t.lz, out); else out.copy(s.pos);
@@ -308,7 +331,9 @@ export class SubLauncher extends LaunchSource {
 
 // ═════════════ Strategic missiles ═════════════
 class StrategicMissile {
-    constructor(mgr, spec, team, pos, dir, aim, source, strike) {
+    // launch (optional, launchseq.js LaunchPhase): how it leaves its launcher — out of a cell on its booster, cold out of
+    // a hatch, in a capsule from a submarine — before the flight below takes over
+    constructor(mgr, spec, team, pos, dir, aim, source, strike, launch = null) {
         this.mgr = mgr; this.game = mgr.game;
         this.spec = spec; this.kind = spec.kind; this.team = team;
         this.source = source; this.strike = strike;
@@ -319,7 +344,8 @@ class StrategicMissile {
         if (source && source.host && source.host.vel) this.vel.add(source.host.vel);
         this.age = 0;
         this.alive = true;
-        this.phase = 'boost';
+        this.launch = launch;
+        this.phase = launch ? 'launch' : 'boost';
         this.hp = 20;
         this.isStrategic = true;
         this.name = spec.short;
@@ -365,6 +391,13 @@ class StrategicMissile {
         if (!this.alive) return;
         this.age += dt;
         const s = this.spec, fx = this.game.effects;
+        if (this.phase === 'launch') {
+            // still in (or just out of) its launcher: the launch phase moves it
+            if (this.launch.step(this, dt)) { this.orient(); return; }
+            this.phase = 'boost';
+            this.launchY = this.pos.y;
+            if (this.launch.dir.y < 0.9) this.upDir = this.launch.dir.clone(); // an inclined launch climbs away on its line
+        }
         switch (this.kind) {
             case 'cruise': case 'antiship': this.flyCruise(dt); break;
             case 'ballistic': this.flyBallistic(dt); break;
@@ -396,7 +429,7 @@ class StrategicMissile {
         if (this.phase === 'boost') {
             // out of the cell vertically, climbing hard; the booster tips it over toward the target
             const climb = this.pos.y - (this.launchY ?? (this.launchY = this.pos.y));
-            const want = climb < 90 ? _v.set(0, 1, 0) : _v.set(dx / hd, climb > 220 ? -0.05 : 0.12, dz / hd).normalize();
+            const want = climb < 90 ? (this.upDir ? _v.copy(this.upDir) : _v.set(0, 1, 0)) : _v.set(dx / hd, climb > 220 ? -0.05 : 0.12, dz / hd).normalize();
             const cur = _v2.copy(this.vel).normalize();
             cur.lerp(want, clamp(dt * (climb < 90 ? 6 : 1.4), 0, 1)).normalize();
             this.vel.copy(cur).multiplyScalar(Math.min(speed + 38 * dt, s.speed * 1.05));
@@ -654,6 +687,27 @@ export class StrikeManager {
         return strike;
     }
 
+    // Fire n of one missile from one given source at a target — a unit, a designation (war.designate) or a point
+    // { x, z } — without the nearest-shooter search: a group's surface action (navalops.js), an interior's launch
+    // panel. Returns the strike (null: no stock or out of range).
+    fireFrom(src, specKey, n, target, { quiet = true, label = null, type = 'naval', spacing = 2.5 } = {}) {
+        const g = this.game, war = g.war;
+        if (!src || !target || !MISSILES[specKey] || !src.canFire(specKey)) return null;
+        const unit = target.pos && target.alive !== undefined ? target : target.unit || null;
+        const pos = unit ? unit.pos : target.fixed || target.pos || new THREE.Vector3(target.x, target.y ?? g.surfaceAt(target.x, target.z).h, target.z);
+        if (src.pos.distanceTo(pos) > src.range) return null;
+        const aim = { pos, unit, label: label || (unit ? war.label(unit) : 'GRID ' + war.grid(pos.x, pos.z)), mark: target.transmitted !== undefined ? target : null };
+        const spec = MISSILES[specKey];
+        const strike = { id: this.nextStrikeId++, type, label: (STRIKE_TYPES[type] || STRIKE_TYPES.naval).label, team: src.team, spec, aims: [aim], launched: 0, planned: 0, impacts: 0, lost: 0, missiles: [], t: g.time, sources: new Set([src]), done: false };
+        const k = src.fire(specKey, n, aim, strike, spacing);
+        if (!k) return null;
+        strike.planned = k;
+        this.strikes.push(strike);
+        if (!quiet && src.team === war.side) war.radio(src.name.split(' (')[0], 'COPY — ' + k + '× ' + spec.name + ' ON ' + aim.label + ', TIME ON TARGET ' + this.clock(this.estimate(spec, src.pos, pos) + src.prepTime(specKey)), { color: '#9fd4ff', say: false });
+        g.events.emit('strikeRequested', strike);
+        return strike;
+    }
+
     // three aim points down the runway nearest a point
     runwayPoints(pos) {
         let best = null, bd = Infinity;
@@ -696,8 +750,8 @@ export class StrikeManager {
     }
 
     // ═════════════ Missiles ═════════════
-    spawnMissile(spec, team, pos, dir, aim, source, strike) {
-        const m = new StrategicMissile(this, spec, team, pos, dir, aim, source, strike);
+    spawnMissile(spec, team, pos, dir, aim, source, strike, launch = null) {
+        const m = new StrategicMissile(this, spec, team, pos, dir, aim, source, strike, launch);
         this.missiles.push(m);
         if (strike) { strike.launched++; strike.missiles.push(m); }
         this.game.events.emit('strategicLaunch', m);

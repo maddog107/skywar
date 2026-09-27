@@ -1,6 +1,7 @@
 // ═══════════════════════════════════════════════════════════════
 // Naval forces: aircraft carriers and destroyers.
-//  • Ships steam in large circles in open ocean.
+//  • Ships steam in large circles in open ocean, or steer a heading and speed when a group plug-in drives them
+//    (Ship.steer: navalops.js keeps carrier groups in formation).
 //  • Carrier decks are real landing surfaces (moving), with catapults and
 //    arresting wires.
 //  • CIWS guns shoot down incoming missiles and aircraft; SAM launchers defend
@@ -16,10 +17,26 @@ import { waterHeightLong } from './water.js';
 import { terrainHeight } from './world.js';
 import { loft, createAircraftModel } from './models.js';
 import { rand, clamp, lerp, interceptTime, freezeLocal } from './util.js';
-import { WEAPONS } from './config.js';
+import { WEAPONS, AIRCRAFT } from './config.js';
 
-const _v = new THREE.Vector3(), _v2 = new THREE.Vector3();
+const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _mp = new THREE.Vector3();
 const damp01 = (a, b, dt) => a + (b - a) * (1 - Math.exp(-0.5 * dt));
+const wrapPi = (a) => { a %= Math.PI * 2; return a > Math.PI ? a - Math.PI * 2 : a < -Math.PI ? a + Math.PI * 2 : a; };
+
+// Group steaming (navalops.js): how a hull answers the helm when it steers a heading and speed instead of circling.
+// maxSpeed m/s (flank), accel m/s² (it slows twice as fast), turn rad/s at full rudder with way on (tactical
+// diameters: a Nimitz ~1.2 km at 30 kt, an Arleigh Burke ~0.6 km), rudder s (how long the turn takes to build).
+export const HELM = {
+    carrier: { maxSpeed: 16, accel: 0.06, turn: 0.016, rudder: 6 },
+    destroyer: { maxSpeed: 16.5, accel: 0.14, turn: 0.034, rudder: 3.5 },
+    cruiser: { maxSpeed: 16.5, accel: 0.13, turn: 0.032, rudder: 3.5 },
+    slava: { maxSpeed: 16.5, accel: 0.12, turn: 0.03, rudder: 4 },
+    supply: { maxSpeed: 14.5, accel: 0.07, turn: 0.02, rudder: 5 },
+    ssn: { maxSpeed: 16, accel: 0.15, turn: 0.035, rudder: 3 },
+    ssgn: { maxSpeed: 13, accel: 0.1, turn: 0.025, rudder: 4 },
+    rhib: { maxSpeed: 25, accel: 2.5, turn: 0.45, rudder: 0.6 },
+    cb90: { maxSpeed: 22, accel: 2, turn: 0.35, rudder: 0.7 },
+};
 
 const TYPES = {
     carrier: { name: 'CARRIER', L: 320, B: 76, deckY: 19, hp: 1300, score: 3000, speed: 12 },
@@ -139,6 +156,35 @@ function box(w, h, d, mat, x, y, z, parent) {
     return m;
 }
 
+// A parked aircraft for a deck: its model standing on landing gear (the legs Aircraft.buildGear makes: struts and
+// wheels under the belly, the belly 1.2 m up), origin on the deck. (The models themselves are gear-up.)
+const PARK_MAT = {
+    strut: new THREE.MeshStandardMaterial({ color: 0xb8bcc0, metalness: 0.7, roughness: 0.35 }),
+    tyre: new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.9 }),
+};
+export function parkedModel(kind) {
+    const { object, rig } = createAircraftModel(kind);
+    const spec = AIRCRAFT[kind] || { length: 17, category: 'fighter' };
+    const L = spec.length;
+    const H = -(rig.minY ?? -L * 0.08) + 1.2;
+    const g = new THREE.Group();
+    object.position.y = H;
+    g.add(object);
+    if (!(rig.gearParts && rig.gearParts.length) && !rig.fixedGear) {
+        const sc = clamp(L / 17, 0.8, 3.2), wheelR = 0.33 * sc, bellyY = (rig.minY != null ? rig.minY + 0.15 : -H + 1.35) + H;
+        const mainX = spec.category === 'civil' || spec.category === 'bomber' ? Math.min((rig.halfSpan || spec.span / 2) * 0.25, L * 0.09) : Math.max(1.0, L * 0.075);
+        for (const [x, z] of [[0, -0.3 * L], [-mainX, 0.04 * L], [mainX, 0.04 * L]]) {
+            const len = Math.max(0.4, bellyY - wheelR);
+            const strut = new THREE.Mesh(new THREE.CylinderGeometry(0.07 * sc, 0.09 * sc, len, 6), PARK_MAT.strut);
+            strut.position.set(x, wheelR + len / 2, z);
+            const tyre = new THREE.Mesh(new THREE.CylinderGeometry(wheelR, wheelR, 0.22 * sc, 12), PARK_MAT.tyre);
+            tyre.rotation.z = Math.PI / 2; tyre.position.set(x, wheelR, z);
+            g.add(strut, tyre);
+        }
+    }
+    return g;
+}
+
 // Ship models (tools/ships/*.py, models/ships/CREDITS.md). Loaded once at boot; if a file is missing the
 // procedural ship below is used instead.
 const SHIP_FILES = {
@@ -203,8 +249,8 @@ function buildFromGltf(type, gltf) {
     // elevator rides it down to the hangar deck (setElevator)
     g.updateMatrixWorld(true);
     for (const [kind, x, z, yaw] of (layout && layout.parked) || []) {
-        const { object } = createAircraftModel(kind);
-        object.position.set(x, (layout.deckY || TYPES[type].deckY) + 2.2, z);
+        const object = parkedModel(kind);
+        object.position.set(x, layout.deckY || TYPES[type].deckY, z);
         object.rotation.y = yaw;
         object.scale.setScalar(0.95);
         const k = (layout.elevators || []).findIndex(p => inPoly(x, z, p));
@@ -353,6 +399,17 @@ export function cellFrame(ship, i, pos, dir) {
     c.node.updateWorldMatrix(true, false);
     if (pos) pos.setFromMatrixPosition(c.node.matrixWorld);
     if (dir) dir.set(0, 1, 0).transformDirection(c.node.matrixWorld);
+    return true;
+}
+
+// world position and +Y direction of any rig point or node by name (harpoon_<n> canister mouths, muzzle_<n>…)
+export function pointFrame(ship, name, pos, dir) {
+    const r = ship && ship.rig;
+    const o = r && (r.points[name] || (r.nodes[name] && r.nodes[name].node));
+    if (!o) return false;
+    o.updateWorldMatrix(true, false);
+    if (pos) pos.setFromMatrixPosition(o.matrixWorld);
+    if (dir) dir.set(0, 1, 0).transformDirection(o.matrixWorld);
     return true;
 }
 
@@ -573,12 +630,47 @@ export class Ship {
         this.sinkT = 0;
         this.wakeT = 0;
         this.ammo = { sam: type === 'carrier' ? 8 : 12 };
+        this.nav = null;        // group steaming (steer()): a heading and speed instead of the circle
+        // level of detail: the parts too small to see from afar (mounts, radars, cell doors, small rig parts)
+        this.details = [...this.mounts.map(m => m.turret), this.parts.radar, this.parts.radar2].filter(Boolean);
+        this.mesh.traverse(o => { if (o.isInstancedMesh && o.name.startsWith('ship:rigdoors')) this.details.push(o); });
+        this.lodK = 1;
         this.place(0);
+    }
+
+    // Steer a heading (rad, 0 = −Z like `heading`) at a speed (m/s): the ship leaves its circle and answers the helm
+    // at its own rate (HELM). navalops.js sets nav.wantHeading / nav.wantSpeed as the group manoeuvres.
+    steer(heading, speed) {
+        if (!this.nav) {
+            const h = HELM[this.type] || HELM.destroyer, p = this.mesh.position;
+            const v0 = Math.hypot(this.vel.x, this.vel.z);
+            this.nav = { x: p.x, z: p.z, speed: v0, rate: 0, wantHeading: this.heading, wantSpeed: v0, ...h };
+        }
+        this.nav.wantHeading = heading;
+        this.nav.wantSpeed = speed;
+        return this.nav;
+    }
+
+    // one step of the helm: speed toward the order, the rudder builds a turn toward the ordered heading
+    steam(dt, rate) {
+        const n = this.nav;
+        const want = clamp(n.wantSpeed, 0, n.maxSpeed * rate);
+        n.speed += clamp(want - n.speed, -n.accel * 2 * dt, n.accel * dt);
+        const err = wrapPi(n.wantHeading - this.heading);
+        const rmax = n.turn * clamp(n.speed / 6, 0.12, 1) * (this.alive ? 1 : 0);
+        const wantRate = clamp(err * 0.35, -rmax, rmax);
+        n.rate += (wantRate - n.rate) * (1 - Math.exp(-dt / n.rudder));
+        this.heading = wrapPi(this.heading + n.rate * dt);
+        n.x -= Math.sin(this.heading) * n.speed * dt;
+        n.z -= Math.cos(this.heading) * n.speed * dt;
+        // (code that reads the circle — a fleet move, an escort joining — sees where the ship is)
+        this.orbit.cx = n.x; this.orbit.cz = n.z;
     }
 
     place(dt) {
         const o = this.orbit;
         const rate = this.alive ? 1 - 0.6 * (1 - Math.max(this.hp, 0) / this.maxHp) : 0.15;
+        if (this.nav) return this.placeAt(dt, rate);
         // recovering aircraft: steam straight into the wind (slide the circle along instead of turning),
         // as long as there's open water ahead
         if (this.straight > 0 && this.alive) {
@@ -593,6 +685,17 @@ export class Ship {
         // tangent direction of travel
         const tx = -Math.sin(o.a) * Math.sign(o.w), tz = Math.cos(o.a) * Math.sign(o.w);
         this.heading = Math.atan2(-tx, -tz);
+        this.poseAt(x, z, dt);
+    }
+
+    // group steaming: the helm moves the ship, then the same sea motion as on the circle
+    placeAt(dt, rate) {
+        if (dt > 0) this.steam(dt, rate);
+        this.poseAt(this.nav.x, this.nav.z, dt);
+    }
+
+    // the hull at (x, z) on the current heading: sinking, battle damage and the sea
+    poseAt(x, z, dt) {
         const sink = this.alive ? 0 : Math.min(this.sinkT / 60, 1);
         const dmgFrac = 1 - Math.max(this.hp, 0) / this.maxHp;
         // heave / pitch / roll with the waves (deckAt follows the tilted deck, so landings stay consistent)
@@ -666,11 +769,37 @@ export class Ship {
         const { lx, lz } = this.toLocal(x, z);
         return deckHeightAt(this.mesh, this.def.deckY, lx, lz);
     }
+    // Where a landing jet's hook finds a wire: its reference point touches down between just short of the
+    // aft-most wire and a little past the forward-most (the hook trails ~6 m behind it). Further up the deck
+    // there's no wire to catch: a bolter.
     inWireZone(x, z) {
+        if (this.type !== 'carrier') return false;
         const { lz } = this.toLocal(x, z);
-        return this.type === 'carrier' && lz > -this.def.L * 0.02 && lz < this.def.L * 0.48;
+        const w = this.layout && this.layout.wires;
+        if (!w || !w.length) return lz > -this.def.L * 0.02 && lz < this.def.L * 0.48;
+        let z0 = Infinity, z1 = -Infinity;
+        for (const [a, b] of w) { z0 = Math.min(z0, a[1], b[1]); z1 = Math.max(z1, a[1], b[1]); }
+        return lz > z0 - 14 && lz < z1 + 10;
     }
-    catapultSpot() { return this.toWorld(12, this.deckY, -this.def.L * 0.02); }
+    // Catapult i's spot (the model's layout.catSpots; cat 2, the port bow one, by default: the view from behind a
+    // jet on it is clear of the island), in world space. Without a layout: the old spot on cat 1.
+    catSpot(i = null, out = new THREE.Vector3()) {
+        const s = this.layout && this.layout.catSpots;
+        if (!s || !s.length) return this.toWorld(12, this.deckY, -this.def.L * 0.02, out);
+        const c = s[Math.min(i ?? (s.length > 1 ? 1 : 0), s.length - 1)];
+        return this.toWorld(c[0], this.deckY, c[1], out);
+    }
+    catapultSpot() { return this.catSpot(this.playerCat ?? null); }
+
+    // is a world point inside (or within `margin` m of) the island? Returns how far inside, or 0
+    inIsland(p, margin = 0) {
+        const isl = this.layout && this.layout.island;
+        if (!isl || this.type !== 'carrier') return 0;
+        const { lx, lz } = this.toLocal(p.x, p.z);
+        if (p.y > this.deckY + 42) return 0;
+        const d = Math.min(lx - (isl[0] - margin), (isl[1] + margin) - lx, lz - (isl[2] - margin), (isl[3] + margin) - lz);
+        return d > 0 ? d : 0;
+    }
 
     hitTest(p) {
         const { lx, lz } = this.toLocal(p.x, p.z);
@@ -728,10 +857,25 @@ export class Ship {
         this.game.events.emit('groundKilled', this, { source });
     }
 
+    // Level of detail: not drawn at all when it would be a speck (or a submarine well under), and no mounts, radars
+    // or cell doors while it's small on screen (the ship's length in pixels on a 900 px screen at this field of view,
+    // so the targeting pod's narrow views still see it all)
+    updateLod() {
+        const cam = this.game.camera;
+        if (!cam) return;
+        const d = Math.max(cam.position.distanceTo(this.mesh.position), 1);
+        const px = this.def.L / d * 450 / Math.tan((cam.fov || 60) * Math.PI / 360);
+        this.mesh.visible = px > 1.2 && this.depth < 22;
+        const detail = this.mesh.visible && px > 70;
+        if (detail !== this.lodDetail) { this.lodDetail = detail; for (const o of this.details) o.visible = detail; }
+        this.lodPx = px;
+    }
+
     update(dt) {
         const g = this.game, fx = g.effects;
         if (!this.alive) this.sinkT += dt;
         this.place(dt);
+        this.updateLod();
         if (this.parts.radar) this.parts.radar.rotation.y += dt * 1.6;
         if (this.parts.radar2) this.parts.radar2.rotation.y -= dt * 2.6;
         if (!this.alive && this.sinkT > 70) { this.remove(); return 'gone'; }
@@ -758,7 +902,7 @@ export class Ship {
         const g = this.game;
         const diff = g.difficulty;
         for (const m of this.mounts) {
-            const mp = this.toWorld(m.turret.position.x, m.turret.position.y + 2, m.turret.position.z, new THREE.Vector3());
+            const mp = this.toWorld(m.turret.position.x, m.turret.position.y + 2, m.turret.position.z, _mp); // (everything below copies it)
             m.fireT -= dt;
             if (m.type === 'ciws') {
                 // priority: incoming missiles aimed at our group
@@ -768,6 +912,16 @@ export class Ship {
                     const d = ms.pos.distanceToSquared(mp);
                     const aimedAtUs = ms.target && ms.target.isShip && ms.target.team === this.team;
                     if (d < best && aimedAtUs) { best = d; tgt = ms; }
+                }
+                // and the strategic ones (strikes.js: cruise and anti-ship missiles, a ballistic one coming down on
+                // us) closing on this ship — the last layer of the group's air defence (navalops.js)
+                const sm = g.strikes && g.strikes.missiles;
+                if (sm) for (const ms of sm) {
+                    if (!ms.alive || ms.team === this.team || ms.phase === 'launch') continue;
+                    const d = ms.pos.distanceToSquared(mp);
+                    if (d >= best) continue;
+                    const closing = (ms.vel.x * (mp.x - ms.pos.x) + ms.vel.y * (mp.y - ms.pos.y) + ms.vel.z * (mp.z - ms.pos.z)) > 0;
+                    if (closing) { best = d; tgt = ms; }
                 }
                 let isMissile = !!tgt;
                 if (!tgt) tgt = this.nearestEnemyAircraft(mp, 2200);
@@ -783,12 +937,16 @@ export class Ship {
                     const aim = _v2.copy(tgt.pos).addScaledVector(tgt.vel, tt).sub(mp).normalize();
                     aim.x += rand(-0.012, 0.012); aim.y += rand(-0.012, 0.012); aim.z += rand(-0.012, 0.012);
                     g.weapons.fireFlak(mp, aim.normalize(), this, isMissile ? 0 : 3 + diff.skill * 3, 1100, Infinity);
+                    m.engagedT = g.time; m.target = tgt; // (navalops.js: "CIWS ENGAGING")
                     if (isMissile && Math.random() < (this.team === 'red' ? 0.028 : 0.05)) {
                         // CIWS kill
-                        g.effects.explosion(tgt.pos, 0.6);
                         g.events.emit('ciwsKill', this, { missile: tgt });
-                        const idx = g.weapons.missiles.indexOf(tgt);
-                        if (idx >= 0) g.weapons.removeMissile(idx);
+                        if (tgt.isStrategic) tgt.damage(1e3, this); // (strikes.js intercepted(): its own explosion)
+                        else {
+                            g.effects.explosion(tgt.pos, 0.6);
+                            const idx = g.weapons.missiles.indexOf(tgt);
+                            if (idx >= 0) g.weapons.removeMissile(idx);
+                        }
                     }
                 }
             } else if (m.type === 'gun') {
@@ -806,7 +964,7 @@ export class Ship {
                     g.effects.fire.emit(mp, _v.set(0, 0, 0), 0.12, 6, 3, [2.2, 1.6, 0.9], [1.2, 0.5, 0.15], 1, 0, 0, 0);
                     g.effects.puffSmoke(mp, _v.set(0, 2, 0), 2.5, 0.55, 2.5, 0.45);
                 }
-            } else if (m.type === 'sam' && this.ammo.sam > 0) {
+            } else if (m.type === 'sam' && this.ammo.sam > 0 && !this.adManaged) { // (navalops.js flies a group's SAMs)
                 const tgt = this.nearestEnemyAircraft(mp, WEAPONS.sam.range);
                 if (!tgt || tgt.pos.distanceTo(mp) < 700) { m.lockT = Math.max(0, m.lockT - dt); continue; }
                 m.lockT += dt;
@@ -887,6 +1045,20 @@ export class Naval {
         this.ships.push(s);
         this.game.ground.targets.push(s);
         return s;
+    }
+
+    // Keep a chase camera out of a carrier's island (a view from inside its wall hides the jet): pull the camera in
+    // along the line to what it looks at until it's clear. Moves `cam` (a Vector3) in place.
+    clearOfIslands(cam, target) {
+        for (const s of this.ships) {
+            if (s.type !== 'carrier' || s.gone || !s.layout || Math.abs(s.mesh.position.x - cam.x) > 300 || Math.abs(s.mesh.position.z - cam.z) > 300) continue;
+            if (!s.inIsland(cam, 2.5)) continue;
+            for (let k = 0.95; k > 0; k -= 0.05) {
+                _v.lerpVectors(target, cam, k);
+                if (!s.inIsland(_v, 2.5)) { cam.copy(_v); break; }
+            }
+        }
+        return cam;
     }
 
     // Deck / hull query used by aircraft ground contact

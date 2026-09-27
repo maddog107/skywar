@@ -16,6 +16,7 @@ import { FrontLine } from './front.js';
 import { Director } from './director.js';
 import { TaskManager } from './tasks.js';
 import { Wingmen } from './wingmen.js';
+import { NavalOps } from './navalops.js';
 
 export const SYSTEMS = [
     ['tacmap', TacticalMap],
@@ -23,6 +24,7 @@ export const SYSTEMS = [
     ['mapkit', MapKit],     // map tools: legend, layers, ruler, coordinates, steerpoint, air tracks, imagery
     ['command', CommandMenu],
     ['strikes', StrikeManager],
+    ['navalops', NavalOps],      // carrier groups, naval air defence, surface action, launches on the rigs, deck ops
     ['front', FrontLine],        // the front line and the ground war
     ['director', Director],      // enemy and friendly activity, the Living War mode
     ['tasks', TaskManager],      // dynamic tasks

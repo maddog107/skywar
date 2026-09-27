@@ -634,7 +634,7 @@ function buildCredits() {
         ['Tu95 (tu95)', 'manilov.ap', 'CC BY 4.0', 'https://sketchfab.com/3d-models/tu95-1eac97ec49ed4f1da8b7deb1e1b2cc7a'],
         ['Low poly 1:1 F/A-18F SuperHornet (ea18g: the EA-18G Growler, derived from fa18)', 'WTigerTw', 'CC BY 4.0', 'https://sketchfab.com/3d-models/low-poly-11-fa-18f-superhornet-635e68b7a0d24ac29c10f5fb9110129f'],
         ['NASA Airborne Science ER-2 model (u2, U-2S)', 'NASA', 'Public domain', 'https://airbornescience.nasa.gov/3d-models'],
-        ['Ships: Nimitz carrier, Arleigh Burke destroyer, Ticonderoga cruiser, Virginia and Ohio submarines, Supply-class AOE, NSW RHIB, CB90, Slava cruiser', 'SKYWAR / Blender (tools/ships; sources in models/ships/CREDITS.md)', 'CC0', 'tools/ships/'],
+        ['Ships: Nimitz carrier, Arleigh Burke destroyer, Ticonderoga cruiser, Virginia and Ohio submarines, Supply-class AOE, NSW RHIB, CB90, Slava cruiser, flight-deck crew and tow tractor', 'SKYWAR / Blender (tools/ships; sources in models/ships/CREDITS.md)', 'CC0', 'tools/ships/'],
         ['Military vehicles: Scud, Bastion, S-300, Osa, Buk, Smerch, Grad, Flap Lid, P-18 and Soviet support trucks; Patriot, HIMARS, M270, Sentinel, Stryker, HEMTT and US support vehicles (see models/vehicles/CREDITS.md)', 'SKYWAR / Blender (tools/vehicles)', 'CC0', 'tools/vehicles/'],
         ['Helicopter (military)', 'Zsky', 'CC BY 3.0', 'https://poly.pizza/m/hG2Qr0A3zR'],
         ['Helicopter (civil)', 'jeremy', 'CC BY 3.0', 'https://poly.pizza/m/eb7b31pjGtQ'],
