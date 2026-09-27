@@ -172,6 +172,7 @@ async function boot() {
     world.updateTerrain(new THREE.Vector3(0, 0, 0), true);
     $('loadFill').style.width = '95%';
     game = new Game({ scene, camera, world, effects, audio, input, hud, cockpit, settings });
+    game.scenePass = renderPass; // (interiors.js: a closed room is drawn instead of the world while you're in it)
     game.onGameOver = showGameOver;
     game.onNvg = (on) => { renderer.domElement.style.filter = on ? 'grayscale(1) brightness(2.3) contrast(1.35) sepia(1) hue-rotate(55deg) saturate(3.5)' : ''; };
     career.attach(game);
@@ -701,7 +702,7 @@ function frame(dt) {
     // Depth precision: push the near plane out as the camera climbs (the cockpit has its own camera),
     // so distant beaches and the water plane don't fight in the depth buffer.
     const agl = camera.position.y - Math.max(terrainHeight(camera.position.x, camera.position.z), 0);
-    const near = clamp(agl / 80, 0.5, 6);
+    const near = game.nearPlane || clamp(agl / 80, 0.5, 6); // (inside a room the consoles are an arm's length away)
     if (Math.abs(camera.near - near) > 0.05) { camera.near = near; camera.updateProjectionMatrix(); }
     postfx.render(dt, game); // [postfx] composer.render + GPU timing for adaptive resolution
     hud.draw(game, dt);

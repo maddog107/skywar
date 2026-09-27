@@ -117,6 +117,8 @@ export class Game {
     surfaceAt(x, z, y = 1e9) {
         const d = this.naval && this.naval.ships.length ? this.naval.deckAt(x, z, y) : null;
         if (d) return d;
+        // piers, pontoons and gangways (boats.js): walkable surfaces over the water
+        if (this.platforms && this.platforms.length) for (const pl of this.platforms) { const s = pl.at(x, z, y); if (s) return s; }
         const th = terrainHeight(x, z);
         const r = this._surf;
         const bh = this.world.towns ? this.world.towns.bridgeAt(x, z, y) : null;
@@ -1274,7 +1276,8 @@ export class Game {
 
     // ═════════════ Player control ═════════════
     // Stopped on the ground (after a crash landing, or just parked): climb out and walk
-    canClimbOut(p) { return p.onGround && p.speed < 0.8 && p.controls.throttle < 0.06 && !p.deck; }
+    // (on a carrier's deck too: the man on foot rides the deck, pilot.js)
+    canClimbOut(p) { return p.onGround && (p.deck ? p.relSpeed : p.speed) < 0.8 && p.controls.throttle < 0.06 && !p.catapult; }
     climbOut() {
         const p = this.player;
         const seat = this.wreckage.groundSeat(p);
@@ -1461,7 +1464,9 @@ export class Game {
             this.groundStart.update(dt, mouse);
             this.firing = false;
         } else if (pm && this.state === 'playing') {
-            if (pm.alive) pm.update(dt, mouse);
+            // a room, a boat's helm or a vehicle's cab has the controls while you're in it (interiors.js)
+            if (this.takeover) this.takeover.control(dt, mouse);
+            else if (pm.alive) pm.update(dt, mouse);
             this.firing = false;
         } else if (this.state === 'playing' && p.alive) {
             this.updatePlayer(dt, mouse);
@@ -1528,7 +1533,7 @@ export class Game {
         else if (this.cockpit && this.cockpit.enabled && p && p.alive) this.cockpit.update(rawDt, this, this.camera, this.world);
         this.audio.update(rawDt, pm ? null : p, {
             playing: this.state === 'playing' || this.state === 'dead',
-            cockpit: this.cameraMode === 'cockpit',
+            cockpit: this.cameraMode === 'cockpit' || !!(this.indoors && this.indoors.sealed), // (walls muffle the world)
             firing: this.firing,
             seeking: this.lockTarget && this.lockProgress > 0 && this.lockProgress < 1,
             locked: this.lockProgress >= 1,
