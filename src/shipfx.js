@@ -7,12 +7,14 @@
 //                          stem, the water piled up against it) and the churn at the transom.
 //  • createHullShadow(ship) darker water / contact occlusion hugging the hull, plus the flight deck's
 //                          (or main deck's) shadow projected on the sea along the sun direction.
-//  • seaMotion(t, seed, amp) gentle heave / pitch / roll for naval.js to apply (deck height helper
-//                          in INTEGRATION.md keeps landings consistent).
+//  • WakeMap                a top-down render target the decals above are drawn into (foam, milky wake water, hull
+//                          shade as three channels): the water shader (ocean.js) lays it on the displaced sea, so a
+//                          wake rides the waves instead of cutting into them.
 //  • ShipFX                 owns all of the above for every ship: add(ship, layout) / remove(ship) /
 //                          update(dt, game) / clear().
-// Everything is drawn as transparent decals just above the flat water plane (world.js, y = 0), after
-// the water (renderOrder > 1), depth-tested so hulls hide them. Nothing touches the DOM at import time.
+// With a WakeMap (always, in the game) the decals go into it; without one they are drawn as transparent decals
+// just above the water plane, after the water, depth-tested so hulls hide them (the old way, kept for tools).
+// Nothing touches the DOM at import time.
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
 import { offsetUnits, mulberry32 } from './util.js';
@@ -128,7 +130,13 @@ const COMMON_FS_HEAD = /* glsl */`
         float fogF = 1.0 - exp(-pow(fogDensity * dist, 2.0));
         col = mix(col, fogColor, fogF);
         return vec4(col, a * (1.0 - 0.6 * fogF));
-    }`;
+    }
+    // into the wake map: white foam, milky water, shade (max-blended); on screen: the lit, fogged decal
+    #ifdef WATER_RT
+    #define EMIT(col, a, fw, mk, dk) gl_FragColor = vec4(clamp(fw, 0.0, 1.0), clamp(mk, 0.0, 1.0), clamp(dk, 0.0, 1.0), 1.0);
+    #else
+    #define EMIT(col, a, fw, mk, dk) gl_FragColor = finish(col, a);
+    #endif`;
 const TAIL = /* glsl */`
     #include <tonemapping_fragment>
     #include <colorspace_fragment>`;
@@ -149,6 +157,67 @@ function fxMaterial(fs, { order = 2, dark = false } = {}) {
     m.userData.dark = dark;
     return m;
 }
+// draw a decal material into the wake map (true) or on screen (false)
+function setRT(m, on) {
+    if (!!m.userData.rt === on) return;
+    m.userData.rt = on;
+    if (on) {
+        m.defines.WATER_RT = '';
+        m.depthTest = false;
+        m.blending = THREE.CustomBlending; m.blendEquation = THREE.MaxEquation;
+        m.blendSrc = THREE.OneFactor; m.blendDst = THREE.OneFactor;
+        m.polygonOffset = false;
+    } else {
+        delete m.defines.WATER_RT;
+        m.depthTest = true;
+        m.blending = THREE.NormalBlending;
+        m.polygonOffset = true;
+    }
+    m.needsUpdate = true;
+}
+
+// ═════════════ Wake map ═════════════
+// A top-down orthographic render of the wake decals into an RGBA8 target: R white foam, G milky wake water, B shade
+// by a hull. It covers a square ahead of the camera (wider the higher the camera is), and ocean.js samples it by
+// world position, so the foam follows the displaced waves.
+export class WakeMap {
+    constructor(renderer, res = 2048) {
+        this.renderer = renderer;
+        this.res = res;
+        this.scene = new THREE.Scene();
+        this.scene.matrixWorldAutoUpdate = true;
+        this.rt = new THREE.WebGLRenderTarget(res, res, { depthBuffer: false, stencilBuffer: false, generateMipmaps: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
+        this.rt.texture.name = 'WakeMap';
+        this.cam = new THREE.OrthographicCamera(-1, 1, 1, -1, -200, 200);
+        this.cam.rotation.set(-Math.PI / 2, 0, 0);
+        this.size = 4096; this.x0 = 0; this.z0 = 0;
+        this.clear = new THREE.Color(0, 0, 0);
+    }
+    // centre the square ahead of the camera (snapped to whole texels, so the foam doesn't shimmer) and draw
+    update(camera) {
+        const c = camera.position, alt = Math.max(0, c.y);
+        const S = alt > 6000 ? 16384 : alt > 1800 ? 8192 : 4096;
+        camera.getWorldDirection(_v);
+        const hl = Math.hypot(_v.x, _v.z) || 1, ahead = S * 0.28;
+        const texel = S / this.res;
+        const cx = Math.round((c.x + _v.x / hl * ahead) / texel) * texel, cz = Math.round((c.z + _v.z / hl * ahead) / texel) * texel;
+        this.size = S; this.x0 = cx - S / 2; this.z0 = cz - S / 2;
+        const cam = this.cam;
+        cam.left = -S / 2; cam.right = S / 2; cam.top = S / 2; cam.bottom = -S / 2;
+        cam.position.set(cx, 100, cz);
+        cam.updateProjectionMatrix(); cam.updateMatrixWorld();
+        const r = this.renderer, prev = r.getRenderTarget(), pa = r.getClearAlpha();
+        r.getClearColor(_c);
+        r.setClearColor(this.clear, 0);
+        r.setRenderTarget(this.rt);
+        r.clear(true, false, false);
+        r.render(this.scene, cam);
+        r.setRenderTarget(prev);
+        r.setClearColor(_c, pa);
+    }
+    dispose() { this.rt.dispose(); }
+}
+const _c = new THREE.Color();
 
 // turbulent centre wake: aData = (s: path metres fixed to the water, lateral m, d: metres behind the transom, half width)
 const WAKE_FS = /* glsl */`
@@ -170,9 +239,10 @@ const WAKE_FS = /* glsl */`
         float foam = smoothstep(1.0 - cover, 1.3 - cover, n);
         // a milky turquoise band (bubbles under the surface) stays long after the white foam has broken up
         float milk = (0.1 + 0.14 * streak) * (0.35 + 0.65 * mid) * (1.0 - 0.5 * x);
-        float a = edge * tail * (foam * 0.92 + milk * (1.0 - foam)) * fade * speedK;
+        float k = edge * tail * fade * speedK;
+        float a = k * (foam * 0.92 + milk * (1.0 - foam));
         vec3 col = mix(vec3(0.4, 0.68, 0.72), vec3(0.95, 0.98, 1.0), foam) * light;
-        gl_FragColor = finish(col, clamp(a, 0.0, 0.9));
+        EMIT(col, clamp(a, 0.0, 0.9), k * foam * 0.92, k * milk * 2.2 * (1.0 - foam), 0.0)
         ` + TAIL + `
     }`;
 
@@ -190,7 +260,7 @@ const KELVIN_FS = /* glsl */`
         float band = exp(-pow((lat - arm * 0.9) / (w * 4.0), 2.0)) * smoothstep(0.58, 0.8, m) * 0.14;
         float a = (crest + band) * exp(-d / 480.0) * smoothstep(15.0, 80.0, d) * fade * speedK * 0.55;
         vec3 col = vec3(0.92, 0.96, 0.99) * light;
-        gl_FragColor = finish(col, clamp(a, 0.0, 0.6));
+        EMIT(col, clamp(a, 0.0, 0.6), a * 1.4, band * 0.6 * fade, 0.0)
         ` + TAIL + `
     }`;
 
@@ -211,9 +281,10 @@ const FOAM_FS = /* glsl */`
         float n = n1 * 0.55 + n2 * 0.45;
         float foam = smoothstep(1.0 - I, 1.25 - I, n);
         float halo = clamp(I, 0.0, 1.0) * 0.18 * (1.0 - r);
-        float a = (foam + halo * (1.0 - foam)) * (1.0 - smoothstep(0.8, 1.0, r)) * fade;
+        float edge = (1.0 - smoothstep(0.8, 1.0, r)) * fade;
+        float a = (foam + halo * (1.0 - foam)) * edge;
         vec3 col = mix(vec3(0.4, 0.7, 0.74), vec3(0.97, 0.99, 1.0), foam) * light;
-        gl_FragColor = finish(col, clamp(a, 0.0, 0.95));
+        EMIT(col, clamp(a, 0.0, 0.95), foam * edge, halo * 3.0 * edge, 0.0)
         ` + TAIL + `
     }`;
 
@@ -223,7 +294,7 @@ const DARK_FS = /* glsl */`
     uniform float strength;
     void main() {
         float a = vData.x * strength * fade;
-        gl_FragColor = finish(darkColor, clamp(a, 0.0, 0.9));
+        EMIT(darkColor, clamp(a, 0.0, 0.9), 0.0, 0.0, a)
         ` + TAIL + `
     }`;
 
@@ -623,21 +694,41 @@ export class ShipFX {
         this.env = { time: 0, light: new THREE.Color(1, 1, 1), fogColor: new THREE.Color(), fogDensity: 0, fade: 1, sunK: 1 };
         this.enabled = true;
         this.underMats = new Set();
+        this.wakeMap = null; // WakeMap once there is a renderer and an ocean to show it (update)
+        this.trails = new Set(); // other wakes drawn into the map (a seaplane's, seaplane.js)
+    }
+
+    // where the decals go: the wake map's scene, or (no map) the world
+    get fxScene() { return this.wakeMap ? this.wakeMap.scene : this.scene; }
+
+    materialsOf(e) { return [e.wake.matW, e.wake.matK, e.foam.mat, e.foam.omat, e.shadow.mat]; }
+
+    // switch to drawing into a wake map (the first update with a renderer and an ocean)
+    useWakeMap(renderer) {
+        if (this.wakeMap) return;
+        this.wakeMap = new WakeMap(renderer);
+        for (const e of this.entries.values()) {
+            for (const m of [e.wake.meshW, e.wake.meshK, e.shadow.mesh, e.follow]) this.wakeMap.scene.add(m);
+            for (const m of this.materialsOf(e)) setRT(m, true);
+            e.wake.scene = this.wakeMap.scene; e.shadow.scene = this.wakeMap.scene;
+        }
     }
 
     add(ship, layout = null) {
         if (this.entries.has(ship)) return;
         const follow = new THREE.Group();
         follow.name = 'shipfx:follow';
-        this.scene.add(follow);
+        const sc = this.fxScene;
+        sc.add(follow);
         const e = {
             follow,
-            wake: createWake(this.scene, ship, layout),
+            wake: createWake(sc, ship, layout),
             foam: createFoamLine(follow, ship, layout),
-            shadow: createHullShadow(this.scene, ship, layout),
+            shadow: createHullShadow(sc, ship, layout),
             sprayT: 0,
             geom: shipGeom(ship, layout),
         };
+        if (this.wakeMap) for (const m of this.materialsOf(e)) setRT(m, true);
         this.entries.set(ship, e);
         // undersides (material "Under"): the scene's hemisphere/IBL light them with the land's green ground
         // colour; over open sea they really get the sea's blue bounce light, added here as a small emissive
@@ -651,11 +742,19 @@ export class ShipFX {
         const e = this.entries.get(ship);
         if (!e) return;
         e.wake.dispose(); e.foam.dispose(); e.shadow.dispose();
-        this.scene.remove(e.follow);
+        e.follow.removeFromParent();
         this.entries.delete(ship);
     }
 
-    clear() { for (const s of [...this.entries.keys()]) this.remove(s); }
+    clear() {
+        for (const s of [...this.entries.keys()]) this.remove(s);
+        for (const t of [...this.trails]) this.removeTrail(t);
+        if (this.ocean) this.ocean.setWakeMap(null); // (nothing draws it again until the next sortie's first update)
+    }
+
+    // a wake of some other craft (seaplane.js WakeTrail): its meshes go into the wake map
+    addTrail(t) { this.trails.add(t); t.attach(this.fxScene, !!this.wakeMap); }
+    removeTrail(t) { if (this.trails.delete(t)) t.dispose(); }
 
     // light reaching an upward-facing white surface, matched to MeshStandardMaterial's diffuse term
     updateLight(world) {
@@ -678,6 +777,7 @@ export class ShipFX {
         const fog = game && game.scene && game.scene.fog;
         if (fog) { env.fogColor.copy(fog.color); env.fogDensity = fog.density || 0; }
         const sunDir = (world && world.sunDir) || _v.set(0.3, 0.8, 0.2);
+        if (world && world.renderer && world.ocean && !this.wakeMap) this.useWakeMap(world.renderer);
         for (const m of this.underMats) m.emissive.setRGB(0.032, 0.058, 0.085).multiplyScalar(Math.min(env.light.b, 1.5));
         const fx = game && game.effects;
         for (const [ship, e] of this.entries) {
@@ -706,6 +806,13 @@ export class ShipFX {
                 const k = (ship.type === 'carrier' ? 1 : 0.8) * sk;
                 fx.smoke.emit(p, new THREE.Vector3(vx, 2.5 + Math.random() * 2, vz), 1.6, 2 * k, 7 * k, [0.95, 0.97, 1], [0.9, 0.94, 0.97], 0.35, 0, 0.8, -4);
             }
+        }
+        // the wake map, laid on the water by the ocean shader (also carries other trails: addTrail)
+        if (this.wakeMap && game && game.camera && world && world.ocean) {
+            for (const t of this.trails) t.update(dt, env);
+            this.wakeMap.update(game.camera);
+            this.ocean = world.ocean;
+            world.ocean.setWakeMap(this.wakeMap.rt.texture, this.wakeMap.x0, this.wakeMap.z0, this.wakeMap.size);
         }
     }
 }

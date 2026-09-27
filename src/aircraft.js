@@ -16,6 +16,8 @@ import { groundHeight, terrainHeight, isOnRunway } from './world.js';
 import { craterAdj } from './craters.js';
 import { createEngineFlame } from './afterburner.js';
 import { surfaceTravel, surfaceWells } from './surfaces.js';
+import { waveTilt } from './float.js';
+import { waterStep, waterContact, enterWater } from './seaplane.js';
 
 const LIFT_K = 0.0016;
 const CL_MAX = 1.65;
@@ -153,6 +155,8 @@ export class Aircraft {
         if (!rig.minY) this.gearOffset = this.spec.length * 0.09 + 1.2;
         this.fixedGear = !!rig.fixedGear;
         if (this.fixedGear) this.gearOffset = -rig.minY + 0.05; // sits on the model's own wheels
+        // the model's own retracting legs: stand on their tyres
+        if (rig.gearContacts && rig.gearContacts.length) this.gearOffset = -Math.min(...rig.gearContacts.map(c => c.y)) + 0.02;
 
         // state
         this.pos = this.root.position;
@@ -232,6 +236,9 @@ export class Aircraft {
 
     buildGear() {
         if (this.fixedGear) { this.gearLegs = []; this.gear = true; this.gearAnim = 1; return; }
+        // the model's own legs (models.js gear file): they fold about their hinges instead of generic struts
+        this.gearParts = this.rig.gearParts && this.rig.gearParts.length ? this.rig.gearParts : null;
+        if (this.gearParts) { this.gearLegs = []; this.hook = false; this.hookAnim = 0; this.updateGearVisual(); return; }
         const L = this.spec.length;
         const H = this.gearOffset;
         const sc = clamp(L / 17, 0.8, 3.2);
@@ -395,6 +402,10 @@ export class Aircraft {
     updateGearVisual() {
         const k = this.gearAnim; // 1 = down
         const e = 1 - (1 - k) * (1 - k);
+        if (this.gearParts) for (const p of this.gearParts) {
+            const gd = p.userData.gear;
+            p.quaternion.setFromAxisAngle(gd.axis, (1 - e) * gd.angle);
+        }
         for (const p of this.gearLegs) {
             const l = p.userData;
             p.visible = k > 0.03;
@@ -417,7 +428,7 @@ export class Aircraft {
         this.speed = this.vel.length();
         this.alpha = 0.03;
         this.throttle = this.controls.throttle = 0.8;
-        this.gear = false; this.gearAnim = 0; this.onGround = false; this.deck = null; this.flaps = 0; this.flapAnim = 0; this.brakeAnim = 0;
+        this.gear = false; this.gearAnim = 0; this.onGround = false; this.onWater = false; this.deck = null; this.flaps = 0; this.flapAnim = 0; this.brakeAnim = 0;
         this.syncBody();
     }
 
@@ -430,7 +441,7 @@ export class Aircraft {
         this.vel.copy(ship.vel);
         this.speed = 0; this.alpha = 0;
         this.throttle = this.controls.throttle = 0;
-        this.gear = true; this.gearAnim = 1; this.onGround = true; this.flaps = 1; this.flapAnim = 0.5; this.brakeAnim = 0;
+        this.gear = true; this.gearAnim = 1; this.onGround = true; this.onWater = false; this.flaps = 1; this.flapAnim = 0.5; this.brakeAnim = 0;
         this.syncBody();
     }
 
@@ -444,7 +455,7 @@ export class Aircraft {
         this.speed = 0;
         this.alpha = 0;
         this.throttle = this.controls.throttle = 0;
-        this.gear = true; this.gearAnim = 1; this.onGround = true; this.deck = null; this.relSpeed = 0; this.flaps = 1; this.flapAnim = 0.5; this.brakeAnim = 0;
+        this.gear = true; this.gearAnim = 1; this.onGround = true; this.onWater = false; this.deck = null; this.relSpeed = 0; this.flaps = 1; this.flapAnim = 0.5; this.brakeAnim = 0;
         this.syncBody();
     }
 
@@ -501,6 +512,7 @@ export class Aircraft {
         const q = this.liftK * V * V * rho;
         const authority = clamp(V / 90, 0.12, 1) * (this.falling ? 0.2 : 1);
 
+        if (this.onWater) return waterStep(this, dt, rho); // a seaplane afloat (seaplane.js)
         if (this.onGround) return this.updateGround(dt, rho);
 
         // Roll about the velocity vector
@@ -763,9 +775,11 @@ export class Aircraft {
                 const slope = Math.hypot(dx, dz) / (2 * e);
                 if (slope > (this.bellied ? 0.35 : 0.12)) this.crash();
             }
-            if (surf.water && !this.bellied) this.crash(true);
+            if (surf.water && !this.bellied) { if (this.spec.seaplane) enterWater(this); else this.crash(true); }
         }
         this.syncBody();
+        // ditched: it lies in the water, tilted with the waves under it (float.js)
+        if (this.bellied && this.bellyWater) this.quat.premultiply(waveTilt(this, this.pos.x, this.pos.z, this.spec.length, dt));
     }
 
     startCatapult() {
@@ -776,9 +790,11 @@ export class Aircraft {
     }
 
     checkGround() {
+        if (this.spec.seaplane && waterContact(this)) return; // a seaplane touching the water (seaplane.js)
         const bottom = this.pos.y - this.gearOffset;
         const surf = this.game.surfaceAt(this.pos.x, this.pos.z, bottom + 3);
         if (bottom > surf.h) return;
+        if (this.spec.seaplane && surf.water && !surf.ship) return; // on the water its hull decides (waterContact)
         if (!this.alive || this.falling) { this.explode(true, surf.water); return; }
         // landing?
         const shipVel = surf.ship ? surf.ship.vel : _v1.set(0, 0, 0);
@@ -866,7 +882,12 @@ export class Aircraft {
             this.bellyStopped = true;
             this.game.events.emit('bellyStopped', this, { water: this.bellyWater });
         }
-        if (this.bellyWater && V < 3) this.sinkDepth = Math.min(this.gearOffset + 2.5, (this.sinkDepth || 0) + dt * 0.25);
+        if (this.bellyWater && V < 3) {
+            this.floatT = (this.floatT || 0) + dt;
+            // it settles low in the water, floats a while, then goes under
+            const settle = this.gearOffset + 2.5, under = this.spec.length * 0.6 + 12;
+            this.sinkDepth = Math.min(this.floatT > 90 ? under : settle, (this.sinkDepth || 0) + dt * (this.floatT > 90 ? 0.6 : 0.25));
+        }
     }
 
     get invincible() { return this.isPlayer && this.game.mode === 'sandbox'; }

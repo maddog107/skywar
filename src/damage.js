@@ -8,6 +8,7 @@
 import * as THREE from 'three';
 import { Character } from './character.js';
 import { rand, clamp } from './util.js';
+import { Floater } from './float.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion();
 
@@ -165,6 +166,7 @@ export class Wreckage {
         this.game = game;
         this.parts = [];
         this.seats = [];
+        this.floaters = []; // wreckage afloat on the waves (float.js), until it sinks
         // smoke and dust drift with the game's wind (the vector is updated in place when the weather changes)
         if (game.effects && game.wind) game.effects.wind = game.wind;
         const chuteTex = chuteTexture();
@@ -310,6 +312,13 @@ export class Wreckage {
             const h = surf.water ? -1 : surf.h;
             const gh = surf.h;
             if (p.obj.position.y < gh + 1 || p.life <= 0) {
+                // into the sea or a lake: a section of airframe floats a while on the waves, then goes down
+                if (h < 0 && p.obj.position.y < gh + 3 && !p.inert && this.floaters.length < 10) {
+                    fx.waterSplash(p.obj.position, p.heavy ? 1.2 : 0.6);
+                    this.floaters.push({ f: new Floater(p.obj, { size: Math.max(1.5, p.radius * 1.6), float: p.heavy ? 0.4 : 0.15, sinkAfter: rand(18, 45), yaw: rand(0, 6.28), spin: rand(-0.3, 0.3), drift: g.wind }), burn: p.burning ? rand(6, 14) : 0, smokeT: 0 });
+                    this.parts.splice(i, 1);
+                    continue;
+                }
                 if (p.obj.position.y < gh + 3) {
                     if (h < 0) fx.waterSplash(p.obj.position, p.heavy ? 1.2 : 0.6);
                     else if (p.inert) fx.groundImpact(p.obj.position);
@@ -323,6 +332,16 @@ export class Wreckage {
                 this.removeObj(p.obj);
                 this.parts.splice(i, 1);
             }
+        }
+        // ── wreckage afloat ──
+        for (let i = this.floaters.length - 1; i >= 0; i--) {
+            const w = this.floaters[i];
+            const alive = w.f.update(dt);
+            if (w.burn > 0) { // fuel burning on the water around it
+                w.burn -= dt; w.smokeT -= dt;
+                if (w.smokeT <= 0) { w.smokeT = 0.08; fx.puffSmoke(w.f.obj.position, _v.set(rand(-1, 1), 3, rand(-1, 1)), 3, 0.08, 4, 0.7); fx.puffFire(w.f.obj.position, _v.set(0, 2, 0), 2.5, 0.35); }
+            }
+            if (!alive) { this.removeObj(w.f.obj); this.floaters.splice(i, 1); }
         }
         // ── ejection seats / parachutes ──
         for (let i = this.seats.length - 1; i >= 0; i--) {
@@ -381,15 +400,24 @@ export class Wreckage {
                     s.landed = true;
                     if (s.character && !s.dead) s.character.setPose(null);
                     s.onShip = su.ship || null;
-                    if (su.water) g.effects.waterSplash(r.position, 0.25);
+                    if (su.water) {
+                        g.effects.waterSplash(r.position, 0.25);
+                        // afloat in a life vest: head and shoulders out, riding the swell (the player's own pilot
+                        // is pilot.js's)
+                        if (!s.player) s.floater = new Floater(r, { size: 1, float: -1.35, yaw: rand(0, 6.28), drift: g.wind });
+                    }
                 }
+            } else if (s.floater) {
+                s.landT += dt;
+                s.floater.update(dt);
+                s.chute.scale.y = Math.max(0.05, s.chute.scale.y - dt * 0.8);
             } else {
                 s.landT += dt;
                 // canopy collapses
                 s.chute.scale.y = Math.max(0.05, s.chute.scale.y - dt * 0.8);
                 s.chute.position.x += dt * 2;
             }
-            if (!s.player && (s.landT > 8 || s.t > 120)) {
+            if (!s.player && (s.landT > (s.floater ? 40 : 8) || s.t > (s.floater ? 160 : 120))) {
                 this.removeSeat(s);
                 this.seats.splice(i, 1);
                 if (s.owner) s.owner.ejectSeat = null;
@@ -400,6 +428,7 @@ export class Wreckage {
     clear() {
         this.parts.forEach(p => this.removeObj(p.obj));
         this.seats.forEach(s => this.removeSeat(s));
-        this.parts = []; this.seats = [];
+        this.floaters.forEach(w => this.removeObj(w.f.obj));
+        this.parts = []; this.seats = []; this.floaters = [];
     }
 }

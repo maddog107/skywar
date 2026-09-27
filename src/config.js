@@ -270,6 +270,33 @@ export const AIRCRAFT = {
         health: 260, gun: null, missiles: 0, flares: 0,
         proc: { airliner: true, engines: 4, body: [0.09, 0.1], hump: true, paint: 0xf6f6f6, accent: 0xb3202a },
     },
+    // Canadair (Bombardier, now De Havilland) CL-415 "Superscooper": amphibious flying boat and water bomber.
+    // 19.82 m long, 28.63 m span; 2 × P&W Canada PW123AF (2,380 shp) on 3.97 m four-bladed props; 17.2 t max from
+    // water, cruise 359 km/h, stalls ~80 kt clean / ~66 kt with flaps; takes off from water in ~800 m. Scoops
+    // 6,137 L in about 12 s skimming a lake at ~70 kt. seaplane.js floats it: the keel and chines of its hull and its
+    // wingtip floats are buoyancy points (heights above the keel in m, positions in fractions of the length).
+    cl415: {
+        name: 'Canadair CL-415', role: 'Amphibian / Water Bomber', country: 'CAN', length: 19.82, span: 28.63, category: 'civil', prop: true,
+        desc: 'The Superscooper: a flying boat that lands on lakes and the sea, taxis to a jetty, and skims the water to scoop 6,000 L for a fire.',
+        flight: { speed: 100, mach: 0.36, accel: 3.5, lift: 2.3, gLimit: 3.25, roll: 1.0, alpha: 16 },
+        health: 160, gun: null, missiles: 0, flares: 0, fuelTime: 4200,
+        proc: { prop: true, highWing: true, turboprop: true, engines: 2, body: [0.13, 0.15], paint: 0xf2c200, accent: 0xd02020 },
+        seaplane: {
+            // hull, measured off the model (models/aircraft/cl415.glb): [z / L, keel height above its lowest point (m),
+            // share of the buoyancy]. A straight forebody keel from 7 m aft of the bow to the step (z −1.1 m, under
+            // the main gear), 0.38 m step, the afterbody rising to 1.5 m at the tail; chines 1.33 m out, 0.4 m up
+            keel: [[-0.48, 0.74, 0.3], [-0.43, 0.29, 0.6], [-0.355, 0.03, 0.9], [-0.25, 0, 1], [-0.15, 0, 1], [-0.07, 0, 1],
+                [-0.025, 0.38, 0.9], [0.076, 0.61, 0.8], [0.2, 0.9, 0.6], [0.33, 1.2, 0.45], [0.43, 1.42, 0.3]],
+            keelY: -0.2107, chine: 0.067, deadrise: 0.4, draft: 1.0, cgHeight: 2.0, cgZ: -0.13,
+            // wingtip floats: 13.2 m out, bottoms 1.47 m above the keel, 0.9 m deep; one pushed under carries 14 %
+            floats: [[0.667, 1.47, -0.093]], floatDepth: 0.9, floatLoad: 0.14,
+            wheels: [[0, -0.47, -0.417], [-0.1204, -0.47, -0.0562], [0.1204, -0.47, -0.0562]],
+            inertia: [21, 36, 46], pitchK: 3, rollK: 3.3, turnRate: 0.3, keelK: 1.6, waterDamp: 1.8, heaveDamp: 0.45, planeLift: 1.2,
+            humpSpeed: 17, sprayZ: -0.3,
+            sinkOk: 2.6, sinkMax: 5.8, landMax: 58, maxWave: 1.9, slamG: 3.4,
+            scoop: 6137, scoopRate: 520, // litres, litres per second
+        },
+    },
     c130: {
         name: 'C-130J Hercules', role: 'Tactical Transport', country: 'USA', length: 29.8, span: 40.4, category: 'civil',
         desc: 'Four-turboprop tactical airlifter. Slow, steady, surprisingly nimble.',

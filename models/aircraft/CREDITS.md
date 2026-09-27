@@ -12,7 +12,7 @@ CC BY models require the attribution below to be shown to players (e.g. on the c
 The Sketchfab models were obtained without a login from the Objaverse mirror of Sketchfab
 (https://huggingface.co/datasets/allenai/objaverse, whose metadata lists each object's licence); every
 licence was re-checked against the live Sketchfab API (`api.sketchfab.com/v3/models/<uid>` →
-"CC Attribution") on 2026-09-25.
+"CC Attribution") on 2026-09-25 (the CL-415's on 2026-09-26).
 
 | File | Aircraft | Title / Author | Licence | Source |
 |---|---|---|---|---|
@@ -37,6 +37,7 @@ licence was re-checked against the live Sketchfab API (`api.sketchfab.com/v3/mod
 | `rafale.glb` | Dassault Rafale | "Dassault Rafale" by so_O (quick_loop) | CC BY 4.0 | https://sketchfab.com/3d-models/dassault-rafale-d8bbfb0970ca4128b73e7e5364828fd3 |
 | `racer.glb` | Unlimited air racer (P-51 airframe) | "P-51 Mustang" by UlissesVinicios | CC BY 4.0 | https://sketchfab.com/3d-models/p-51-mustang-36f0f3e71d2a4c18b479db1ae8f9e7a7 |
 | `pitts.glb` | Stunt biplane (Stearman-style) | "Airplane biplane" by BlueHour (KaramellGlass) | CC BY 4.0 | https://sketchfab.com/3d-models/airplane-biplane-be48f3f906ed431b98b1bf03ab7aadd6 |
+| `cl415.glb`, `cl415_gear.glb` | Canadair CL-415 (airframe; its retractable landing gear) | "cl415" by helijah (Emmanuel Baranger) | CC BY 4.0 | https://sketchfab.com/3d-models/cl415-bf3eaa6a1f4f4fc18df9b05cf40de927 |
 
 ### Built for SKYWAR in Blender (CC0 1.0)
 
@@ -69,6 +70,7 @@ the models).
 - "Boeing747" (https://sketchfab.com/3d-models/boeing747-4eadf04e705b41a2b272ee5aed4d01d5) by kaymanv, CC BY 4.0. Changes: painted, re-oriented.
 - "P-51 Mustang" (https://sketchfab.com/3d-models/p-51-mustang-36f0f3e71d2a4c18b479db1ae8f9e7a7) by UlissesVinicios, CC BY 4.0. Changes: propeller, guns and tailwheel removed, textures downscaled, re-oriented.
 - "Airplane biplane" (https://sketchfab.com/3d-models/airplane-biplane-be48f3f906ed431b98b1bf03ab7aadd6) by BlueHour, CC BY 4.0. Changes: levelled, textures re-encoded, re-oriented.
+- "cl415" (https://sketchfab.com/3d-models/cl415-bf3eaa6a1f4f4fc18df9b05cf40de927) by helijah, CC BY 4.0. Changes: landing gear split into a separate file and rigged to retract (nose gear doors rebuilt), propeller blades and instrument gauges removed, materials renamed, textures re-encoded, re-oriented.
 - "F-14 Tomcat Top Gun (Gear UP) Downloadable" (https://sketchfab.com/3d-models/f-14-tomcat-top-gun-gear-up-downloadable-9d2d0c87539046aa8c2198fcc47cdcf8) by dwsd, CC BY 4.0. Changes: re-oriented.
 - "F-15 Eagle" (https://sketchfab.com/3d-models/f-15-eagle-f874bffa8e314743b4a7cb9ad4b9f3a8) by dashdu (Trouvaille), CC BY 4.0. Changes: landing gear removed, re-oriented.
 - "F-4 Phantom II Recreation" (https://sketchfab.com/3d-models/f-4-phantom-ii-recreation-666403b893024c8c88409f9feb2277eb) by jpford63, CC BY 4.0. Changes: painted.

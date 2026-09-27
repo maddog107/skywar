@@ -284,6 +284,15 @@ export const SURFACE_DEFS = {
             { top: [[0.195, 0.0317], [0.32, 0.1025], [0.32, 0.1185], [0.195, 0.0477]], y: [-0.063, -0.056], dihedral: 5.6, hinge: [[0.195, -0.0592, 0.0317], [0.32, -0.0478, 0.1025]], angle: -45, skin: 1 },
         ],
     },
+    // Canadair CL-415: one hydraulic single-slotted flap each side from the hull to the aileron (the strip the model
+    // marks under the wing, x 0.065 to 0.459), hung on four external hinges: the pods under the wing, whose round
+    // lower ends are the hinge line, about 0.5 m below the skin. Turning about them the flap runs aft as it goes down
+    // and opens its slot (0.26 m at full travel). Its chord is the aileron's (the line in the upper skin). A plane
+    // just under the lower skin (clip) leaves the pods on the wing. The flight manual's settings are 0 / 10 / 15 / 25°
+    // (15 to scoop and drop, 25 to land): full travel is 25°, the takeoff notch 12.5°
+    cl415: {
+        flaps: [{ top: [[0.0675, -0.0245], [0.4585, -0.0245], [0.4585, 0.025], [0.0675, 0.025]], y: [-0.0465, -0.029], clip: [[[0.2, -0.0443, -0.0315], [0, 1, -0.0869]]], hinge: [[0.0675, -0.0682, -0.0318], [0.4585, -0.0682, -0.0318]], angle: 25 }],
+    },
     // Cessna 172: electric slotted flaps on the inboard half of the wing, 30° in about 9 s; the model builds each
     // as a body of its own tucked into the cove under the upper skin, and it runs aft as it goes down
     cessna: {

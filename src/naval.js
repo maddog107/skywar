@@ -11,7 +11,8 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeInPlace } from './meshmerge.js';
-import { ShipFX, seaMotion, SEA_MOTION, deckHeightAt, foamTexture } from './shipfx.js';
+import { ShipFX, deckHeightAt, foamTexture } from './shipfx.js';
+import { waterHeightLong } from './water.js';
 import { terrainHeight } from './world.js';
 import { loft, createAircraftModel } from './models.js';
 import { rand, clamp, lerp, interceptTime, freezeLocal } from './util.js';
@@ -33,6 +34,23 @@ const TYPES = {
     slava: { name: 'SLAVA CRUISER', L: 186, B: 20.8, deckY: 7.6, hp: 600, score: 1800, speed: 13 },
 };
 export const SHIP_TYPES = TYPES;
+
+// How a hull answers the sea (water.js): it feels only waves longer than `minLam` (a long hull bridges the short
+// ones), sampled at its bow, stern and sides, and follows them as a damped oscillator for heave, pitch and roll
+// (natural periods T s, damping ζ), scaled by `gain` and capped (m / rad) so a carrier deck stays landable.
+const SEA_RESPONSE = {
+    carrier: { minLam: 110, heave: { T: 9, z: 0.6, gain: 0.8, cap: 1.6 }, pitch: { T: 8, z: 0.7, gain: 0.6, cap: 0.012 }, roll: { T: 17, z: 0.35, gain: 0.5, cap: 0.018 } },
+    destroyer: { minLam: 45, heave: { T: 6, z: 0.45, gain: 0.95, cap: 3 }, pitch: { T: 6, z: 0.5, gain: 0.9, cap: 0.07 }, roll: { T: 10, z: 0.15, gain: 1, cap: 0.2 } },
+    cruiser: { minLam: 50, heave: { T: 6.5, z: 0.45, gain: 0.9, cap: 2.8 }, pitch: { T: 6.5, z: 0.5, gain: 0.85, cap: 0.06 }, roll: { T: 11, z: 0.15, gain: 0.95, cap: 0.18 } },
+    slava: { minLam: 50, heave: { T: 6.5, z: 0.45, gain: 0.9, cap: 2.8 }, pitch: { T: 6.5, z: 0.5, gain: 0.85, cap: 0.06 }, roll: { T: 11, z: 0.15, gain: 0.95, cap: 0.18 } },
+    supply: { minLam: 70, heave: { T: 7.5, z: 0.5, gain: 0.85, cap: 2.2 }, pitch: { T: 7, z: 0.6, gain: 0.7, cap: 0.035 }, roll: { T: 13, z: 0.25, gain: 0.8, cap: 0.1 } },
+    // surfaced submarines: round hulls with little freeboard roll easily; submerged, the waves fade out (update)
+    ssn: { minLam: 35, heave: { T: 5.5, z: 0.4, gain: 1, cap: 2.5 }, pitch: { T: 5.5, z: 0.45, gain: 0.9, cap: 0.08 }, roll: { T: 8, z: 0.12, gain: 1, cap: 0.22 } },
+    ssgn: { minLam: 45, heave: { T: 6, z: 0.4, gain: 1, cap: 2.8 }, pitch: { T: 6, z: 0.45, gain: 0.9, cap: 0.07 }, roll: { T: 9, z: 0.12, gain: 1, cap: 0.2 } },
+    // small boats ride the short waves
+    rhib: { minLam: 4, heave: { T: 1.1, z: 0.5, gain: 1, cap: 1.2 }, pitch: { T: 1.1, z: 0.45, gain: 1, cap: 0.3 }, roll: { T: 1.5, z: 0.3, gain: 1, cap: 0.35 } },
+    cb90: { minLam: 6, heave: { T: 1.4, z: 0.5, gain: 1, cap: 1.3 }, pitch: { T: 1.4, z: 0.45, gain: 1, cap: 0.25 }, roll: { T: 1.9, z: 0.3, gain: 1, cap: 0.3 } },
+};
 
 function inPoly(x, z, poly) {
     let inside = false;
@@ -577,9 +595,9 @@ export class Ship {
         this.heading = Math.atan2(-tx, -tz);
         const sink = this.alive ? 0 : Math.min(this.sinkT / 60, 1);
         const dmgFrac = 1 - Math.max(this.hp, 0) / this.maxHp;
-        // gentle heave / pitch / roll with the sea (deckAt follows the tilted deck, so landings stay consistent)
+        // heave / pitch / roll with the waves (deckAt follows the tilted deck, so landings stay consistent)
         this.motionT += dt;
-        const mo = seaMotion(this.motionT, this.motionSeed, SEA_MOTION[this.type] || SEA_MOTION.carrier, this.motion);
+        const mo = this.seaMotion(x, z, dt);
         const y = -sink * (this.def.deckY + 25) - dmgFrac * 1.5 + mo.heave - this.depth;
         if (dt > 0) this.vel.set((x - this.mesh.position.x) / dt, (y - this.mesh.position.y) / dt, (z - this.mesh.position.z) / dt);
         this.mesh.position.set(x, y, z);
@@ -589,6 +607,34 @@ export class Ship {
         this.mesh.rotation.x = mo.pitch - (this.alive ? 0 : sink * 0.08);
         this.deckY = this.def.deckY + y;
         this.center.set(x, y + this.def.deckY * 0.55, z);
+    }
+
+    // The sea under the hull (only waves long enough to move it) at bow, stern, beam and centre, followed by a damped
+    // oscillator per axis. Pitch > 0 lifts the bow, roll > 0 the starboard side (the mesh turns YXZ).
+    seaMotion(x, z, dt) {
+        const R = SEA_RESPONSE[this.type] || SEA_RESPONSE.carrier, m = this.motion, L = this.def.L * 0.4, B = this.def.B * 0.42;
+        const c = Math.cos(this.heading), s = Math.sin(this.heading);
+        // ship-local (lx, lz) → world: x + lx c + lz s, z − lx s + lz c (the inverse of toLocal)
+        const at = (lx, lz) => waterHeightLong(x + lx * c + lz * s, z - lx * s + lz * c, R.minLam);
+        const hb = at(0, -L), hs = at(0, L), hp = at(-B, 0), hsb = at(B, 0), hc = at(0, 0);
+        const f = this.depth > 0 ? Math.exp(-this.depth / 8) : 1; // a submerged hull feels the waves less with depth
+        const target = {
+            heave: f * (hb + hs + hp + hsb + 2 * hc) / 6,
+            pitch: f * Math.atan2(hb - hs, 2 * L),
+            roll: f * Math.atan2(hsb - hp, 2 * B),
+        };
+        if (!m.v) { m.v = { heave: 0, pitch: 0, roll: 0 }; m.x = { heave: target.heave, pitch: 0, roll: 0 }; }
+        if (dt > 0) for (const k of ['heave', 'pitch', 'roll']) {
+            const P = R[k], w = 2 * Math.PI / P.T;
+            // semi-implicit Euler, in substeps (stable at any frame rate)
+            const n = Math.max(1, Math.ceil(dt / 0.02)), h = dt / n;
+            for (let i = 0; i < n; i++) {
+                m.v[k] += (w * w * (target[k] * P.gain - m.x[k]) - 2 * P.z * w * m.v[k]) * h;
+                m.x[k] += m.v[k] * h;
+            }
+            m[k] = Math.max(-P.cap, Math.min(P.cap, m.x[k]));
+        }
+        return m;
     }
 
     // local coordinates: lx across (starboard +), lz along (bow −)

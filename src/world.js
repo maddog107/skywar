@@ -9,6 +9,8 @@ import { Vegetation, SP, GROUND_GLSL } from './vegetation.js';
 import { BASES, terrainHeight, colorAt as groundColorAt, tileJob, runJob } from './terraincore.js';
 import { TerrainBatch } from './terrainbatch.js';
 import { Craters, CRATER_U, CRATER_GLSL } from './craters.js';
+import { Ocean } from './ocean.js';
+import { foamTexture } from './shipfx.js';
 // the height function and the airbase list live in terraincore.js (no three.js: the terrain worker uses them too)
 export { BASES, terrainHeight };
 
@@ -536,6 +538,8 @@ export class World {
         // 'low' plants fewer trees; rebuild the tree tiles on a switch
         if (this.lowTrees !== low) { this.lowTrees = low; this.refreshTrees(); }
         this.clouds.setQuality(q); // cheaper cloud march on lower settings
+        this.ocean.setQuality(q);  // grid density, detail FFT, refraction (ocean.js)
+        this.terrainWaterRefract.value = q === 'high' || q === 'ultra' ? 1 : 0;
         for (const t of this.tiles.values()) if (t.trees) t.trees.castShadow = this.treeShadows;
         // alpha-to-coverage where the scene is multisampled (ultra, see postfx QUALITY), dithered alpha test otherwise
         for (const m of [this.forestMat, this.treeMat, this.grassMat]) if (m) this.veg.setA2C(m, q === 'ultra');
@@ -733,12 +737,14 @@ export class World {
         const detail = this.detailTex;
         this.groundTex = this.makeGroundTexture();
         this.terrainDesat = { value: 0 };
+        this.terrainWaterRefract = { value: 1 }; // 1: the water absorbs and tints what's under it (high / ultra, ocean.js)
         this.terrainMat.onBeforeCompile = (shader) => {
             shader.uniforms.detailMap = { value: detail };
             shader.uniforms.groundMap = { value: this.groundTex };
             shader.uniforms.uDesat = this.terrainDesat;
             shader.uniforms.uTime = this.uTime;
             shader.uniforms.uDetail = this.terrainDetail;
+            shader.uniforms.uWaterRefract = this.terrainWaterRefract;
             Object.assign(shader.uniforms, this.veg.groundU, CRATER_U); // photo ground textures (vegetation.js), craters
             shader.vertexShader = shader.vertexShader
                 .replace('#include <common>', `#include <common>
@@ -781,7 +787,7 @@ export class World {
                         varying float vCrClod;
                     #endif
                     uniform sampler2D detailMap, groundMap;
-                    uniform float uDesat, uTime, uDetail;
+                    uniform float uDesat, uTime, uDetail, uWaterRefract;
                     // the sea bed doesn't get shadows (a ship's shadow would show through the water)
                     float seaFade(float s) { return mix(s, 1.0, smoothstep(-0.5, -4.0, vWPos.y)); }
                     #define SHADOW_FADE( s ) seaFade( s )
@@ -825,7 +831,7 @@ export class World {
                     float edgeN = (gm.a - 0.5) * 2.0;
                     float sH = vTrueH;
                     // lake and sea bed below the true waterline
-                    vec3 bedC = mix(vec3(0.62, 0.58, 0.42), vec3(0.2, 0.36, 0.38), smoothstep(-2.0, -60.0, sH));
+                    vec3 bedC = mix(vec3(0.62, 0.58, 0.42), mix(vec3(0.2, 0.36, 0.38), vec3(0.46, 0.43, 0.35), uWaterRefract), smoothstep(-2.0, -60.0, sH));
                     diffuseColor.rgb = mix(diffuseColor.rgb, bedC * bedC * mix(0.9, 1.1, d2), smoothstep(-0.3, -2.5, sH));
                     float sandW = (1.0 - smoothstep(1.3, 2.9, sH + edgeN * 1.2)) * smoothstep(-4.5, -1.2, sH) * (1.0 - smoothstep(0.035, 0.1, tSlope));
                     vec3 sandC = vec3(0.55, 0.47, 0.29) * mix(1.0, 0.6, 1.0 - smoothstep(0.25, 1.0, sH + edgeN * 0.3));
@@ -1041,6 +1047,8 @@ export class World {
 
     updateTerrain(focus, force = false) {
         if (!this.workers) this.initTerrainWorkers();
+        // a new sortie or a jump: the sea-state maps around the new spot, right now (ocean.js)
+        if (force && this.ocean) { this.ocean.setSea(this.weather, this.windRef); this.ocean.prime(focus.x, focus.z); }
         // nothing to do last time and the focus has hardly moved: skip the scan (it re-checks every 30 frames anyway)
         const S = this.terrainScan || (this.terrainScan = { x: 1e9, z: 1e9, idle: false, n: 0 });
         if (!force && S.idle && ++S.n % 30 && !this.pendingJob && !this.readyTiles.length && !this.inflight.size
@@ -1558,81 +1566,11 @@ export class World {
         this.grassReady = true;
     }
 
-    // ── Ocean ──
+    // ── Ocean: the displaced, shaded sea and lakes (ocean.js; the wave field itself is water.js) ──
     initWater() {
-        this.waterMat = new THREE.ShaderMaterial({
-            transparent: true, depthWrite: true, fog: false,
-            uniforms: {
-                time: { value: 0 }, sunDir: { value: new THREE.Vector3() }, sunColor: { value: new THREE.Color() },
-                skyColor: { value: new THREE.Color() }, horizonColor: { value: new THREE.Color() }, deepColor: { value: new THREE.Color() },
-                fogColor: { value: new THREE.Color() }, detailMap: { value: this.detailTex },
-                skyFogA: { value: SKY_FOG.a }, skyFogB: { value: SKY_FOG.b }, skyFogC: { value: SKY_FOG.c }, skyFogD: { value: SKY_FOG.d },
-            },
-            vertexShader: /* glsl */`
-                varying vec3 vWPos;
-                void main() {
-                    vec4 wp = modelMatrix * vec4(position, 1.0);
-                    vWPos = wp.xyz;
-                    gl_Position = projectionMatrix * viewMatrix * wp;
-                }`,
-            fragmentShader: /* glsl */`
-                uniform float time;
-                uniform vec3 sunDir, sunColor, skyColor, horizonColor, deepColor, fogColor;
-                uniform sampler2D detailMap;
-                varying vec3 vWPos;
-                ${FOG_GLSL}
-                ${CLOUD_SHADOW_GLSL}
-                void main() {
-                    vec2 p = vWPos.xz;
-                    float dist = length(cameraPosition - vWPos);
-                    vec3 v = normalize(cameraPosition - vWPos);
-                    // roughly how many metres of water one pixel covers (grazing angles stretch it): detail
-                    // finer than that only makes sparkling noise, so it fades out
-                    float fp = dist * 0.0015 / max(v.y, 0.06);
-                    vec3 n = vec3(0.0, 1.0, 0.0);
-                    // irregular directional swell (small slopes) + scrolling noise ripples
-                    const int W = 6;
-                    vec2 dirs[6]; dirs[0]=vec2(0.8,0.6); dirs[1]=vec2(-0.47,0.88); dirs[2]=vec2(0.21,-0.98); dirs[3]=vec2(-0.93,-0.37); dirs[4]=vec2(0.62,-0.79); dirs[5]=vec2(0.99,0.12);
-                    float freqs[6]; freqs[0]=0.0131; freqs[1]=0.0197; freqs[2]=0.0313; freqs[3]=0.0571; freqs[4]=0.0917; freqs[5]=0.1433;
-                    for (int i = 0; i < W; i++) {
-                        float f = freqs[i];
-                        float amp = 0.5 / (float(i) * 0.7 + 1.0) * (1.0 - smoothstep(0.08, 0.3, fp * f / 6.2832));
-                        vec2 q = p + vec2(sin(p.y * 0.0021 + float(i)), cos(p.x * 0.0017 - float(i))) * 60.0;
-                        float ph = dot(dirs[i], q) * f + time * sqrt(9.8 * f) * 1.2;
-                        n.xz -= dirs[i] * f * amp * 2.2 * cos(ph);
-                    }
-                    float r1 = texture2D(detailMap, p / 140.0 + vec2(time * 0.010, time * 0.006)).r;
-                    float r2 = texture2D(detailMap, p / 53.0 - vec2(time * 0.014, -time * 0.009)).r;
-                    float r3 = mix(0.5, texture2D(detailMap, p / 17.0 + vec2(-time * 0.02, time * 0.017)).r, 1.0 - smoothstep(0.6, 3.0, fp));
-                    n.xz += (vec2(r1 - r3, r2 - r3)) * 0.3 * mix(0.1, 1.0, 1.0 - smoothstep(60.0, 900.0, dist)); // fine ripples only up close
-                    n = normalize(mix(normalize(n), vec3(0.0, 1.0, 0.0), smoothstep(1500.0, 14000.0, dist) * 0.85));
-                    float fres = 0.02 + 0.98 * pow(1.0 - max(dot(n, v), 0.0), 5.0);
-                    vec3 rf = reflect(-v, n);
-                    vec3 sky = mix(horizonColor, skyColor, clamp(rf.y * 1.6, 0.0, 1.0));
-                    // under a cloud's shadow the water body loses its sunlit glow and the sun's glitter goes out
-                    // (the reflected sky stays)
-                    float csh = cloudSunShadowAt(vWPos);
-                    vec3 col = mix(deepColor * (0.45 + 0.55 * csh), sky, fres);
-                    float sd = max(dot(rf, normalize(sunDir)), 0.0);
-                    // the sun's glitter spreads into a broader, dimmer path with distance instead of pixel-sized spikes
-                    float wide = smoothstep(200.0, 5000.0, dist);
-                    col += sunColor * (pow(sd, mix(900.0, 150.0, wide)) * mix(14.0, 3.0, wide) + pow(sd, 80.0) * 0.35) * csh;
-                    float alpha = mix(0.72, 0.97, clamp(fres * 2.0 + smoothstep(200.0, 3000.0, dist), 0.0, 1.0));
-                    vec3 ray = vWPos - cameraPosition;
-                    vec2 fg = skyFogAmount(ray, cameraPosition.y);
-                    col = mix(col, skyFogColor(fogColor, ray, fg.y), fg.x);
-                    alpha = mix(alpha, 1.0, fg.x);
-                    gl_FragColor = vec4(col, alpha);
-                    #include <tonemapping_fragment>
-                    #include <colorspace_fragment>
-                }`,
-        });
-        const geo = new THREE.PlaneGeometry(90000, 90000, 1, 1);
-        geo.rotateX(-Math.PI / 2);
-        this.water = new THREE.Mesh(geo, this.waterMat);
-        this.water.renderOrder = 1;
-        this.water.frustumCulled = false;
-        this.scene.add(this.water);
+        this.ocean = new Ocean(this.scene, this.renderer, { detailTex: this.detailTex, foamTex: foamTexture(), SKY_FOG, FOG_GLSL, CLOUD_SHADOW_GLSL });
+        this.waterMat = this.ocean.material; // (world palette + cloud shadows set its uniforms)
+        this.water = this.ocean.mesh;
     }
 
     // ── Airbase dressing: runway, taxiways, hangars, tower, lights ──
@@ -1775,16 +1713,15 @@ export class World {
         this.skyDome.position.copy(camera.position);
         this.stars.position.copy(camera.position);
         this.skyMat.uniforms.camPos.value.copy(camera.position);
-        this.water.position.set(Math.round(camera.position.x / 100) * 100, 0, Math.round(camera.position.z / 100) * 100);
         const fog = this.scene.fog;
         const cam = camera.position;
         this.uTime.value = this.time;
         this.veg.uniforms.vegCam.value.copy(cam); // trees fade with distance from the camera (also in the shadow passes)
         this.starMat.uniforms.time.value = this.time;
         this.starMat.uniforms.pr.value = this.renderer.getPixelRatio();
-        const wu = this.waterMat.uniforms;
-        wu.time.value = this.time;
-        wu.fogColor.value.copy(fog.color);
+        this.windRef = wind;
+        this.waterMat.uniforms.fogColor.value.copy(fog.color);
+        this.ocean.update(dt, camera, this.time, this.weather, wind);
         this.clouds.update(dt, camera, wind, fog.color);
         // trees sway with the wind, harder in a storm
         const ws = Math.hypot(wind.x, wind.z), storm = this.weather === 'storm' ? 1 : this.weather === 'rain' ? 0.5 : 0;

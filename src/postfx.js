@@ -10,6 +10,7 @@ import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { terrainHeight } from './world.js';
+import { WAVE_GLSL, WATER, waterHeight } from './water.js';
 
 // ── Quality presets ──
 // pr: pixel ratio with adaptive resolution off (today's values); top/floor: adaptive range
@@ -194,9 +195,9 @@ const AO_BLUR_FRAG = /* glsl */`
     }`;
 
 // ═════════════ Water reflections (half resolution) ═════════════
-// Sea and lakes are the plane y = 0. A pixel is water when its depth-reconstructed world height is
-// within a few cm of 0 (the terrain mesh leaves a gap of -1.5…+0.6 m around the waterline, runways and
-// decks are metres up). The reflected ray (plane normal jiggled by a few swell waves) is marched through
+// The water (ocean.js) marks its pixels in the scene's alpha: 0.1 + 0.5 × its reflection weight (Fresnel, less
+// through fog); everything else is ≥ 1 (opaque) or blends toward 1 over it. The water's normal comes from the
+// depth buffer (the displaced waves as drawn), nudged by a few ripples. The reflected ray is marched through
 // the depth buffer in view space with exponentially growing steps, then refined by bisection.
 const SSR_FRAG = /* glsl */`
     ${DEPTH_GLSL}
@@ -213,26 +214,37 @@ const SSR_FRAG = /* glsl */`
         vec2 uv = pixelUv(p, size);
         float d = texelFetch(tDepth, p, 0).x;
         gl_FragColor = vec4(0.0);
-        if (isSky(d) || camPos.y < 0.3) return;
+        if (isSky(d) || camPos.y < -1.0) return;
+        float mark = texelFetch(tColor, p, 0).a;
+        if (mark > 0.7) return; // not water
         float z = linDepth(d);
         vec3 P = viewPos(uv, z);
         vec3 W = camPos + camRot * P;
-        if (abs(W.y) > min(0.04 + z * 1.5e-4, 0.5)) return;
-        // swell: a few long waves tilt the normal a little (less with distance, where they'd alias)
+        // the surface as drawn: normal from the depth buffer (the neighbour on the same side of an edge), world space
+        vec3 nL = viewPos(pixelUv(p - ivec2(2, 0), size), linDepth(texelFetch(tDepth, p - ivec2(2, 0), 0).x));
+        vec3 nR = viewPos(pixelUv(p + ivec2(2, 0), size), linDepth(texelFetch(tDepth, p + ivec2(2, 0), 0).x));
+        vec3 nB = viewPos(pixelUv(p - ivec2(0, 2), size), linDepth(texelFetch(tDepth, p - ivec2(0, 2), 0).x));
+        vec3 nT = viewPos(pixelUv(p + ivec2(0, 2), size), linDepth(texelFetch(tDepth, p + ivec2(0, 2), 0).x));
+        vec3 dx = abs(nL.z - P.z) < abs(nR.z - P.z) ? P - nL : nR - P;
+        vec3 dy = abs(nB.z - P.z) < abs(nT.z - P.z) ? P - nB : nT - P;
+        vec3 N = normalize(camRot * normalize(cross(dx, dy)));
+        if (N.y < 0.0) N = -N;
+        // a depth-buffer normal is noisy (worse at grazing angles): keep only part of it, and never tilted more than
+        // ~14°, so reflections follow the swell without rays from every ripple finding the nearest hull
+        N = normalize(mix(N, vec3(0.0, 1.0, 0.0), 0.35 + 0.65 * smoothstep(150.0, 2000.0, z)));
+        float tilt = length(N.xz);
+        if (tilt > 0.25) { N.xz *= 0.25 / tilt; N.y = 1.0; N = normalize(N); }
+        // ripples: a few short waves tilt it a little more (less with distance, where they'd alias)
         vec2 g = vec2(0.0);
-        g += vec2(0.8, 0.6) * cos(dot(vec2(0.8, 0.6), W.xz) * 0.045 + time * 0.9);
-        g += vec2(-0.47, 0.88) * cos(dot(vec2(-0.47, 0.88), W.xz) * 0.083 + time * 1.3) * 0.7;
-        g += vec2(0.21, -0.98) * cos(dot(vec2(0.21, -0.98), W.xz) * 0.19 + time * 1.9) * 0.45;
-        g += vec2(-0.93, -0.37) * cos(dot(vec2(-0.93, -0.37), W.xz) * 0.41 + time * 2.8) * 0.3;
-        float amp = 0.035 * (1.0 - smoothstep(150.0, 2500.0, z));
-        vec3 N = normalize(vec3(-g.x * amp, 1.0, -g.y * amp));
+        g += vec2(0.8, 0.6) * cos(dot(vec2(0.8, 0.6), W.xz) * 0.41 + time * 2.8);
+        g += vec2(-0.47, 0.88) * cos(dot(vec2(-0.47, 0.88), W.xz) * 0.83 + time * 3.9) * 0.7;
+        float amp = 0.03 * (1.0 - smoothstep(60.0, 800.0, z));
+        N = normalize(N + vec3(-g.x * amp, 0.0, -g.y * amp));
         vec3 V = normalize(W - camPos);
         vec3 R = reflect(V, N);
         R.y = max(R.y, 0.01);
         R = normalize(R);
-        float F = 0.02 + 0.98 * pow(1.0 - max(dot(-V, N), 0.0), 5.0);
-        float fog = 1.0 - exp(-pow(fogDensity * length(W - camPos), 2.0));
-        float weight = F * strength * (1.0 - fog);
+        float weight = clamp((mark - 0.1) / 0.5, 0.0, 1.0) * strength;
         if (weight < 0.01) return;
         vec3 Rv = viewRot * R;
         float t0 = max(1.0, z * 0.004);
@@ -260,9 +272,7 @@ const SSR_FRAG = /* glsl */`
                 vec2 hu = toUv(P + Rv * bT);
                 // a ray above the sea can't really hit the sea: at grazing angles one pixel spans a lot of
                 // depth and the test misfires, so skip water "hits" and keep marching
-                float hz = linDepth(textureLod(tDepth, hu, 0.0).x);
-                float hy = camPos.y + (camRot * viewPos(hu, hz)).y;
-                if (hy > min(0.04 + hz * 1.5e-4, 0.5) + 0.05) { hitUv = hu; t = bT; break; }
+                if (textureLod(tColor, hu, 0.0).a > 0.7) { hitUv = hu; t = bT; break; }
             }
             tPrev = t;
             t *= grow;
@@ -309,7 +319,12 @@ const COMPOSITE_FRAG = /* glsl */`
     uniform mat4 reproj; // motion blur: previous projection × previous view × current camera world
     uniform float blurOn, blurScale, blurMaxPx, nearCut;
     uniform float debugView; // 1: AO, 2: water mask (blue) + reflection weight (white)
+    // under water (ocean.js / water.js): the camera at or below the surface
+    uniform float underOn;
+    uniform vec3 underColor, underExt;
+    uniform mat3 camRotM;
     varying vec2 vUv;
+    ${WAVE_GLSL}
 
     #ifdef USE_BLUR
     // Camera motion blur: velocity from depth (each pixel's view position re-projected with last frame's
@@ -396,10 +411,8 @@ const COMPOSITE_FRAG = /* glsl */`
             #endif
             #ifdef USE_SSR
             if (ssrOn > 0.5) {
-                vec3 P = viewPos(pixelUv(pix, size), z);
-                float wy = camPos.y + dot(camRotY, P);
-                if (debugView == 3.0) dbg = vec3(abs(wy) * 4.0, z / 1000.0, 0.0);
-                if (abs(wy) < min(0.04 + z * 1.5e-4, 0.5)) {
+                if (debugView == 3.0) dbg = vec3(c.a < 0.7 ? 1.0 : 0.0, z / 1000.0, 0.0);
+                if (c.a < 0.7) { // water (ocean.js marks it in alpha)
                     ivec2 hs = textureSize(tSSR, 0) - 1;
                     vec3 rgb = vec3(0.0); float asum = 0.0, wsum = 0.0;
                     for (int k = 0; k < 4; k++) {
@@ -415,6 +428,24 @@ const COMPOSITE_FRAG = /* glsl */`
             #endif
         }
         #endif
+        // under water: every pixel whose eye (its point on the near plane) is below the waves looks through
+        // water to what it sees: absorbed and scattered (Beer-Lambert), darker the deeper the camera; a dark
+        // meniscus where the surface crosses the lens
+        if (underOn > 0.5) {
+            vec2 usz = vec2(textureSize(tDepth, 0));
+            ivec2 up = ivec2(vUv * usz);
+            float ud = texelFetch(tDepth, up, 0).x;
+            vec3 nearW = camPos + camRotM * viewPos(vUv, cameraNear * 1.02);
+            float surf = waveHeightApprox(nearW.xz, 0.0);
+            float below = nearW.y - surf;
+            if (below < 0.0) {
+                float dist = isSky(ud) ? 4000.0 : length(viewPos(pixelUv(up, usz), linDepth(ud)));
+                vec3 T = exp(-underExt * dist);
+                float dim = exp(-max(surf - camPos.y, 0.0) * 0.045);
+                c.rgb = c.rgb * T + underColor * dim * (1.0 - T);
+            }
+            c.rgb *= 1.0 - 0.55 * exp(-abs(below) * 40.0);
+        }
         #ifdef USE_FLARE
         if (flareOn > 0.0) {
             float vis = texture2D(tSunVis, vec2(0.5)).r * flareOn;
@@ -424,6 +455,19 @@ const COMPOSITE_FRAG = /* glsl */`
         if (debugView > 0.0) c.rgb = dbg.x >= 0.0 ? dbg : (debugView == 1.0 ? vec3(1.0) : c.rgb * 0.25);
         gl_FragColor = c;
     }`;
+
+// uniforms WAVE_GLSL reads, as placeholders until the ocean exists (Ocean.shareWaveUniforms fills them each frame:
+// they must be on the material before it compiles, or three.js never uploads them)
+const _emptyF = new THREE.DataTexture(new Float32Array(4), 1, 1, THREE.RGBAFormat, THREE.FloatType);
+_emptyF.needsUpdate = true;
+function waveUniformSlots() {
+    return {
+        waveA: { value: new Float32Array(96) }, waveB: { value: new Float32Array(96) }, waveN: { value: 0 },
+        waveOrigin: { value: new THREE.Vector2() }, waveLod: { value: new THREE.Vector2(1e9, 1e9) }, setDepth: { value: new THREE.Vector3(1, 1, 1) },
+        seaMapFine: { value: _emptyF }, seaMapCoarse: { value: _emptyF }, seaFineInfo: { value: new THREE.Vector4() }, seaCoarseInfo: { value: new THREE.Vector4() },
+        shoreInfo: { value: new THREE.Vector4() }, time: { value: 0 },
+    };
+}
 
 export class SceneFXPass extends Pass {
     constructor(scenePass, camera) {
@@ -460,6 +504,8 @@ export class SceneFXPass extends Pass {
             flareColor: { value: new THREE.Color() }, aspect: { value: 1 }, flareOn: { value: 0 },
             reproj: { value: new THREE.Matrix4() }, blurOn: { value: 0 }, blurScale: { value: 0 }, blurMaxPx: { value: 20 }, nearCut: { value: 0 },
             debugView: { value: 0 },
+            underOn: { value: 0 }, underColor: { value: new THREE.Color(0.012, 0.05, 0.065) }, underExt: { value: new THREE.Vector3(0.42, 0.1, 0.075) },
+            camRotM: { value: new THREE.Matrix3() }, ...waveUniformSlots(),
         }, { TAPS: 8 });
         this.quad = new FullScreenQuad(null);
         this.time = 0;
@@ -485,12 +531,14 @@ export class SceneFXPass extends Pass {
 
     // decide what runs this frame (before the scene renders, so PostFX knows whether the scene needs
     // its own target); `blurOn` is set up by PostFX
+    // the camera is under water (or its near plane is): PostFX sets this from the wave field
+    get underActive() { return this.underwater > 0; }
     prepare(cam, blurOn) {
         this.aoActive = this.ao && this.groundDist < this.aoMat.uniforms.fadeFar.value;
         this.ssrActive = this.ssr > 0 && cam.position.y > 0.3 && this.waterVisible(cam);
         this.flareActive = this.flare && this.sun.on > 0;
         this.blurActive = this.blur > 0 && blurOn;
-        return this.aoActive || this.ssrActive || this.flareActive || this.blurActive;
+        return this.aoActive || this.ssrActive || this.flareActive || this.blurActive || this.underActive;
     }
 
     setSize(w, h) {
@@ -564,6 +612,8 @@ export class SceneFXPass extends Pass {
         }
 
         cm.blurOn.value = this.blurActive && hasDepth ? 1 : 0;
+        cm.underOn.value = this.underActive && hasDepth ? 1 : 0;
+        if (cm.underOn.value) cm.camRotM.value.setFromMatrix4(cam.matrixWorld);
         cm.blurMaxPx.value = 0.02 * src.height;
         this.renderQuad(renderer, this.compMat, this.renderToScreen ? null : writeBuffer);
     }
@@ -1036,6 +1086,15 @@ export class PostFX {
 
         // the scene only gets its own target (a spare full-screen copy) when something reads depth
         // afterwards or it's multisampled; otherwise it renders straight into the composer's buffer
+        // under water (or the near plane nearly so): the composite tints what the camera sees through the water
+        fx.underwater = 0;
+        const ocean = world && world.ocean;
+        if (ocean) {
+            ocean.shareWaveUniforms(fx.compMat.uniforms);
+            const cp = cam.position;
+            if (cp.y < WATER.maxCrest + 2 && cp.y < waterHeight(cp.x, cp.z) + 1.5) fx.underwater = 1;
+            if (fx.underwater) ocean.underwaterPalette(fx.compMat.uniforms, cp.x, cp.z);
+        }
         const busy = fx.prepare(cam, blurOn);
         const own = busy || this.dof.enabled || q.msaa > 0;
         this.scenePass.ownTarget = own;

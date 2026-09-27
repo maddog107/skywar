@@ -26,6 +26,8 @@ import { BASES, RUNWAY, terrainHeight, isOnRunway, baseToWorld } from './world.j
 import { craterAdj } from './craters.js';
 import { War } from './war.js';
 import { SYSTEMS } from './systems.js';
+import { WATER, waterHeight } from './water.js';
+import { spawnWater, findSeaplaneBase, buildJetty } from './seaplane.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
 const _q = new THREE.Quaternion(), _m = new THREE.Matrix4();
@@ -129,6 +131,8 @@ export class Game {
         // and dug out where something blew a crater in it (craters.js)
         r.h = Math.max(towns && towns.townBase ? towns.townBase(x, z, th) : th, 0) + craterAdj(x, z);
         r.water = th < -0.5 && !r.runway;
+        // the sea and lakes: the waves as drawn (water.js), for anything near the surface
+        if (r.water && y < WATER.maxCrest + 2) r.h = waterHeight(x, z);
         r.ship = null; r.hull = false;
         return r;
     }
@@ -325,7 +329,7 @@ export class Game {
     // Where the player starts: air, runway, apron (taxi) or carrier catapult
     startPoint() {
         let w = this.mission ? this.mission.start : this.settings.start || 'auto';
-        if (w === 'auto') w = this.mode === 'freeflight' || this.mode === 'sandbox' ? 'runway' : this.mode === 'naval' ? 'carrier' : 'air';
+        if (w === 'auto') w = this.mode === 'freeflight' || this.mode === 'sandbox' ? (AIRCRAFT[this.aircraftId]?.seaplane ? 'water' : 'runway') : this.mode === 'naval' ? 'carrier' : 'air';
         return w;
     }
 
@@ -339,6 +343,8 @@ export class Game {
         if (where === 'carrier' && carrier) {
             p.spawnDeck(carrier);
             this.addFeed('FULL POWER (9 OR 0) ON DECK TO LAUNCH', '#5dffa0');
+        } else if (where === 'water' && p.spec.seaplane && this.spawnOnWater(p)) {
+            // a seaplane afloat by a jetty on sheltered water near a town (seaplane.js)
         } else if (where === 'runway') {
             p.spawnRunway(home);
         } else if (where === 'heist') {
@@ -384,6 +390,18 @@ export class Game {
         this.lockTarget = null; this.lockProgress = 0;
         this._lowHpCall = false;
         return p;
+    }
+
+    // Seaplane start: the base (sheltered water near a town, found once) and its jetty; false if there's none
+    spawnOnWater(p) {
+        if (this.seaBase === undefined) this.seaBase = findSeaplaneBase(this.world.towns ? this.world.towns.towns : [], BASES[0], this.wind);
+        const b = this.seaBase;
+        if (!b) return false;
+        if (!this.jetty) { this.jetty = buildJetty(b); this.scene.add(this.jetty.mesh); }
+        const j = this.jetty;
+        spawnWater(p, j.end.x, j.end.z, b.heading);
+        this.addFeed('AFLOAT BY THE JETTY — FLAPS 1 (F), FULL POWER, PULL AT 80 KT · A/D: WATER RUDDER · SPACE: REVERSE', '#5dffa0');
+        return true;
     }
 
     respawnPlayer() {
@@ -687,6 +705,7 @@ export class Game {
         this.infantry.clear();
         this.ordnance.clear();
         this.naval.clear();
+        if (this.jetty) { this.scene.remove(this.jetty.mesh); this.jetty.mesh.traverse(o => { if (o.isMesh) { o.geometry.dispose(); o.material.dispose(); } }); this.jetty = null; }
         if (this.rings) { this.rings.remove(); this.rings = null; }
         this.navTarget = null;
     }
@@ -857,9 +876,10 @@ export class Game {
             else if (this.player && ac.lastHitBy === this.player) this.addFeed('WING SHOT OFF', '#ffc23f');
         });
         ev.on('flares', (ac) => { if (ac.isPlayer) this.audio.flares(); });
-        ev.on('touchdown', (ac, { vs, onRunway, onDeck, trap, late }) => {
+        ev.on('touchdown', (ac, { vs, onRunway, onDeck, trap, late, onWater }) => {
             if (!ac.isPlayer) return;
             const fpm = Math.round(-vs * 196.85);
+            if (onWater) { this.addFeed('ON THE WATER ' + fpm + ' FPM', fpm < 400 ? '#5dffa0' : '#ffc23f'); return; } // a seaplane (seaplane.js)
             if (onDeck) {
                 this.addFeed(late ? 'TRAP! (LATE WIRE)' : (trap ? 'TRAP! ' : 'DECK LANDING — NO WIRE ') + fpm + ' FPM', trap ? '#5dffa0' : '#ffc23f');
                 if (trap) { this.score += 400; this.showBanner('TRAP!', 'Caught the wire +400', 2.5); this.audio.say('Nice trap!'); this.shake = 0.8; }
@@ -1827,8 +1847,8 @@ export class Game {
             }
             const offset = _v.set(0, height, back).applyQuaternion(this.camQuat);
             const desired = _v2.copy(p.pos).add(offset);
-            // keep above terrain
-            const gh = Math.max(terrainHeight(desired.x, desired.z), 0) + 3;
+            // keep above terrain and the waves
+            const gh = Math.max(terrainHeight(desired.x, desired.z), desired.y < WATER.maxCrest + 4 ? waterHeight(desired.x, desired.z) : 0) + 3;
             if (desired.y < gh) desired.y = gh;
             cam.position.copy(desired);
             cam.quaternion.copy(this.camQuat);
