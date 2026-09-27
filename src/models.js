@@ -50,18 +50,32 @@ export const MODEL_FILES = {
     gripen: { file: 'aircraft/gripen.glb', rot: [0, 0, 0], cockpit: [-0.0248, -0.2295] },
     cessna: { file: 'aircraft/cessna.glb', rot: [0, 0, 0], nozzles: [], fixedGear: true, prop: { y: -0.04, r: 0.11, blades: 2 }, cockpit: [0.03, -0.1] },
     b737: { file: 'aircraft/b737.glb', rot: [0, 0, 0], cockpit: [-0.054, -0.43] },
+    // Canadair CL-415: its own retractable gear from a second file (normaliseGear), and two four-bladed Hamilton
+    // Sundstrand 14SF-19 props, 3.97 m across, on the nacelles' own spinners (the model's blades are cut out)
+    cl415: {
+        file: 'aircraft/cl415.glb', gear: 'aircraft/cl415_gear.glb', rot: [0, 0, 0], cockpit: [-0.065, -0.395], nozzles: [],
+        props: [-0.1723, 0.1723].map(x => ({ x, y: 0.004, z: -0.2651, r: 0.1, blades: 4, style: 'hs14sf' })),
+    },
 };
 
 const cache = {};
 
 export async function preloadModels(onProgress) {
     const loader = new GLTFLoader();
-    const entries = Object.entries(MODEL_FILES);
+    // (a file for a type the game doesn't define yet can't be scaled to it: skip it)
+    const entries = Object.entries(MODEL_FILES).filter(([id]) => AIRCRAFT[id]);
     let done = 0;
     await Promise.all(entries.map(async ([id, info]) => {
         try {
-            const gltf = await loader.loadAsync('models/' + info.file);
+            const [gltf, gear] = await Promise.all([loader.loadAsync('models/' + info.file),
+                info.gear && loader.loadAsync('models/' + info.gear).catch((e) => console.warn('[models] failed to load', info.gear, e))]);
             const r = normaliseGLTF(gltf.scene, id, info);
+            if (gear) {
+                try {
+                    r.gear = normaliseGear(gear.scene, r.frame, r.object);
+                    r.rig.gearContacts = r.gear.contacts;
+                } catch (e) { r.gear = null; console.warn('[models] could not set up the gear of', id, e); }
+            }
             r.object = safeSegment(r.object, id);
             cache[id] = r;
         } catch (e) {
@@ -160,7 +174,135 @@ function normaliseGLTF(root, id, info) {
             return prop;
         });
     }
-    return { object: holder, rig };
+    // frame: the file → model space transform (a gear file in the same frame goes through it too)
+    return { object: holder, rig, frame: inner.matrixWorld.clone() };
+}
+
+// ── Retractable gear of its own (MODEL_FILES `gear`) ──
+// For a model whose real gear should fold away rather than the game's generic struts (aircraft.js buildGear): a
+// second file in the airframe file's own frame, modelled extended. Each top-level node is one leg (nose, left main,
+// right main): origin on its retraction pivot, glTF extras axis [x, y, z] (file coordinates), angle (degrees from down
+// to up, a positive turn about axis), kind ('nose' | 'main') and contact (the bottom of its wheels). A child with its
+// own axis / angle extras is a linked sub-part that follows the leg's turn (gearLinkUpdate): extras from, to (the
+// share of the leg's travel it moves in) and fixed (it stays on the airframe: a door hinged to the hull). A material
+// with extras share: <airframe material name> draws with that (already tuned) material (paint 1: takes the livery
+// with the airframe, like a door in the hull's skin) or a copy of it liveries leave alone (legs, wheels); any other
+// material is used as it comes. Returns templates in model space (never segmented or cut: createAircraftModel adds
+// fresh copies, addGear) and the contact points in model space, in the same order.
+export function normaliseGear(root, frame, airframe) {
+    const byName = new Map(), own = new Map();
+    airframe.traverse(o => { if (o.isMesh) for (const m of [].concat(o.material)) if (m) byName.set(m.name, m); });
+    const material = (m) => {
+        const src = m && m.userData.share && byName.get(m.userData.share);
+        if (!src) return m;
+        if (m.userData.paint) return src;
+        if (!own.has(m.name)) {
+            const c = src.clone();
+            c.name = m.name;
+            c.userData.noPaint = true;
+            own.set(m.name, c);
+        }
+        return own.get(m.name);
+    };
+    const holder = new THREE.Group();
+    holder.matrixAutoUpdate = false;
+    holder.matrix.copy(frame);
+    holder.add(root);
+    holder.updateMatrixWorld(true);
+    const rot = new THREE.Quaternion();
+    frame.decompose(new THREE.Vector3(), rot, new THREE.Vector3());
+    const dir = (a) => new THREE.Vector3().fromArray(a).applyQuaternion(rot).normalize();
+    // a leg or linked sub-part: a group on its pivot (no turn, no scale) holding its meshes, baked into model space
+    const bake = (node, parentOrigin) => {
+        const origin = node.getWorldPosition(new THREE.Vector3());
+        const g = new THREE.Group();
+        g.name = node.name;
+        g.position.copy(origin).sub(parentOrigin);
+        const take = (o) => {
+            if (o.isMesh) {
+                const geo = o.geometry.clone().applyMatrix4(o.matrixWorld).translate(-origin.x, -origin.y, -origin.z);
+                const m = new THREE.Mesh(geo, Array.isArray(o.material) ? o.material.map(material) : material(o.material));
+                m.castShadow = true; m.receiveShadow = true;
+                g.add(m);
+            }
+            for (const c of o.children) {
+                if (!c.userData.axis) { take(c); continue; }
+                const u = c.userData, sub = bake(c, origin);
+                sub.userData.gearLink = { axis: dir(u.axis).toArray(), angle: u.angle * Math.PI / 180, from: u.from ?? 0, to: u.to ?? 1, fixed: !!u.fixed, home: sub.position.toArray() };
+                g.add(sub);
+            }
+        };
+        take(node);
+        return g;
+    };
+    const parts = [], contacts = [];
+    for (const node of [...root.children]) {
+        const u = node.userData;
+        if (!u.axis || !u.angle) continue;
+        const part = bake(node, new THREE.Vector3());
+        part.userData.gear = { axis: dir(u.axis), angle: u.angle * Math.PI / 180, kind: u.kind || (/nose/i.test(node.name) ? 'nose' : 'main') };
+        parts.push(part);
+        contacts.push(u.contact ? new THREE.Vector3().fromArray(u.contact).applyMatrix4(frame) : lowestPoint(part));
+    }
+    return { parts, contacts };
+}
+
+function lowestPoint(obj) {
+    const v = new THREE.Vector3(), best = new THREE.Vector3(0, Infinity, 0);
+    obj.updateMatrixWorld(true);
+    obj.traverse((o) => {
+        if (!o.isMesh) return;
+        const p = o.geometry.attributes.position;
+        for (let i = 0; i < p.count; i++) if (v.fromBufferAttribute(p, i).applyMatrix4(o.matrixWorld).y < best.y) best.copy(v);
+    });
+    return best;
+}
+
+// A linked gear sub-part follows its leg's turn: the leg's quaternion (the game turns it about userData.gear.axis)
+// says how far up it is (0 down … 1 up); the sub-part turns link.angle · k about its own origin, k running 0 → 1 over
+// [from, to] of that. A fixed one (a door on the hull, a direct child of the leg) stays put on the airframe instead of
+// riding on the leg. So the game only turns the three legs; installed as the sub-part's updateMatrix (addGear).
+const _glq = new THREE.Quaternion(), _glp = new THREE.Quaternion(), _gla = new THREE.Vector3();
+function gearLinkUpdate() {
+    const L = this.userData.gearLink;
+    let leg = this.parent;
+    while (leg && !leg.userData.gear) leg = leg.parent;
+    let t = 0;
+    if (leg) {
+        const g = leg.userData.gear, q = leg.quaternion, s = q.w < 0 ? -1 : 1;
+        t = clamp01(2 * Math.atan2(s * (q.x * g.axis.x + q.y * g.axis.y + q.z * g.axis.z), s * q.w) / g.angle, 0, 1);
+    }
+    const k = L.to > L.from ? clamp01((t - L.from) / (L.to - L.from), 0, 1) : +(t >= L.to);
+    _glq.setFromAxisAngle(_gla.fromArray(L.axis), L.angle * k);
+    if (L.fixed) {
+        _glp.copy(this.parent.quaternion).invert();
+        this.position.fromArray(L.home).applyQuaternion(_glp);
+        this.quaternion.copy(_glp).multiply(_glq);
+    } else {
+        this.quaternion.copy(_glq);
+    }
+    THREE.Object3D.prototype.updateMatrix.call(this);
+}
+
+// Fresh copies of a type's gear legs on a new model instance: direct children of the model, sharing the templates'
+// geometry and materials (don't dispose them). rig.gearParts: the legs, in the gear file's order (the same as
+// rig.gearContacts), each with userData.gear = { axis, angle, kind }.
+export function addGear(object, rig, templates) {
+    rig.gearParts = templates.map((t) => {
+        const c = t.clone(true);
+        const g = t.userData.gear;
+        c.userData.gear = { axis: g.axis.clone(), angle: g.angle, kind: g.kind };
+        c.traverse(o => { if (o.userData.gearLink) o.updateMatrix = gearLinkUpdate; });
+        object.add(c);
+        return c;
+    });
+    rig.retractGear = true;
+}
+
+// Pose a model's own gear (preview tool / hangar): k = 1 down … 0 up, turning each leg by (1 − k) · angle about its
+// axis as the game does (the linked sub-parts follow)
+export function poseGear(rig, k) {
+    for (const p of rig.gearParts || []) p.quaternion.setFromAxisAngle(p.userData.gear.axis, (1 - k) * p.userData.gear.angle);
 }
 
 // ── Propellers ──
@@ -169,10 +311,13 @@ function normaliseGLTF(root, id, info) {
 // hidden and the blades opaque (parked aircraft merge them as they are); aircraft.js fades the blades and shows the
 // disc as the prop speeds up. Blade stations: [radius, chord, sweep back, pitch in degrees], radius / chord / sweep as
 // fractions of the prop radius. 'scimitar': the C-130J's six-bladed Dowty R391, wide blades with swept-back tips.
+// 'hs14sf': the Hamilton Sundstrand 14SF (CL-415, Dash 8, ATR 42): broad straight blades with rounded tips.
 const PROP_BLADES = {
     paddle: [[0.12, 0.07, 0, 42], [0.3, 0.095, 0, 34], [0.55, 0.095, 0, 27], [0.8, 0.085, 0, 21], [0.95, 0.065, 0, 18], [1, 0.035, 0, 17]],
     scimitar: [[0.14, 0.075, 0, 50], [0.26, 0.11, -0.012, 43], [0.45, 0.14, -0.006, 34], [0.63, 0.145, 0.015, 27], [0.78, 0.13, 0.045, 23],
         [0.89, 0.105, 0.08, 20], [0.96, 0.075, 0.115, 18], [1, 0.035, 0.14, 17]],
+    hs14sf: [[0.13, 0.07, 0, 50], [0.22, 0.105, 0, 44], [0.35, 0.13, 0, 37], [0.5, 0.14, 0, 31], [0.65, 0.138, 0, 26], [0.78, 0.128, 0.002, 22],
+        [0.88, 0.11, 0.008, 19.5], [0.95, 0.085, 0.016, 18], [0.99, 0.05, 0.024, 17], [1, 0.02, 0.026, 16.5]],
 };
 function makeProp(R, n, opts = {}) {
     const st = PROP_BLADES[opts.style] || PROP_BLADES.paddle;
@@ -348,6 +493,7 @@ export function createAircraftModel(id) {
         const object = src.object.clone(true);
         const rig = cloneRig(src.rig);
         rig.props = addProps(object, src.rig.propTemplates);
+        if (src.gear) addGear(object, rig, src.gear.parts);
         return { object, rig, fromFile: true };
     }
     if (!cache['proc_' + id]) {
@@ -490,6 +636,7 @@ function cloneRig(r) {
         wingtips: r.wingtips.map(v => v.clone()),
         cockpit: r.cockpit.clone(),
         props: r.props ? [...r.props] : [],
+        ...(r.gearContacts && { gearContacts: r.gearContacts.map(v => v.clone()) }),
     };
 }
 

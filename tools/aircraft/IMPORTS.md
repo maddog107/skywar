@@ -32,6 +32,20 @@ Each was cleaned with
 | su57 | `245cebbc76e34a9d8b77e81a54d9cdf1.glb` | `--nose -Y --decimate 0.4 --paint 'Material_0=#7b8791,02_-_Default=#2b3238' --length 20.1 --uv0 --one-uv --img JPEG --weld 35` |
 | typhoon | `01d9a26a89dc4a17a9fa4c4c1f7ac39f.glb` | `--nose -Y --tex 1024 --img JPEG` |
 | rafale | `d8bbfb0970ca4128b73e7e5364828fd3.glb` | `--nose -Y --delete 'Cylindre00[3789]\|bombe' --level-roll --decimate 0.7 --glass 'Material__29' --strip-maps --paint 'Material__31=#8e969c,Material__32=#6d757b,Material__30=#6d757b' --length 15.27 --img JPEG --tex 512` |
+| cl415 | `cl415_airframe.glb`, split from `bf3eaa6a1f4f4fc18df9b05cf40de927.glb` (shard `000-129`) by `tools/aircraft/cl415_gear.py` (below) | `--nose -X --tex 1024 --img JPEG` |
+
+The CL-415 keeps its own landing gear, which folds away in the game (`models/aircraft/cl415_gear.glb`, models.js
+MODEL_FILES `gear`). The model is split first, then the airframe goes through `import_model.py`, and a second run of
+the split checks that the gear file's frame is the finished airframe's:
+
+    /opt/homebrew/bin/blender -b -P tools/aircraft/cl415_gear.py -- bf3eaa6a1f4f4fc18df9b05cf40de927.glb cl415_airframe.glb models/aircraft/cl415_gear.glb
+    /opt/homebrew/bin/blender -b -P tools/aircraft/import_model.py -- cl415_airframe.glb models/aircraft/cl415.glb --nose -X --tex 1024 --img JPEG
+    /opt/homebrew/bin/blender -b -P tools/aircraft/cl415_gear.py -- bf3eaa6a1f4f4fc18df9b05cf40de927.glb cl415_airframe.glb models/aircraft/cl415_gear.glb --check models/aircraft/cl415.glb
+
+`cl415_gear.py` takes the three gear legs (with the nose gear's doors), the static propeller blades (the game spins
+two four-bladed props of its own) and the instrument gauges out of the model, names the materials, and writes the gear
+in the frame `import_model.py --nose -X` gives the airframe; its header describes the gear file (pivots, axes, linked
+parts, shared materials).
 
 Kit-built aircraft (`tools/aircraft/<id>.py`, run as `blender -b -P tools/aircraft/<id>.py -- models/aircraft/<id>.glb`)
 are listed in `models/aircraft/CREDITS.md` with their reference drawings.

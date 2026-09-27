@@ -260,7 +260,7 @@ function buildMenu() {
     seg('segTime', Object.entries(TIMES).map(([k, v]) => [k, v.label]), 'time', () => world.setTime(settings.time));
     seg('segWingmen', [[0, 'SOLO'], [1, '1'], [2, '2']], 'wingmen');
     seg('segWeather', [['clear', 'CLEAR'], ['cloudy', 'CLOUDY'], ['rain', 'RAIN'], ['storm', 'STORM']], 'weather', () => world.setWeather(settings.weather));
-    seg('segStart', [['auto', 'AUTO'], ['air', 'AIR'], ['runway', 'RWY'], ['apron', 'TAXI'], ['carrier', 'CVN'], ['barracks', 'BARRACKS']], 'start');
+    seg('segStart', [['auto', 'AUTO'], ['air', 'AIR'], ['runway', 'RWY'], ['apron', 'TAXI'], ['carrier', 'CVN'], ['water', 'WATER'], ['barracks', 'BARRACKS']], 'start'); // WATER: seaplanes afloat by a jetty
     seg('segLoadout', Object.entries(LOADOUT_LABELS).map(([k, v]) => [k, v.label.split(' ')[0]]), 'loadout');
     seg('segLivery', Object.entries(LIVERIES).map(([k, v]) => [k, v.label]), 'livery', () => { if (showcase) applyLivery(showcase.model, settings.livery, showcase.type); });
     seg('setFuel', [[true, 'ON'], [false, 'OFF']], 'fuel');
@@ -613,6 +613,7 @@ function buildCredits() {
         ['B-2 Spirit Bomber (b2)', 'Carlos.Maciel', 'CC BY 4.0', 'https://sketchfab.com/3d-models/b-2-spirit-bomber-12244128967f4d93b9cac52b275c3d51'],
         ['P-51 Mustang (racer)', 'UlissesVinicios', 'CC BY 4.0', 'https://sketchfab.com/3d-models/p-51-mustang-36f0f3e71d2a4c18b479db1ae8f9e7a7'],
         ['Airplane biplane (pitts)', 'BlueHour', 'CC BY 4.0', 'https://sketchfab.com/3d-models/airplane-biplane-be48f3f906ed431b98b1bf03ab7aadd6'],
+        ['cl415 (Canadair CL-415, cl415)', 'helijah', 'CC BY 4.0', 'https://sketchfab.com/3d-models/cl415-bf3eaa6a1f4f4fc18df9b05cf40de927'],
         ['MiG-31, MiG-25, J-20, J-10, J-8, F-5E, MiG-21, Mirage III, Jaguar', 'SKYWAR / Blender (tools/aircraft_kit.py)', 'CC0', 'tools/aircraft/'],
         ['Aircraft carrier and destroyer', 'SKYWAR / Blender (tools/ships)', 'CC0', 'tools/ships/'],
         ['Helicopter (military)', 'Zsky', 'CC BY 3.0', 'https://poly.pizza/m/hG2Qr0A3zR'],
