@@ -840,7 +840,9 @@ export class Audio {
     uiClick() { this.tick(1800, 0.08, 0.04); }
     uiConfirm() { this.tick(900, 0.1, 0.08); this.tick(1350, 0.1, 0.1, 0.08); }
 
-    say(text, priority = false) {
+    // voice (optional): { pitch, rate, name } — a speaker's own voice on the radio (name: a RegExp or string matched
+    // against the system voices; falls back to the default one)
+    say(text, priority = false, voice = null) {
         if (!this.callouts || !window.speechSynthesis) return;
         const now = performance.now();
         if (!priority && now - this.lastSpeak < 1800) return;
@@ -848,9 +850,10 @@ export class Audio {
         try {
             if (priority) speechSynthesis.cancel();
             const u = new SpeechSynthesisUtterance(text);
-            u.rate = 1.15; u.pitch = 0.85; u.volume = clamp(this.volume * 1.2, 0, 1);
+            u.rate = voice?.rate ?? 1.15; u.pitch = voice?.pitch ?? 0.85; u.volume = clamp(this.volume * 1.2, 0, 1);
             const voices = speechSynthesis.getVoices();
-            const v = voices.find(v => /en-US/.test(v.lang) && /Alex|Daniel|Fred|Google US|Aaron/i.test(v.name)) || voices.find(v => /^en/.test(v.lang));
+            const want = voice?.name ? new RegExp(voice.name, 'i') : null;
+            const v = (want && voices.find(v => /^en/.test(v.lang) && want.test(v.name))) || voices.find(v => /en-US/.test(v.lang) && /Alex|Daniel|Fred|Google US|Aaron/i.test(v.name)) || voices.find(v => /^en/.test(v.lang));
             if (v) u.voice = v;
             if (this.volume > 0 && this.running) {
                 // keyed mic: click, static under the voice (off at the estimated end if onend never comes), click

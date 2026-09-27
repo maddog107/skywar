@@ -209,11 +209,17 @@ export class War {
         if (quiet || rec.team === this.side || !this.enabled) return;
         const g = this.game;
         const where = this.describePos(rec.unit.pos);
+        // (through the director's pacing when a war runs: flying over a base spots a dozen things at once)
+        const call = (text, color, group) => {
+            const d = g.director;
+            if (d && d.enabled && d.say) d.say('INTEL', text, { color, say: false, group, merge: (n) => n + ' MORE ' + (group === 'contact' ? 'NEW CONTACTS' : 'TARGETS IDENTIFIED') + ' NEAR GRID ' + this.grid(rec.unit.pos.x, rec.unit.pos.z) + ' — SEE THE MAP' });
+            else this.radio('INTEL', text, { color, say: false });
+        };
         if (level === INTEL.CONTACT && was < INTEL.CONTACT && !['aircraft', 'helicopter'].includes(rec.cls)) {
-            this.radio('INTEL', 'NEW CONTACT: ' + rec.contactName + ' — ' + where, { color: '#ffd24a', say: false });
+            call('NEW CONTACT: ' + rec.contactName + ' — ' + where, '#ffd24a', 'contact');
             g.events.emit('warContact', rec.unit, { rec });
         } else if (level >= INTEL.IDENTIFIED && was < INTEL.IDENTIFIED && !['aircraft', 'helicopter'].includes(rec.cls)) {
-            this.radio('INTEL', 'IDENTIFIED: ' + rec.name + ' — ' + where, { color: '#ff9f5a', say: false });
+            call('IDENTIFIED: ' + rec.name + ' — ' + where, '#ff9f5a', 'ident');
             g.events.emit('warIdentified', rec.unit, { rec });
             // an intel report whose facility this was is resolved
             for (const rp of this.reports) if (rp.unit === rec.unit && !rp.resolved) this.resolveReport(rp);
@@ -362,13 +368,14 @@ export class War {
     }
 
     // ═════════════ Radio ═════════════
-    // from: the speaker's callsign ('COMMAND', 'MAGIC' (AWACS), 'BOLT', …). say: true (the text), a string, or false
-    radio(from, text, { color = '#9fd4ff', say = true, priority = false } = {}) {
+    // from: the speaker's callsign ('COMMAND', 'MAGIC' (AWACS), 'BOLT', …). say: true (the text), a string, or false.
+    // voice: { pitch, rate, name } for the speech (each speaker keeps their own; see audio.say)
+    radio(from, text, { color = '#9fd4ff', say = true, priority = false, voice = null } = {}) {
         const msg = { from, text, color, t: this.game.time };
         this.radioLog.push(msg);
         if (this.radioLog.length > 60) this.radioLog.shift();
         this.game.addFeed((from ? from + ': ' : '') + text, color);
-        if (say && this.game.audio) this.game.audio.say(typeof say === 'string' ? say : (from && from !== 'INTEL' ? from.toLowerCase() + ', ' : '') + text.toLowerCase(), priority);
+        if (say && this.game.audio) this.game.audio.say(typeof say === 'string' ? say : (from && from !== 'INTEL' ? from.toLowerCase() + ', ' : '') + text.toLowerCase(), priority, voice);
         this.game.events.emit('radio', msg);
         return msg;
     }
@@ -398,18 +405,33 @@ export class War {
         return { brg: Math.round(((Math.atan2(dx, -dz) * 57.2958) + 360) % 360), km: Math.hypot(dx, dz) / 1000 };
     }
 
-    // Who holds the ground at (x, z): 'red' north of the front (and in the far north), 'blue' elsewhere
+    // Who holds the ground at (x, z): 'red' north of the front (and in the far north), 'blue' elsewhere.
+    // The red side is the polygon the tactical map shades: the front, carried on far west and east, closed round
+    // the north — so a front that bends back on itself as it moves (front.js) still answers correctly.
     sideAt(x, z) {
-        const F = this.front;
-        if (x <= F[0].x) return z < F[0].z ? 'red' : 'blue';
-        for (let i = 0; i + 1 < F.length; i++) {
-            const a = F[i], b = F[i + 1];
-            if (x >= a.x && x <= b.x) {
-                const t = (x - a.x) / Math.max(b.x - a.x, 1);
-                return z < a.z + (b.z - a.z) * t ? 'red' : 'blue';
-            }
+        const P = this.frontPoly();
+        let inside = false;
+        for (let i = 0, n = P.length, j = n - 2; i < n; j = i, i += 2) {
+            const xi = P[i], zi = P[i + 1], xj = P[j], zj = P[j + 1];
+            if ((zi > z) !== (zj > z) && x < xi + (z - zi) / (zj - zi) * (xj - xi)) inside = !inside;
         }
-        return z < F[F.length - 1].z ? 'red' : 'blue';
+        return inside ? 'red' : 'blue';
+    }
+
+    // the red-side polygon as flat [x0, z0, x1, z1, …], rebuilt when the front changes
+    frontPoly() {
+        const F = this.front;
+        if (this._poly && this._polyOf === F) return this._poly;
+        const BIG = 1e7, n = F.length, P = new Float64Array((n + 4) * 2);
+        let k = 0;
+        const put = (x, z) => { P[k++] = x; P[k++] = z; };
+        put(F[0].x - BIG, F[0].z);
+        for (const p of F) put(p.x, p.z);
+        put(F[n - 1].x + BIG, F[n - 1].z);
+        put(F[n - 1].x + BIG, -BIG);
+        put(F[0].x - BIG, -BIG);
+        this._poly = P; this._polyOf = F;
+        return P;
     }
 
     setFront(points) { this.front = points.map(p => ({ x: p.x, z: p.z })); this.game.events.emit('warFront', this.front); }

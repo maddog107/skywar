@@ -291,7 +291,11 @@ parts are pulled out first and every instance gets its own copy, hung on the sec
   DESIGNATION, SUPPORT, WINGMEN, MISSILE CAMERA, SANDBOX, then any others.
 - **Tactical map:** plug-ins draw with `drawMap(ctx, map)` (`map.toScreen(x, z)`, `map.scale` in px/m)
   and add panel buttons for the selection with `mapActions(sel)`. `sel` is `{ kind: 'unit' | 'mark' |
-  'report' | 'point', … }`.
+  'report' | 'point', … }`. A system can also put clickable buttons anywhere on the map from `drawMap` by
+  pushing `{ x, y, w, h, run }` (screen px) onto `map.buttons` (tasks.js does this for its task list).
+- **Town names:** `mapName` on each town; front.js names them all at the start of a war (`nameTowns`), in
+  the same scheme the map uses, so radio calls and the map agree.
+
 
 ### `game.sensors` (src/sensors.js) and `game.mapkit` (src/mapkit.js)
 - **Targeting pod (Sniper / LITENING style):** period brings its video up full screen; the main camera becomes
@@ -336,3 +340,132 @@ parts are pulled out first and every instance gets its own copy, hung on the sec
   `{ image, caption }`; `mapPick(x, y, map)` returns a selection of the plug-in's own (tried after units and
   marks); the panel shows plug-in info for kinds it doesn't know. The close-zoom background is a tile pyramid
   (src/maptiles.js) painted by a pool of map workers.
+
+## The living war (Phase C: director, front, tasks, wingmen)
+
+### The LIVING WAR mode (`'war'`)
+- The full dynamic war, on the mode cards after MISSIONS. Infinite jets: a new one at the friendly airfield
+  or the carrier nearest where the last went down (the `respawnPoint()` system hook in game.js), without
+  resetting anything. The enemy airbase and its defences are live (`GroundForces.spawnEnemyBase`), so is
+  the enemy carrier group, and everything below runs. No soft boundary.
+- The HUD objective line shows the war: how far the front has moved (km, mean), the balance, tasks done.
+  COMMAND › SORTIE › END SORTIE banks the score (full career XP) once you're stopped on a friendly pad.
+- **Sandbox** runs the same war (the later sandbox tools shape it). **Free Flight** stays peaceful (marks and
+  strikes only). The other modes don't run any of it; wingmen take orders wherever there are wingmen.
+- Damage persists for the whole session: nothing destroyed is rebuilt (radars stay down, SAM sites stay
+  dead, bridges stay down and keep cutting supply), and destroyed fuel and ammunition keep burning.
+
+### `game.front` (src/front.js): the front line and the ground war
+- **Sectors:** the fighting stretch of `war.front` (x −32…+36 km) is resampled into control points every
+  2 km and split into ~12 km sectors (`front.sectors`: `{ name, center, normal (into red), blue, red,
+  supply: { blue, red }, off (m moved, + = into red), vel (m/s), intensity (0..1), contested, offensive }`).
+  The ends stay put; `war.setFront` is called as it moves (every 2 s at most). `war.sideAt` is a polygon
+  test now, so a front that bends back on itself still answers correctly.
+- **Fighting:** every second each side loses strength in proportion to the other's (artillery alive in a
+  sector adds to red's fire) and rebuilds toward 100 at a rate set by its supply. Past a 45/55 balance the
+  line moves at up to 6 m/s, never within 5.5 km of an airbase of the side giving ground, and at most 7 km
+  from where the war started. Offensives (random, more often near the player; `front.offensive(sector,
+  team)`) add strength and firepower for a few minutes.
+- **What moves it:** any red or blue unit destroyed within 30 km of the line weakens its side's sector by
+  what it's worth (artillery 9, command 10, tank 5, SAM 5, radar 4, AAA 3, vehicle 2, +1 for a convoy
+  vehicle), less the deeper behind the line it was. A bridge down within 16 km of a sector cuts the supply
+  of the side it's on; destroyed fuel and ammunition, and the enemy command bunker, cut it too, for as long
+  as they stay destroyed. Convoys that arrive add supply (`front.deliver(pos, team, amount)`).
+  `front.hit(sector, team, amount, why)` is the raw lever.
+- **Near the camera:** shell impacts and muzzle flashes, rumble, smoke from burning wrecks, tracer across
+  the line; engagement zones of real ground units (ground.js tanks and Shilkas, BTR-80s against Abrams,
+  Strykers and Humvees) in the one or two sectors nearest the player, which trade fire, get reinforced from
+  behind, move with the line, and go away when the player leaves (`front.zoneUnits(sector, team)`). Their own
+  fire uses the source `{ isFront: true }`, which scores nothing and isn't counted twice in the strengths.
+  Stretches of front over the sea (`sector.sea`) stay quiet.
+- **Artillery:** red BM-21 Grad batteries (three launchers, war class `artillery`) 4–7 km behind the line in
+  two or three sectors; they ripple-fire every 11–19 s (`firingT`, so they're easy to spot), their rockets
+  land on our side, and a new battery comes up every ~10 minutes if some were destroyed.
+- **Vehicles:** ground targets wear the rigged models from `src/vehicles.js` once they've loaded
+  (`dress(unit, id, { onRig })` in src/dressing.js keeps the target and swaps its stand-in mesh): the Grads,
+  the APCs, the convoys' Urals / HEMTTs / SA-8, the stand-in Scud TEL and our Patriot launcher.
+- **Map:** sector ticks and names with a blue/red strength bar, push arrows, contested stretches glowing,
+  engagement zones (orange crosses), and the war's starting line (faint dots).
+- **Events:** `frontPush` (sector, { team }), `frontOffensive` (sector, { team }), `townCaptured` (town,
+  { team }), and war's `warFront`.
+
+### `game.director` (src/director.js): the war around the player
+- **Flights** (`director.flights`): `{ team, role, callsign, types, hp[], bombs[], pos, vel, route, loiter,
+  target, home, members, state, detected }`. Roles: `cap`, `raid`, `escort`, `recon`, `intercept`,
+  `strike` (our packages), `cas`. Far away a flight is a point moving along its route; within 18 km of the
+  player it becomes real jets (`members`, Aircraft + Pilot, configured by role: CAPs leashed to their
+  station, raiders flying their route and releasing bombs over the target, CAS strafing ground targets
+  through a Pilot brain); past 27 km (and not in a fight) it goes back to abstract, keeping its damage.
+  A budget keeps the real jets to 5 / 6 / 8 (rookie / veteran / ace) and the enemy fighters around the
+  player to 2 / 3 / 4; the rest wait, abstract.
+  Out of sight, fights between flights and SAMs against flights are settled by odds.
+  `director.spawnFlight(opts)` adds one (opts as the fields above plus `speed`, `skill`, `escortOf`).
+- **Enemy:** CAP stations over their ground; radar-directed scrambles when their radars (`war.coverage`)
+  hold the player near or over their ground (no radars, no scrambles; no airfield, they come from the
+  carrier or from far away); raids on our airfields, radars, the carrier or a town near the front, formed up
+  40–50 km out, some low under the radar, with escorts from veteran up; recon flights over the carrier or the
+  base (one that gets home makes the carrier a missile target); supply convoys on the road network toward
+  the front; the carrier group moving; missile strikes through `strikes.request(type, marks, 'red')` —
+  half of them announced first ("TEL PREPARING A LAUNCH"), a chance to find and kill the launcher in time.
+- **Launcher:** until the mobile-forces plug-in adds real TELs, a stand-in SCUD TEL (the rigged 9P117: jacks,
+  pad and erector run before each launch, the rail stays empty for 90 s after; war class `tel`, conceal 0.6)
+  hides 12–22 km behind the line, relocates a few minutes after firing when nobody's watching (event
+  `telRelocated`), and a new one comes up ten minutes after it's destroyed. It isn't made if another plug-in
+  has added red `launcher` sources.
+- **Friendly:** a CAP over our side, strike packages (HAMMER) against high-value targets the player
+  identified and left alone, convoys to the front that draw enemy attack aircraft, and calls for help.
+  An AN/TPS-75 radar at the home base and at Miramar, a Patriot battery at home and the carriers'
+  `radarRange` give our side a radar picture: `director.airPicture()` reveals enemy aircraft they see, and a
+  new enemy flight gets a MAGIC call.
+- **Convoys** (`director.convoys`): `{ team, path, sign, callsign, vehicles, total, arrived, state,
+  destPos, destName }`; vehicles are ground.js targets with `convoyOf`. A downed bridge ahead stops a convoy
+  short of the gap; after 45 s it turns back.
+- **Radio:** `director.say(from, text, opts)` — war.radio with pacing (3.5 s between calls, lines older
+  than `opts.ttl` (25 s) dropped, `priority` goes straight out) and each speaker's voice (`voiceFor`).
+  Other plug-ins should talk through it.
+- **Events:** `raidDetected`, `reconDetected`, `flightDetected` (flight), `raidHit` (flight, { target, hit }),
+  `flightDown` (flight), `flightDone` (flight, { why: 'destroyed' | 'landed' }), `convoyStarted`,
+  `convoyUnderAttack` (convoy, { flight }), `convoyArrived`, `convoyLost`, `supportRequest` (flight,
+  { attackers }), `packageTasked` (flight, { unit }), `telPreparing` (unit, { launchAt, target }).
+
+### `game.tasks` (src/tasks.js): dynamic tasks
+- Offered on the radio and the HUD ("NEW TASK AVAILABLE"), accepted in COMMAND › TASKS (with a badge) or
+  on the tactical map (the task list's ACCEPT buttons, or a task's marker or target). The active task gets
+  a HUD line (distance, progress, time left), brackets on its targets, a map marker and the steer cue
+  (`game.navTarget`, which the war modes own while a task is active).
+- Built in: SAM site detected, silence the artillery in a sector, attack the enemy convoy, destroy the TEL
+  before it fires, missile launch → find the launcher, intercept the raid, unknown aircraft approaching,
+  support a friendly flight, protect / escort our convoy, SEAD for a strike package, battle damage
+  assessment, re-strike a damaged target (accepting fires the same strike again), investigate an unknown
+  contact, recon a search area, close air support where an offensive is on.
+- Paced: a routine offer at most every ~2 minutes (by difficulty), urgent ones 15 s apart, three waiting
+  at most (an urgent one pushes out the oldest routine one). A finished task pays its reward in score (so
+  career XP); one finished before it was accepted pays half, and only if the player or a wingman had a hand.
+- **API:** `game.tasks.addGenerator(fn)` — `fn(tasks, game)` is called every 5 s while a war runs and may
+  return a spec or call `tasks.offer(spec)`; check `tasks.canOffer(urgent)` before setting anything up.
+  `game.tasks.offer(spec, { force })` returns the task or null (paced, full, or a duplicate `key`). A spec:
+  - `type`, `key` (duplicates of a live task are ignored), `title`, `brief`, `from` ('COMMAND'), `label`
+    (the steer cue's), `reward` (400), `urgent`, `expires` (s the offer stands), `limit` (s to do it once
+    accepted, 0 = none);
+  - where: `pos` (a Vector3 or a function), `units` (the targets: done when `need` of them (all) are dead,
+    failed if they get away — `removed` while alive), `area` ({ center, radius } drawn on the map),
+    `report` (a war.report it goes with);
+  - `check(task, game)` → `'done[:how]'`, `'failed[:why]'`, `'expired'` or null (checked twice a second);
+    `progress(task)` → text for the HUD; `onOffer`, `onAccept`, `onKill(task, unit, source, mine)`,
+    `onDone`, `onFail`, `onEnd` (any ending) callbacks; `data` for your own state.
+  - Events: `taskOffered`, `taskAccepted`, `taskDone` (task, { points, assigned }), `taskFailed`.
+- Later plug-ins should add generators for their own situations (a recon drone losing contact, an
+  underground facility found, an airbase under attack, a tanker needing an escort…).
+
+### `game.wingmen` (src/wingmen.js): orders
+- COMMAND › WINGMEN: ATTACK MY TARGET (the lock, else the newest mark), COVER ME, ENGAGE FIGHTERS (free CAP,
+  30 km), ATTACK GROUND TARGETS (the newest mark, else known enemies within 9 km of the player — armour and
+  guns before SAMs), HOLD POSITION (orbit here), ESCORT AIRCRAFT (the nearest friendly), RETURN TO BASE; to
+  all, or to one (WINGMEN › BOLT). Each is acknowledged on the radio in the wingman's own voice.
+- An order is a `WingBrain` on the pilot (`pilot.brain`): ai.js asks `brain.pick(pilot)` for the target
+  (a target, null for none, undefined for the usual choice) and `brain.steer(pilot, dt)` → `{ dir,
+  throttle }` for where to fly with none. A ground target gets gun runs (the same `strafe()` the AI uses on
+  an ejected pilot) and, from the wingmen system, rocket pairs. No brain: exactly the old behaviour.
+- The Living War starts wingmen on COVER ME with rockets. Badly hit (25%) they RTB by themselves; one that
+  lands, or is shot down, is replaced by a fresh jet after 75 / 150 s in the war modes.
+- Other plug-ins can give any AI pilot a brain the same way (director.js does for enemy CAS).
