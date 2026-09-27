@@ -11,14 +11,14 @@ import { mulberry32 } from './util.js';
 const MAT = {};
 function mats() {
     if (MAT.steel) return MAT;
-    MAT.steel = new THREE.MeshStandardMaterial({ color: 0x6b6e68, roughness: 0.7, metalness: 0.45 });
-    MAT.roof = new THREE.MeshStandardMaterial({ color: 0x5a5f55, roughness: 0.6, metalness: 0.5 });
+    MAT.steel = new THREE.MeshStandardMaterial({ color: 0x5f6258, roughness: 0.8, metalness: 0.25, envMapIntensity: 0.5 });
+    MAT.roof = new THREE.MeshStandardMaterial({ color: 0x565c48, roughness: 0.85, metalness: 0.15, envMapIntensity: 0.4 }); // (olive-painted sheeting)
     MAT.concrete = new THREE.MeshStandardMaterial({ color: 0x8b8a82, roughness: 0.95, metalness: 0 });
     MAT.earth = new THREE.MeshStandardMaterial({ color: 0x5c6440, roughness: 1, metalness: 0 });
-    MAT.door = new THREE.MeshStandardMaterial({ color: 0x55594f, roughness: 0.65, metalness: 0.55 });
+    MAT.door = new THREE.MeshStandardMaterial({ color: 0x55594f, roughness: 0.75, metalness: 0.35, envMapIntensity: 0.5 });
     MAT.dark = new THREE.MeshStandardMaterial({ color: 0x141512, roughness: 1, metalness: 0 });
-    // camouflage net: garnished netting in woodland colours, seen from above and below
-    MAT.net = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, side: THREE.DoubleSide });
+    // camouflage net: garnished netting in woodland colours, seen from above and below (matte: no sky in it)
+    MAT.net = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, envMapIntensity: 0.25, side: THREE.DoubleSide });
     MAT.wood = new THREE.MeshStandardMaterial({ color: 0x6d5a41, roughness: 0.9 });
     return MAT;
 }
@@ -33,7 +33,8 @@ export function netGeometry(w, d, h, seed = 1) {
     const g = new THREE.PlaneGeometry(w, d, nx, nz);
     g.rotateX(-Math.PI / 2);
     const p = g.attributes.position, col = [];
-    const cols = [[0.26, 0.3, 0.17], [0.34, 0.36, 0.2], [0.2, 0.23, 0.13], [0.38, 0.33, 0.22]];
+    // woodland garnish, authored in sRGB (vertex colours are linear: squared-ish)
+    const cols = [[0.34, 0.4, 0.2], [0.42, 0.45, 0.24], [0.26, 0.31, 0.16], [0.45, 0.39, 0.26]].map(c => c.map(v => Math.pow(v, 2.2)));
     for (let i = 0; i < p.count; i++) {
         const x = p.getX(i), z = p.getZ(i);
         const u = Math.abs(x) / (w / 2), v = Math.abs(z) / (d / 2);

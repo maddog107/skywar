@@ -151,7 +151,7 @@ export class ForceVehicle {
         const h = this.groundAt(x, z);
         this.base.set(x, h, z);
         this.pos.set(x, h + this.H * 0.42, z);
-        this.liftK = 0;
+        this.liftK = 0; this.onRoad = false;
         this.syncMesh();
     }
 
@@ -178,13 +178,14 @@ export class ForceVehicle {
         const R = this.route, r = R.r;
         if (!r) return;
         const p = r.at(R.s, _pc, R.i); R.i = p.i;
-        let v = Math.min(p.f & 1 ? this.u.road : this.u.off, p.lim, R.cap);
+        // the vehicle ahead in the column: keep the gap (it may have stopped, or been knocked out); a follower may
+        // run a little over the column's speed to close up
+        let lead = R.lead;
+        while (lead && (!lead.alive || lead.removed || lead.route.r !== r)) lead = lead.alive && !lead.removed ? null : lead.route.lead;
+        let v = Math.min(p.f & 1 ? this.u.road : this.u.off, p.lim, R.cap * (lead ? 1.3 : 1));
         if (this.hp < this.maxHp * 0.4) v *= 0.6; // limping
         const brake = 1.8;
         let room = R.end - R.s;
-        // the vehicle ahead in the column: keep the gap (it may have stopped, or been knocked out)
-        let lead = R.lead;
-        while (lead && (!lead.alive || lead.removed || lead.route.r !== r)) lead = lead.alive && !lead.removed ? null : lead.route.lead;
         if (lead) {
             const gap = lead.route.s - R.s - R.gap;
             room = Math.min(room, gap + 2);
@@ -222,6 +223,7 @@ export class ForceVehicle {
         if (dt > 0 && Math.abs(dh) > 0.5) this.heading = wrap(this.heading + Math.sign(dh) * Math.min(Math.abs(dh), 1.1 * dt));
         else this.heading = want;
         const onRoad = (c.f & 1) !== 0;
+        this.onRoad = onRoad;
         // off the road the wheels are on the drawn ground (a meshed vehicle), else on the route's samples
         let y = c.y;
         if (!onRoad && this.lod > 0) y = this.drawnGround(c.x, c.z);
@@ -258,13 +260,15 @@ export class ForceVehicle {
         this.roll = Math.atan2(-nr, _ds.ny);
     }
 
-    // parked: settle on the ground as drawn (re-done now and then: the terrain tiles sharpen as the camera nears)
+    // parked: settle on the ground as drawn (re-done now and then: the terrain tiles sharpen as the camera nears);
+    // one stopped on a road stays on the road's surface, with its distance lift
     settle() {
-        const h = this.lod > 0 ? this.drawnGround(this.base.x, this.base.z) : this.groundAt(this.base.x, this.base.z);
-        this.base.y = h;
-        this.pos.y = h + this.H * 0.42;
-        if (this.lod > 0) this.tiltFromGround(); else { this.pitch = 0; this.roll = 0; }
-        this.liftK = 0;
+        if (!this.onRoad) {
+            this.base.y = this.lod > 0 ? this.drawnGround(this.base.x, this.base.z) : this.groundAt(this.base.x, this.base.z);
+            if (this.lod > 0) this.tiltFromGround(); else { this.pitch = 0; this.roll = 0; }
+            this.liftK = 0;
+        }
+        this.pos.y = this.base.y + this.H * 0.42;
         this.syncMesh();
     }
 

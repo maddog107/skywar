@@ -46,10 +46,20 @@ export function forcesGame(opts = {}) {
             fireMissile(ac, target, kind) {
                 const m = { owner: ac, target, kind, pos: new THREE.Vector3().copy(ac.pos), vel: new THREE.Vector3(), W: null, life: 0, t: g.time };
                 fired.push(m);
+                g.samLog.push(m);
+                if (target && target.incoming) target.incoming.push(m);
                 return m;
             },
         },
         isNeutral: () => false, lockTarget: null,
+    };
+    g.samLog = [];
+    // an aircraft for the air defences to see: flies straight and level (pos, vel, team, incoming, lockedBy)
+    g.addJet = (x, y, z, vx = 0, vz = 0, team = 'blue') => {
+        const a = { pos: new THREE.Vector3(x, y, z), vel: new THREE.Vector3(vx, 0, vz), team, alive: true, onGround: false, incoming: [], hitRadius: 8, name: 'JET',
+            update(dt) { this.pos.addScaledVector(this.vel, dt); } };
+        g.aircraft.push(a);
+        return a;
     };
     g.war = new W.War(g);
     g.war.start(g.mode);
@@ -61,7 +71,7 @@ export function forcesGame(opts = {}) {
     g.step = (dt = 1 / 30) => {
         g.time += dt;
         g.war.time += dt;
-        for (const a of g.aircraft) if (a.lockedBy) a.lockedBy.clear();
+        for (const a of g.aircraft) { if (a.lockedBy) a.lockedBy.clear(); if (a.update) a.update(dt); }
         g.strikes.update(dt);
         g.forces.update(dt);
     };
