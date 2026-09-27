@@ -27,6 +27,8 @@ const _v = new THREE.Vector3(), _p = {};
 const km = (m) => (m / 1000).toFixed(1) + ' KM';
 const clock = (s) => { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
 const LIVE = (t) => t.state === 'offered' || t.state === 'active';
+// the compass point of b as seen from a ('NE')
+const compass = (a, b) => ['NORTH', 'NORTH-EAST', 'EAST', 'SOUTH-EAST', 'SOUTH', 'SOUTH-WEST', 'WEST', 'NORTH-WEST'][Math.round((((Math.atan2(b.x - a.x, -(b.z - a.z)) * 180 / Math.PI) + 360) % 360) / 45) % 8];
 
 export class TaskManager {
     constructor(game) {
@@ -297,9 +299,9 @@ export class TaskManager {
                 const center = known ? known.center : bt.at.clone().add(new THREE.Vector3(rand(-1300, 1300), 0, rand(-1300, 1300)));
                 return {
                     type: 'artillery', key: 'artillery:' + (war.rec(bt.units[0])?.id ?? bt.sector.id), title: 'SILENCE THE ARTILLERY IN SECTOR ' + bt.sector.name,
-                    brief: 'A HOWITZER BATTERY IS SHELLING ' + fr.sectorLabel(bt.sector) + '. SEARCH AREA ' + war.grid(center.x, center.z) + ' — MUZZLE FLASHES GIVE IT AWAY. DESTROY ALL THREE GUNS.',
+                    brief: 'A BM-21 GRAD ROCKET BATTERY IS SHELLING ' + fr.sectorLabel(bt.sector) + '. SEARCH AREA ' + war.grid(center.x, center.z) + ' — ITS LAUNCHES GIVE IT AWAY. DESTROY ALL THREE LAUNCHERS.',
                     units: bt.units.slice(), area: { center, radius: 2600 }, reward: 700, label: 'ARTILLERY', expires: 300,
-                    progress: (t) => t.units.filter(u => !u.alive).length + '/' + t.units.length + ' GUNS',
+                    progress: (t) => t.units.filter(u => !u.alive).length + '/' + t.units.length + ' LAUNCHERS',
                     onOffer: (t) => {
                         bt.tasked = true; bt.offeredT = war.time;
                         if (!known) { bt.report = war.report({ text: 'ENEMY ARTILLERY SHELLING ' + fr.sectorLabel(bt.sector), center, radius: 2600, unit: bt.units[0], cls: 'artillery', say: false }); bt.report.tasked = true; }
@@ -420,7 +422,13 @@ export class TaskManager {
         });
         on('telRelocated', (u) => { u.relocatedAfter = war().time; for (const rp of war().reports) if (rp.unit === u && !rp.resolved) rp.resolved = true; });
         // raids and unknown aircraft inbound
-        on('raidDetected', (f) => { if (f.team !== war().side) this.offer(this.raidTask(f), { force: true }); });
+        on('raidDetected', (f) => {
+            if (f.team === war().side) return;
+            // (a second raid on a target that already has an intercept task is on the map and the radio, not a second task)
+            const label = f.target ? f.target.label : '';
+            if (this.tasks.some(t => LIVE(t) && t.type === 'raid' && t.data.label === label)) return;
+            this.offer(this.raidTask(f), { force: true });
+        });
         on('reconDetected', (f) => this.offer(this.reconFlightTask(f), { force: true }));
         // calls for help
         on('supportRequest', (f, { attackers }) => this.offer(this.supportTask(f, attackers), { force: true }));
@@ -484,10 +492,11 @@ export class TaskManager {
     raidTask(f) {
         if (!f || f.done) return null;
         const label = f.target ? f.target.label : 'OUR LINES';
+        const from = f.target ? ' FROM THE ' + compass(f.target.pos, f.pos) : '';
         return {
             type: 'raid', key: 'raid:' + f.id, urgent: true, title: (f.role === 'cas' ? 'STOP THE ATTACK ON ' : 'INTERCEPT THE RAID ON ') + label,
-            brief: f.n + ' ENEMY ' + (f.role === 'cas' ? 'ATTACK AIRCRAFT' : 'STRIKE AIRCRAFT') + ' INBOUND ON ' + label + '. BREAK IT UP BEFORE THEY GET THERE — THE BOMBERS FIRST.',
-            pos: () => f.pos, reward: 700, label: 'RAID', expires: 120, data: { flight: f },
+            brief: f.n + ' ENEMY ' + (f.role === 'cas' ? 'ATTACK AIRCRAFT' : 'STRIKE AIRCRAFT') + ' INBOUND ON ' + label + from + '. BREAK IT UP BEFORE THEY GET THERE — THE BOMBERS FIRST.',
+            pos: () => f.pos, reward: 700, label: 'RAID', expires: 120, data: { flight: f, label },
             progress: () => f.n + ' LEFT' + (f.target ? ' · ' + km(f.pos.distanceTo(f.target.pos)) + ' TO TARGET' : ''),
             check: () => {
                 if (f.n === 0) return 'done:THE RAID IS BROKEN UP';

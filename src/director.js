@@ -28,6 +28,8 @@ import { BASES, terrainHeight, groundHeight, baseToWorld, isOnRunway } from './w
 import { INTEL } from './war.js';
 import { GroundLauncher } from './strikes.js';
 import { findOcean } from './naval.js';
+import { VEHICLES, pose, raise, deployJacks, deployPad } from './vehicles.js';
+import { dress } from './dressing.js';
 import { clamp, rand, pick, lerp } from './util.js';
 
 const MAT_R = 18000, DEMAT_R = 27000; // flights become real jets this close to the player, abstract past that
@@ -41,10 +43,13 @@ const CONVOY_CALLS = ['CARAVAN', 'MULE', 'PACKHORSE', 'WAGON'];
 const RED_CONVOY = ['truck', 'fueltruck', 'truck', 'spaag', 'truck', 'msam', 'fueltruck', 'tank'];
 const BLUE_CONVOY = ['humvee', 'truck', 'fueltruck', 'truck', 'truck', 'humvee'];
 const VEH_NAMES = {
-    red: { truck: 'URAL-4320 TRUCK', fueltruck: 'FUEL TANKER', spaag: 'ZSU-23-4 SHILKA', msam: 'SA-8 GECKO', tank: 'T-72 TANK', humvee: 'BRDM SCOUT CAR' },
-    blue: { truck: 'M939 TRUCK', fueltruck: 'M978 FUEL TRUCK', humvee: 'HUMVEE', tank: 'M1 ABRAMS', spaag: 'M163 VULCAN', msam: 'M1097 AVENGER' },
+    red: { truck: 'URAL-4320 AMMUNITION TRUCK', fueltruck: 'ATZ-5 FUEL TANKER', spaag: 'ZSU-23-4 SHILKA', msam: 'SA-8 GECKO', tank: 'T-72 TANK', humvee: 'BRDM SCOUT CAR' },
+    blue: { truck: 'HEMTT CARGO TRUCK', fueltruck: 'HEMTT FUELER', humvee: 'M1126 STRYKER', tank: 'M1 ABRAMS', spaag: 'M163 VULCAN', msam: 'M1097 AVENGER' },
 };
 const VEH_CLS = { truck: 'vehicle', fueltruck: 'vehicle', humvee: 'vehicle', tank: 'tank', spaag: 'aaa', msam: 'sam' };
+// the rigged models (vehicles.js) the convoy stand-ins wear once they've loaded
+const VEH_MODEL = { red: { truck: 'ammo_red', fueltruck: 'fuel_red', msam: 'osa' }, blue: { truck: 'ammo_blue', fueltruck: 'fuel_blue', humvee: 'stryker' } };
+const TEL_MUZZLE = new THREE.Vector3(0, 7.8, 5.2); // the erected Scud's middle (it stands on its pad at the rear)
 
 // Radio voices: each speaker keeps theirs (audio.say picks a system voice by name when there is one)
 export const VOICES = {
@@ -125,6 +130,7 @@ export class Convoy {
             t.name = VEH_NAMES[team][type] || t.name;
             t.def = { ...t.def, name: t.name };
             g.war.add(t, { cls: VEH_CLS[type] || 'vehicle', name: t.name, conceal: team === 'red' ? 0.15 : 0 });
+            if (VEH_MODEL[team][type]) dress(t, VEH_MODEL[team][type], { pose: 'road' });
             return t;
         });
         this.total = this.vehicles.length;
@@ -265,6 +271,8 @@ export class Director {
             u.name = name; u.def = { ...u.def, name };
             if (type === 'radar') u.radarRange = 85000;
             g.war.add(u, { name, cls: type === 'radar' ? 'radar' : 'sam' });
+            // the Patriot launching station, emplaced: outriggers down, mast up, canisters raised
+            if (type === 'sam') dress(u, 'patriot_ln', { pose: 'emplaced', onRig: (rig) => { for (const k of VEHICLES.patriot_ln.deploy) pose(rig, k, 1); } });
             this.defences.push(u);
             return u;
         };
@@ -1153,8 +1161,11 @@ export class Director {
         u.def = { ...u.def, name: 'SCUD TEL', score: 600 };
         war.add(u, { cls: 'tel', name: 'SS-1C SCUD-B TEL', conceal: 0.6 });
         this.telRig(u);
-        const src = st.addSource(new GroundLauncher(st, u, { kind: 'launcher', name: 'SCUD TEL', stock: { scud: 4, kalibr: 2 }, muzzle: new THREE.Vector3(0, 9, 3) }));
-        this.tel = { u, src, relocateT: Infinity, deadT: 0 };
+        const src = st.addSource(new GroundLauncher(st, u, { kind: 'launcher', name: 'SCUD TEL', stock: { scud: 4, kalibr: 2 }, muzzle: TEL_MUZZLE.clone() }));
+        // the rigged 9P117 (vehicles.js), once the models are in: jacks, pad and erector run the launch sequence
+        dress(u, 'scud', { onRig: () => { u.erectShown = -1; } });
+        u.radius = u.hitRadius = 8;
+        this.tel = { u, src, relocateT: Infinity, deadT: 0, reloadT: 0 };
         return this.tel;
     }
 
@@ -1193,13 +1204,23 @@ export class Director {
         if (!t) return;
         const u = t.u;
         if (!u.alive) { if (!t.deadT) t.deadT = war.time; return; }
-        // raise the missile while a launch is being prepared, lower the rail after
+        // raise the missile while a launch is being prepared, lower the rail after (a new round is loaded a
+        // minute and a half after each launch, while there are any left)
         const q = t.src.queue[0];
         const want = q ? 1 : 0;
         u.erect = clamp(u.erect + (want ? dt / 8 : -dt / 10), 0, 1);
-        if (u.erector) {
+        const loaded = !!q || (war.time > t.reloadT && (t.src.stock.scud || 0) + (t.src.stock.kalibr || 0) > 0);
+        if (u.rig) {
+            // jacks down, then the pad, then the erector (and the reverse): only when something changed
+            const r = u.rig, e = u.erect;
+            if (Math.abs(e - (u.erectShown ?? -1)) > 0.002 || u.loadedShown !== loaded) {
+                u.erectShown = e; u.loadedShown = loaded;
+                deployJacks(r, clamp(e * 3, 0, 1)); deployPad(r, clamp(e * 3 - 1, 0, 1)); raise(r, clamp(e * 3 - 2, 0, 1));
+                if (r.missile) r.missile.visible = loaded;
+            }
+        } else if (u.erector) {
             u.erector.rotation.x = (Math.PI / 2 - 0.06) * (1 - u.erect);
-            u.erector.visible = (t.src.stock.scud || 0) + (t.src.stock.kalibr || 0) > 0 || !!q;
+            u.erector.visible = loaded;
         }
         // a prepared launch goes ahead unless it's been found and killed first
         if (t.launchAt && war.time >= t.launchAt) { t.launchAt = null; this.fireTel(t.target); }
@@ -1267,6 +1288,7 @@ export class Director {
     onLaunch(m) {
         if (!this.enabled || !m || m.team === this.game.war.side) return;
         const src = m.source, war = this.game.war;
+        if (this.tel && src === this.tel.src) this.tel.reloadT = war.time + 90; // the rail's empty until a reload
         // the launch gives the launcher away: satellites / AWACS put a contact where it came from
         if (src && src.host && src.host.pos && war.rec(src.host)) war.reveal(src.host, INTEL.CONTACT, 'launch', true);
     }

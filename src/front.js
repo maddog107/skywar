@@ -23,6 +23,8 @@ import * as THREE from 'three';
 import { terrainHeight, groundHeight, BASES } from './world.js';
 import { INTEL } from './war.js';
 import { BLUE_TOWNS, RED_TOWNS } from './tacmap.js';
+import { aim } from './vehicles.js';
+import { dress } from './dressing.js';
 import { clamp, lerp, rand, pick, damp } from './util.js';
 
 const NAMES = ['ALPHA', 'BRAVO', 'CHARLIE', 'DELTA', 'ECHO', 'FOXTROT', 'GOLF', 'HOTEL', 'INDIA', 'JULIET'];
@@ -39,9 +41,11 @@ const ZONE_R = 14000, ZONE_DROP = 22000; // real ground units near the player: m
 const BLUE_C = '#6fb4ff', RED_C = '#ff5a4a';
 // what each class is worth to its side's sector when it's destroyed near the front
 const WORTH = { artillery: 9, tank: 5, sam: 5, 'sam-radar': 5, radar: 4, aaa: 3, tel: 4, command: 10, fuel: 4, ammo: 6, vehicle: 2, convoy: 2, infantry: 1, bunker: 4, facility: 4 };
-const RED_NAMES = { tank: 'T-72 TANK', spaag: 'ZSU-23-4 SHILKA', truck: 'URAL TRUCK', humvee: 'BRDM SCOUT CAR' };
-const BLUE_NAMES = { tank: 'M1 ABRAMS', spaag: 'M163 VULCAN', truck: 'M939 TRUCK', humvee: 'HUMVEE' };
+const RED_NAMES = { tank: 'T-72 TANK', spaag: 'ZSU-23-4 SHILKA', truck: 'BTR-80 APC', humvee: 'BRDM SCOUT CAR' };
+const BLUE_NAMES = { tank: 'M1 ABRAMS', spaag: 'M163 VULCAN', truck: 'M1126 STRYKER', humvee: 'HUMVEE' };
 const TYPE_CLS = { tank: 'tank', spaag: 'aaa', msam: 'sam', truck: 'vehicle', humvee: 'vehicle', fueltruck: 'vehicle' };
+// the engagement zones' APCs wear the rigged models (vehicles.js) once they've loaded
+const ZONE_MODEL = { red: { truck: 'btr80' }, blue: { truck: 'stryker' } };
 const TRACER_RED = [3.4, 1.0, 0.5], TRACER_BLUE = [3.0, 2.6, 1.3];
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
@@ -485,28 +489,31 @@ export class FrontLine {
         const face = Math.atan2(s.normal.x, s.normal.z); // (facing −normal: toward our lines)
         for (let k = 0; k < 3; k++) {
             const x = site.x + Math.cos(face) * (k - 1) * 75 + rand(-10, 10), z = site.z - Math.sin(face) * (k - 1) * 75 + rand(-10, 10);
-            const u = g.ground.addTarget('tank', x, z, face, 'red');
-            u.name = '2S19 MSTA-S';
-            u.def = { ...u.def, name: '2S19 MSTA-S', score: 220 };
+            // a BM-21 Grad (vehicles.js) once the models are in; a truck with a raised tube pack until then
+            const u = g.ground.addTarget('truck', x, z, face, 'red');
+            u.name = 'BM-21 GRAD';
+            u.def = { ...u.def, name: 'BM-21 GRAD', score: 220, boom: 1.6 };
+            u.hp = u.maxHp = u.health = u.maxHealth = 70;
             u.battery = bt;
             u.fireT = rand(3, 14);
-            this.gunBarrel(u);
-            g.war.add(u, { cls: 'artillery', name: '2S19 MSTA-S HOWITZER', conceal: 0.35 });
+            this.tubePack(u);
+            dress(u, 'grad', { pose: 'aimed', onRig: (rig) => aim(rig, 0, 0.78) });
+            g.war.add(u, { cls: 'artillery', name: 'BM-21 GRAD ROCKET LAUNCHER', conceal: 0.35 });
             bt.units.push(u);
         }
         this.batteries.push(bt);
         return bt;
     }
 
-    // a long barrel raised over the hull, so a howitzer doesn't read as a tank
-    gunBarrel(u) {
-        if (!FrontLine.barrelGeo) {
-            FrontLine.barrelGeo = new THREE.CylinderGeometry(0.16, 0.2, 7.5, 8).translate(0, 3.75, 0);
-            FrontLine.barrelMat = new THREE.MeshStandardMaterial({ color: 0x3f4633, roughness: 0.75, metalness: 0.3 });
+    // the stand-in's raised tube pack (until the rigged Grad has loaded)
+    tubePack(u) {
+        if (!FrontLine.packGeo) {
+            FrontLine.packGeo = new THREE.BoxGeometry(2.2, 1.1, 3.2).translate(0, 0.55, -1.6);
+            FrontLine.packMat = new THREE.MeshStandardMaterial({ color: 0x4d5a3c, roughness: 0.8, metalness: 0.2 });
         }
-        const b = new THREE.Mesh(FrontLine.barrelGeo, FrontLine.barrelMat);
-        b.position.set(0, 2.6, -0.8);
-        b.rotation.x = -1.05; // ~30° elevation, pointing forward (−Z)
+        const b = new THREE.Mesh(FrontLine.packGeo, FrontLine.packMat);
+        b.position.set(0, 2.9, 2.6);
+        b.rotation.x = 0.7; // ~40° up, muzzles forward (−Z)
         b.castShadow = true;
         u.mesh.add(b);
     }
@@ -560,17 +567,33 @@ export class FrontLine {
                 u.fireT -= dt;
                 if (u.fireT > 0) continue;
                 u.fireT = rand(11, 19);
-                u.firingT = war.time; // a gun firing gives its position away
+                u.firingT = war.time; // a launcher firing gives its position away
                 const d = u.pos.distanceTo(cam);
                 if (d < VIS_R + 4000) {
-                    const fx = g.effects;
-                    const muzzle = _v.copy(u.pos).addScaledVector(s.normal, -4).setY(u.pos.y + 5);
-                    fx.sprite(fx.flashTex, muzzle, 11, 0.16, 1.2, 1, [1, 0.85, 0.6]);
-                    if (d < 6000) for (let i = 0; i < 5; i++) fx.smoke.emit(muzzle, _v2.set(rand(-3, 3), rand(2, 6), rand(-3, 3)), rand(3, 6), 3, 12, [0.6, 0.58, 0.55], [0.7, 0.68, 0.66], 0.5, 0, 1.2, 1);
+                    // a short ripple: rockets streaking out of the tubes, flash and smoke
+                    const fx = g.effects, n = d < 7000 ? 4 : 2;
+                    const tubes = u.vehicle && u.vehicle.userData.muzzles;
+                    if (tubes && tubes.length) u.mesh.updateMatrixWorld();
+                    for (let k = 0; k < n; k++) {
+                        const m = _v, dir = _v2;
+                        if (tubes && tubes.length) {
+                            const tb = tubes[Math.floor(Math.random() * tubes.length)];
+                            m.copy(tb.p).applyMatrix4(u.mesh.matrixWorld);
+                            dir.copy(tb.d).transformDirection(u.mesh.matrixWorld);
+                        } else {
+                            m.copy(u.pos).addScaledVector(s.normal, -3).setY(u.pos.y + 4.5);
+                            dir.set(-s.normal.x, 0.75, -s.normal.z).normalize();
+                        }
+                        fx.sprite(fx.flashTex, m, 8, 0.14, 1.2, 1, [1, 0.85, 0.6]);
+                        fx.fire.emit(m, _v3.copy(dir).multiplyScalar(rand(260, 320)), rand(1.4, 2), 2.2, 1.6, [6, 4.5, 2.2], [3, 1.2, 0.3], 1, 0.6, 0, 0);
+                        if (d < 6000) for (let i = 0; i < 3; i++) fx.smoke.emit(m, _v3.copy(dir).multiplyScalar(rand(3, 9)), rand(3, 6), 2.5, 12, [0.62, 0.6, 0.57], [0.72, 0.7, 0.68], 0.5, 0, 1.2, 1);
+                    }
                     if (d < 9000 && g.audio.boom) g.audio.boom(d, 0.8);
-                    // the shell lands on our side of this sector a few seconds later
-                    const p = this.randomFrontPoint(s, -1, 200, 1400);
-                    if (p) this.pending.push({ at: p.clone(), t: war.time + rand(4, 8), size: rand(0.55, 0.85) });
+                    // the rockets land on our side of this sector a few seconds later
+                    for (let k = 0; k < 2; k++) {
+                        const p = this.randomFrontPoint(s, -1, 200, 1400);
+                        if (p) this.pending.push({ at: p.clone(), t: war.time + rand(5, 9), size: rand(0.5, 0.8) });
+                    }
                 }
             }
         }
@@ -810,6 +833,7 @@ export class FrontLine {
         u.frontZone = zone;
         u.drive = drive ? 1 : 0;
         war.add(u, { name: u.name, cls: TYPE_CLS[sl.type] || 'vehicle' });
+        if (ZONE_MODEL[sl.team][sl.type]) dress(u, ZONE_MODEL[sl.team][sl.type], { pose: 'road' });
         sl.unit = u;
         zone.units.push(u);
         return u;

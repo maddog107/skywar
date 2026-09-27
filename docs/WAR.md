@@ -296,13 +296,17 @@ and its `deploy` sequence (the pose groups to run, in order, from travel to firi
   as they stay destroyed. Convoys that arrive add supply (`front.deliver(pos, team, amount)`).
   `front.hit(sector, team, amount, why)` is the raw lever.
 - **Near the camera:** shell impacts and muzzle flashes, rumble, smoke from burning wrecks, tracer across
-  the line; engagement zones of real ground units (ground.js tanks, Shilkas, trucks, Abrams, Humvees) in the
-  one or two sectors nearest the player, which trade fire, get reinforced from behind, move with the line,
-  and go away when the player leaves (`front.zoneUnits(sector, team)`). Their own fire uses the source
-  `{ isFront: true }`, which scores nothing and isn't counted twice in the strengths.
-- **Artillery:** red howitzer batteries (three 2S19s, war class `artillery`) 4–7 km behind the line in two
-  or three sectors; they fire every 11–19 s (`firingT`, so they're easy to spot), their shells land on our
-  side, and a new battery comes up every ~10 minutes if some were destroyed.
+  the line; engagement zones of real ground units (ground.js tanks and Shilkas, BTR-80s against Abrams,
+  Strykers and Humvees) in the one or two sectors nearest the player, which trade fire, get reinforced from
+  behind, move with the line, and go away when the player leaves (`front.zoneUnits(sector, team)`). Their own
+  fire uses the source `{ isFront: true }`, which scores nothing and isn't counted twice in the strengths.
+  Stretches of front over the sea (`sector.sea`) stay quiet.
+- **Artillery:** red BM-21 Grad batteries (three launchers, war class `artillery`) 4–7 km behind the line in
+  two or three sectors; they ripple-fire every 11–19 s (`firingT`, so they're easy to spot), their rockets
+  land on our side, and a new battery comes up every ~10 minutes if some were destroyed.
+- **Vehicles:** ground targets wear the rigged models from `src/vehicles.js` once they've loaded
+  (`dress(unit, id, { onRig })` in src/dressing.js keeps the target and swaps its stand-in mesh): the Grads,
+  the APCs, the convoys' Urals / HEMTTs / SA-8, the stand-in Scud TEL and our Patriot launcher.
 - **Map:** sector ticks and names with a blue/red strength bar, push arrows, contested stretches glowing,
   engagement zones (orange crosses), and the war's starting line (faint dots).
 - **Events:** `frontPush` (sector, { team }), `frontOffensive` (sector, { team }), `townCaptured` (town,
@@ -311,11 +315,12 @@ and its `deploy` sequence (the pose groups to run, in order, from travel to firi
 ### `game.director` (src/director.js): the war around the player
 - **Flights** (`director.flights`): `{ team, role, callsign, types, hp[], bombs[], pos, vel, route, loiter,
   target, home, members, state, detected }`. Roles: `cap`, `raid`, `escort`, `recon`, `intercept`,
-  `strike` (our packages), `cas`. Far away a flight is a point moving along its route; within 20 km of the
+  `strike` (our packages), `cas`. Far away a flight is a point moving along its route; within 18 km of the
   player it becomes real jets (`members`, Aircraft + Pilot, configured by role: CAPs leashed to their
   station, raiders flying their route and releasing bombs over the target, CAS strafing ground targets
-  through a Pilot brain); past 30 km (and not in a fight) it goes back to abstract, keeping its damage.
-  A budget keeps the real jets to ~10 and the enemy fighters around the player to 2–5 by difficulty.
+  through a Pilot brain); past 27 km (and not in a fight) it goes back to abstract, keeping its damage.
+  A budget keeps the real jets to 5 / 6 / 8 (rookie / veteran / ace) and the enemy fighters around the
+  player to 2 / 3 / 4; the rest wait, abstract.
   Out of sight, fights between flights and SAMs against flights are settled by odds.
   `director.spawnFlight(opts)` adds one (opts as the fields above plus `speed`, `skill`, `escortOf`).
 - **Enemy:** CAP stations over their ground; radar-directed scrambles when their radars (`war.coverage`)
@@ -325,10 +330,11 @@ and its `deploy` sequence (the pose groups to run, in order, from travel to firi
   base (one that gets home makes the carrier a missile target); supply convoys on the road network toward
   the front; the carrier group moving; missile strikes through `strikes.request(type, marks, 'red')` —
   half of them announced first ("TEL PREPARING A LAUNCH"), a chance to find and kill the launcher in time.
-- **Launcher:** until the mobile-forces plug-in adds real TELs, a stand-in SCUD TEL (a truck with a missile
-  that's raised before a launch; war class `tel`, conceal 0.6) hides 12–22 km behind the line, relocates
-  a few minutes after firing when nobody's watching (event `telRelocated`), and a new one comes up ten
-  minutes after it's destroyed. It isn't made if another plug-in has added red `launcher` sources.
+- **Launcher:** until the mobile-forces plug-in adds real TELs, a stand-in SCUD TEL (the rigged 9P117: jacks,
+  pad and erector run before each launch, the rail stays empty for 90 s after; war class `tel`, conceal 0.6)
+  hides 12–22 km behind the line, relocates a few minutes after firing when nobody's watching (event
+  `telRelocated`), and a new one comes up ten minutes after it's destroyed. It isn't made if another plug-in
+  has added red `launcher` sources.
 - **Friendly:** a CAP over our side, strike packages (HAMMER) against high-value targets the player
   identified and left alone, convoys to the front that draw enemy attack aircraft, and calls for help.
   An AN/TPS-75 radar at the home base and at Miramar, a Patriot battery at home and the carriers'
