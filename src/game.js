@@ -1170,7 +1170,7 @@ export class Game {
     candidates() {
         const out = [];
         for (const a of this.aircraft) if (a.alive && a.team !== 'blue' && !a.onGround) out.push(a);
-        if (this.ground) for (const t of this.ground.targets) if (t.alive && t.team !== 'blue' && (!t.isBridge || t.objective)) out.push(t);
+        if (this.ground) for (const t of this.ground.targets) if (t.alive && t.team !== 'blue' && !t.hidden && (!t.isBridge || t.objective)) out.push(t); // (hidden: not found yet)
         return out;
     }
 

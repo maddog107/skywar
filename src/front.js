@@ -485,8 +485,11 @@ export class FrontLine {
         if (!g.ground || !g.ground.addTarget) return null;
         const site = this.findSite(s, 'red', 3800, 6800);
         if (!site) return null;
-        const bt = { sector: s, units: [], at: new THREE.Vector3(site.x, groundHeight(site.x, site.z), site.z), t: 0 };
         const face = Math.atan2(s.normal.x, s.normal.z); // (facing −normal: toward our lines)
+        // with the mobile forces (forces.js): their Grads — driving, laying, rippling real salvos, shooting and scooting
+        const fb = g.forces && g.forces.frontBattery ? g.forces.frontBattery(s, site, face) : null;
+        if (fb) { this.batteries.push(fb); return fb; }
+        const bt = { sector: s, units: [], at: new THREE.Vector3(site.x, groundHeight(site.x, site.z), site.z), t: 0 };
         for (let k = 0; k < 3; k++) {
             const x = site.x + Math.cos(face) * (k - 1) * 75 + rand(-10, 10), z = site.z - Math.sin(face) * (k - 1) * 75 + rand(-10, 10);
             // a BM-21 Grad (vehicles.js) once the models are in; a truck with a raised tube pack until then
@@ -561,7 +564,7 @@ export class FrontLine {
         const g = this.game, war = g.war, cam = g.camera.position;
         for (const bt of this.batteries) {
             const s = bt.sector;
-            if (s.red < 15) continue;
+            if (s.red < 15 || bt.forces) continue; // (the mobile forces' batteries fire their own salvos at the sector)
             for (const u of bt.units) {
                 if (!u.alive) continue;
                 u.fireT -= dt;

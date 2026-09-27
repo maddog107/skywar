@@ -12,6 +12,7 @@ import { CommandMenu } from './command.js';
 import { StrikeManager } from './strikes.js';
 import { Sensors } from './sensors.js';
 import { MapKit } from './mapkit.js';
+import { MobileForces } from './forces.js';
 import { FrontLine } from './front.js';
 import { Director } from './director.js';
 import { TaskManager } from './tasks.js';
@@ -23,6 +24,7 @@ export const SYSTEMS = [
     ['mapkit', MapKit],     // map tools: legend, layers, ruler, coordinates, steerpoint, air tracks, imagery
     ['command', CommandMenu],
     ['strikes', StrikeManager],
+    ['forces', MobileForces],    // TELs, mobile SAMs, rocket artillery, convoys (before the front: its batteries are ours)
     ['front', FrontLine],        // the front line and the ground war
     ['director', Director],      // enemy and friendly activity, the Living War mode
     ['tasks', TaskManager],      // dynamic tasks
