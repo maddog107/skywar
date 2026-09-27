@@ -176,7 +176,8 @@ parts are pulled out first and every instance gets its own copy, hung on the sec
   (its `userData.rpm`, 6 by default, airborne; ¼ rpm on the ground; `ac.radarRpm` overrides).
 - **The types:** E-3G and A-50U (`rotodome`); KC-135R (`boom` and wing drogues `l`/`r`); Il-78M (drogues `l`, `r`
   and `c`, the centre one on the rear fuselage, 26 m of hose); MQ-9A (a spinning pusher) and RQ-4B; B-52H and
-  Tu-95MS (eight contra-rotating props: a MODEL_FILES prop's `dir: -1` turns it the other way).
+  Tu-95MS (eight contra-rotating props: a MODEL_FILES prop's `dir: -1` turns it the other way); EA-18G Growler
+  (a fighter in the support group), U-2S and RC-135W (no moving parts beyond flaps; receivers carry `refuel`).
   `tests/supportac.test.mjs` lists each type's rig nodes.
 - **Receivers:** `REFUEL` in rigparts.js gives each receiver an empty named `refuel`: the boom receptacle
   (`userData.kind === 'boom'`) or the extended probe's tip (`'probe'`).

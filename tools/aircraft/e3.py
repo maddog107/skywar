@@ -42,13 +42,18 @@ ALL = lambda: SK.meshes()
 
 # ── clean-up: KC-135-only parts ──
 SK.delete_loose(lambda a, b, n: -b.y > 33.5 and n < 400 and b.z < 1.3, [obj['Object_37']])            # the boom
-SK.delete_loose(lambda a, b, n: n < 60 and -b.y > 30 and -a.y < 34.5 and b.z < 0.0, [obj['Object_37']])  # boom operator's pod
+# the boom operator's pod under the tail: its blister, the fairing slab under it and a strip ahead (as rc135.py; the
+# slab has ~240 verts once welded)
+print('boom pod', SK.delete_loose(lambda a, b, n: n < 700 and -b.y > 30 and -a.y < 34.5 and b.z < 0.0, [obj['Object_37']]))
 SK.delete_loose(lambda a, b, n: (b - a).length > 8 and (b - a).x < 0.1 and n <= 200, [obj['Object_32']])  # HF wire
 SK.delete([obj['Object_38'], obj['Object_25'], obj['Object_33']])                                        # unit markings
 print('tail codes', SK.delete_loose(lambda a, b, n: -b.y > 30 and a.z > 3.0, [obj['Object_20']]),     # tail codes (and their
       SK.delete_loose(lambda a, b, n: n < 40 and -b.y > 34.5 and -a.y < 37.6 and a.z > 5.3 and b.z < 7.0 and abs(a.x) < 0.5, [obj['Object_27']]))  # fragments in the fin)
 # the cargo door outline on the left forward fuselage (the E-3's -320B airframe has none)
 print('cargo door', SK.delete_loose(lambda a, b, n: a.x < -1.5 and b.x < -0.5 and -b.y > 6.5 and -a.y < 11.0 and (b.z - a.z) > 1.2 and n < 400, [obj['Object_32'], obj['Object_37']]))
+# the tanker unit's lettering ("190th ARW") and badge under the cockpit, both sides (as rc135.py)
+print('unit lettering', SK.delete_loose(lambda a, b, n: n < 130 and min(abs(a.x), abs(b.x)) > 1.15 and 3.55 < -b.y and -a.y < 4.75 and a.z > -0.72 and b.z < -0.25,
+                                        [obj['Object_32'], obj['Object_36']]))
 # the CFM56 nacelles, their fans and pylons, and the lines painted on them
 SK.delete([obj[n] for n in ('Object_3', 'Object_4', 'Object_5', 'Object_7', 'Object_8', 'Object_9', 'Object_11', 'Object_12', 'Object_13',
                             'Object_15', 'Object_16', 'Object_17', 'Object_21', 'Object_22', 'Object_23', 'Object_24')])

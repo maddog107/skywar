@@ -26,6 +26,9 @@ const RIGS = {
     rq4: {},
     b52: {},
     tu95: {},
+    ea18g: {},
+    u2: {},
+    rc135: {},
 };
 
 // node name → parent node name, from a GLB's JSON chunk
@@ -91,6 +94,9 @@ describe('support types: config and model entries', () => {
         assert.equal(hasEjectionSeat(AIRCRAFT.f16), true);
         assert.equal(hasEjectionSeat(AIRCRAFT.b2), true);
         assert.equal(hasEjectionSeat(AIRCRAFT.b52), true);
+        assert.equal(hasEjectionSeat(AIRCRAFT.u2), true, 'the U-2 has one');
+        assert.equal(hasEjectionSeat(AIRCRAFT.ea18g), true);
+        assert.equal(hasEjectionSeat(AIRCRAFT.rc135), false);
         assert.equal(hasEjectionSeat(AIRCRAFT.tu95), false, 'the Bear\'s crew bail out through a hatch');
         assert.equal(hasEjectionSeat(AIRCRAFT.b737), false);
         assert.equal(hasEjectionSeat({ category: 'support', eject: true }), true);

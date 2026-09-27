@@ -57,6 +57,9 @@ export the moving parts as separate named nodes for `src/rigparts.js`):
 | rq4 | `rq4.py` | NASA 3D Resources `3D Models/Global Hawk/Global Hawk.glb` |
 | b52 | `b52.py` | Objaverse `glbs/000-078/3ca2f507a0a749799e16a4eee12e456c.glb` ("B52" by manilov.ap) |
 | tu95 | `tu95.py` | Objaverse `glbs/000-114/1eac97ec49ed4f1da8b7deb1e1b2cc7a.glb` ("Tu95" by manilov.ap) |
+| ea18g | `ea18g.py` | `models/aircraft/fa18.glb` (the game's F/A-18F) |
+| u2 | `u2.py` | NASA `ER2_AFRC_AIR_0626.glb` (https://airbornescience.nasa.gov/3d-models/models/ER2_AFRC_AIR_0626.glb) |
+| rc135 | `rc135.py` | the same KC-135R file |
 
 Each script's header lists what it changes; sources and licences are in the last section of
 `models/aircraft/CREDITS.md`.

@@ -84,6 +84,14 @@ export const MODEL_FILES = {
         props: [[-0.2492, -0.209], [0.2492, -0.209], [-0.1301, -0.2778], [0.1301, -0.2778]].flatMap(([x, z]) => [
             { x, y: -0.0873, z, r: 0.0573, blades: 4, dir: 1 }, { x, y: -0.0873, z: z + 0.0153, r: 0.0573, blades: 4, dir: -1 }]),
     },
+    // the Growler: the F/A-18F file with its stores and pods (tools/aircraft/ea18g.py); the Super Hornet's nozzles given
+    // explicitly (the pods confuse findNozzles), afterburner flame on
+    ea18g: { file: 'aircraft/ea18g.glb', rot: [0, 0, 0], cockpit: [0.016, -0.238], nozzles: [[-0.0297, -0.0425, 0.4433], [0.0297, -0.0425, 0.4433]] },
+    u2: { file: 'aircraft/u2.glb', rot: [0, 0, 0], cockpit: [-0.0616, -0.3035], nozzles: [[0, -0.039, 0.4974]], nozzleR: 0.012, flame: false },
+    rc135: {
+        file: 'aircraft/rc135.glb', rot: [0, 0, 0], cockpit: [-0.0501, -0.3644], flame: false, nozzleR: 0.012,
+        nozzles: [[-0.3396, -0.0938, 0.092], [-0.2009, -0.1129, -0.0182], [0.2009, -0.1129, -0.0182], [0.3396, -0.0938, 0.092]],
+    },
 };
 
 const cache = {};

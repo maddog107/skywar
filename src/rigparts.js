@@ -42,6 +42,7 @@ export const REFUEL = {
     b2: { at: [0, 0.082, -0.19], kind: 'boom' },              // top, behind the cockpit
     e3: { at: [0, -0.0229, -0.3756], kind: 'boom' },          // UARRSI on the spine behind the cockpit
     b52: { at: [0, -0.0242, -0.3079], kind: 'boom' },         // UARRSI on the spine behind the cockpit
+    rc135: { at: [0, -0.0226, -0.3333], kind: 'boom' },       // receptacle on the spine behind the cockpit
     // probe-and-drogue receivers: the tip of the (extended) probe
     rafale: { at: [0.0294, -0.085, -0.4056], kind: 'probe' }, // fixed probe (modelled), right of the windscreen: its tip
     typhoon: { at: [0.031, -0.034, -0.35], kind: 'probe' },   // retractable, right side ahead of the canopy
@@ -50,6 +51,8 @@ export const REFUEL = {
     su35: { at: [-0.024, -0.05, -0.33], kind: 'probe' },      // retractable, left of the windscreen
     a50: { at: [0, -0.0143, -0.5], kind: 'probe' },           // fixed probe over the nose: its tip
     tu95: { at: [-0.0004, -0.0644, -0.5], kind: 'probe' },    // fixed probe on the nose: its tip
+    fa18: { at: [0.0293, 0.008, -0.3776], kind: 'probe' },    // retractable, right of the nose: its extended tip
+    ea18g: { at: [0.0293, 0.008, -0.3776], kind: 'probe' },   // the same airframe
 };
 
 const _m = new THREE.Matrix4(), _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _s = new THREE.Vector3();

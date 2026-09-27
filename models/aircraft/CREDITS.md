@@ -96,6 +96,9 @@ Reference drawings and photographs were used only to measure.
 | `rq4.glb` | RQ-4B Global Hawk | NASA 3D Resources "Global Hawk" | Public domain (US Government work; NASA insignia removed) | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Global%20Hawk |
 | `b52.glb` | B-52H Stratofortress | "B52" by manilov.ap | CC BY 4.0 | https://sketchfab.com/3d-models/b52-3ca2f507a0a749799e16a4eee12e456c |
 | `tu95.glb` | Tu-95MS Bear-H | "Tu95" by manilov.ap | CC BY 4.0 | https://sketchfab.com/3d-models/tu95-1eac97ec49ed4f1da8b7deb1e1b2cc7a |
+| `ea18g.glb` | EA-18G Growler, derived from the F/A-18F model | "Low poly 1:1 F/A-18F SuperHornet" by WTigerTw (Yi Tsung Lee) | CC BY 4.0 | https://sketchfab.com/3d-models/low-poly-11-fa-18f-superhornet-635e68b7a0d24ac29c10f5fb9110129f |
+| `u2.glb` | U-2S Dragon Lady, from NASA's ER-2 (a U-2S derivative) | NASA Airborne Science Program 3D model "ER2_AFRC_AIR_0626" | Public domain (US Government work; credit NASA) | https://airbornescience.nasa.gov/3d-models |
+| `rc135.glb` | RC-135W Rivet Joint, derived from the same KC-135R model | "KC135R" by Adastra | CC BY 4.0 | https://sketchfab.com/3d-models/kc135r-95fedbaed45b492e8dfa9d1a8f76b25f |
 
 References: USAF E-3 line drawing (https://commons.wikimedia.org/wiki/File:AWACS_Line_drawing.jpg, public domain),
 USAF KC-135 line drawing (File:Boeing_KC-135_Stratotanker_line_drawing_-_USAF_medium_res.png), photographs of
@@ -105,10 +108,12 @@ the A-50 at MAKS-2013.
 Tu-95MS: the three-view on Wikimedia Commons (CC BY-SA 3.0), used for measuring only.
 
 Attribution lines:
-- "KC135R" (https://sketchfab.com/3d-models/kc135r-95fedbaed45b492e8dfa9d1a8f76b25f) by Adastra, CC BY 4.0. Changes (kc135.glb): repainted with panel lines, unit markings and the HF wire removed, a new articulated flying boom and two MPRS hose-and-drogue pods added. Changes (e3.glb): lengthened and re-winged into a Boeing 707-320B (E-3G), new TF33 nacelles, rotodome and antennas, KC-135 details removed.
+- "KC135R" (https://sketchfab.com/3d-models/kc135r-95fedbaed45b492e8dfa9d1a8f76b25f) by Adastra, CC BY 4.0. Changes (kc135.glb): repainted with panel lines, unit markings and the HF wire removed, a new articulated flying boom and two MPRS hose-and-drogue pods added. Changes (e3.glb): lengthened and re-winged into a Boeing 707-320B (E-3G), new TF33 nacelles, rotodome and antennas, KC-135 details removed. Changes (rc135.glb): hog nose, SLAR cheek fairings and antenna arrays added; boom, boom operator's pod, unit markings and HF wire removed; decimated.
 - "Ilyushin Il-76" (https://sketchfab.com/3d-models/ilyushin-il-76-ab71a5f790f940798cc755246a7a8a7f) by helijah (Emmanuel Baranger), CC BY 4.0. Changes (a50.glb): landing gear and cockpit interior removed, repainted in the A-50U scheme with Russian stars, navigator glazing faired over, rotodome, refuelling probe, blisters and antennas added.
 - "Il78" (https://sketchfab.com/3d-models/il78-0c0da2cc1b4c441dadc2510212c25fb7) by manilov.ap, CC BY 4.0. Changes (il78.glb): landing gear removed, hose-and-drogue units rigged.
 - "MQ-9 Reaper" (https://sketchfab.com/3d-models/mq-9-reaper-eff549610fee4f20904f7b388a3a0830) by Tyler V Howell, CC BY 4.0. Changes (mq9.glb): re-oriented, rescaled, outer wing shortened to the ER wing's 24 m, static propeller removed (the game spins its own), stores decimated, textures reduced and darkened.
 - Global Hawk model courtesy of NASA (3D Resources). Changes (rq4.glb): landing gear and NASA markings removed, repainted USAF grey, wing lengthened to the RQ-4B's 39.9 m.
 - "B52" (https://sketchfab.com/3d-models/b52-3ca2f507a0a749799e16a4eee12e456c) by manilov.ap, CC BY 4.0. Changes (b52.glb): tail gun barrels and gear doors removed, wing stretched to the real span.
 - "Tu95" (https://sketchfab.com/3d-models/tu95-1eac97ec49ed4f1da8b7deb1e1b2cc7a) by manilov.ap, CC BY 4.0. Changes (tu95.glb): straightened; static propellers, gear, gear doors and HF wire removed (the game spins eight contra-rotating props); gear bays covered; wing stretched to the real span.
+- "Low poly 1:1 F/A-18F SuperHornet" (https://sketchfab.com/3d-models/low-poly-11-fa-18f-superhornet-635e68b7a0d24ac29c10f5fb9110129f) by WTigerTw (Yi Tsung Lee), CC BY 4.0. Changes (ea18g.glb, the EA-18G Growler, from the game's fa18.glb): wingtip AIM-9 rails replaced by ALQ-218 pods; ALQ-99 jamming pods, AGM-88 HARMs, AIM-120s and ALQ-227 spine blades added; squadron titles repainted (VAQ-133).
+- NASA Airborne Science Program ER-2 3D model "ER2_AFRC_AIR_0626" (https://airbornescience.nasa.gov/3d-models), courtesy of NASA, public domain. Changes (u2.glb): repainted black (NASA markings removed), the belly pod and a wing sensor removed, textures downscaled.

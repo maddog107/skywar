@@ -40,6 +40,9 @@ SK.delete_loose(lambda a, b, n: (b - a).length > 8 and (b - a).x < 0.1 and n <= 
 # unit markings of one real aircraft (the Kansas ANG "Free State Fueler" nose art, the ANG crest on the fin) and the
 # subdued-flag decals that map as white squares: a generic AMC tanker keeps only the USAF titles, insignia and serial
 SK.delete([obj['Object_38'], obj['Object_25'], obj['Object_33']])
+# ... and the unit's lettering ("190th ARW") and badge under the cockpit, both sides
+print('unit lettering', SK.delete_loose(lambda a, b, n: n < 130 and min(abs(a.x), abs(b.x)) > 1.15 and 3.55 < -b.y and -a.y < 4.75 and a.z > -0.72 and b.z < -0.25,
+                                        [obj['Object_32'], obj['Object_36']]))
 # paint: the flat teal airframe → AMC grey with panel lines (box UVs); the rudder a shade darker; engine parts
 SK.replace_material(r'^material_6$', 'Paint')
 SK.replace_material(r'^material_12$', 'Paint2')

@@ -354,6 +354,29 @@ export const AIRCRAFT = {
         health: 260, gun: null, missiles: 6, flares: 48, fuelTime: 7200, maxBank: 0.6,
         proc: { airliner: true, turboprop: true, engines: 4, body: [0.065, 0.065], paint: 0xb8bcbd, accent: 0x9ca1a3 },
     },
+    // electronic warfare and reconnaissance. The Growler is a fighter (a Super Hornet airframe: seats, hook, fighter
+    // handling) listed with the support types; the U-2's pilot has an ejection seat
+    ea18g: jet({
+        name: 'EA-18G Growler', role: 'Electronic Attack', country: 'USA', length: 18.31, span: 13.62, group: 'support',
+        desc: 'The Super Hornet turned radar killer: ALQ-99 jamming pods, ALQ-218 receivers on the wingtips and HARMs to finish the job. No gun.',
+        flight: { speed: 318, mach: 1.45, cd0: 0.062, aoaLimiter: true, accel: 12, gLimit: 7.5, roll: 3.3, alpha: 35, lift: 1.04 },
+        health: 120, missiles: 4, gun: null, flares: 60,
+        proc: { body: [0.09, 0.08], wing: { rc: 0.3, tc: 0.12, sweep: 28, z: 0.1 }, tail: 'twin', cant: 20, hstab: true, engines: 2, spacing: 0.06, intake: 'side', lerx: true, paint: 0x7b858e, accent: 0x68727b },
+    }),
+    u2: {
+        name: 'U-2S Dragon Lady', role: 'High-Altitude Reconnaissance', country: 'USA', length: 19.2, span: 31.4, category: 'support', eject: true,
+        desc: 'The Dragon Lady: a jet-powered glider that photographs and listens from 70,000 ft. Flies itself high, hates the ground.',
+        flight: { speed: 200, mach: 0.74, afterburner: false, accel: 5.5, lift: 2.7, gLimit: 2.5, roll: 0.8, alpha: 14 },
+        health: 90, gun: null, missiles: 0, flares: 0, fuelTime: 9000,
+        proc: { body: [0.06, 0.06], wing: { rc: 0.14, tc: 0.07, sweep: 5, z: 0.05 }, tail: 'single', hstab: true, engines: 1, intake: 'side', paint: 0x1e2023, accent: 0x161719 },
+    },
+    rc135: {
+        name: 'RC-135W Rivet Joint', role: 'SIGINT Reconnaissance', country: 'USA', length: 41.1, span: 39.88, category: 'support',
+        desc: 'A flying listening post: the hog-nosed, cheek-bulged C-135 that maps enemy radars and radios from 300 km away.',
+        flight: { speed: 236, mach: 0.84, afterburner: false, accel: 4.0, lift: 0.82, gLimit: 2.5, roll: 0.75, alpha: 14 },
+        health: 210, gun: null, missiles: 0, flares: 0, fuelTime: 7200,
+        proc: { airliner: true, engines: 4, body: [0.09, 0.095], paint: 0x8f969b, accent: 0x2a2d30 },
+    },
 };
 
 // Which aircraft can appear as hostiles, and what they're worth
