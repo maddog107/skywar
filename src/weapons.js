@@ -9,6 +9,11 @@ import { outsideBases } from './roads.js';
 import { CRATER_KINDS, craterAdj } from './craters.js';
 import { AIR_TARGETS, segHitsSphere } from './softtargets.js';
 import { seatHitTest, seatBody, seatCanopyUp, seatCanopyCenter, isEnemySeat, hitEnemySeat, shredEnemyCanopy } from './pilot.js';
+import { materielDamage, targetClass, damageAt } from './arsenal.js';
+
+// what a round does to a target class: small arms (b.small, from ordnance.js) carry their weapon's table
+// (arsenal.js: armour shrugs them off, walls stop them); everything else deals its flat damage
+const roundVs = (b, cls) => (b.small ? materielDamage(b.def, cls) : b.damage);
 
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _v4 = new THREE.Vector3();
 const _prev = new THREE.Vector3();
@@ -92,7 +97,7 @@ export class Weapons {
         const b = this.bulletPool.pop() || { pos: new THREE.Vector3(), vel: new THREE.Vector3(), pooled: true };
         b.pos.copy(pos); b.vel.copy(vel);
         b.owner = owner; b.team = owner.team; b.damage = damage; b.life = life; b.tracer = tracer; b.color = color;
-        b.flak = false; b.fuse = 0;
+        b.flak = false; b.fuse = 0; b.small = false; b.def = null; b.whizzed = false;
         this.bullets.push(b);
         return b;
     }
@@ -116,7 +121,8 @@ export class Weapons {
                     // test in target's frame: shift the segment by target displacement this frame
                     _v1.copy(_prev).addScaledVector(ac.vel, dt);
                     if (segPointDistSq(_v1, b.pos, ac.pos) < r * r) {
-                        ac.damage(b.damage, b.owner, 'gun');
+                        ac.damage(roundVs(b, 'aircraft'), b.owner, b.small ? 'rifle' : 'gun');
+                        if (b.small && b.owner === g.pilotMode) g.hitmarkerT = g.time;
                         g.effects.impact(b.pos, ac.vel);
                         g.events.emit('bulletHit', b.owner, { target: ac });
                         dead = true;
@@ -128,7 +134,9 @@ export class Weapons {
                 for (const t of g.ground.targets) {
                     if (!t.alive || t.team === b.team || b.damage <= 0) continue;
                     if (t.hitTest ? t.hitTest(b.pos) : segPointDistSq(_prev, b.pos, t.center) < t.radius * t.radius) {
-                        t.damage(b.damage, b.owner);
+                        const dmg = roundVs(b, targetClass(t));
+                        if (dmg > 0) t.damage(dmg, b.owner, b.small ? 'rifle' : undefined);
+                        if (b.small && dmg > 0 && b.owner === g.pilotMode) g.hitmarkerT = g.time;
                         g.effects.impact(b.pos, null);
                         g.events.emit('bulletHit', b.owner, { target: t });
                         dead = true;
@@ -159,7 +167,7 @@ export class Weapons {
                         g.effects.groundImpact(b.pos);
                         // strafing: a round striking the ground right by someone on foot still hurts (fragments, ricochet)
                         const pm = g.pilotMode;
-                        if (b.team === 'red' && b.damage > 0 && pm && pm.alive && pm.walker) {
+                        if (b.team === 'red' && b.damage > 0 && !b.small && pm && pm.alive && pm.walker) {
                             const d = Math.hypot(pm.pos.x - b.pos.x, pm.pos.z - b.pos.z);
                             if (d < 2.5) pm.takeHit(b.damage * (1.6 - d * 0.4), 'CUT DOWN BY GUNFIRE');
                         }
@@ -350,10 +358,13 @@ export class Weapons {
     // standing where they landed (hit by blue rounds): a body capsule plus the canopy, which tears (pilot.js) ──
     peopleBulletHit(b, prev) {
         const g = this.game;
+        if (g.infantry && g.infantry.bulletHit(b, prev)) return true; // soldiers (infantry.js)
         if (b.team === 'red') {
             const pm = g.pilotMode;
             if (!pm || !pm.alive || Math.abs(pm.pos.x - b.pos.x) > 60 || Math.abs(pm.pos.z - b.pos.z) > 60) return false;
-            if (!pm.bulletHit(prev, b.pos, b.damage)) return false;
+            // a round snapping past your head
+            if (b.small && !b.whizzed && segPointDistSq(prev, b.pos, _v1.copy(pm.pos).setY(pm.pos.y + 1.3)) < 9) { b.whizzed = true; g.audio.whiz && g.audio.whiz(); }
+            if (!pm.bulletHit(prev, b.pos, b.damage, b)) return false;
             g.effects.impact(b.pos, null);
             return true;
         }
@@ -363,19 +374,21 @@ export class Weapons {
             if (Math.abs(r.x - b.pos.x) > 60 || Math.abs(r.z - b.pos.z) > 60 || Math.abs(r.y + 8 - b.pos.y) > 60) continue;
             const hit = seatHitTest(s, prev, b.pos);
             if (!hit) continue;
-            if (hit === 'body') hitEnemySeat(g, s, 22 + b.damage, b.owner);
-            else shredEnemyCanopy(g, s, 6 + b.damage * 0.4, b.owner);
+            if (hit === 'body') hitEnemySeat(g, s, b.small ? damageAt(b.def, (b.def.life - b.life) * b.def.velocity) * 1.2 : 22 + b.damage, b.owner);
+            else shredEnemyCanopy(g, s, 6 + (b.small ? b.def.damage * 0.3 : b.damage * 0.4), b.owner);
             g.effects.impact(b.pos, null);
-            if (b.owner === g.player) g.hitmarkerT = g.time;
+            if (b.owner === g.player || (b.owner === g.pilotMode && g.pilotMode)) g.hitmarkerT = g.time;
             return true;
         }
         return false;
     }
 
     // an explosion at `at`: people inside R take up to `dmg` (canopies a little further out tear).
-    // `team` is the side that set it off: its own pilots are spared (null: everyone, e.g. a jet crashing)
-    blastPeople(at, R, dmg, owner, team = null) {
+    // `team` is the side that set it off: its own pilots are spared (null: everyone, e.g. a jet crashing).
+    // Soldiers (infantry.js) are caught too unless opts.soldiers is false (ordnance.js blasts them itself).
+    blastPeople(at, R, dmg, owner, team = null, opts = null) {
         const g = this.game, pm = g.pilotMode;
+        if (g.infantry && !(opts && opts.soldiers === false)) g.infantry.blast(at, { R, inner: R * 0.15, peak: dmg }, owner, team);
         if (pm && pm.alive && team !== 'blue') pm.blast(at, R, dmg);
         if (team === 'red') return;
         for (const s of g.wreckage.seats) {
@@ -403,9 +416,9 @@ export class Weapons {
         for (const t of AIR_TARGETS) {
             if (!t.alive || Math.abs(t.pos.x - b.pos.x) > 120 || Math.abs(t.pos.z - b.pos.z) > 120) continue;
             if (segHitsSphere(prev, b.pos, t.pos, t.radius)) {
-                this.hitAir(t, b.damage, b.owner);
+                this.hitAir(t, roundVs(b, 'aircraft'), b.owner);
                 g.effects.impact(b.pos, null);
-                if (b.owner === g.player) g.hitmarkerT = g.time;
+                if (b.owner === g.player || (b.small && b.owner === g.pilotMode)) g.hitmarkerT = g.time;
                 return true;
             }
         }
@@ -417,16 +430,20 @@ export class Weapons {
             for (let k = 1; k <= 4; k++) {
                 const p = _v1.lerpVectors(prev, b.pos, k / 4);
                 const hit = bl.at(p.x, p.y, p.z);
-                if (hit) { bl.damage(hit, b.damage, g, b.owner); g.effects.impact(p, null); b.pos.copy(p); return true; }
+                if (hit) { const d = roundVs(b, 'building'); if (d > 0) bl.damage(hit, d, g, b.owner); g.effects.impact(p, null); b.pos.copy(p); return true; }
             }
         }
         // cars: sample the step too — the band just above the road is thinner than one frame's travel
-        if (b.pos.y - terrainHeight(b.pos.x, b.pos.z) < 40) {
+        if (b.pos.y - terrainHeight(b.pos.x, b.pos.z) < 40 && (!towns.traffic.nearAny || towns.traffic.nearAny(prev, b.pos))) {
             for (let k = 1; k <= 6; k++) {
                 const p = _v1.lerpVectors(prev, b.pos, k / 6);
                 const h = terrainHeight(p.x, p.z);
                 if (p.y - h > 4) continue;
-                if (towns.traffic.hitAt(p, b.damage, g)) { g.effects.impact(p, null); b.pos.copy(p); return true; }
+                if (towns.traffic.hitAt(p, roundVs(b, 'vehicle'), g, 2.8, b.owner)) {
+                    g.effects.impact(p, null); b.pos.copy(p);
+                    if (b.small && b.owner === g.pilotMode) g.hitmarkerT = g.time;
+                    return true;
+                }
                 if (p.y < h) break; // into the ground first
             }
         }

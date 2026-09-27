@@ -1,0 +1,15 @@
+{
+    "title": "m67 frag grenade by mypPi",
+    "uid": "256b80fab7204f35a9284c5f5ee93dad",
+    "src": "256b80fab7204f35a9284c5f5ee93dad.glb",
+    "forward": "+Y",
+    "up": "+Z",
+    "length": 0.090,
+    "lengthAxis": "z",
+    "parts": { "spoon": "^Plane\\.001", "pin": "^Torus" },
+    "points": { "grip": [0, 0.034, 0.036] },
+    "lod1": 400,
+    "tex": 512,
+    "texNormal": 256,
+    "texOther": 256
+}

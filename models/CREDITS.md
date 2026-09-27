@@ -1,6 +1,6 @@
 # 3D Model Credits
 
-**Aircraft in `models/aircraft/`** (most of the flyable aircraft since the models upgrade): see `models/aircraft/CREDITS.md` — CC BY 4.0 Sketchfab models (attribution shown in the in-game credits), a NASA public-domain C-130, and aircraft built in Blender by `tools/aircraft_kit.py` (CC0). **Ships in `models/ships/`**: built in Blender by `tools/ships/` (CC0). **Trees, grass and ground textures in `models/vegetation/` and `models/ground/`**: Poly Haven (CC0), see the CREDITS.md in each folder. The table below lists the other models in `models/`.
+**Aircraft in `models/aircraft/`** (most of the flyable aircraft since the models upgrade): see `models/aircraft/CREDITS.md` — CC BY 4.0 Sketchfab models (attribution shown in the in-game credits), a NASA public-domain C-130, and aircraft built in Blender by `tools/aircraft_kit.py` (CC0). **Ships in `models/ships/`**: built in Blender by `tools/ships/` (CC0). **Trees, grass and ground textures in `models/vegetation/` and `models/ground/`**: Poly Haven (CC0), see the CREDITS.md in each folder. **On-foot weapons and first-person arms in `models/weapons/`**: CC BY 4.0 Sketchfab models, see `models/weapons/CREDITS.md`. The table below lists the other models in `models/`.
 
 All models are binary glTF 2.0 (`.glb`). CC BY models require the attribution below to be shown to players, for example on a credits screen.
 

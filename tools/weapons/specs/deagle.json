@@ -1,0 +1,20 @@
+{
+    "title": "Desert Eagle by ELIZION",
+    "uid": "cabde59f5cf24effaf80536e35d04e95",
+    "src": "cabde59f5cf24effaf80536e35d04e95.glb",
+    "delete": "^Bullet",
+    "forward": "-Y",
+    "up": "+Z",
+    "length": 0.273,
+    "parts": { "slide": "^(Slide_low|Bolt|RearSight|Safety|SlidePart)", "mag": "^(Magazine|MagazineBase|BaseInside)", "hammer": "^Hammer" },
+    "pivots": { "mag": [0.070, 0.100], "hammer": [0.028, 0.108] },
+    "points": {
+        "grip": [0, 0.060, 0.066],
+        "muzzle": [0, 0.273, 0.137],
+        "eject": [0.015, 0.180, 0.140],
+        "sight": [0, 0.040, 0.1505],
+        "sightFront": [0, 0.265, 0.1525]
+    },
+    "lod1": 700,
+    "oneUV": true
+}

@@ -18,6 +18,8 @@ import { GroundStart } from './groundstart.js';
 import { HEIST_JET } from './heist.js';
 import { updateCharacters } from './character.js';
 import { AIR_TARGETS, AIR } from './softtargets.js';
+import { Infantry, GARRISONS } from './infantry.js';
+import { Ordnance } from './ordnance.js';
 import { readStick, rampAxis, expo, STICK_EXPO } from './input.js';
 import { clamp, damp, lerp, rand, pick, formatTime, G } from './util.js';
 import { BASES, RUNWAY, terrainHeight, isOnRunway, baseToWorld } from './world.js';
@@ -66,6 +68,8 @@ export class Game {
         // the war layer and its plug-ins (war.js, systems.js, docs/WAR.md)
         this.war = new War(this);
         this.systems = SYSTEMS.map(([name, S]) => (this[name] = new S(this)));
+        this.infantry = new Infantry(this);   // soldiers (infantry.js)
+        this.ordnance = new Ordnance(this);   // on-foot weapons in the world: rockets, grenades, dropped weapons (ordnance.js)
         this.pilotMode = null;
         this.lives = 0;
         this.slot = 0;
@@ -193,6 +197,7 @@ export class Game {
             this.hookBuildings();
         }
         if (this.mode === 'strike' || this.mode === 'sandbox') this.ground.spawnEnemyBase();
+        this.spawnGarrisons();
         // enemy parked jets are real targets when the enemy base is live, decoration otherwise
         if (this.world.airbases) this.world.airbases.setEnemyParkedVisible(!(this.mode === 'strike' || this.mode === 'sandbox'));
         if (this.mode === 'naval' || this.mode === 'sandbox') this.naval.spawnEnemyGroup();
@@ -306,6 +311,15 @@ export class Game {
         this.score = Math.max(0, this.score - penalty);
         this.addFeed('COLLATERAL: ' + what + '  −' + penalty, '#ff9f5a');
         if (!this._collateralCall) { this._collateralCall = true; this.audio.say('Check your fire! Those are civilians down there.', true); }
+    }
+
+    // Soldiers (infantry.js): the enemy base's garrison where it's a live target (and in Free Flight, to land and
+    // fight on foot), friendly guards at home
+    spawnGarrisons() {
+        const inf = this.infantry;
+        if (!inf) return;
+        if (['strike', 'sandbox', 'freeflight'].includes(this.mode)) inf.garrison(BASES.find(b => b.id === 'enemy'), 'red', baseToWorld, GARRISONS.enemy);
+        if (!['rings', 'naval'].includes(this.mode)) inf.garrison(BASES.find(b => b.id === 'home'), 'blue', baseToWorld, GARRISONS.home);
     }
 
     // Where the player starts: air, runway, apron (taxi) or carrier catapult
@@ -527,8 +541,8 @@ export class Game {
         this.state = 'playing';
         this.missileCam = null;
         this.lockTarget = null; this.lockProgress = 0; this.seeker.visible = false; // no missiles on foot
-        if (seat.walkedOut) this.showBanner('CLIMBED OUT', 'WASD walk · SHIFT run · Mouse look · LMB: AK-47 · E: board a jet · ENTER: new jet', 5, '#5dffa0');
-        else this.showBanner('EJECTED', 'A/D steer the canopy · W dive / S brake · SPACE flare near the ground · V: first person · LMB: AK-47', 6, '#ffc23f');
+        if (seat.walkedOut) this.showBanner('CLIMBED OUT', 'WASD walk · SHIFT sprint · LMB fire · RMB aim · R reload · 1–7 / wheel: weapons · E: board a jet · ENTER: new jet', 6, '#5dffa0');
+        else this.showBanner('EJECTED', 'A/D steer the canopy · W dive / S brake · SPACE flare near the ground · V: first person · LMB fire · 1–7: weapons', 6, '#ffc23f');
         this.input.lock();
     }
 
@@ -670,6 +684,8 @@ export class Game {
         for (const s of this.systems) if (s.clear) s.clear();
         this.war.clear();
         this.ground.clear();
+        this.infantry.clear();
+        this.ordnance.clear();
         this.naval.clear();
         if (this.rings) { this.rings.remove(); this.rings = null; }
         this.navTarget = null;
@@ -882,6 +898,24 @@ export class Game {
             if (missile.owner === this.player) this.addFeed('MISSILE SHOT DOWN BY CIWS', '#ffc23f');
         });
         ev.on('bomb', (ac) => { if (ac.isPlayer) this.audio.say(pick(['Bombs away!', 'Pickle, pickle.', 'Bomb released.'])); });
+        // soldiers (infantry.js) and cars (traffic.js) brought down by the player (on foot or from the air)
+        ev.on('soldierKilled', (s, { source, headshot }) => {
+            const mine = !!source && (source === this.player || source === this.pilotMode);
+            if (!mine || this.state !== 'playing') return;
+            if (s.team === 'red') {
+                const pts = 100 + (headshot ? 50 : 0);
+                this.score += pts; this.groundKills++;
+                this.killmarkerT = this.time; this.hitmarkerT = this.time;
+                if (this.pilotMode) this.pilotMode.kills++;
+                this.addFeed((headshot ? 'HEADSHOT — ' : '') + 'ENEMY SOLDIER KILLED  +' + pts, '#ffc23f');
+            } else {
+                this.score = Math.max(0, this.score - 200);
+                this.addFeed('FRIENDLY FIRE — SOLDIER KILLED  −200', '#ff4a3d');
+            }
+        });
+        ev.on('carDestroyed', (c, { source }) => {
+            if (source && (source === this.player || source === this.pilotMode) && this.state === 'playing') this.addFeed(c.parked ? 'PARKED CAR DESTROYED' : 'CAR DESTROYED', '#ff9f5a');
+        });
         // a helicopter or airliner brought down by our weapons (weapons.js hitAir)
         ev.on('airKilled', (t, { source }) => {
             if (!source || (source !== this.player && source !== this.pilotMode) || this.collateralFree) return;
@@ -1373,7 +1407,7 @@ export class Game {
             // frozen world, free orbit camera: mouse orbits, wheel zooms
             const m = this.input.consumeMouse(), ph = this.photo, cam = this.camera;
             ph.yaw -= m.dx * 0.005; ph.pitch = clamp(ph.pitch + m.dy * 0.004, -1.4, 1.4);
-            ph.dist = clamp(ph.dist * (1 + m.wheel * 0.08), 5, 1500);
+            ph.dist = clamp(ph.dist * (1 + m.wheel * 0.08), this.pilotMode && this.pilotMode.walker ? 1.5 : 5, 1500); // (close in on a man on foot)
             cam.position.set(Math.sin(ph.yaw) * Math.cos(ph.pitch), Math.sin(ph.pitch), Math.cos(ph.yaw) * Math.cos(ph.pitch)).multiplyScalar(ph.dist).add(ph.target);
             cam.up.set(0, 1, 0); cam.lookAt(ph.target);
             cam.fov = damp(cam.fov, 50, 4, rawDt); cam.updateProjectionMatrix();
@@ -1411,6 +1445,8 @@ export class Game {
         for (const a of this.aircraft) a.update(dt);
         this.worldCollisions();
         this.weapons.update(dt);
+        this.ordnance.update(dt);
+        this.infantry.update(dt);
         this.wreckage.update(dt);
         this.updateSeats();
         this.ground.update(dt);
@@ -1643,16 +1679,24 @@ export class Game {
             p.root.visible = !p.exploded;
             this.cockpit.enabled = false;
             const under = !pm.walker;
-            const target = _v.copy(pm.pos).add(_v2.set(0, under ? 3.5 : 1.6, 0));
-            const dist = under ? 17 : 4.6;
+            // on foot: over the right shoulder (so the crosshair isn't on your own head), closer when aiming
+            const ads = pm.adsK || 0, k = ads * ads * (3 - 2 * ads);
+            const target = _v.copy(pm.pos).add(_v2.set(0, under ? 3.5 : 1.6 + k * 0.05, 0));
+            if (!under) target.add(_v2.set(Math.cos(pm.yaw), 0, -Math.sin(pm.yaw)).multiplyScalar(0.55 + k * 0.1));
+            const dist = under ? 17 : 4.6 - k * 2.4;
             const dir = pm.viewDir(_v2);
-            const want = _v3.copy(target).addScaledVector(dir, -dist).add(new THREE.Vector3(0, under ? 1.5 : 0.5, 0));
+            const want = _v3.copy(target).addScaledVector(dir, -dist).add(new THREE.Vector3(0, under ? 1.5 : 0.5 - k * 0.25, 0));
             const gy = Math.max(terrainHeight(want.x, want.z), 0) + 0.5;
             if (want.y < gy) want.y = gy;
-            if (!this._tpInit) cam.position.copy(want); else cam.position.lerp(want, Math.min(1, dt * 10));
+            // don't back the camera into a wall
+            const bl = this.world.towns && this.world.towns.buildings;
+            if (!under && bl && bl.at(want.x, want.y, want.z, 0.3)) {
+                for (let s = 0.85; s > 0.1; s -= 0.15) { const q = _v2.lerpVectors(target, want, s); if (!bl.at(q.x, q.y, q.z, 0.3)) { want.copy(q); break; } }
+            }
+            if (!this._tpInit) cam.position.copy(want); else cam.position.lerp(want, Math.min(1, dt * 12));
             this._tpInit = true;
             cam.quaternion.setFromEuler(new THREE.Euler(pm.pitch + pm.recoil, pm.yaw, 0, 'YXZ'));
-            cam.fov = damp(cam.fov, 66, 4, dt);
+            cam.fov = damp(cam.fov, pm.fov ?? 66, 8, dt);
             cam.updateProjectionMatrix();
             return;
         }
@@ -1668,7 +1712,7 @@ export class Game {
             }
             cam.position.copy(head);
             cam.quaternion.setFromEuler(new THREE.Euler(pm.pitch + pm.recoil, pm.yaw, 0, 'YXZ'));
-            cam.fov = damp(cam.fov, 72, 4, dt);
+            cam.fov = damp(cam.fov, pm.fov ?? 72, 10, dt);
             cam.updateProjectionMatrix();
             return;
         }
