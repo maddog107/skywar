@@ -106,7 +106,7 @@ class Part:
                 continue
             self.g(mat).face(pts, [uvf(*p) for p in pts] if uvf else None, want)
 
-    def beam(self, mat, p0, p1, w, h=None):
+    def beam(self, mat, p0, p1, w, h=None, caps=True):
         """square/rect bar from p0 to p1 (any direction)"""
         h = h or w
         a, b = Vector(p0), Vector(p1)
@@ -126,8 +126,9 @@ class Part:
             quad = [A[i], A[j], B[j], B[i]]
             mid = (A[i] + A[j]) / 2 - a
             self.g(mat).face([tuple(q) for q in quad], None, tuple(mid))
-        self.g(mat).face([tuple(q) for q in A], None, tuple(-d))
-        self.g(mat).face([tuple(q) for q in B], None, tuple(d))
+        if caps:
+            self.g(mat).face([tuple(q) for q in A], None, tuple(-d))
+            self.g(mat).face([tuple(q) for q in B], None, tuple(d))
 
     def cyl(self, mat, c, r0, r1, y0, y1, n=16, cap0=True, cap1=True, smooth=True, axis='y', rz=None):
         """cylinder / cone along +y (or along z / x) centred on c (x, _, z)"""
@@ -198,6 +199,16 @@ class Part:
         return sum(g.tris() for g in self.geo.values())
 
     def build(self, origin=(0, 0, 0), parent=None, weld=True, sharp_deg=35.0):
+        me = self.mesh(origin, weld, sharp_deg)
+        ob = bpy.data.objects.new(self.name, me)
+        bpy.context.collection.objects.link(ob)
+        ob.location = V(origin)
+        if parent:
+            ob.parent = parent
+        return ob
+
+    def mesh(self, origin=(0, 0, 0), weld=True, sharp_deg=35.0):
+        """the mesh datablock only (vertices relative to origin), e.g. to share it between many rig nodes"""
         me = bpy.data.meshes.new(self.name)
         verts, faces, uvs, midx, smooth = [], [], [], [], []
         names = list(self.geo.keys())
@@ -227,12 +238,7 @@ class Part:
             bm.to_mesh(me)
             bm.free()
         me.set_sharp_from_angle(angle=math.radians(sharp_deg))
-        ob = bpy.data.objects.new(self.name, me)
-        bpy.context.collection.objects.link(ob)
-        ob.location = V(origin)
-        if parent:
-            ob.parent = parent
-        return ob
+        return me
 
 
 def point_in_poly(x, z, poly):

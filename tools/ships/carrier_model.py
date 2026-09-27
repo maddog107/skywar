@@ -15,6 +15,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import carrier_layout as C
 from shipkit import (Part, material, srgb, smoothstep, lerp, clamp, add_text, MATS, ciws, launcher)
+import navkit as K
 
 args = sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else []
 TEX = args[0] if len(args) > 0 else '/tmp/shiptex'
@@ -130,13 +131,23 @@ deck_poly = dp
 S.prism(deck_poly, C.GALLERY_Y, DY, 'Deck', 'Hull', 'Under', uv_top=deck_uv, uv_side=hull_uv)
 
 elev_polys = []
-for (x0, x1, z0, z1) in C.ELEVATORS:
+elev_parts = []
+for i, (x0, x1, z0, z1) in enumerate(C.ELEVATORS):
     if x0 < 0:   # port elevator: inboard edge follows the deck edge
         poly = [(x0, z0), (C.edge_at(C.PORT_EDGE, z0), z0), (C.edge_at(C.PORT_EDGE, z1), z1), (x0, z1)]
     else:
         poly = [(x0, z0), (x1, z0), (x1, z1), (x0, z1)]
     elev_polys.append(poly)
-    S.prism(poly, DY - 0.75, DY, 'Deck', 'Super', 'Under', uv_top=deck_uv)
+    # the platform is its own rig node (elevator_<n>, built below the island): it runs down to the hangar deck
+    E = Part('elevator_%d' % (i + 1))
+    E.prism(poly, DY - 0.75, DY, 'Deck', 'Super', 'Under', uv_top=deck_uv)
+    # the platform's outboard safety stanchions (folded flat) and edge lights
+    xo = x1 if x0 > 0 else x0
+    for zz in (z0 + 1.0, (z0 + z1) / 2, z1 - 1.0):
+        E.box('Super', min(xo, xo - math.copysign(0.25, xo)), max(xo, xo - math.copysign(0.25, xo)), DY, DY + 0.12, zz - 0.8, zz + 0.8)
+    for zz in (z0 + 0.3, z1 - 0.3):
+        E.box('Lamp', min(xo, xo - math.copysign(0.3, xo)), max(xo, xo - math.copysign(0.3, xo)), DY, DY + 0.08, zz - 0.15, zz + 0.15)
+    elev_parts.append((E, (sum(p[0] for p in poly) / len(poly), DY, (z0 + z1) / 2)))
     # hangar-bay opening in the hull side behind the elevator
     side = 1 if x0 > 0 else -1
     hx = side * 21.06
@@ -435,9 +446,74 @@ for sx in (-13.0, -5.0, 5.0, 13.0):
 for sx in (-6.0, 6.0):
     S.box('Hull', sx - 0.4, sx + 0.4, -9.0, -1.2, 137.0, 144.0, uvf=hull_uv)
 
+# ═════════════ Accommodation ladder (starboard quarter): where a boat comes alongside ═════════════
+def hull_x(z, y):
+    """starboard hull half-width at (z, y) from the lofted grid"""
+    best = None
+    for k in range(len(LEVELS) - 1):
+        if LEVELS[k] <= y <= LEVELS[k + 1]:
+            t = (y - LEVELS[k]) / (LEVELS[k + 1] - LEVELS[k])
+            xs = []
+            for row in (grid[k], grid[k + 1]):
+                i = min(range(NS), key=lambda i: abs(row[i][2] - z))
+                xs.append(row[i][0])
+            best = xs[0] + (xs[1] - xs[0]) * t
+    return best if best is not None else grid[-1][NS // 2][0]
+
+ACC_TOP = (C.HANGAR_Y, 114.0)      # (y, z) of the hull door at the hangar deck
+ACC_BOT = (1.5, 101.5)             # bottom platform, a little above the waterline
+xt = hull_x(ACC_TOP[1], ACC_TOP[0])
+xb = hull_x(ACC_BOT[1], ACC_BOT[0])
+S.box('Super', xt, xt + 1.7, ACC_TOP[0] - 0.2, ACC_TOP[0], ACC_TOP[1] - 1.6, ACC_TOP[1] + 1.6)          # top platform
+S.box('Super', xb + 0.15, xb + 2.3, ACC_BOT[0] - 0.22, ACC_BOT[0], ACC_BOT[1] - 2.4, ACC_BOT[1] + 0.8)  # bottom platform
+S.g('Dark').face([(xt + 0.02, ACC_TOP[0], ACC_TOP[1] - 0.6), (xt + 0.02, ACC_TOP[0], ACC_TOP[1] + 0.6),
+                  (xt + 0.02, ACC_TOP[0] + 2.0, ACC_TOP[1] + 0.6), (xt + 0.02, ACC_TOP[0] + 2.0, ACC_TOP[1] - 0.6)], None, (1, 0, 0))
+lx = (xt + xb) / 2 + 1.0
+K.ladder(S, (lx, ACC_BOT[0], ACC_BOT[1] + 0.8), (lx, ACC_TOP[0] - 0.1, ACC_TOP[1] - 1.6), w=1.0, mat='Super', rung=0.28)
+for dx in (-0.55, 0.55):
+    S.beam('Dark', (lx + dx, ACC_BOT[0] + 1.0, ACC_BOT[1] + 0.8), (lx + dx, ACC_TOP[0] + 0.9, ACC_TOP[1] - 1.6), 0.05)
+    for f in (0.0, 0.25, 0.5, 0.75, 1.0):
+        y = lerp(ACC_BOT[0], ACC_TOP[0] - 0.1, f); z = lerp(ACC_BOT[1] + 0.8, ACC_TOP[1] - 1.6, f)
+        S.beam('Dark', (lx + dx, y, z), (lx + dx, y + 1.0, z), 0.04)
+K.rail(S, [(xb + 2.3, ACC_BOT[0], ACC_BOT[1] - 2.4), (xb + 2.3, ACC_BOT[0], ACC_BOT[1] + 0.8)], h=1.0, step=0.8, mat='Dark')
+K.rail(S, [(xb + 0.15, ACC_BOT[0], ACC_BOT[1] - 2.4), (xb + 2.3, ACC_BOT[0], ACC_BOT[1] - 2.4)], h=1.0, step=0.8, mat='Dark')
+K.rail(S, [(xt + 1.7, ACC_TOP[0], ACC_TOP[1] - 0.6), (xt + 1.7, ACC_TOP[0], ACC_TOP[1] + 1.6), (xt, ACC_TOP[0], ACC_TOP[1] + 1.6)], h=1.0, step=0.9, mat='Dark')
+# the davit that lowers the ladder, folded against the hull
+S.beam('Super', (xt + 0.2, ACC_TOP[0] + 2.6, ACC_TOP[1] - 2.0), (xb + 1.4, ACC_TOP[0] + 3.2, ACC_BOT[1] + 5.0), 0.25)
+S.beam('Dark', (xb + 1.4, ACC_TOP[0] + 3.2, ACC_BOT[1] + 5.0), (lx, ACC_BOT[0] + 4.5, ACC_BOT[1] + 5.0), 0.03)
+
 root = bpy.data.objects.new('carrier', None)
 bpy.context.collection.objects.link(root)
 static = S.build(parent=root)
+
+# ═════════════ Rig (tools/ships/RIG.md): elevators, island doors, the accommodation ladder ═════════════
+for i, (E, c) in enumerate(elev_parts):
+    K.sliding(E, 'elevator_%d' % (i + 1), c, root, (0, 1, 0), -(DY - C.HANGAR_Y), t='elevator')
+
+def swing_door(name, x, z, face, y0=DY, w=1.1, h=2.1, mat='Super'):
+    """watertight door proud of a wall facing `face`, hinged on its forward / port edge, opening outward 100°"""
+    D = Part(name)
+    if face in ('-x', '+x'):
+        sg = -1 if face == '-x' else 1
+        xd = x + sg * 0.03
+        D.box(mat, min(xd, xd + sg * 0.07), max(xd, xd + sg * 0.07), y0, y0 + h, z - w / 2, z + w / 2)
+        D.box('Dark', min(xd, xd + sg * 0.14), max(xd, xd + sg * 0.14), y0 + 0.95, y0 + 1.05, z + w / 2 - 0.25, z + w / 2 - 0.1)
+        for yy in (y0 + 0.3, y0 + h - 0.3):
+            D.box(mat, min(xd, xd + sg * 0.11), max(xd, xd + sg * 0.11), yy - 0.04, yy + 0.04, z - w / 2 + 0.05, z + w / 2 - 0.05)
+        return K.hinged(D, name, (xd, y0, z - w / 2), root, (0, 1, 0), 1.75 * sg)
+    zd = z - 0.03
+    D.box(mat, x - w / 2, x + w / 2, y0, y0 + h, zd - 0.07, zd)
+    D.box('Dark', x + w / 2 - 0.25, x + w / 2 - 0.1, y0 + 0.95, y0 + 1.05, zd - 0.14, zd)
+    return K.hinged(D, name, (x - w / 2, y0, zd), root, (0, 1, 0), 1.75)
+
+swing_door('door_island_1', 12.97, 18.0, '-x')
+swing_door('door_island_2', 12.97, 33.0, '-x')
+swing_door('door_island_3', 16.0, 9.97, '-z', w=2.0, h=2.3)
+swing_door('door_island_4', 25.03, 14.0, '+x')
+swing_door('door_island_5', 25.03, 40.0, '+x')
+swing_door('door_accom', xt, ACC_TOP[1], '+x', y0=ACC_TOP[0], w=1.2, h=2.0)
+# where a boat's crew steps off (and where the player boards): the ladder's bottom platform
+K.point('hatch_entry', (xb + 1.2, ACC_BOT[0], ACC_BOT[1] - 0.8), root)
 
 # ═════════════ Rotating radars ═════════════
 # SPS-49-style air-search dish on the aft pedestal: node "radar" (pivot on its axis)

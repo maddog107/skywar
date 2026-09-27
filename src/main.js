@@ -617,7 +617,7 @@ function buildCredits() {
         ['P-51 Mustang (racer)', 'UlissesVinicios', 'CC BY 4.0', 'https://sketchfab.com/3d-models/p-51-mustang-36f0f3e71d2a4c18b479db1ae8f9e7a7'],
         ['Airplane biplane (pitts)', 'BlueHour', 'CC BY 4.0', 'https://sketchfab.com/3d-models/airplane-biplane-be48f3f906ed431b98b1bf03ab7aadd6'],
         ['MiG-31, MiG-25, J-20, J-10, J-8, F-5E, MiG-21, Mirage III, Jaguar', 'SKYWAR / Blender (tools/aircraft_kit.py)', 'CC0', 'tools/aircraft/'],
-        ['Aircraft carrier and destroyer', 'SKYWAR / Blender (tools/ships)', 'CC0', 'tools/ships/'],
+        ['Ships: Nimitz carrier, Arleigh Burke destroyer, Ticonderoga cruiser, Virginia and Ohio submarines, Supply-class AOE, NSW RHIB, CB90, Slava cruiser', 'SKYWAR / Blender (tools/ships; sources in models/ships/CREDITS.md)', 'CC0', 'tools/ships/'],
         ['Military vehicles: Scud, Bastion, S-300, Osa, Buk, Smerch, Grad, Flap Lid, P-18 and Soviet support trucks; Patriot, HIMARS, M270, Sentinel, Stryker, HEMTT and US support vehicles (see models/vehicles/CREDITS.md)', 'SKYWAR / Blender (tools/vehicles)', 'CC0', 'tools/vehicles/'],
         ['Helicopter (military)', 'Zsky', 'CC BY 3.0', 'https://poly.pizza/m/hG2Qr0A3zR'],
         ['Helicopter (civil)', 'jeremy', 'CC BY 3.0', 'https://poly.pizza/m/eb7b31pjGtQ'],

@@ -332,21 +332,21 @@ def DQ(x, z):
     return DP(x, z, SS)
 def dseg(a, b, color, w):
     m2.line([DQ(*a), DQ(*b)], fill=color, width=max(1, int(round(w * dsx * SS))))
-# flight deck (z 62..77.5): perimeter, lineup line, landing circle, hangar door "T"
-FD0, FD1 = 62.5, 77.0
+# flight deck: perimeter, lineup line, landing circle, hangar door "T"
+FD0, FD1 = 56.0, 77.2      # flight deck: x 133–155.3 m from the bow tip (z = x − 77.5)
 for (a, b) in (((-7.2, FD0), (7.2, FD0)), ((-7.2, FD0), (-7.2, FD1)), ((7.2, FD0), (7.2, FD1)), ((-7.2, FD1), (7.2, FD1))):
     dseg(a, b, WHITE, 0.2)
 z = FD0 + 0.5
 while z < FD1:
     dseg((0, z), (0, min(z + 1.2, FD1)), WHITE, 0.25)
     z += 2.4
-cx, cz, r = 0.0, 70.0, 3.6
+cx, cz, r = 0.0, 66.5, 3.6
 m2.ellipse([DQ(cx - r, cz - r)[0], DQ(cx - r, cz - r)[1], DQ(cx + r, cz + r)[0], DQ(cx + r, cz + r)[1]], outline=YELLOW, width=int(0.25 * dsx * SS))
 dseg((-4.5, cz), (4.5, cz), WHITE, 0.3)
 dseg((-3.0, FD0 + 0.6), (3.0, FD0 + 0.6), YELLOW, 0.3)
 # anchor chain runs on the forecastle
-for sg in (-1, 1):
-    dseg((sg * 1.2, -63.0), (sg * 5.5, -71.5), (30, 30, 30, 255), 0.35)
+for sg in (1,):              # the anchor chain from the windlass to the starboard hawse
+    dseg((sg * 1.5, -67.2), (sg * 3.6, -73.0), (30, 30, 30, 255), 0.35)
 mk2 = mk2.resize((DW, DH), Image.LANCZOS)
 ma = np.asarray(mk2, np.float32) / 255.0
 arr2 = np.asarray(dimg, np.float32)

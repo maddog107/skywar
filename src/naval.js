@@ -23,7 +23,16 @@ const damp01 = (a, b, dt) => a + (b - a) * (1 - Math.exp(-0.5 * dt));
 const TYPES = {
     carrier: { name: 'CARRIER', L: 320, B: 76, deckY: 19, hp: 1300, score: 3000, speed: 12 },
     destroyer: { name: 'DESTROYER', L: 155, B: 20, deckY: 8, hp: 450, score: 1200, speed: 13 },
+    // (models/ships/*.glb, tools/ships/*_model.py; cls = the war layer's class string, docs/WAR.md)
+    cruiser: { name: 'CRUISER', L: 173, B: 16.8, deckY: 6.4, hp: 520, score: 1500, speed: 13 },
+    ssn: { name: 'SUBMARINE', L: 140, B: 10.4, deckY: 1.7, hp: 260, score: 1400, speed: 8, cls: 'sub' },
+    ssgn: { name: 'SSGN', L: 171, B: 12.8, deckY: 1.9, hp: 320, score: 1600, speed: 8, cls: 'sub' },
+    supply: { name: 'SUPPLY SHIP', L: 229, B: 32.6, deckY: 12.5, hp: 700, score: 900, speed: 11 },
+    rhib: { name: 'RHIB', L: 11, B: 3.2, deckY: 0.9, hp: 25, score: 80, speed: 16, cls: 'boat' },
+    cb90: { name: 'COMBAT BOAT', L: 15.9, B: 3.8, deckY: 1.3, hp: 60, score: 200, speed: 18, cls: 'boat' },
+    slava: { name: 'SLAVA CRUISER', L: 186, B: 20.8, deckY: 7.6, hp: 600, score: 1800, speed: 13 },
 };
+export const SHIP_TYPES = TYPES;
 
 function inPoly(x, z, poly) {
     let inside = false;
@@ -114,15 +123,33 @@ function box(w, h, d, mat, x, y, z, parent) {
 
 // Ship models (tools/ships/*.py, models/ships/CREDITS.md). Loaded once at boot; if a file is missing the
 // procedural ship below is used instead.
-const SHIP_FILES = { carrier: 'models/ships/carrier.glb', destroyer: 'models/ships/destroyer.glb' };
+const SHIP_FILES = {
+    carrier: 'models/ships/carrier.glb', destroyer: 'models/ships/destroyer.glb',
+    cruiser: 'models/ships/cruiser.glb', ssn: 'models/ships/ssn.glb', ssgn: 'models/ships/ssgn.glb', rhib: 'models/ships/rhib.glb', cb90: 'models/ships/cb90.glb', supply: 'models/ships/supply.glb', slava: 'models/ships/slava.glb',
+};
 const shipGltf = {};
+// The carrier and destroyer (what the game modes spawn today) load before the game starts; the other fleet models
+// load right after, off the boot's critical path: await shipsLoaded() before spawning them.
+const BOOT_SHIPS = ['carrier', 'destroyer'];
+let lateShips = null;
+const shipLoading = new Set();   // types whose model is still on its way
 export async function preloadShips() {
     foamTexture(); // build the procedural foam texture now (~80 ms) rather than on the first sortie
     const loader = new GLTFLoader();
-    await Promise.all(Object.entries(SHIP_FILES).map(async ([type, file]) => {
+    const load = async ([type, file]) => {
+        shipLoading.add(type);
         try { shipGltf[type] = await loader.loadAsync(file); } catch (e) { console.warn('[naval] ship model not loaded:', file, e && e.message); }
-    }));
+        shipLoading.delete(type);
+    };
+    const files = Object.entries(SHIP_FILES);
+    await Promise.all(files.filter(([t]) => BOOT_SHIPS.includes(t)).map(load));
+    lateShips = Promise.all(files.filter(([t]) => !BOOT_SHIPS.includes(t)).map(load));
 }
+export function shipsLoaded() { return lateShips || Promise.resolve(); }
+export function hasShipModel(type) { return !!shipGltf[type]; }
+// Use an already parsed glTF for a ship type (tests, tools); ships made after this use it.
+export function setShipModel(type, gltf) { shipGltf[type] = gltf; delete templates[type]; }
+export const SHIP_MODEL_FILES = SHIP_FILES;
 
 // A ship from its glTF: static hull/superstructure, rotating radar(s) "radar"/"radar2", turrets "mount_<type>_<n>";
 // root extras.skywar = the layout (deck outline, waterline, parked aircraft…) written by the Blender script.
@@ -153,15 +180,162 @@ function buildFromGltf(type, gltf) {
         const m = /^mount_(ciws|sam|gun)_\d+$/.exec(o.name);
         if (m) mounts.push({ type: m[1], p: o.position.clone(), turret: o });
     });
-    // parked aircraft (kept clear of cat 1, the landing lane and the landing area)
+    prepareRig(root);
+    // parked aircraft (kept clear of cat 1, the landing lane and the landing area); one parked on a deck-edge
+    // elevator rides it down to the hangar deck (setElevator)
+    g.updateMatrixWorld(true);
     for (const [kind, x, z, yaw] of (layout && layout.parked) || []) {
         const { object } = createAircraftModel(kind);
         object.position.set(x, (layout.deckY || TYPES[type].deckY) + 2.2, z);
         object.rotation.y = yaw;
         object.scale.setScalar(0.95);
-        g.add(object);
+        const k = (layout.elevators || []).findIndex(p => inPoly(x, z, p));
+        const lift = k >= 0 ? root.getObjectByName('elevator_' + (k + 1)) : null;
+        if (lift) { lift.worldToLocal(object.position); lift.add(object); } else g.add(object);
     }
     return { group: g, parts, mounts, layout };
+}
+
+// ── Rig: the moving parts the Blender scripts name (docs/WAR.md "Model conventions", tools/ships/RIG.md) ──
+// Each rig node carries extras "rig" (JSON). {hinge: [x, y, z], open: rad} turns it about its own axis (after its
+// rest rotation) by open·k; {slide: [x, y, z], travel: m} moves it along its own axis by travel·k. t (kind):
+// 'door' (vls_<n> cell doors, uptake_<n>, hatch_*, door_*), 'mast' (mast_*), 'elevator' (elevator_<n>),
+// 'wheel' and 'turret' (k −1..1: ±open about the hinge), 'cell' (cell_<n>: the missile's start point, +Y = launch
+// direction; door = the node that covers it), 'point' (seat_*, hatch_entry, jet_<n>, muzzle_<n>).
+// Template time: parse the specs, give single-mesh rig nodes a pivot of their own, and draw doors that share a
+// mesh (the ~100 VLS cell doors of a destroyer) as one InstancedMesh per ship — one draw call, not a hundred.
+function toPivot(mesh) {
+    const p = new THREE.Object3D();
+    p.name = mesh.name; p.userData = mesh.userData;
+    p.position.copy(mesh.position); p.quaternion.copy(mesh.quaternion); p.scale.copy(mesh.scale);
+    const parent = mesh.parent;
+    parent.add(p); parent.remove(mesh);
+    for (const c of [...mesh.children]) p.add(c);
+    mesh.name = ''; mesh.userData = {};
+    mesh.position.set(0, 0, 0); mesh.quaternion.identity(); mesh.scale.set(1, 1, 1);
+    p.add(mesh);
+    return p;
+}
+
+function prepareRig(root) {
+    let nodes = [];
+    root.traverse(o => {
+        if (typeof o.userData.rig !== 'string') return;
+        try { o.userData.rigSpec = JSON.parse(o.userData.rig); nodes.push(o); } catch (e) { /* not a rig node */ }
+    });
+    nodes = nodes.map(o => (o.isMesh ? toPivot(o) : o));
+    // doors that share one mesh (and parent) → one InstancedMesh per primitive; the door nodes stay as empty pivots
+    const groups = new Map();
+    for (const o of nodes) {
+        const ms = o.children;
+        if (o.userData.rigSpec.t !== 'door' || !ms.length || !ms.every(c => c.isMesh && !c.isInstancedMesh && !c.children.length && !Array.isArray(c.material))) continue;
+        const key = ms.map(c => c.geometry.uuid + c.material.uuid).join() + o.parent.uuid;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(o);
+    }
+    let n = 0;
+    const m4 = new THREE.Matrix4();
+    for (const list of groups.values()) {
+        if (list.length < 3) continue;
+        const ims = list[0].children.map(src => {
+            src.updateMatrix();
+            const im = new THREE.InstancedMesh(src.geometry, src.material, list.length);
+            im.name = 'ship:rigdoors' + n++;
+            im.castShadow = true; im.receiveShadow = true;
+            im.userData.local = src.matrix.toArray();   // the primitive's place in its door node (identity from Blender)
+            return im;
+        });
+        list.forEach((o, i) => {
+            o.updateMatrix();
+            ims.forEach((im, j) => im.setMatrixAt(i, m4.fromArray(im.userData.local).premultiply(o.matrix)));
+            for (const c of [...o.children]) o.remove(c);
+            o.userData.rigInst = { ims: ims.map(im => im.name), index: i };
+        });
+        for (const im of ims) { im.computeBoundingSphere(); list[0].parent.add(im); }
+    }
+    // small moving parts (hatches, a boat's wheel) are a draw call each in every shadow cascade for a shadow
+    // nobody sees: they don't cast one (judged per node, so a mast's parts stay one mesh)
+    root.updateMatrixWorld(true);
+    const box = new THREE.Box3(), size = new THREE.Vector3();
+    for (const o of nodes) {
+        box.setFromObject(o);
+        if (!box.isEmpty() && box.getSize(size).length() < 3) o.traverse(c => { if (c.isMesh && !c.isInstancedMesh) c.castShadow = false; });
+    }
+}
+
+// Per ship (a clone of the template): the rig nodes by name and by kind. Lists are in number order
+// (vls_1 → rig.vls[0], cell_1 → rig.cells[0], elevator_1 → rig.elevators[0]).
+function bindRig(group) {
+    const rig = { nodes: {}, vls: [], cells: [], uptakes: [], masts: {}, elevators: [], hatches: {}, doors: {}, seats: {}, points: {}, turrets: {}, wheel: null };
+    const ims = {};
+    group.traverse(o => { if (o.isInstancedMesh && o.name.startsWith('ship:rigdoors')) ims[o.name] = o; });
+    group.traverse(o => {
+        const spec = o.userData.rigSpec;
+        if (!spec) return;
+        const inst = o.userData.rigInst;
+        rig.nodes[o.name] = {
+            name: o.name, node: o, spec, k: 0, p0: o.position.clone(), q0: o.quaternion.clone(),
+            ims: inst ? inst.ims.map(nm => ims[nm]).filter(Boolean) : null, index: inst ? inst.index : -1,
+        };
+    });
+    const num = (s) => +(/(\d+)$/.exec(s) || [0, 0])[1];
+    const byNum = (re) => Object.values(rig.nodes).filter(e => re.test(e.name)).sort((a, b) => num(a.name) - num(b.name));
+    rig.vls = byNum(/^vls_\d+$/);
+    rig.uptakes = byNum(/^uptake_\d+$/);
+    rig.elevators = byNum(/^elevator_\d+$/);
+    rig.cells = byNum(/^cell_\d+$/);
+    for (const c of rig.cells) {
+        c.door = rig.nodes[c.spec.door || c.name.replace('cell_', 'vls_')] || null;
+        c.uptake = c.spec.uptake ? rig.nodes[c.spec.uptake] || null : null;
+    }
+    for (const e of Object.values(rig.nodes)) {
+        const nm = e.name;
+        if (nm.startsWith('mast_')) rig.masts[nm.slice(5)] = e;
+        else if (nm.startsWith('hatch_') && e.spec.t === 'door') rig.hatches[nm.slice(6)] = e;
+        else if (nm.startsWith('door_')) rig.doors[nm.slice(5)] = e;
+        else if (nm.startsWith('seat_')) rig.seats[nm.slice(5)] = e.node;
+        else if (e.spec.t === 'wheel') rig.wheel = e;
+        else if (e.spec.t === 'turret') rig.turrets[nm] = e;
+        if (e.spec.t === 'point') rig.points[nm] = e.node;
+    }
+    return rig;
+}
+
+// ── Pose helpers (work on a Ship or on shipModel()'s result; k 0..1 = closed/stowed/up … open/raised/down) ──
+const _rq = new THREE.Quaternion(), _rax = new THREE.Vector3(), _rm = new THREE.Matrix4();
+export function poseRig(ship, name, k) {
+    const e = ship && ship.rig && ship.rig.nodes[name];
+    if (!e) return false;
+    const s = e.spec, o = e.node;
+    e.k = s.t === 'wheel' || s.t === 'turret' ? clamp(k, -1, 1) : clamp(k, 0, 1);
+    if (s.hinge) o.quaternion.copy(e.q0).multiply(_rq.setFromAxisAngle(_rax.fromArray(s.hinge), (s.open || 0) * e.k));
+    if (s.slide) o.position.copy(e.p0).addScaledVector(_rax.fromArray(s.slide).applyQuaternion(e.q0), (s.travel || 0) * e.k);
+    o.updateMatrix();
+    if (e.ims) for (const im of e.ims) { im.setMatrixAt(e.index, _rm.fromArray(im.userData.local).premultiply(o.matrix)); im.instanceMatrix.needsUpdate = true; }
+    return true;
+}
+// open the door over missile cell i (0-based: cell_1 is 0); on a submarine that's the tube hatch over it
+export function openCell(ship, i, k) { const c = ship && ship.rig && ship.rig.cells[i]; return !!(c && c.door) && poseRig(ship, c.door.name, k); }
+// open the exhaust uptake of cell i's VLS module (Mk 41: the hatch between its two rows of cells)
+export function ventCell(ship, i, k) { const c = ship && ship.rig && ship.rig.cells[i]; return !!(c && c.uptake) && poseRig(ship, c.uptake.name, k); }
+// masts by name ('periscope' or 'mast_periscope'); k 0 = stowed in the sail, 1 = fully raised
+export function raiseMast(ship, name, k) { return poseRig(ship, name.startsWith('mast_') ? name : 'mast_' + name, k); }
+// deck-edge elevator i (0-based); k 0 = flush with the flight deck, 1 = down at the hangar deck
+export function setElevator(ship, i, k) { const e = ship && ship.rig && ship.rig.elevators[i]; return !!e && poseRig(ship, e.name, k); }
+// hatch_<name> / door_<name>
+export function openHatch(ship, name, k) { return poseRig(ship, name.startsWith('hatch_') || name.startsWith('door_') ? name : 'hatch_' + name, k); }
+// boat steering wheel, s −1 (hard to port) .. 1 (hard to starboard)
+export function steerWheel(ship, s) { const w = ship && ship.rig && ship.rig.wheel; return !!w && poseRig(ship, w.name, s); }
+// submarine depth below its surfaced trim, in metres (0 = surfaced, layout.periscopeDepth = only the masts show)
+export function setDepth(ship, d) { ship.depth = Math.max(0, d); return ship.depth; }
+// world position of cell i's mouth and its launch direction (+Y of the cell node); false if there's no such cell
+export function cellFrame(ship, i, pos, dir) {
+    const c = ship && ship.rig && ship.rig.cells[i];
+    if (!c) return false;
+    c.node.updateWorldMatrix(true, false);
+    if (pos) pos.setFromMatrixPosition(c.node.matrixWorld);
+    if (dir) dir.set(0, 1, 0).transformDirection(c.node.matrixWorld);
+    return true;
 }
 
 function buildCarrier() {
@@ -281,9 +455,35 @@ function addMount(g, m) {
 // radar's own parts likewise: a carrier with its deck park is a handful of draw calls, and the shadow pass too.
 function mergeStatic(g) {
     const moving = [];
-    g.traverse(o => { if (o.name.startsWith('ship:radar') || o.name.startsWith('ship:mount')) moving.push(o); });
+    g.traverse(o => { if (o.name.startsWith('ship:radar') || o.name.startsWith('ship:mount') || o.userData.rigSpec) moving.push(o); });
     mergeInPlace(g, moving);
-    for (const o of moving) mergeInPlace(o, moving.filter(x => x !== o));
+    for (const o of moving) if (o.children.length) mergeInPlace(o, moving.filter(x => x !== o));
+}
+
+// Submarines: below the surface their paint fades to the colour of deep water (light absorbed on the way down
+// and back), fully by ~5 m, so at periscope depth only the raised masts read, whatever the water shader lets
+// through. A clone per source material (a sub's merged meshes share theirs with other ships otherwise).
+const DEEP_WATER = new THREE.Color(0.004, 0.025, 0.045);
+const _uwMats = new Map();
+function underwaterMaterial(src) {
+    let m = _uwMats.get(src);
+    if (m) return m;
+    m = src.clone();
+    const prev = src.onBeforeCompile;
+    m.onBeforeCompile = (sh, r) => {
+        if (prev && prev !== THREE.Material.prototype.onBeforeCompile) prev.call(src, sh, r);
+        sh.uniforms.uDeep = { value: DEEP_WATER };
+        sh.vertexShader = sh.vertexShader
+            .replace('#include <common>', '#include <common>\nvarying float vSubY;')
+            .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvSubY = (modelMatrix * vec4(transformed, 1.0)).y;');
+        sh.fragmentShader = sh.fragmentShader
+            .replace('#include <common>', '#include <common>\nvarying float vSubY;\nuniform vec3 uDeep;')
+            .replace('#include <opaque_fragment>', 'outgoingLight = mix(outgoingLight, uDeep, smoothstep(0.2, 5.0, -vSubY) * 0.95);\n#include <opaque_fragment>');
+    };
+    const key = src.customProgramCacheKey.bind(src);
+    m.customProgramCacheKey = () => key() + '|underwater';
+    _uwMats.set(src, m);
+    return m;
 }
 
 // Ships are built once per type and cloned: clones share geometry and materials, so a sortie that
@@ -292,9 +492,13 @@ const templates = {};
 function makeShip(type) {
     let t = templates[type];
     if (!t) {
-        t = templates[type] = type === 'carrier' ? buildCarrier() : buildDestroyer();
+        const pending = !shipGltf[type] && shipLoading.has(type);
+        if (pending) console.warn('[naval] model for', type, 'not loaded yet (await shipsLoaded()): using the procedural destroyer');
+        t = shipGltf[type] ? buildFromGltf(type, shipGltf[type]) : type === 'carrier' ? buildCarrier() : buildDestroyer();
+        if (!pending) templates[type] = t;   // (a stand-in isn't kept: the next ship of the type gets the real model)
         t.mounts.forEach((m, i) => { m.turret.name = 'ship:mount' + i; });
         mergeStatic(t.group);
+        if (TYPES[type] && TYPES[type].cls === 'sub') t.group.traverse(o => { if (o.isMesh) o.material = underwaterMaterial(o.material); });
     }
     const group = t.group.clone(true);
     const parts = {};
@@ -303,8 +507,12 @@ function makeShip(type) {
     const radar2 = group.getObjectByName('ship:radar2');
     if (radar2) parts.radar2 = radar2;
     const mounts = t.mounts.map((m, i) => ({ type: m.type, p: m.p.clone(), turret: group.getObjectByName('ship:mount' + i), fireT: rand(0, 2), lockT: 0 }));
-    return { group, parts, mounts, layout: t.layout || null };
+    return { group, parts, mounts, layout: t.layout || null, rig: bindRig(group) };
 }
+
+// A fresh model of a ship type with its rig, not in any scene and not simulated (previews, the hangar, tests):
+// { group, parts, mounts, layout, rig } — the pose helpers above take it in place of a Ship.
+export function shipModel(type) { return makeShip(type); }
 
 export class Ship {
     constructor(naval, type, team, center, orbitR, angle, dir = 1, name = null) {
@@ -332,6 +540,9 @@ export class Ship {
         this.parts = built.parts;
         this.mounts = built.mounts;
         this.layout = built.layout;
+        this.rig = built.rig;   // moving parts: see the pose helpers (openCell, raiseMast, setElevator…)
+        this.cls = this.def.cls || (type === 'carrier' ? 'carrier' : 'ship');
+        this.depth = 0;         // submarines: metres below the surfaced trim (layout.periscopeDepth = at periscope depth)
         this.motionT = Math.random() * 100;
         this.motionSeed = Math.random() * 10;
         this.motion = { heave: 0, pitch: 0, roll: 0 };
@@ -369,7 +580,7 @@ export class Ship {
         // gentle heave / pitch / roll with the sea (deckAt follows the tilted deck, so landings stay consistent)
         this.motionT += dt;
         const mo = seaMotion(this.motionT, this.motionSeed, SEA_MOTION[this.type] || SEA_MOTION.carrier, this.motion);
-        const y = -sink * (this.def.deckY + 25) - dmgFrac * 1.5 + mo.heave;
+        const y = -sink * (this.def.deckY + 25) - dmgFrac * 1.5 + mo.heave - this.depth;
         if (dt > 0) this.vel.set((x - this.mesh.position.x) / dt, (y - this.mesh.position.y) / dt, (z - this.mesh.position.z) / dt);
         this.mesh.position.set(x, y, z);
         this.mesh.rotation.set(0, this.heading, 0);
@@ -620,6 +831,16 @@ export class Naval {
         for (const s of [carrier, d1, d2]) { s.passive = passive; this.ships.push(s); this.game.ground.targets.push(s); }
         this.enemyCarrier = carrier;
         return carrier;
+    }
+
+    // Any ship type (cruiser, ssn, ssgn, supply, rhib, cb90, slava, …) steaming round a circle of radius orbitR about
+    // `center` (open ocean: see findOcean). opts: orbitR, angle, dir (1 / −1), name, passive.
+    spawn(type, team, center, opts = {}) {
+        const s = new Ship(this, type, team, center, opts.orbitR ?? (TYPES[type].L < 40 ? 400 : 1800), opts.angle ?? Math.random() * Math.PI * 2, opts.dir ?? 1, opts.name || null);
+        s.passive = !!opts.passive;
+        this.ships.push(s);
+        this.game.ground.targets.push(s);
+        return s;
     }
 
     // Deck / hull query used by aircraft ground contact

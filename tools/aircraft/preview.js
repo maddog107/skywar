@@ -296,3 +296,103 @@ export async function closeup(id, flap, brake, o = {}) {
     c.getContext('2d').drawImage(r.domElement, 0, 0, w, h);
     return c;
 }
+
+// ── Ships: src/naval.js models with their rigs (tools/ships/RIG.md) ──
+//   const N = await P.loadShips();       // a fresh copy of naval.js (so rebuilt GLBs are picked up), every model loaded
+//   const c = await P.shipViews('destroyer', { pose: (m, N) => N.openCell(m, 0, 1), water: 'clear' });
+//   const z = await P.shipCloseup('ssn', { at: [0, 8, -10], dir: [1, 0.4, -1], dist: 40, water: 'sea', depth: 12 });
+//   await P.save(P.sheet([['DDG', c], ['close-up', [z]]]), 'naval/ddg.png');
+// m = naval.js shipModel(type): the game's own ship (merged hull, instanced VLS doors) with its rig; pose(m, N) poses
+// it with the naval.js helpers. water: 'clear' (see-through sea plane at y = 0: the waterline and the underwater
+// hull), 'sea' (nearly opaque: only what is above the surface shows), none by default. depth: sink the model
+// by that many metres (a submarine at periscope depth).
+let NAV = null;
+export async function loadShips() {
+    NAV = await import('/src/naval.js?t=' + Date.now());
+    await NAV.preloadShips();
+    await NAV.shipsLoaded();
+    return NAV;
+}
+function shipScene(type, o) {
+    const w = o.w ?? 640, h = o.h ?? 400;
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(o.bg ?? 0x9aa6b2);
+    scene.environment = envTex || (renderer(w, h), envTex);
+    scene.add(new THREE.HemisphereLight(0xdfe8f2, 0x4a4540, 0.9));
+    const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+    sun.position.set(-30, 60, -20);
+    scene.add(sun);
+    const m = NAV.shipModel(type);
+    if (o.pose) o.pose(m, NAV);
+    m.group.position.y = -(o.depth ?? 0);
+    scene.add(m.group);
+    m.group.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(m.group);
+    if (o.water) {
+        const clear = o.water === 'clear';
+        const sea = new THREE.Mesh(new THREE.PlaneGeometry(6000, 6000), new THREE.MeshStandardMaterial({
+            color: clear ? 0x2a6a8a : 0x1b4660, roughness: 0.3, metalness: 0.0, transparent: true, opacity: clear ? 0.45 : 0.93, depthWrite: !clear }));
+        sea.rotation.x = -Math.PI / 2;
+        sea.renderOrder = 2;
+        scene.add(sea);
+    }
+    return { scene, m, box, w, h };
+}
+function grab(r, w, h) {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    c.getContext('2d').drawImage(r.domElement, 0, 0, w, h);
+    return c;
+}
+// several views of one ship → array of canvases (like views()), with .tris (and mesh count) and .dims
+export async function shipViews(type, o = {}) {
+    if (!NAV) await loadShips();
+    const { scene, m, box, w, h } = shipScene(type, { w: 520, h: 300, ...o });
+    const center = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3());
+    const rad = size.length() / 2;
+    const out = [];
+    VIEWS.low = VIEWS.low || { dir: [-0.7, -0.35, 1.2], persp: true };
+    VIEWS.above = VIEWS.above || { dir: [-0.5, 1.4, 0.9], persp: true };
+    VIEWS.bow34 = VIEWS.bow34 || { dir: [1.0, 0.35, -1.1], persp: true };
+    for (const v of o.views ?? ['front34', 'side', 'top', 'rear34']) {
+        const V = VIEWS[v], d = new THREE.Vector3(...V.dir).normalize();
+        let cam;
+        if (V.persp) {
+            cam = new THREE.PerspectiveCamera(28, w / h, rad * 0.02, rad * 20);
+            cam.position.copy(center).addScaledVector(d, rad / Math.sin(THREE.MathUtils.degToRad(14)) * (o.zoom ?? 0.62));
+        } else {
+            const hw = v === 'side' ? size.z / 2 : size.x / 2, hh = v === 'top' ? size.z / 2 : size.y / 2;
+            const s = Math.max(hw / (w / h), hh) * 1.06;
+            cam = new THREE.OrthographicCamera(-s * w / h, s * w / h, s, -s, 0.01, rad * 10);
+            cam.position.copy(center).addScaledVector(d, rad * 4);
+        }
+        if (V.up) cam.up.set(...V.up);
+        cam.lookAt(center);
+        const r = renderer(w, h);
+        r.render(scene, cam);
+        out.push(grab(r, w, h));
+    }
+    let tris = 0, calls = 0;
+    m.group.traverse(x => {
+        if (!x.isMesh || !x.visible) return;
+        calls++;
+        const t = (x.geometry.index ? x.geometry.index.count : x.geometry.attributes.position.count) / 3;
+        tris += x.isInstancedMesh ? t * x.count : t;
+    });
+    out.tris = Math.round(tris) + ' (' + calls + ' meshes)';
+    out.dims = 'x' + size.x.toFixed(1) + ' y' + size.y.toFixed(1) + ' z' + size.z.toFixed(1);
+    out.model = m;
+    return out;
+}
+// one perspective close-up: at = [x, y, z] (ship metres), dir = direction from the target to the camera, dist (m)
+export async function shipCloseup(type, o = {}) {
+    if (!NAV) await loadShips();
+    const { scene, w, h } = shipScene(type, o);
+    const at = new THREE.Vector3(...(o.at ?? [0, 0, 0]));
+    const cam = new THREE.PerspectiveCamera(o.fov ?? 35, w / h, 0.05, 20000);
+    cam.position.copy(at).addScaledVector(new THREE.Vector3(...(o.dir ?? [1, 1, 1])).normalize(), o.dist ?? 30);
+    cam.lookAt(at);
+    const r = renderer(w, h);
+    r.render(scene, cam);
+    return grab(r, w, h);
+}
