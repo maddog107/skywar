@@ -11,7 +11,8 @@
 // Each finding goes to the war layer as war.reveal(unit, level, 'recon' | 'sigint'); the platforms also watch
 // strikes for BDA (strikes.watchers) and their imagery joins the targeting pod's (sensors.imagery).
 // ═══════════════════════════════════════════════════════════════
-import { terrainHeight } from './world.js';
+import { terrainHeight, BASES } from './world.js';
+import { colorAt } from './terraincore.js';
 import { clamp, DEG } from './util.js';
 
 export const RECON = {
@@ -50,7 +51,8 @@ export function inSwath(p, a, b, w) {
 // pass: the terrain near a far-away drone isn't even built): shaded relief, water, roads and the units in view,
 // in the platform's look — 'flir' (white-hot), 'sar' (radar: bright returns, dark water, speckle) or 'photo'
 // (panchromatic). Returns a 320×240 canvas, or null without a DOM.
-const W = 320, H = 240, GW = 80, GH = 60;
+const W = 320, H = 240, GW = 64, GH = 48;
+const _col = new Float32Array(3);
 export function reconImage({ center, size = 3000, style = 'flir', units = [], roads = null, title = '', lines = [], look = null }) {
     if (typeof document === 'undefined' || !document.createElement) return null;
     const c = document.createElement('canvas');
@@ -74,11 +76,15 @@ export function reconImage({ center, size = 3000, style = 'flir', units = [], ro
         const h = hs[j * (GW + 1) + i], hx = hs[j * (GW + 1) + i + 1] - h, hz = hs[(j + 1) * (GW + 1) + i] - h;
         const nx = -hx / cell, nz = -hz / cell, nl = Math.hypot(nx, 1, nz);
         const lambert = clamp((nx * lx + 1 * 0.55 + nz * lz) / nl / 1.1, 0, 1);
+        // the land cover (the terrain's own colours): forest dark and cool, rock and bare ground warm and bright
+        colorAt(x0 + i * cell, h, z0 + j * cell, 1 / nl, _col, 0);
+        const r = Math.sqrt(_col[0]), gC = Math.sqrt(_col[1]), bC = Math.sqrt(_col[2]);
+        const lum = 0.3 * r + 0.59 * gC + 0.11 * bC, green = clamp((gC - Math.max(r, bC)) * 4, 0, 1);
         let v;
-        if (h < -0.5) v = style === 'sar' ? 0.04 + rnd() * 0.04 : style === 'flir' ? 0.18 : 0.22;
-        else if (style === 'flir') v = 0.34 + lambert * 0.18 + (h > 900 ? -0.08 : 0);
-        else if (style === 'sar') v = clamp(0.12 + lambert * 0.7, 0, 1) * (0.55 + rnd() * 0.9);
-        else v = 0.3 + lambert * 0.45 + (h > 1200 ? 0.15 : 0);
+        if (h < -0.5) v = style === 'sar' ? 0.04 + rnd() * 0.04 : style === 'flir' ? 0.16 : 0.2;
+        else if (style === 'flir') v = 0.22 + (1 - green) * 0.28 + lambert * 0.16 + (rnd() - 0.5) * 0.04;
+        else if (style === 'sar') v = clamp(0.1 + lambert * 0.5 + green * 0.25, 0, 1) * (0.55 + rnd() * 0.9);
+        else v = lum * (0.45 + lambert * 0.75);
         const o = (j * GW + i) * 4, b = clamp(v, 0, 1) * 255;
         img.data[o] = b; img.data[o + 1] = b; img.data[o + 2] = b; img.data[o + 3] = 255;
     }
@@ -86,6 +92,19 @@ export function reconImage({ center, size = 3000, style = 'flir', units = [], ro
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(small, 0, 0, W, H);
     const px = (x) => (x - x0) / size * W, pz = (z) => (z - z0) / (size * GH / GW) * H;
+    // runways: warm concrete (FLIR), smooth and dark (radar), pale (photo)
+    for (const b of BASES) {
+        if (Math.abs(b.x - center.x) > size + 4000 || Math.abs(b.z - center.z) > size + 4000) continue;
+        const c = Math.cos(b.heading), s = Math.sin(b.heading);
+        ctx.fillStyle = style === 'flir' ? 'rgba(215,215,215,0.8)' : style === 'sar' ? 'rgba(8,8,8,0.9)' : 'rgba(205,205,198,0.85)';
+        for (const rw of b.runways) {
+            const cx = b.x + rw.lx * c + rw.lz * s, cz = b.z - rw.lx * s + rw.lz * c, hd = b.heading + (rw.rot || 0);
+            ctx.save();
+            ctx.translate(px(cx), pz(cz)); ctx.rotate(-hd);
+            ctx.fillRect(-rw.w / 2 / size * W, -rw.len / 2 / size * W, rw.w / size * W, rw.len / size * W);
+            ctx.restore();
+        }
+    }
     // roads
     if (roads) {
         ctx.strokeStyle = style === 'flir' ? 'rgba(200,200,200,0.5)' : style === 'sar' ? 'rgba(20,20,20,0.7)' : 'rgba(235,235,225,0.6)';
@@ -107,8 +126,14 @@ export function reconImage({ center, size = 3000, style = 'flir', units = [], ro
     for (const u of units) {
         const X = px(u.pos.x), Y = pz(u.pos.z);
         if (X < -10 || Y < -10 || X > W + 10 || Y > H + 10) continue;
-        const r = Math.max(1.6, (u.radius || 5) / cell * 1.1);
+        const r = Math.max(2.4, (u.radius || 5) / size * W * 1.1);
         const dead = u.alive === false;
+        if (style === 'flir') {
+            // a hot engine / a fire: a bloom round the shape
+            const gl = ctx.createRadialGradient(X, Y, 0, X, Y, r * 3);
+            gl.addColorStop(0, 'rgba(255,255,255,0.55)'); gl.addColorStop(1, 'rgba(255,255,255,0)');
+            ctx.fillStyle = gl; ctx.fillRect(X - r * 3, Y - r * 3, r * 6, r * 6);
+        }
         if (style === 'flir') ctx.fillStyle = dead ? 'rgba(255,255,255,0.95)' : 'rgba(250,250,250,0.9)';
         else if (style === 'sar') ctx.fillStyle = dead ? 'rgba(160,160,160,0.8)' : 'rgba(255,255,255,0.95)';
         else { ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(X - r + 1.5, Y - r * 0.6 + 1.5, r * 2, r * 1.2); ctx.fillStyle = dead ? 'rgba(30,30,30,0.95)' : 'rgba(60,62,58,0.95)'; }

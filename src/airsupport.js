@@ -78,7 +78,8 @@ export class SupportFlight {
         this.id = air.nextId++;
         this.role = role; this.kind = kind; this.team = team; this.type = type;
         this.callsign = callsign;
-        const ac = this.ac = new Aircraft(g, type, { team, name: callsign });
+        // (an enemy's callsign isn't ours to know: its jet goes by its type)
+        const ac = this.ac = new Aircraft(g, type, { team, name: team === g.war.side ? callsign : null });
         ac.spawnAir(pos, heading, clamp(speed / ac.spec.flight.speed, 0.3, 1));
         ac.vel.setLength(speed); ac.speed = speed;
         ac.throttle = ac.controls.throttle = 0.72;
@@ -273,7 +274,8 @@ export class SupportFlight {
         const g = this.game, ac = this.ac;
         if (!ac.alive) { if (this.coarse) this.goReal(); return; }
         const d = ac.pos.distanceTo(g.camera.position);
-        const busy = ac.incoming.length > 0 || !!this.threat || ac.health < ac.maxHealth * 0.999 || g.lockTarget === ac || this.keepReal || this.air.sessions.some(s => !s.done && (s.tanker === this || s.rx === ac));
+        // (a bomb run needs the real jet: its release point comes from the real flight)
+        const busy = ac.incoming.length > 0 || !!this.threat || ac.health < ac.maxHealth * 0.999 || g.lockTarget === ac || this.keepReal || (this.task && this.task.kind === 'strike') || this.air.sessions.some(s => !s.done && (s.tanker === this || s.rx === ac));
         if (this.coarse) { if (d < 18000 || busy) this.goReal(); }
         else if (d > 24000 && !busy && this.t > 1) this.goCoarse();
     }
@@ -773,9 +775,13 @@ export class AirSupport {
                 g.events.emit('supportThreatened', f, { threat: best });
             }
         } else if (f.threat) {
+            // clear once nothing's after it and the bandit's well away (a slow drone can't outrun it: it goes back
+            // to work after a minute and a half anyway)
             const d = f.threat.alive ? f.threat.pos.distanceTo(f.ac.pos) : Infinity;
-            if (!best && d > 40000) f.clearT += 1; else f.clearT = 0;
-            if (f.clearT > 15 || !f.threat.alive) {
+            if (!best && d > R * 1.2) f.clearT += 1; else f.clearT = 0;
+            f.retroT = (f.retroT || 0) + 1;
+            if (f.clearT > 10 || !f.threat.alive || (f.role === 'recon' && f.retroT > 90 && !best)) {
+                f.retroT = 0;
                 f.threat = null;
                 f.task = f.saved && f.saved.kind === 'track' ? null : f.saved;
                 if (f.saved && f.saved.kind === 'track') f.setTrack(f.saved.T);
@@ -986,7 +992,8 @@ export class AirSupport {
         if (best) {
             j.on = true; j.at = best.u; j.brg = bearingRad(f.ac.pos, best.u.pos);
             j.half = 40 * DEG;
-            if (!f.jamCalled || f.jamCalled !== best.u) { f.jamCalled = best.u; this.say(f.callsign, 'MUSIC ON, JAMMING ' + best.em.name, { color: '#9fd4ff', say: f.callsign.toLowerCase() + ', music on.' }); }
+            // (MUSIC: electronic jamming, in brevity; said when it starts or switches after a while)
+            if (!f.jamCalled || (f.jamCalled !== best.u && war.time - (f.jamCallT || 0) > 45)) { f.jamCalled = best.u; f.jamCallT = war.time; this.say(f.callsign, 'MUSIC ON, JAMMING ' + best.em.name, { color: '#9fd4ff', say: f.callsign.toLowerCase() + ', music on.' }); }
             // a HARM at a fire-control radar in reach, nose roughly on
             const shot = harmShot(f.ac.pos, f.ac.getForward(_v), best.u.pos, best.em);
             if (best.em.hot && f.ac.harms > 0 && shot.ok && war.time - (f.harmT || -1e9) > 20 && !best.u.incoming.some(m => m.kind === 'arm')) {
@@ -1347,7 +1354,7 @@ export class AirSupport {
             let fired = 0;
             for (const a of aims) { const s = st.request('standoff', [a], f.team || 'red', true); if (s) fired += s.planned; }
             if (fired) {
-                this.say(this.awacsCtl.call, 'VAMPIRE LAUNCH — THE BOMBERS HAVE RELEASED ' + fired + ' CRUISE MISSILES TOWARD ' + r.target.label, { color: '#ff4a3d', priority: true, speech: 'Missile launch. The bombers have released cruise missiles toward ' + r.target.label.toLowerCase() + '.' });
+                this.say(this.awacsCtl.call, 'LAUNCH — THE BOMBERS HAVE RELEASED ' + fired + ' CRUISE MISSILES TOWARD ' + r.target.label, { color: '#ff4a3d', priority: true, say: 'Launch, launch. The bombers have released cruise missiles toward ' + r.target.label.toLowerCase() + '.' });
                 g.events.emit('raidLaunch', f, { target: r.target, missiles: fired });
             }
         }
@@ -1641,9 +1648,12 @@ export class AirSupport {
             if (!any) {
                 any = true;
                 const b = (((hdg + brg) * -1 / DEG) % 360 + 360) % 360;
-                ctx.font = '700 12px ' + FONT; ctx.textAlign = 'center'; ctx.fillStyle = burn ? '#ff4a3d' : AMBER;
-                const y = g.cameraMode !== 'cockpit' && hud.radarGeom ? hud.radarGeom.cy - hud.radarGeom.R - 14 : hud.h * 0.78;
-                ctx.fillText((burn ? 'BURN-THROUGH ' : 'STROBE ') + BR.pad3(BR.bearing(p.pos.x, p.pos.z, j.pos.x, j.pos.z)) + (burn ? ' · ' + (d / 1000).toFixed(0) + ' KM' : ' · JAMMED'), hud.w / 2, y);
+                // (beside the scope, clear of the target labels above it; mid-screen low in the cockpit)
+                ctx.font = '700 12px ' + FONT; ctx.fillStyle = burn ? '#ff4a3d' : AMBER;
+                const scope = g.cameraMode !== 'cockpit' && hud.radarGeom;
+                ctx.textAlign = scope ? 'right' : 'center';
+                const tx = scope ? hud.radarGeom.cx - hud.radarGeom.R - 12 : hud.w / 2, ty = scope ? hud.radarGeom.cy - hud.radarGeom.R * 0.5 : hud.h * 0.78;
+                ctx.fillText((burn ? 'BURN-THROUGH ' : 'STROBE ') + BR.pad3(BR.bearing(p.pos.x, p.pos.z, j.pos.x, j.pos.z)) + (burn ? ' · ' + (d / 1000).toFixed(0) + ' KM' : ' · JAMMED'), tx, ty);
                 void b;
             }
         }

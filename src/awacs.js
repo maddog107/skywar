@@ -121,12 +121,12 @@ export class AwacsController {
             if (!a.alive || a.team === side || a.team === 'neutral' || a.onGround || a.abandoned) continue;
             const rec = war.rec(a);
             if (!rec || rec.known < INTEL.CONTACT || war.time - rec.lastSeen > HELD) continue;
-            out.push({ pos: rec.lastPos, vel: a.vel, n: 1, unit: a, known: rec.known, type: a.type, origin: rec.origin || (rec.origin = war.sideAt(rec.lastPos.x, rec.lastPos.z)) });
+            out.push({ pos: rec.lastPos, vel: a.vel, n: 1, unit: a, known: rec.known, type: a.type, armed: a.spec.category === 'fighter', origin: rec.origin || (rec.origin = war.sideAt(rec.lastPos.x, rec.lastPos.z)) });
         }
         const d = g.director;
         if (d && d.enabled) for (const f of d.flights) {
             if (f.done || f.members || f.team === side || !f.detected || f.n <= 0) continue;
-            out.push({ pos: f.lastSeen || f.pos, vel: f.vel, n: f.n, flight: f, known: INTEL.CONTACT, origin: 'red', types: f.types, role: f.role });
+            out.push({ pos: f.lastSeen || f.pos, vel: f.vel, n: f.n, flight: f, known: INTEL.CONTACT, origin: 'red', types: f.types, role: f.role, armed: f.fighters || f.role === 'cas' });
         }
         const st = g.strikes;
         if (st && st.missiles) for (const m of st.missiles) {
@@ -178,6 +178,8 @@ export class AwacsController {
         q.id = hostile ? 'HOSTILE' : 'BOGEY';
         q.type = q.missiles ? 'CRUISE MISSILES' : sameType && type ? BR.REPORTING[type] || null : null;
         q.fast = !q.missiles && Math.hypot(q.vel.x, q.vel.z) > 330;
+        // (a threat to a fighter is an armed one: an AWACS or a tanker closing isn't a THREAT call)
+        q.armed = q.members.some(m => m.armed);
     }
 
     // ── what MAGIC says by itself ──
@@ -193,7 +195,7 @@ export class AwacsController {
             const rng = Math.hypot(q.pos.x - P.pos.x, q.pos.z - P.pos.z);
             const b = BR.braa(P.pos, q.pos, q.vel);
             if (rng < MERGE_R) {
-                if (!q.merged) { q.merged = true; q.called = true; this.say(this.pc + ', ' + this.call + ', MERGED', { priority: true, color: '#ff9f5a' }); }
+                if (!q.merged && q.armed) { q.merged = true; q.called = true; this.say(this.pc + ', ' + this.call + ', MERGED', { priority: true, color: '#ff9f5a' }); }
                 continue;
             }
             if (q.isNew && !q.called && rng < POPUP_R) {
@@ -208,7 +210,7 @@ export class AwacsController {
             }
             // THREAT: closing, inside the briefed range; again when it's halved the range or a while has passed
             const closing = b.aspect === 'HOT' || b.aspect === 'FLANK';
-            if (closing && rng < THREAT_R && (q.threatT == null || (now - q.threatT > 45) || rng < (q.threatR ?? Infinity) * 0.55)) {
+            if (q.armed && closing && rng < THREAT_R && (q.threatT == null || (now - q.threatT > 45) || rng < (q.threatR ?? Infinity) * 0.55)) {
                 q.threatT = now; q.threatR = rng; q.called = true;
                 this.say(this.pc + ', ' + this.call + ', THREAT, ' + BR.groupBraa(P.pos, q, q.id), { priority: rng < 15000, color: '#ff9f5a' });
             }

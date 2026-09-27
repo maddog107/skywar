@@ -47,7 +47,8 @@ export function boomEnvelope(ud = {}, travel = 6) {
     const pitchMin = (ud.pitchMin ?? 20) * DEG, pitchMax = (ud.pitchMax ?? 40) * DEG, yawMax = (ud.yawMax ?? 15) * DEG;
     return {
         pitchMin, pitchMax, yawMax, yawNormal: Math.min(yawMax, 10 * DEG), ideal: (pitchMin + pitchMax) / 2,
-        extMin: Math.min(6 * FT_M, travel * 0.3), extMax: Math.min(18 * FT_M, travel - 0.05), extIdeal: Math.min(12 * FT_M, travel * 0.6), travel,
+        // (a shorter telescope than the KC-135's 6 m keeps the same proportions)
+        extMin: Math.min(6 * FT_M, travel * 0.4), extMax: Math.min(18 * FT_M, travel - 0.05), extIdeal: Math.min(12 * FT_M, travel * 0.65), travel,
     };
 }
 
@@ -327,14 +328,20 @@ export function arSpeed(tankerType, receiverSpec, alt) {
 // across, up), turned into stick (ai.js steerToward) and throttle (a PI loop scaled by the thrust available).
 // lim: { along: [back, fwd] m/s, side, vert } closure limits; k: position gains 1/s. st keeps the integrator.
 const _e = new THREE.Vector3(), _f = new THREE.Vector3(), _r = new THREE.Vector3(), _u = new THREE.Vector3(), _vd = new THREE.Vector3(), _rp = new THREE.Vector3();
-export function stationKeep(ac, c, target, refLocal, vRef, frameQ, dt, st, { k = 0.35, kSide = 0.45, along = [-8, 6], side = 5, vert = 4, assist = 0 } = {}) {
+// aRef: the target's acceleration (the tanker turning): led by about the steering's lag, so a steady turn leaves
+// no offset
+export function stationKeep(ac, c, target, refLocal, vRef, frameQ, dt, st, { k = 0.35, kSide = 0.45, along = [-8, 6], side = 5, vert = 4, assist = 0 } = {}, aRef = null) {
     // where the reference point is now
     toWorld(ac, refLocal, _rp);
     _e.subVectors(target, _rp);
     _f.set(0, 0, -1).applyQuaternion(frameQ); _r.set(1, 0, 0).applyQuaternion(frameQ); _u.set(0, 1, 0).applyQuaternion(frameQ);
     const ea = _e.dot(_f), es = _e.dot(_r), eu = _e.dot(_u);
-    const va = clamp(ea * k, along[0], along[1]), vs = clamp(es * kSide, -side, side), vu = clamp(eu * kSide, -vert, vert);
+    // close in, an integral on the cross-track errors takes out what's left (a turn, a gusty tanker)
+    if (Math.abs(es) < 6 && Math.abs(eu) < 6) { st.is = clamp((st.is ?? 0) + es * 0.15 * dt, -2, 2); st.iu = clamp((st.iu ?? 0) + eu * 0.15 * dt, -2, 2); }
+    else { st.is = 0; st.iu = 0; }
+    const va = clamp(ea * k, along[0], along[1]), vs = clamp(es * kSide + st.is, -side, side), vu = clamp(eu * kSide + st.iu, -vert, vert);
     _vd.copy(vRef).addScaledVector(_f, va).addScaledVector(_r, vs).addScaledVector(_u, vu);
+    if (aRef) _vd.addScaledVector(aRef, 0.35);
     const V = _vd.length();
     steerToward(ac, _e.copy(_vd).divideScalar(Math.max(V, 1)), c, 1, true);
     // throttle: the along-track speed error, gain sized by the thrust per unit throttle here
@@ -483,7 +490,7 @@ const GAINS = {
     join: { k: 0.1, kSide: 0.1, along: [-30, 50], side: 30, vert: 12 },
     observe: { k: 0.3, kSide: 0.3, along: [-8, 8], side: 6, vert: 4 },
     precontact: { k: 0.35, kSide: 0.45, along: [-4, 3], side: 3, vert: 2.5 },
-    contact: { k: 0.3, kSide: 0.6, along: [-1.2, 0.9], side: 1.2, vert: 1.2 },
+    contact: { k: 0.3, kSide: 0.6, along: [-1.2, 0.9], side: 2, vert: 1.5 },
     breakaway: { k: 0.5, kSide: 0.5, along: [-12, 0], side: 6, vert: 8 },
     post: { k: 0.3, kSide: 0.3, along: [-10, 6], side: 8, vert: 4 },
 };
@@ -549,6 +556,9 @@ export class RefuelSession {
         this.t += dt; this.stateT += dt;
         toWorld(rx, this.ref, _w); toLocal(tk, _w, this.tip);
         if (this.hasPrev && dt > 0) this.relV.subVectors(this.tip, this.prevTip).divideScalar(dt);
+        // the tanker's acceleration (its turns), smoothed: the station keeping leads it
+        if (this.tkV && dt > 0) this.tkA.lerp(_p.subVectors(tk.vel, this.tkV).divideScalar(dt), clamp(dt * 4, 0, 1));
+        (this.tkV || (this.tkV = new THREE.Vector3(), this.tkA = new THREE.Vector3())).copy(tk.vel);
         const closure = -this.relV.z;
         const dCg = rx.pos.distanceTo(tk.pos);
         switch (this.state) {
@@ -563,6 +573,11 @@ export class RefuelSession {
             case 'join': case 'observe': {
                 this.useRef = false;
                 this.obsPoint(this.tgtL);
+                // joining from behind: out to the side first, then up alongside (never through the tanker's tail)
+                if (this.state === 'join') {
+                    toLocal(tk, rx.pos, _q);
+                    if (Math.abs(_q.x - this.tgtL.x) > 25 && _q.z > this.tgtL.z) this.tgtL.z = Math.max(this.tgtL.z, _q.z - 120);
+                }
                 this.measure(rx, tk);
                 if (this.state === 'join') {
                     this.stable = this.err.dist < 40 ? this.stable + dt : 0;
@@ -794,7 +809,7 @@ export class RefuelSession {
         }
         toWorld(tk, this.tgtL, _t);
         const G0 = (this.auto && ASSIST[this.state]) || GAINS[this.state] || GAINS.observe;
-        stationKeep(rx, c, _t, this.useRef ? this.ref : ZERO, tk.vel, tk.quat, dt, this.ctl, G0);
+        stationKeep(rx, c, _t, this.useRef ? this.ref : ZERO, tk.vel, tk.quat, dt, this.ctl, G0, this.tkA || null);
         return true;
     }
 
