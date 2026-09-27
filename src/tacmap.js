@@ -12,6 +12,7 @@
 import { BASES } from './world.js';
 import { INTEL, INTEL_NAMES } from './war.js';
 import { STRIKE_TYPES } from './strikes.js';
+import { MapTiles } from './maptiles.js';
 import { clamp } from './util.js';
 
 const SPAN = 128000, BASE_RES = 1024; // background: 128 km square at 125 m a pixel
@@ -27,7 +28,9 @@ export class TacticalMap {
         this.sel = null;
         this.hover = null;
         this.buttons = [];
-        this.bg = null; this.detail = null; this.pending = false;
+        this.bg = null;
+        this.tiles = new MapTiles(); // sharp background tiles when zoomed in (maptiles.js)
+        this.layers = { threats: true, intel: true, roads: true, units: true, labels: true }; // (mapkit.js toggles them)
         this.canvas = document.createElement('canvas');
         this.canvas.id = 'tacmap';
         Object.assign(this.canvas.style, { position: 'fixed', inset: '0', width: '100%', height: '100%', display: 'none', zIndex: '40', cursor: 'crosshair', background: '#0b1118' });
@@ -53,23 +56,7 @@ export class TacticalMap {
         const c = document.createElement('canvas');
         c.width = c.height = d.size;
         c.getContext('2d').putImageData(new ImageData(d.pixels, d.size, d.size), 0, 0);
-        const tile = { img: c, x0: d.x0, z0: d.z0, span: d.span };
-        if (d.base) this.bg = tile; else { this.detail = tile; this.pending = false; }
-    }
-
-    // a sharper tile for what's on screen, once the view has settled while zoomed in
-    maybeDetail(dt) {
-        const v = this.view, W = this.canvas.width;
-        const pxPerM = v.scale * (window.devicePixelRatio || 1);
-        if (!this.worker || pxPerM < BASE_RES / SPAN * 2.2) { this.settle = 0; return; }
-        const span = W / (v.scale * (window.devicePixelRatio || 1)) * 1.3 * (window.devicePixelRatio || 1);
-        const d = this.detail;
-        const covers = d && Math.abs(d.x0 + d.span / 2 - v.cx) < d.span * 0.2 && Math.abs(d.z0 + d.span / 2 - v.cz) < d.span * 0.2 && d.span < span * 1.8 && d.span > span * 0.6;
-        if (covers || this.pending) { this.settle = 0; return; }
-        this.settle = (this.settle || 0) + dt;
-        if (this.settle < 0.35) return;
-        this.pending = true; this.settle = 0;
-        this.worker.postMessage({ size: 768, x0: v.cx - span / 2, z0: v.cz - span / 2, span });
+        if (d.base) this.bg = { img: c, x0: d.x0, z0: d.z0, span: d.span };
     }
 
     // ═════════════ Open / close ═════════════
@@ -106,6 +93,7 @@ export class TacticalMap {
         if (a === 'map') { this.toggle(); return true; }
         if (!this.open) return false;
         if (a === 'pause') { this.close(); return true; }
+        if (a === 'flaps') return true; // (F centres the map)
         return false;
     }
 
@@ -157,7 +145,7 @@ export class TacticalMap {
         }, { passive: false });
         c.addEventListener('contextmenu', (e) => e.preventDefault());
         window.addEventListener('keydown', (e) => {
-            if (!this.open) return;
+            if (!this.open || (e.target && e.target.tagName === 'INPUT')) return;
             if (e.code === 'KeyF') { const p = this.focusPos(); if (p) { this.view.cx = p.x; this.view.cz = p.z; } }
             if (e.code === 'Equal' || e.code === 'NumpadAdd') this.view.scale = clamp(this.view.scale * 1.25, 0.0025, 0.6);
             if (e.code === 'Minus' || e.code === 'NumpadSubtract') this.view.scale = clamp(this.view.scale / 1.25, 0.0025, 0.6);
@@ -178,7 +166,7 @@ export class TacticalMap {
         this.strikeMenu = false;
     }
 
-    // the thing under the cursor: a unit we know, a mark, an intel area
+    // the thing under the cursor: a unit we know, a mark, something of a plug-in's (mapPick), an intel area
     pick(x, y) {
         const war = this.game.war;
         let best = null, bd = 14 * 14;
@@ -197,6 +185,7 @@ export class TacticalMap {
             const dd = (P.x - x) ** 2 + (P.y - y) ** 2;
             if (dd < bd) { bd = dd; best = { kind: 'mark', mark: d }; }
         }
+        if (!best) for (const s of this.game.systems || []) if (s.mapPick) { const h = s.mapPick(x, y, this); if (h) return h; }
         if (!best) for (const rp of war.reports) {
             if (rp.resolved) continue;
             this.toScreen(rp.center.x, rp.center.z, P);
@@ -207,7 +196,7 @@ export class TacticalMap {
 
     visibleUnit(r) {
         const war = this.game.war;
-        if (!r) return false;
+        if (!r || !this.layers.units) return false;
         if (r.team === war.side) return r.unit.alive || r.cls !== 'aircraft';
         // bridges only close in (or when one's down, or marked): the road network already shows where they are
         if (r.team === 'neutral') return r.cls === 'bridge' && (this.view.scale > 0.04 || !r.unit.alive || war.designations.some(d => d.unit === r.unit));
@@ -218,23 +207,23 @@ export class TacticalMap {
     update(dt) {
         if (!this.open) return;
         this.resize();
-        this.maybeDetail(dt);
         this.draw();
+        void dt;
     }
 
     draw() {
-        const ctx = this.ctx, g = this.game, war = g.war;
+        const ctx = this.ctx, g = this.game, war = g.war, L = this.layers;
         ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
         ctx.fillStyle = '#0b1118';
         ctx.fillRect(0, 0, this.w, this.h);
         this.buttons = [];
-        // background relief
-        for (const t of [this.bg, this.detail]) {
-            if (!t) continue;
-            const a = this.toScreen(t.x0, t.z0), s = t.span * this.view.scale;
+        // background relief: the whole theatre, then sharp tiles when zoomed in
+        if (this.bg) {
+            const t = this.bg, a = this.toScreen(t.x0, t.z0), s = t.span * this.view.scale;
             ctx.imageSmoothingEnabled = true;
             ctx.drawImage(t.img, a.x, a.y, s, s);
         }
+        this.tiles.draw(ctx, this);
         if (!this.bg) {
             ctx.fillStyle = 'rgba(159,212,255,0.6)'; ctx.font = '600 14px "Share Tech Mono", monospace'; ctx.textAlign = 'center';
             ctx.fillText('PREPARING MAP…', this.w / 2, this.h / 2);
@@ -242,9 +231,9 @@ export class TacticalMap {
         this.drawTerritory(ctx);
         this.drawGrid(ctx);
         this.drawGeography(ctx);
-        this.drawThreats(ctx);
-        this.drawReports(ctx);
-        this.drawUnits(ctx);
+        if (L.threats) this.drawThreats(ctx);
+        if (L.intel) this.drawReports(ctx);
+        if (L.units) this.drawUnits(ctx);
         this.drawMarks(ctx);
         for (const s of g.systems || []) if (s !== this && s.drawMap) { try { s.drawMap(ctx, this); } catch (e) { console.warn('[tacmap]', e); } }
         this.drawPlayer(ctx);
@@ -311,7 +300,7 @@ export class TacticalMap {
         ctx.save();
         if (towns) {
             ctx.strokeStyle = 'rgba(240,220,170,0.55)'; ctx.lineWidth = this.view.scale > 0.02 ? 2 : 1.2;
-            for (const path of towns.paths || []) {
+            if (this.layers.roads) for (const path of towns.paths || []) {
                 const pts = path.pts;
                 ctx.beginPath();
                 for (let i = 0; i < pts.length; i += 2) { this.toScreen(pts[i].x, pts[i].z, P); if (i) ctx.lineTo(P.x, P.y); else ctx.moveTo(P.x, P.y); }
@@ -327,7 +316,7 @@ export class TacticalMap {
                 ctx.beginPath(); ctx.arc(P.x, P.y, r, 0, Math.PI * 2); ctx.fill();
                 if (!t.mapName) t.mapName = red ? RED_TOWNS[ri++ % RED_TOWNS.length] : BLUE_TOWNS[bi++ % BLUE_TOWNS.length];
                 else red ? ri++ : bi++;
-                if (this.view.scale > 0.005 || t.size === 'city') {
+                if (this.layers.labels && (this.view.scale > 0.005 || t.size === 'city')) {
                     ctx.fillStyle = '#f4ead8'; ctx.font = (t.size === 'city' ? '700 12px' : '600 10px') + ' "Share Tech Mono", monospace'; ctx.textAlign = 'center';
                     ctx.fillText(t.mapName.toUpperCase(), P.x, P.y - r - 5);
                 }
@@ -347,7 +336,7 @@ export class TacticalMap {
             }
             this.toScreen(b.x, b.z, P);
             ctx.fillStyle = red ? RED : b.civil ? '#e9e2cf' : BLUE; ctx.font = '700 11px "Share Tech Mono", monospace'; ctx.textAlign = 'left';
-            ctx.fillText(b.name, P.x + 14, P.y + 18);
+            if (this.layers.labels) ctx.fillText(b.name, P.x + 14, P.y + 18);
         }
         ctx.restore();
     }
@@ -425,7 +414,7 @@ export class TacticalMap {
             if (!u.alive) { ctx.strokeStyle = '#111'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(P.x - s, P.y - s); ctx.lineTo(P.x + s, P.y + s); ctx.moveTo(P.x + s, P.y - s); ctx.lineTo(P.x - s, P.y + s); ctx.stroke(); }
             // label when zoomed in (or selected)
             const selected = this.sel && this.sel.unit === u;
-            if (this.view.scale > 0.02 || selected || (known && !air && this.view.scale > 0.008 && !own)) {
+            if (selected || (this.layers.labels && (this.view.scale > 0.02 || (known && !air && this.view.scale > 0.008 && !own)))) {
                 ctx.font = '600 10px "Share Tech Mono", monospace'; ctx.textAlign = 'left'; ctx.fillStyle = col;
                 ctx.fillText(war.label(u) + (stale ? ' (' + Math.round((now - r.lastSeen) / 60) + ' MIN)' : ''), P.x + s + 4, P.y);
             }
@@ -537,13 +526,15 @@ export class TacticalMap {
             add('GRID ' + war.grid(sel.pos.x, sel.pos.z), '#e8f4ff', '700 15px');
             add(war.sideAt(sel.pos.x, sel.pos.z) === 'red' ? 'ENEMY TERRITORY' : 'FRIENDLY TERRITORY', war.sideAt(sel.pos.x, sel.pos.z) === 'red' ? RED : BLUE);
             actions.push({ label: 'MARK POINT', run: () => { const d = war.designate({ x: sel.pos.x, z: sel.pos.z }, 'map'); this.sel = { kind: 'mark', mark: d }; } });
-        } else {
+        } else if (!sel) {
             add('TACTICAL MAP', '#9fd4ff', '700 15px');
             add('CLICK A UNIT OR THE GROUND');
             add('DRAG: PAN · WHEEL: ZOOM · F: CENTRE ON YOU');
             add('` OR ESC: CLOSE');
         }
-        // plug-in actions for the selection
+        // what the plug-ins know about the selection (lines, and pictures: BDA imagery), and what they can do with it
+        const pics = [];
+        for (const s of g.systems || []) if (s.mapInfo && sel) { try { for (const it of s.mapInfo(sel) || []) { if (it.image) pics.push(it); else add(it.text, it.color, it.font); } } catch (e) { console.warn('[tacmap]', e); } }
         for (const s of g.systems || []) if (s.mapActions && sel) { try { actions.push(...(s.mapActions(sel) || [])); } catch (e) { console.warn('[tacmap]', e); } }
         // strike types for the selection (it's marked first)
         if (this.strikeMenu && sel && (sel.kind === 'unit' || sel.kind === 'mark')) {
@@ -559,13 +550,21 @@ export class TacticalMap {
                 });
             }
         }
-        const H = 20 + lines.length * 18 + actions.length * 26 + (actions.length ? 10 : 0);
+        const picH = (p) => Math.round((W - 24) * p.image.height / p.image.width) + (p.caption ? 18 : 6);
+        const H = 20 + lines.length * 18 + pics.reduce((s, p) => s + picH(p), 0) + actions.length * 26 + (actions.length ? 10 : 0);
         ctx.save();
         ctx.fillStyle = 'rgba(6,12,18,0.82)'; ctx.strokeStyle = 'rgba(111,180,255,0.45)';
         ctx.fillRect(x, y, W, H); ctx.strokeRect(x + 0.5, y + 0.5, W - 1, H - 1);
         ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
         y += 18;
         for (const l of lines) { ctx.font = l.f + ' "Share Tech Mono", monospace'; ctx.fillStyle = l.c; ctx.fillText(l.t, x + 12, y, W - 24); y += 18; }
+        for (const p of pics) {
+            const ih = picH(p) - (p.caption ? 18 : 6);
+            ctx.drawImage(p.image, x + 12, y - 6, W - 24, ih);
+            ctx.strokeStyle = 'rgba(111,180,255,0.35)'; ctx.strokeRect(x + 12.5, y - 5.5, W - 25, ih - 1);
+            if (p.caption) { ctx.font = '600 10px "Share Tech Mono", monospace'; ctx.fillStyle = 'rgba(159,212,255,0.75)'; ctx.fillText(p.caption, x + 12, y + ih + 3, W - 24); }
+            y += picH(p);
+        }
         y += 6;
         for (const a of actions) {
             const hov = this.mouse && this.mouse.x >= x + 8 && this.mouse.x <= x + W - 8 && this.mouse.y >= y - 11 && this.mouse.y <= y + 11;

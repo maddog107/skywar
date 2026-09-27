@@ -41,8 +41,26 @@ const HARDENED = { command: 0.6, bunker: 0.8, facility: 0.9, entrance: 0.85, sil
 // and the Miramar pocket in the north-west. West → east. (A front-line system can move it: setFront.)
 const FRONT_KM = [[-70, -34], [-20, -34], [-3, -30], [-2, -20], [-1, -12], [4, -8], [12, -5], [70, -6]];
 
-const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
+const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _nose = new THREE.Vector3();
 let nextId = 1;
+
+// Grid references (War.grid): a 10 km square named by two letters (columns west → east, rows south → north, I and
+// O left out), then the easting and northing inside it. parseGrid is the inverse: "KD 412 883", "kd412883",
+// "KD 41 88" (any even number of digits, split in half: 1 km, 100 m, 10 m or 1 m) → the centre of the square the
+// reference names, { x, z, size }, or null when it isn't one
+const GRID_L = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+export function parseGrid(ref) {
+    const m = /^\s*([A-Za-z])\s*([A-Za-z])\s*(\d+)\s*(\d*)\s*$/.exec(String(ref ?? ''));
+    if (!m) return null;
+    const cx = GRID_L.indexOf(m[1].toUpperCase()), cz = GRID_L.indexOf(m[2].toUpperCase());
+    if (cx < 0 || cz < 0) return null;
+    let e = m[3], n = m[4];
+    if (!n) { if (e.length % 2) return null; n = e.slice(e.length / 2); e = e.slice(0, e.length / 2); }
+    if (e.length !== n.length || e.length > 4) return null;
+    const size = 10000 / 10 ** e.length;
+    const ex = +e * size + size / 2, nz = +n * size + size / 2;
+    return { x: (cx - 12) * 10000 + ex, z: -((cz - 12) * 10000 + nz), size };
+}
 
 export class War {
     constructor(game) {
@@ -229,6 +247,8 @@ export class War {
         const light = this.lightFactor();
         const weather = { clear: 1, cloudy: 0.85, rain: 0.55, storm: 0.4 }[g.world.weather] ?? 1;
         const hasRadar = p && p.alive && !onFoot && p.spec && (p.spec.missiles > 0 || p.spec.radar);
+        // (the radar looks along the nose, wherever the camera — the head, the targeting pod — is looking)
+        const nose = hasRadar ? p.getForward(_nose) : fwd;
         const per = Math.min(n, 48);
         const step = dt * n / per; // each unit gets looked at about every (n / per) frames: scale its dwell time
         for (let k = 0; k < per; k++) {
@@ -243,7 +263,7 @@ export class War {
                 const airborne = !u.onGround;
                 // air-to-air radar: contacts to ~45 km in front, the type (NCTR) closer
                 if (hasRadar && airborne && d < 45000) {
-                    const inCone = _v.subVectors(u.pos, eye).divideScalar(d).dot(fwd) > 0.35;
+                    const inCone = _v.subVectors(u.pos, eye).divideScalar(d).dot(nose) > 0.35;
                     if (inCone) { this.bump(rec, d < 18000 ? INTEL.IDENTIFIED : INTEL.CONTACT, 'radar', step); continue; }
                 }
                 spotR = 9000; idR = 3500;
@@ -354,6 +374,9 @@ export class War {
     }
 
     // ═════════════ Geography ═════════════
+    // "KD 412 883" → { x, z, size } (the centre of that square), or null
+    parseGrid(ref) { return parseGrid(ref); }
+
     // Grid reference: a 10 km square (two letters) and metres within it to 10 m ("KD 412 883")
     grid(x, z) {
         const L = 'ABCDEFGHJKLMNPQRSTUVWXYZ';

@@ -9,7 +9,7 @@ import * as THREE from 'three';
 import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { terrainHeight } from './world.js';
+import { terrainHeight, SKY_FOG } from './world.js';
 import { WAVE_GLSL, WATER, waterHeight } from './water.js';
 
 // ── Quality presets ──
@@ -728,6 +728,289 @@ export class DofPass extends Pass {
     dispose() { this.mat.dispose(); this.compMat.dispose(); this.halfRT.dispose(); }
 }
 
+// ═════════════ Targeting pod video (sensors.js) ═════════════
+// While the pod's video is up (game.sensorView) the scene becomes sensor video, in scene-linear light before
+// bloom and the output pass: TV is the CCD's monochrome with its gain pulling a dim scene up (noise and all);
+// white-hot / black-hot is a FLIR's picture: the scene's brightness about the frame's own mean (a two-pass
+// reduction: the FLIR's automatic gain), vegetation cooler, water at its own temperature, the sky and clouds
+// cold, and the heat of what sensors.js hands over (engines, exhaust, bodies, fires: spheres standing on the
+// ground plane, found by rebuilding world positions from depth). Saturated white-hot spots bloom through the
+// bloom pass that follows. Grain, fixed-pattern column noise. Each grey is written as the scene-linear value the
+// output pass's ACES curve turns into the wanted display grey.
+export const SENSOR_SPOTS = 24;
+// the scene's haze (world.js FOG_GLSL: an exponential height layer plus low mist, and the fade at the edge of the
+// streamed terrain), so the FLIR can see through most of it: the eye's haze is bright, the FLIR's a thin grey veil
+const SENSOR_FOG_GLSL = /* glsl */`
+    uniform vec4 fogA, fogD;
+    uniform vec3 fogCol, camPos;
+    uniform mat4 camWorld;
+    float fogLayer(float dens, float k, float y0, float y1, float L) {
+        float e0 = exp(-k * max(y0, 0.0)), e1 = exp(-k * max(y1, 0.0));
+        float dk = k * (y1 - y0);
+        return dens * L * (abs(dk) > 1e-4 ? (e0 - e1) / dk : e0);
+    }
+    float fogAmount(vec3 ray) {
+        float L = length(ray);
+        float tau = fogLayer(fogA.x, fogA.y, camPos.y, camPos.y + ray.y, L) + fogLayer(fogD.x, fogD.y, camPos.y, camPos.y + ray.y, L);
+        return max(1.0 - exp(-tau * tau), smoothstep(fogA.z, fogA.w, length(ray.xz)));
+    }
+    // the colour before the haze was laid over it
+    vec3 defog(vec3 c, float f) { return max((c - fogCol * f) / max(1.0 - f, 0.06), vec3(0.0)); }
+    // the cloud layer over the scene (clouds.js composites its premultiplied history with (1, 1 − a) blending,
+    // depth-tested against the cloud's entry distance): the cloud here, or none when it's behind what's in view
+    uniform sampler2D tCloud, tCloudInfo;
+    uniform vec2 cloudRes, cloudJitter;
+    uniform float cloudOn;
+    vec4 cloudAt(vec2 uv, float sceneDist) {
+        if (cloudOn < 0.5) return vec4(0.0);
+        vec4 cl = texture2D(tCloud, uv);
+        if (cl.a < 0.002) return vec4(0.0);
+        // the entry of the four march texels around (as the composite takes them: the ones with cloud; none: far)
+        vec2 st = uv * cloudRes - 0.5 - cloudJitter;
+        ivec2 i0 = ivec2(floor(st)), mx = ivec2(cloudRes) - 1;
+        float entry = 30000.0;
+        for (int k = 0; k < 4; k++) {
+            float e = texelFetch(tCloudInfo, clamp(i0 + ivec2(k & 1, k >> 1), ivec2(0), mx), 0).x;
+            if (e < 59000.0) entry = min(entry, e);
+        }
+        return entry > sceneDist * 1.03 + 40.0 ? vec4(0.0) : cl;
+    }
+`;
+const SENSOR_STATS_FRAG = /* glsl */`
+    ${DEPTH_GLSL}
+    ${SENSOR_FOG_GLSL}
+    uniform sampler2D tColor;
+    varying vec2 vUv;
+    // 16×16 cells, 4×4 samples each: sums of log luminance (haze taken off), its square, the count and the plain
+    // luminance
+    void main() {
+        vec2 cell = floor(gl_FragCoord.xy) / 16.0;
+        vec4 acc = vec4(0.0);
+        for (int j = 0; j < 4; j++) for (int i = 0; i < 4; i++) {
+            vec2 uv = cell + (vec2(float(i), float(j)) + 0.5) / 64.0;
+            float d = texture2D(tDepth, uv).x;
+            if (isSky(d)) continue;
+            vec3 c = texture2D(tColor, uv).rgb;
+            float l = max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-5);
+            vec3 P = (camWorld * vec4(viewPos(uv, linDepth(d)), 1.0)).xyz;
+            vec4 cl = cloudAt(uv, length(P - camPos));
+            if (cl.a > 0.5) continue; // (the gain follows the ground, not the clouds)
+            c = max((c - cl.rgb) / max(1.0 - cl.a, 0.05), vec3(0.0));
+            float ll = log(max(dot(defog(c, fogAmount(P - camPos)), vec3(0.2126, 0.7152, 0.0722)), 1e-5));
+            acc += vec4(ll, ll * ll, 1.0, l);
+        }
+        gl_FragColor = acc;
+    }`;
+const SENSOR_REDUCE_FRAG = /* glsl */`
+    uniform sampler2D tCells, tPrev;
+    uniform float blend;
+    varying vec2 vUv;
+    // mean log luminance, its spread, the mean luminance: eased in over time like a camera's gain
+    void main() {
+        vec4 a = vec4(0.0);
+        for (int j = 0; j < 16; j++) for (int i = 0; i < 16; i++) a += texelFetch(tCells, ivec2(i, j), 0);
+        vec3 cur = vec3(-2.3, 0.6, 0.1);
+        if (a.z > 0.5) { float m = a.x / a.z; cur = vec3(m, sqrt(max(a.y / a.z - m * m, 0.0)), a.w / a.z); }
+        vec3 prev = texelFetch(tPrev, ivec2(0), 0).rgb;
+        gl_FragColor = vec4(mix(prev, cur, blend), 1.0);
+    }`;
+const SENSOR_FRAG = /* glsl */`
+    ${DEPTH_GLSL}
+    ${SENSOR_FOG_GLSL}
+    #define NSPOT ${SENSOR_SPOTS}
+    uniform sampler2D tColor, tStats;
+    uniform float mode, time, grain, expo, nightK, masked, seaBand;
+    uniform int nSpots;
+    uniform vec4 spotA[NSPOT], spotB[NSPOT], spotE[NSPOT];
+    varying vec2 vUv;
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+    // display grey (sRGB) → the scene-linear grey three's ACES curve maps to it
+    float fromDisplay(float y) {
+        y = clamp(y, 0.0, 0.985);
+        float L = y <= 0.04045 ? y / 12.92 : pow((y + 0.055) / 1.055, 2.4);
+        float A = 1.0 - 0.983729 * L, B = 0.0245786 - 0.4329510 * L, C = -(0.000090537 + 0.238081 * L);
+        return (-B + sqrt(B * B - 4.0 * A * C)) / (2.0 * A) * 0.6 / expo;
+    }
+    void main() {
+        vec3 c = texture2D(tColor, vUv).rgb;
+        vec3 st = texelFetch(tStats, ivec2(0), 0).rgb;
+        float lum = max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-5);
+        vec2 px = gl_FragCoord.xy;
+        float n = hash(px * 0.73 + fract(time * 7.13) * 97.3) - 0.5;
+        if (mode > 1.5) {
+            // TV: the CCD in monochrome; its gain lifts a dim scene (and its noise)
+            float gain = clamp(0.16 / max(st.b, 1e-4), 0.7, 6.0);
+            float g = lum * gain * (1.0 + n * grain * (0.5 + gain * 0.5) * 3.0);
+            g = mix(g, 0.18, masked * 0.9);
+            gl_FragColor = vec4(vec3(g), 1.0);
+            return;
+        }
+        float d = texture2D(tDepth, vUv).x;
+        vec3 ray = normalize(mat3(camWorld) * viewPos(vUv, 1.0));
+        float t, eng = 0.0;
+        bool sky = isSky(d);
+        vec3 P = sky ? camPos + ray * 1e5 : (camWorld * vec4(viewPos(vUv, linDepth(d)), 1.0)).xyz;
+        // the cloud in front, and the scene behind it
+        vec4 cl = cloudAt(vUv, sky ? 1e9 : length(P - camPos));
+        c = max((c - cl.rgb) / max(1.0 - cl.a, 0.05), vec3(0.0));
+        if (sky) t = mix(0.26, 0.05, smoothstep(-0.03, 0.3, ray.y));
+        else {
+            float f = fogAmount(P - camPos);
+            vec3 c0 = defog(c, f);
+            float lum0 = max(dot(c0, vec3(0.2126, 0.7152, 0.0722)), 1e-5);
+            // apparent temperature: brightness about the frame's own mean (the FLIR's automatic gain); what only
+            // shines (lamps, bright paint) doesn't saturate the picture — heat does, below
+            float rel = (log(lum0) - st.r) / max(st.g, 0.3);
+            // (at night the land has given its heat back: a flatter background, and what's running stands out)
+            t = min(0.5 + 0.17 * rel * mix(1.0, 0.55, nightK), 0.96);
+            float hi0 = max(c0.r, max(c0.g, c0.b)), sat0 = (hi0 - min(c0.r, min(c0.g, c0.b))) / max(hi0, 1e-5);
+            // vegetation evaporates (cooler); dark bare surfaces (asphalt, rock) soak up the sun (warmer: a runway
+            // shows light by day); water sits at its own temperature (cooler than the land by day, warmer at night)
+            float veg = clamp((c0.g - max(c0.r, c0.b)) / lum0 * 2.5, 0.0, 1.0);
+            t -= veg * mix(0.09, 0.04, nightK);
+            float bare = (1.0 - smoothstep(0.06, 0.2, sat0)) * (1.0 - veg) * smoothstep(0.3, -1.2, rel);
+            t = mix(t, 0.64, bare * mix(0.85, 0.3, nightK));
+            float water = (1.0 - smoothstep(seaBand * 0.35, seaBand, abs(P.y))) * clamp((c0.b - c0.r) / lum0 * 2.0, 0.0, 1.0);
+            t = mix(t, mix(0.3, 0.6, nightK), water);
+            // heat: the spheres sensors.js hands over (what stands above their ground plane, shaded by the object's
+            // own light and dark), the ground right under them a little, their engine / exhaust / fire a lot
+            float body = 0.0;
+            for (int i = 0; i < NSPOT; i++) {
+                if (i >= nSpots) break;
+                vec4 a = spotA[i];
+                vec3 dp = P - a.xyz;
+                float r2 = dot(dp, dp);
+                if (r2 > a.w * a.w) continue;
+                vec4 b = spotB[i];
+                vec3 nrm = vec3(b.z, sqrt(max(1.0 - b.z * b.z - b.w * b.w, 0.0)), b.w);
+                float hgt = dot(P - vec3(a.x, b.y, a.z), nrm);
+                float rr = sqrt(r2) / a.w;
+                float on = smoothstep(0.08, 0.4, hgt) * (1.0 - smoothstep(0.65, 1.0, rr));
+                float pad = (1.0 - smoothstep(0.0, 0.6, hgt)) * (1.0 - smoothstep(0.2, 0.7, rr)) * 0.25;
+                vec4 e = spotE[i];
+                body += b.x * max(on, pad);
+                eng += e.w * (1.0 - smoothstep(0.0, min(a.w * 0.3, 3.5), length(P - e.xyz))) * smoothstep(0.02, 0.25, hgt);
+            }
+            t += body * clamp(0.6 + rel * 0.35, 0.3, 1.1) + eng;
+            // the FLIR's own haze: a thin grey veil where the eye's is thick
+            t = mix(t, 0.46, f * 0.55);
+        }
+        // clouds are cold (a little texture from their own light and shade)
+        if (cl.a > 0.002) {
+            float cr = log(max(dot(cl.rgb / cl.a, vec3(0.2126, 0.7152, 0.0722)), 1e-4)) - st.r;
+            t = mix(t, mix(0.2, 0.34, nightK) + 0.05 * clamp(cr, -1.5, 1.5), min(cl.a * 1.15, 1.0));
+        }
+        // sensor noise: temporal grain and the fixed pattern of the detector's columns
+        t += n * grain + (hash(vec2(floor(px.x * 0.5), 3.7)) - 0.5) * 0.016;
+        float y = mode < 0.5 ? t : 1.0 - t;
+        // masked: the airframe's warm skin smeared across the view
+        y = mix(y, mode < 0.5 ? 0.62 - 0.12 * vUv.y : 0.38 + 0.12 * vUv.y, masked * 0.92);
+        float g = fromDisplay(y);
+        // engines, exhaust and fires saturate white-hot and are pushed past the bloom's threshold (PostFX raises it
+        // while the FLIR is up): they bloom a little, like a detector overloading
+        if (mode < 0.5 && eng > 0.2 && t > 1.0) g *= 1.0 + min(t - 1.0, 0.4) * 3.0 * (1.0 - masked);
+        gl_FragColor = vec4(vec3(g), 1.0);
+    }`;
+
+export class SensorPass extends Pass {
+    constructor(scenePass, camera, renderer) {
+        super();
+        this.scenePass = scenePass;
+        this.camera = camera;
+        this.renderer = renderer;
+        this.needsSwap = true;
+        this.enabled = false;
+        const tiny = (w, h) => new THREE.WebGLRenderTarget(w, h, { type: THREE.FloatType, depthBuffer: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, generateMipmaps: false });
+        this.cellsRT = tiny(16, 16);
+        this.statRT = [tiny(1, 1), tiny(1, 1)];
+        this.statIdx = 0;
+        // (the haze and cloud uniforms are shared: one update serves both materials)
+        this.noCloud = new THREE.DataTexture(new Float32Array(4), 1, 1, THREE.RGBAFormat, THREE.FloatType);
+        this.noCloud.needsUpdate = true;
+        const fog = {
+            fogA: { value: new THREE.Vector4() }, fogD: { value: new THREE.Vector4() }, fogCol: { value: new THREE.Color() }, camPos: { value: new THREE.Vector3() }, camWorld: { value: new THREE.Matrix4() },
+            tCloud: { value: this.noCloud }, tCloudInfo: { value: this.noCloud }, cloudRes: { value: new THREE.Vector2(1, 1) }, cloudJitter: { value: new THREE.Vector2() }, cloudOn: { value: 0 },
+        };
+        this.statsMat = fxMaterial(SENSOR_STATS_FRAG, { ...depthUniforms(), ...fog, tColor: { value: null } });
+        this.reduceMat = fxMaterial(SENSOR_REDUCE_FRAG, { tCells: { value: this.cellsRT.texture }, tPrev: { value: null }, blend: { value: 1 } });
+        const vec4s = () => Array.from({ length: SENSOR_SPOTS }, () => new THREE.Vector4());
+        this.mat = fxMaterial(SENSOR_FRAG, {
+            ...depthUniforms(), ...fog, tColor: { value: null }, tStats: { value: null }, mode: { value: 0 }, time: { value: 0 }, grain: { value: 0.02 },
+            expo: { value: 1 }, nightK: { value: 0 }, masked: { value: 0 }, seaBand: { value: 1.2 },
+            nSpots: { value: 0 }, spotA: { value: vec4s() }, spotB: { value: vec4s() }, spotE: { value: vec4s() },
+        });
+        this.fog = fog;
+        this.quad = new FullScreenQuad(null);
+        this.time = 0;
+        this.fresh = true;
+        this.view = null;
+    }
+
+    // sv: game.sensorView (sensors.js): mode 0 white-hot, 1 black-hot, 2 TV; grain; night; masked; the heat spots
+    configure(sv, dt, world) {
+        const u = this.mat.uniforms;
+        if (!this.enabled) this.fresh = true;
+        this.view = sv;
+        this.time += dt;
+        u.mode.value = sv.mode; u.grain.value = sv.grain; u.nightK.value = sv.night; u.masked.value = sv.masked;
+        u.seaBand.value = Math.max(1.2, WATER.maxCrest); // how far the waves reach above and below sea level
+        u.time.value = this.time;
+        u.expo.value = this.renderer.toneMappingExposure;
+        const f = this.fog;
+        f.fogA.value.fromArray(SKY_FOG.a); f.fogD.value.fromArray(SKY_FOG.d);
+        if (world && world.scene && world.scene.fog) f.fogCol.value.copy(world.scene.fog.color);
+        this.clouds = world ? world.clouds : null;
+        const n = Math.min(sv.nSpots, SENSOR_SPOTS);
+        u.nSpots.value = n;
+        for (let i = 0; i < n; i++) {
+            const o = i * 4;
+            u.spotA.value[i].fromArray(sv.spotA, o); u.spotB.value[i].fromArray(sv.spotB, o); u.spotE.value[i].fromArray(sv.spotE, o);
+        }
+        // the gain settles over about half a second (at once when the video comes up)
+        this.reduceMat.uniforms.blend.value = this.fresh ? 1 : 1 - Math.exp(-dt * 3);
+        this.fresh = false;
+    }
+
+    render(renderer, writeBuffer, readBuffer) {
+        const src = this.scenePass.output || readBuffer;
+        const depth = src.depthTexture, cam = this.camera, f = this.fog;
+        f.camWorld.value.copy(cam.matrixWorld);
+        f.camPos.value.setFromMatrixPosition(cam.matrixWorld);
+        // the cloud layer as this frame's scene pass composited it
+        const cl = this.clouds, cu = cl && cl.ready && cl.enabled && cl.mesh && cl.mesh.visible && cl.compMat ? cl.compMat.uniforms : null;
+        f.cloudOn.value = cu ? 1 : 0;
+        f.tCloud.value = cu ? cu.tCloud.value : this.noCloud;
+        f.tCloudInfo.value = cu ? cu.tInfo.value : this.noCloud;
+        if (cu) { f.cloudRes.value.copy(cu.lowRes.value); f.cloudJitter.value.copy(cu.jitter.value); }
+        // automatic gain: 16×16 cells → one texel, eased against last frame's
+        const su = this.statsMat.uniforms;
+        su.tColor.value = readBuffer.texture;
+        setDepthUniforms(su, cam, depth, src.samples);
+        this.quad.material = this.statsMat;
+        renderer.setRenderTarget(this.cellsRT);
+        this.quad.render(renderer);
+        const prev = this.statRT[this.statIdx];
+        this.statIdx ^= 1;
+        this.reduceMat.uniforms.tPrev.value = prev.texture;
+        this.quad.material = this.reduceMat;
+        renderer.setRenderTarget(this.statRT[this.statIdx]);
+        this.quad.render(renderer);
+        // the picture
+        const u = this.mat.uniforms;
+        u.tColor.value = readBuffer.texture;
+        u.tStats.value = this.statRT[this.statIdx].texture;
+        setDepthUniforms(u, cam, depth, src.samples);
+        this.quad.material = this.mat;
+        renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
+        this.quad.render(renderer);
+    }
+
+    dispose() {
+        this.cellsRT.dispose(); for (const r of this.statRT) r.dispose();
+        this.statsMat.dispose(); this.reduceMat.dispose(); this.mat.dispose(); this.noCloud.dispose();
+    }
+}
+
 // ═════════════ Tone mapping + FXAA in one pass ═════════════
 // Replaces the composer's OutputPass: FXAA (the Catlike Coding variant that three's FXAAShader uses)
 // whose texture fetch tone-maps and sRGB-encodes each sample, so the edge search runs on final LDR
@@ -971,7 +1254,7 @@ const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3();
 
 export class PostFX {
     // composer passes on entry: [scenePass, cockpitPass, bloom, OutputPass, grade]
-    // afterwards: [scenePass, sceneFX, dof, cockpitPass, bloom, OutputPass (off), OutputAAPass, grade]
+    // afterwards: [scenePass, sceneFX, dof, sensor, cockpitPass, bloom, OutputPass (off), OutputAAPass, grade]
     constructor({ renderer, composer, camera, scenePass, cockpitPass }) {
         this.renderer = renderer;
         this.composer = composer;
@@ -982,6 +1265,12 @@ export class PostFX {
         const at = composer.passes.indexOf(cockpitPass);
         composer.insertPass(this.dof, at);
         composer.insertPass(this.sceneFX, at);
+        // the targeting pod's video (sensors.js): after the scene effects, before bloom (which it retunes while the
+        // FLIR is up: only saturated hot spots bloom)
+        this.sensor = new SensorPass(scenePass, camera, renderer);
+        composer.insertPass(this.sensor, composer.passes.indexOf(cockpitPass));
+        this.bloom = composer.passes.find(p => p.threshold !== undefined && p.strength !== undefined && p.radius !== undefined) || null;
+        this.bloomSaved = null;
         // tone mapping + FXAA in one pass, in place of the plain OutputPass
         this.output = composer.passes.find(p => p.isOutputPass) || null;
         this.outputAA = new OutputAAPass();
@@ -1066,6 +1355,14 @@ export class PostFX {
             fx.groundDist = cam.position.y - Math.max(terrainHeight(cam.position.x, cam.position.z), 0);
             this.updateSun(world, cam);
         } else { fx.groundDist = 1e9; fx.sun.on = 0; }
+
+        // the targeting pod's video, while it's up (the FLIR's hot spots bloom a little; the rest doesn't)
+        const sv = !photo && game && game.sensorView;
+        if (sv) this.sensor.configure(sv, dt, world);
+        this.sensor.enabled = !!sv;
+        const b = this.bloom, flir = !!sv && sv.mode !== 2;
+        if (b && flir && !this.bloomSaved) { this.bloomSaved = { threshold: b.threshold, strength: b.strength, radius: b.radius }; b.threshold = 5.4; b.strength = 0.4; b.radius = 0.05; }
+        else if (b && !flir && this.bloomSaved) { Object.assign(b, this.bloomSaved); this.bloomSaved = null; }
 
         // depth of field: photo mode only
         this.dof.enabled = photo && q.dof > 0;

@@ -1368,6 +1368,8 @@ export class Game {
                 this.audio.whoosh(0.8);
             }
         } else { p.airbrake = s.airbrake; p.wheelBrake = false; }
+        // a plug-in flying for the pilot (the targeting pod's autopilot, sensors.js) has the last word on the controls
+        for (const sy of this.systems) if (sy.flyJet) sy.flyJet(dt, p, s, mouse);
         // autopilot flies until the pilot touches the stick
         if (this.autopilot.active) {
             // accidental bumps only warn; sustained input takes control
