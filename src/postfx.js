@@ -715,8 +715,14 @@ const SENSOR_FOG_GLSL = /* glsl */`
         if (cloudOn < 0.5) return vec4(0.0);
         vec4 cl = texture2D(tCloud, uv);
         if (cl.a < 0.002) return vec4(0.0);
-        ivec2 q = clamp(ivec2(floor(uv * cloudRes - cloudJitter)), ivec2(0), ivec2(cloudRes) - 1);
-        float entry = texelFetch(tCloudInfo, q, 0).x;
+        // the entry of the four march texels around (as the composite takes them: the ones with cloud; none: far)
+        vec2 st = uv * cloudRes - 0.5 - cloudJitter;
+        ivec2 i0 = ivec2(floor(st)), mx = ivec2(cloudRes) - 1;
+        float entry = 30000.0;
+        for (int k = 0; k < 4; k++) {
+            float e = texelFetch(tCloudInfo, clamp(i0 + ivec2(k & 1, k >> 1), ivec2(0), mx), 0).x;
+            if (e < 59000.0) entry = min(entry, e);
+        }
         return entry > sceneDist * 1.03 + 40.0 ? vec4(0.0) : cl;
     }
 `;
