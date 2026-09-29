@@ -272,7 +272,7 @@ export class SiloSite extends LaunchSource {
         s.closeT = 5;
         dir.set(0, 1, 0);
     }
-    remove() { this.game.scene.remove(this.mesh); }
+    remove() { this.game.scene.remove(this.mesh); this.mesh.traverse(o => { if (o.isMesh) o.geometry.dispose(); }); } // (its own geometry: a new field is built every sortie; the materials are cached)
 }
 
 // A ground launcher: a TEL or rocket artillery vehicle. The vehicle and its motion are someone else's (a mobile-

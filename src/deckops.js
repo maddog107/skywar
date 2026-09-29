@@ -1057,7 +1057,8 @@ export class DeckOps {
 
     dispose() {
         if (this.crew) this.crew.dispose();
-        for (const im of this.parked) { im.removeFromParent(); const i = this.ship.details.indexOf(im); if (i >= 0) this.ship.details.splice(i, 1); }
+        // (each deck merged its own parked jets: their geometry stayed on the GPU after every sortie)
+        for (const im of this.parked) { im.removeFromParent(); im.geometry.dispose(); im.dispose(); const i = this.ship.details.indexOf(im); if (i >= 0) this.ship.details.splice(i, 1); }
         this.parked.length = 0;
         for (const dp of this.jets) if (dp.ac.alive && dp.combat) dp.ac.pilot = dp.combat;
         this.jets.length = 0;
