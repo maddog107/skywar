@@ -54,7 +54,7 @@ const log = (...a) => console.log(((Date.now() - t0) / 1000).toFixed(0).padStart
 
 for (const name of names) {
     const sc = SCENARIOS[name];
-    const settings = { controlMode: 'keyboard', quality: args.quality || 'high', difficulty: 'veteran', wingmen: 1, time: 'day', weather: 'clear', dynRes: false, ...sc.settings };
+    const settings = { controlMode: 'keyboard', quality: args.quality || 'high', difficulty: 'veteran', wingmen: 1, time: 'day', weather: 'clear', dynRes: false, unlockAll: true, ...sc.settings }; // (unlockAll: a fresh profile hasn't earned every jet, and a locked one disables LAUNCH)
     const page = await browser.newPage({ viewport: { width: W, height: H } });
     const errors = [];
     page.on('pageerror', e => errors.push(String(e.message)));
