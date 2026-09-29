@@ -215,6 +215,7 @@ export class Director {
 
     focus() {
         const g = this.game;
+        if (g.viewFocus) return g.viewFocus; // (the sandbox's spectator camera: the war comes alive where it looks)
         if (g.pilotMode) return g.pilotMode.pos;
         if (g.player && g.player.alive) return g.player.pos;
         return g.camera.position;
@@ -351,7 +352,8 @@ export class Director {
             case 'cas': {
                 pl.home = (f.target ? f.target.pos : f.pos).clone(); pl.leash = 9000;
                 // strafe what's on the ground at the target, unless a fighter is on us
-                pl.brain = { pick: (p) => this.casPick(f, p) };
+                // (f.pick: a mission's own choice first, the sandbox's SEAD: sandbox.js)
+                pl.brain = { pick: (p) => { const t = f.pick ? f.pick(p) : undefined; return t !== undefined ? t : this.casPick(f, p); } };
                 break;
             }
             default: {
@@ -420,7 +422,8 @@ export class Director {
         const g = this.game, P = this.focus(), war = g.war;
         const k = this.intensity();
         // (each real jet costs ~0.2 ms a frame: rookie 5 / veteran 6 / ace 8, and 2 / 3 / 4 enemy fighters)
-        const budget = Math.round(k * 6), fighterCap = Math.round(k * 3);
+        // (the sandbox raises both while you watch a battle you set up: liveMax, fighterMax)
+        const budget = this.liveMax ?? Math.round(k * 6), fighterCap = this.fighterMax ?? Math.round(k * 3);
         let live = 0, redFighters = 0;
         for (const f of this.flights) if (f.members) { live += f.n; if (f.team !== war.side && f.fighters) redFighters += f.n; }
         // nearest first
@@ -520,6 +523,7 @@ export class Director {
         if (!r) { if (f.loiter && this.game.war.time < f.loiter.until) return; this.rtb(f); return; }
         if (r.attack && !f.members) this.resolveAttack(f);
         f.wp++;
+        if (f.loop && f.wp >= f.route.length) f.wp = 0; // (a patrol flies its route round and round: sandbox.js)
         if (f.wp >= f.route.length && !f.loiter && f.role !== 'intercept' && f.role !== 'cas') { this.rtb(f); return; }
         if (f.members) for (const a of f.members) if (a.alive && a.pilot && a.pilot.passive) a.pilot.waypoint = this.flyPoint(f).clone();
     }
@@ -780,6 +784,8 @@ export class Director {
         const g = this.game, war = g.war;
         if (!g.player) return;
         const k = this.intensity();
+        // the sandbox can turn the war's own activity off (its placed flights, convoys and fleets carry on)
+        if (this.auto === false) { this.vectorCaps(); for (const c of this.convoys) this.convoyThreats(c); return; }
         // CAP stations over their ground (and ours)
         this.capT -= 1;
         if (this.capT <= 0) { this.capT = 25; this.keepCaps(); }

@@ -161,7 +161,7 @@ export class Wingmen {
         // the wingmen game.js made (formation on the player)
         let i = 0;
         for (const a of g.aircraft) {
-            if (a === g.player || a.team !== 'blue' || !a.pilot || !a.pilot.formation) continue;
+            if (a === g.player || a.team !== g.war.side || !a.pilot || !a.pilot.formation) continue;
             this.list.push({ ac: a, callsign: a.callsign, voice: VOICE[i % VOICE.length], brain: null, hitCall: false, lowCall: false, rktT: 0, offset: a.pilot.formation.offset.clone(), type: a.type });
             i++;
         }
@@ -259,7 +259,7 @@ export class Wingmen {
     orderedTarget() {
         const g = this.game, war = g.war;
         const t = g.lockTarget;
-        if (t && t.alive && !g.isNeutral(t) && t.team !== 'blue') return t;
+        if (t && t.alive && !g.isNeutral(t) && t.team !== g.war.side) return t;
         for (let i = war.designations.length - 1; i >= 0; i--) {
             const d = war.designations[i];
             if (d.unit && d.unit.alive && d.unit.team !== war.side) return d.unit;
@@ -374,7 +374,7 @@ export class Wingmen {
         w.respawnT = null;
         if (!p) return;
         const base = w.base || this.nearestBase(p.pos);
-        const a = new Aircraft(g, w.type || pick(ALLY_POOL), { team: 'blue', name: w.callsign });
+        const a = new Aircraft(g, w.type || pick(ALLY_POOL), { team: g.war.side, name: w.callsign });
         const dir = _v.set(p.pos.x - base.x, 0, p.pos.z - base.z);
         const L = dir.length() || 1;
         a.spawnAir(new THREE.Vector3(base.x + dir.x / L * 1500, base.h + 900, base.z + dir.z / L * 1500), Math.atan2(-dir.x, -dir.z), 0.6);

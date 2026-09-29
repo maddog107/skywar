@@ -104,7 +104,7 @@ export class HUD {
         ctx.textBaseline = 'middle';
 
         // (a missile camera, the old one or the strikes one, shows the missile, not the jet's HUD)
-        const missileView = game.missileCam || (game.strikes && game.strikes.cam);
+        const missileView = game.missileCam || (game.strikes && game.strikes.cam) || game.spectating; // (and the sandbox's spectator camera)
         if (p.alive && !missileView) {
             // central HUD symbology (clipped to combiner glass in the cockpit)
             ctx.save();
@@ -129,7 +129,7 @@ export class HUD {
         this.drawPanels(game);
         if (game.cameraMode !== 'cockpit') this.drawRadar(game);
         this.drawMessages(game);
-        this.drawWarnings(game);
+        if (!game.spectating) this.drawWarnings(game); // (the held jet's warnings aren't what the camera's watching)
         this.drawSystems(game);
     }
 
@@ -423,7 +423,7 @@ export class HUD {
     // or left off, so a close formation or a carrier group never turns into a smear of text.
     drawTargets(game) {
         const ctx = this.ctx, cam = game.camera;
-        const p = game.pilotMode ? { pos: cam.position, team: 'blue', isProxy: true } : game.player;
+        const p = game.pilotMode ? { pos: cam.position, team: game.war ? game.war.side : 'blue', isProxy: true } : game.player;
         const lock = game.lockTarget;
         const entries = [];
         const add = (a, kind) => entries.push({ a, kind, dist: a.pos.distanceTo(p.pos) });
@@ -718,14 +718,14 @@ export class HUD {
         if (game.ground) for (const t of game.ground.targets) {
             if (!t.alive || (t.isBridge && !t.objective)) continue;
             const at = seen(t, false);
-            if (at) plot(at, t.team === 'blue' ? BLUE : iff(t, war ? '#ff9f5a' : AMBER), 'dia', t.isShip ? 4.5 : 2.5);
+            if (at) plot(at, t.team === (war ? war.side : 'blue') ? BLUE : iff(t, war ? '#ff9f5a' : AMBER), 'dia', t.isShip ? 4.5 : 2.5);
         }
         // neutral air traffic (helicopters, airliners): small grey contacts
         for (const t of AIR_TARGETS) if (t.alive && !t.done) plot(t.pos, t === game.lockTarget ? RED : 'rgba(212,221,230,0.75)', 'sq', t === game.lockTarget ? 3.5 : 2);
         for (const a of game.aircraft) {
             if (a === p || !a.alive) continue;
             const at = a === game.lockTarget ? a.pos : seen(a, true);
-            if (at) plot(at, a.team === 'blue' ? BLUE : (a === game.lockTarget ? RED : iff(a, '#ff9f5a')), 'sq', a === game.lockTarget ? 4 : 3);
+            if (at) plot(at, a.team === (war ? war.side : 'blue') ? BLUE : (a === game.lockTarget ? RED : iff(a, '#ff9f5a')), 'sq', a === game.lockTarget ? 4 : 3);
         }
         for (const m of game.weapons.missiles) plot(m.pos, m.target === p ? RED : 'rgba(255,255,255,0.8)', 'dot', 1.8);
         ctx.restore();

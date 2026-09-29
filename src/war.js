@@ -83,6 +83,21 @@ export class War {
     get playerTeam() { return this.side; }
     get enemyTeam() { return this.side === 'blue' ? 'red' : 'blue'; }
 
+    // The player changes sides (the sandbox's faction swap, sandbox.js): the new side's units are ours (confirmed), the
+    // old side's drop back to what pre-war intelligence would give the other side; marks go (they were the other
+    // side's). Emits 'warSide'.
+    setSide(side) {
+        if (side !== 'blue' && side !== 'red') return;
+        if (side === this.side) return;
+        this.side = side;
+        for (const rec of this.recs.values()) {
+            if (rec.team === side) { rec.known = INTEL.CONFIRMED; rec.source = 'own'; rec.lastPos.copy(rec.unit.pos); rec.lastSeen = this.time; }
+            else if (rec.team !== 'neutral') { rec.known = Math.min(rec.known, this.priorIntel(rec)); rec.source = rec.known ? 'prior' : null; rec.seenT = 0; }
+        }
+        this.designations.length = 0;
+        this.game.events.emit('warSide', side);
+    }
+
     // ═════════════ Lifecycle ═════════════
     start(mode) {
         this.clear();
@@ -103,6 +118,7 @@ export class War {
         this.radioLog.length = 0;
         this.time = 0;
         this.enabled = false;
+        this.side = 'blue'; // (every sortie starts on our side; the sandbox can swap it: setSide)
     }
 
     // ═════════════ Registry ═════════════
@@ -249,6 +265,7 @@ export class War {
         const g = this.game, units = this.units, n = units.length;
         if (!n) return;
         if (g.indoors && g.indoors.sealed) return; // (in a closed room nobody's looking out: interiors.js)
+        if (g.spectating) return; // (the sandbox's spectator camera is a god's view, not the side's eyes: sandbox.js)
         const pm = g.pilotMode, p = g.player;
         const onFoot = !!pm;
         const eye = g.camera.position;

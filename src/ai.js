@@ -630,7 +630,7 @@ export class Pilot {
             t.lockedBy.add(ac);
             const need = WEAPONS.missile.lockTime * lerp(2.2, 1.1, sk);
             if (this.lockT > need && this.missileCD <= 0 && t.incoming.length < maxPerTarget) {
-                const rate = ac.team === 'red' ? g.difficulty.enemyMissileRate : 0.8;
+                const rate = ac.team !== (g.war ? g.war.side : 'blue') ? g.difficulty.enemyMissileRate : 0.8; // (the difficulty is the enemy's: the sandbox can swap sides)
                 if (Math.random() < rate) {
                     g.weapons.fireMissile(ac, t);
                     ac.missiles--;
