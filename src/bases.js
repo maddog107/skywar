@@ -1004,7 +1004,7 @@ export class Bases {
         if (!friendly && this.time - F.seenT > 30 && bd > 12000) return;
         const lines = [];
         const st = F.stateName;
-        lines.push({ t: (friendly ? '' : 'ENEMY ') + F.name + ' · ' + (st === 'ATTACK' ? 'ALARM RED' : st === 'ALERT' ? 'ALARM YELLOW' : st), c: COL[st] });
+        lines.push({ t: (friendly || /^ENEMY /.test(F.name) ? '' : 'ENEMY ') + F.name + ' · ' + (st === 'ATTACK' ? 'ALARM RED' : st === 'ALERT' ? 'ALARM YELLOW' : st), c: COL[st] });
         F.base.runways.forEach((rw, i) => {
             const s = F.craters.runwayStatus(i);
             if (!s.craters && !F.closed[i]) return;

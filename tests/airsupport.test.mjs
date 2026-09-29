@@ -389,6 +389,11 @@ describe('air refuelling, flown', () => {
         air.threatCheck(tk, 1.1);
         assert.ok(tk.threat === ship && tk.task && tk.task.kind === 'retro', 'retrograding from the ship (' + (tk.task && tk.task.kind) + ')');
         assert.ok(said.some(s => /SAM THREAT/.test(s)), said.join(' | '));
+        // its racetrack moved out of the ship's reach (+6 km), so it isn't back in it on the next lap
+        const T = tk.saved.T, L = RF.trackLength(T), P = { x: 0, z: 0 }, D = { x: 0, z: 0 };
+        let dmin = Infinity;
+        for (let i = 0; i < 200; i++) { RF.trackPoint(T, L * i / 200, P, D); dmin = Math.min(dmin, Math.hypot(P.x - ship.pos.x, P.z - ship.pos.z)); }
+        assert.ok(dmin > 29000, 'the new track keeps ' + (dmin / 1000).toFixed(1) + ' km off');
         ship.alive = false;
         for (let i = 0; i < 12; i++) air.threatCheck(tk, 1.1);
         assert.ok(!tk.threat, 'back on station once the ship is gone');

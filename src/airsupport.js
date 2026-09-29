@@ -793,6 +793,8 @@ export class AirSupport {
             f.threat = best; f.clearT = 0;
             f.saved = f.task;
             f.task = { kind: 'retro', from: best.pos.clone() };
+            // (a ship stays where it is: the racetrack moves out of its reach, or it'd be back in it on every lap)
+            if (ship && f.saved && f.saved.kind === 'track' && f.saved.T) f.saved = { ...f.saved, T: shiftTrackFrom(f.saved.T, best.pos, g.navalops.samReachOf(best) + 6000) };
             if (f.team === war.side) {
                 const b = BR.braa(f.ac.pos, best.pos, best.vel);
                 const what = ship ? 'SAM THREAT, ' + (best.name || 'SURFACE GROUP') + ' ' : 'BANDIT ';
@@ -1862,3 +1864,17 @@ export class AirSupport {
 // (helpers)
 function headingOf(p) { const f = p.getForward(_v); return Math.atan2(f.x, -f.z); }
 function formatClock(s) { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+// a racetrack moved straight away from `pos` until every point of it is at least `clear` metres off (unchanged if it is)
+export function shiftTrackFrom(T, pos, clear) {
+    const P = { x: 0, z: 0 }, D = { x: 0, z: 0 }, L = trackLength(T);
+    const vx = T.x - pos.x, vz = T.z - pos.z, n = Math.hypot(vx, vz) || 1;
+    let out = T;
+    for (let it = 0; it < 8; it++) {
+        let dmin = Infinity;
+        for (let i = 0; i < 64; i++) { trackPoint(out, L * i / 64, P, D); dmin = Math.min(dmin, Math.hypot(P.x - pos.x, P.z - pos.z)); }
+        if (dmin >= clear) return out;
+        const k = clear - dmin + 1500;
+        out = { ...out, x: out.x + vx / n * k, z: out.z + vz / n * k };
+    }
+    return out;
+}
