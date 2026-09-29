@@ -128,8 +128,9 @@ export class MapView {
     toScreen(x, z, out = {}) { out.x = this.w / 2 + (x - this.view.cx) * this.view.scale; out.y = this.h / 2 + (z - this.view.cz) * this.view.scale; return out; }
     toWorld(sx, sy) { return { x: this.view.cx + (sx - this.w / 2) / this.view.scale, z: this.view.cz + (sy - this.h / 2) / this.view.scale }; }
     // (the tactical map's methods, run with this view as `this`)
-    draw(ctx, { skip = ['mapkit', 'tacmap'], own = null } = {}) {
+    draw(ctx, { skip = ['mapkit', 'tacmap'], own = null, ui = null } = {}) {
         const g = this.game, T = g.tacmap;
+        this.mouse = ui && ui.hover ? { x: ui.hover.x, y: ui.hover.y } : null;
         ctx.save();
         ctx.fillStyle = '#0b1118'; ctx.fillRect(0, 0, this.w, this.h);
         this.buttons.length = 0;
@@ -149,6 +150,8 @@ export class MapView {
         }
         if (own) own(ctx, this);
         ctx.restore();
+        // (buttons the layers drew, e.g. the task list's ACCEPT: clickable on the screen)
+        if (ui) for (const b of this.buttons) if (b && b.run) ui.hit(b.x, b.y, b.w, b.h, () => b.run(), null, { label: b.label || 'TASK' });
     }
     focusPos() { return this.game.tacmap ? this.game.tacmap.focusPos() : null; }
 }

@@ -88,14 +88,14 @@ export class CarrierOps {
     swing(name) { this.doorT = { name: 'door_' + name, t: 2.4 }; }
 
     // where you stand on the flight deck by the island (travel, and leaving the island)
-    deckSpot(door = 'island_1') {
+    deckSpot(door = 'island_1', out = false) {
         const c = this.cv(), d = c.rig.doors[door];
         d.node.updateWorldMatrix(true, false);
         const p = new THREE.Vector3().setFromMatrixPosition(d.node.matrixWorld);
         const l = c.toLocal(p.x, p.z);
         const w = c.toWorld(l.lx - 2.2, c.def.deckY, l.lz, new THREE.Vector3());
         w.y = c.deckHeight(w.x, w.z);
-        return { pos: w, yaw: c.heading + Math.PI / 2 };
+        return { pos: w, yaw: c.heading + (out ? Math.PI / 2 : -Math.PI / 2) };
     }
 
     dutyBoat() {
@@ -160,11 +160,11 @@ export class CarrierOps {
             title: () => 'CVN-73 · COMBAT DIRECTION CENTER (CIC)',
             status: () => { const c = ops.cv(); if (!c) return ''; return 'HDG ' + String(Math.round(hdgDeg(c.heading))).padStart(3, '0') + ' · ' + Math.round(Math.hypot(c.vel.x, c.vel.z) * KT) + ' KT · GRID ' + g.war.grid(c.pos.x, c.pos.z) + ' · DECK ' + ['RED', 'AMBER', 'GREEN'][ops.deckStatus]; },
             anchor: (out) => { const c = ops.cv(); if (!c) return out.identity(); _m.compose(c.mesh.position, c.mesh.quaternion, one); return out.makeTranslation(CIC_OFFSET.x, CIC_OFFSET.y, CIC_OFFSET.z).premultiply(_m); },
-            exitTo: () => ops.deckSpot('island_1'),
+            exitTo: () => ops.deckSpot('island_1', true),
             onExit: () => ops.swing('island_1'),
             onLoad: (room) => { dressRoom(room); for (const l of room.lights || []) { l.intensity *= 0.7; l.userData.base = l.intensity; } },
             stations: {
-                stand_tao: { label: 'TACTICAL ACTION OFFICER', order: 1 }, stand_strike: { label: 'STRIKE CONSOLE', order: 2 },
+                stand_tao: { label: 'TACTICAL ACTION OFFICER', order: 1 }, stand_strike: { label: 'STRIKE CONSOLE', order: 2, fov: 46 },
                 stand_air: { label: 'AIR DEFENSE', order: 3 }, stand_surf: { label: 'SURFACE PLOT', order: 4 }, stand_asw: { label: 'UNDERSEA WARFARE', order: 5 },
             },
             bind: {
@@ -195,7 +195,7 @@ export class CarrierOps {
                 _m2.makeRotationY(Math.PI / 2).setPosition(PRIFLY_OFFSET);
                 return out.multiplyMatrices(_m, _m2);
             },
-            exitTo: () => ops.deckSpot('island_2'),
+            exitTo: () => ops.deckSpot('island_2', true),
             onExit: () => ops.swing('island_2'),
             onLoad: (room) => dressRoom(room),
             stations: { stand_boss: { label: 'AIR BOSS', order: 1 }, stand_miniboss: { label: 'MINI BOSS', order: 2 } },
@@ -285,7 +285,7 @@ function cicScreens(ops) {
     const K = () => ops.console;
     return {
         screen_lsd_air: { fps: 3, draw: (ctx, ui, s) => drawAirPicture(ctx, s, g, ops.cv(), 'AIR PICTURE — SPS-48 / CEC', 120000) },
-        screen_lsd_map: { fps: 1, draw: (ctx, ui, s) => drawGroupMap(ctx, s, g, ops.cv(), mv(s), 'TACTICAL PICTURE', 0.004) },
+        screen_lsd_map: { fps: 1, draw: (ctx, ui, s) => drawGroupMap(ctx, ui, s, g, ops.cv(), mv(s), 'TACTICAL PICTURE', 0.004) },
         screen_lsd_strike: { fps: 2, draw: (ctx, ui, s) => drawStrikeBoard(ctx, s, g, 'STRIKE STATUS') },
         screen_air_1: { fps: 4, draw: (ctx, ui, s) => drawAirPicture(ctx, s, g, ops.cv(), 'SPS-49 AIR SEARCH', 60000, true) },
         screen_air_2: { fps: 2, draw: (ctx, ui, s) => drawTrackList(ctx, ui, s, g, ops.cv()) },
@@ -388,7 +388,13 @@ export class JocOps {
     }
     clear() { this.sys.removeSite('joc:door'); this.console = new StrikeConsole(this.consoleCtx()); }
     alive() { return !this.rec || this.rec.alive; }
-    entrySpot() { return { pos: this.entry.clone(), yaw: 0 }; }
+    // outside the door, facing it (the building's −z face: the entrance)
+    entrySpot() { return { pos: this.entry.clone(), yaw: this.yaw + Math.PI }; }
+    // building-local (x, z) → world
+    toWorld(lx, lz, out = new THREE.Vector3()) {
+        const c = Math.cos(this.yaw), s = Math.sin(this.yaw);
+        return out.set(this.origin.x + lx * c + lz * s, this.origin.y, this.origin.z - lx * s + lz * c);
+    }
 
     // the building (models/interiors/joc_ext.glb), placed once; solid and destructible (buildings.js)
     build() {
@@ -398,7 +404,7 @@ export class JocOps {
         const y = Math.max(terrainHeight(w.x, w.z), b.h);
         this.origin = new THREE.Vector3(w.x, y, w.z);
         this.yaw = -b.heading;
-        this.entry = new THREE.Vector3(w.x, y, w.z - 11.5);
+        this.entry = this.toWorld(8, -10.6);          // (the model's 'entry' point; read from it once it's loaded)
         new GLTFLoader().loadAsync('models/interiors/joc_ext.glb').then(gltf => {
             const root = gltf.scene;
             let meta = null;
@@ -408,14 +414,19 @@ export class JocOps {
             root.position.copy(this.origin); root.rotation.y = this.yaw;
             g.scene.add(root);
             root.updateMatrixWorld(true);
+            root.traverse(o => { o.matrixAutoUpdate = false; });       // (it never moves)
             this.ext = root;
             const ent = root.getObjectByName('entry');
             if (ent) { ent.updateWorldMatrix(true, false); this.entry = new THREE.Vector3().setFromMatrixPosition(ent.matrixWorld); this.entry.y = y; }
+            // solid and destructible: the building's walls, and the blast walls, HESCO, generators and fuel tank
+            // round it (the model's footprint and 'solids'), one record
             const fp = meta && meta.footprint ? meta.footprint : [-13, 13, -9, 9], ht = meta && meta.height ? meta.height : 5.5;
+            const box = (x0, x1, z0, z1, h) => { const c = this.toWorld((x0 + x1) / 2, (z0 + z1) / 2); return { x: c.x, z: c.z, y0: y - 0.5, y1: y + h, w: x1 - x0, d: z1 - z0, yaw: this.yaw }; };
+            const boxes = [box(fp[0], fp[1], fp[2], fp[3], ht), ...((meta && meta.solids) || []).map(q => box(...q))];
             const B = WORLD_BUILDINGS.current;
             if (B) {
-                const cx = (fp[0] + fp[1]) / 2, cz = (fp[2] + fp[3]) / 2;
-                this.rec = B.add({ x: w.x + cx, z: w.z + cz, y, w: fp[1] - fp[0], d: fp[3] - fp[2], ht, yaw: this.yaw, kind: 'office', name: 'JOINT OPERATIONS CENTER', friendly: true, hp: 2400 });
+                const m = boxes[0];
+                this.rec = B.add({ x: m.x, z: m.z, y, w: m.w, d: m.d, ht, yaw: this.yaw, kind: 'office', name: 'JOINT OPERATIONS CENTER', friendly: true, hp: 2400, boxes });
                 B.partMesh(this.rec, root);
                 B.index();
             }
@@ -463,8 +474,9 @@ export class JocOps {
             id: 'joc', name: 'JOINT OPERATIONS CENTER', file: 'models/interiors/joc.glb', sealed: true, exitName: 'DOOR',
             title: () => 'JOINT OPERATIONS CENTER · SKYWAR AIR BASE',
             status: () => 'THEATRE ' + clockZ(g) + ' · MARKS ' + g.war.designations.length + ' · STRIKES IN FLIGHT ' + (g.strikes ? g.strikes.missiles.filter(m => m.team === g.war.side).length : 0) + (g.tasks && g.tasks.enabled ? ' · TASKS ' + g.tasks.offered.length + (g.tasks.active ? ' + ACTIVE' : '') : ''),
-            anchor: (out) => { if (!ops.origin) return out.identity(); return out.makeRotationY(ops.yaw).setPosition(ops.origin); },
-            exitTo: () => ({ pos: ops.entry.clone(), yaw: 0 }),
+            // (the floor sits turned round in the building, 0.45 m below the ground outside: tools/interiors/joc_ext.py)
+            anchor: (out) => { if (!ops.origin) return out.identity(); return out.makeRotationY(ops.yaw + Math.PI).setPosition(ops.origin.x, ops.origin.y - 0.45, ops.origin.z); },
+            exitTo: () => ({ pos: ops.entry.clone(), yaw: ops.yaw }),
             onLoad: (room) => { dressRoom(room); for (const l of room.lights || []) { l.intensity *= 0.8; l.userData.base = l.intensity; } },
             stations: {
                 stand_wall: { label: 'THE WALL', order: 1 }, stand_map: { label: 'MAP CONSOLE', order: 2 }, stand_intel: { label: 'INTEL CONSOLE', order: 3 },
@@ -518,7 +530,8 @@ function jocScreens(ops) {
 
 // ═════════════ The TEL: a captured Scud and its launch cabin ═════════════
 const TEL_AT = { lx: 468, lz: -452 };                   // (home base: beside the JOC, in the T-wall compound)
-const CABIN_OFFSET = new THREE.Vector3(0, 1.6, 1.4);     // the launch cabin's floor in the vehicle's frame (tools/interiors/tel_cabin.py)
+const CABIN_OFFSET = new THREE.Vector3(0, 1.0, -1.83);   // the launch cabin's floor in the vehicle's frame (tools/interiors/tel_cabin.py)
+const CABIN_DOOR = { lx: -1.43, lz: -1.28 };             // its door (in the left wall), vehicle frame
 const CAB_OFFSET = new THREE.Vector3(-0.95, 1.55, -4.9); // the left (driver's) cab's floor
 export class TelOps {
     constructor(sys) {
@@ -530,7 +543,7 @@ export class TelOps {
     }
     start(mode) {
         this.clear();
-        if (mode === 'rings' || mode === 'practice') return;
+        if (!['freeflight', 'sandbox', 'war'].includes(mode)) return; // (a blue truck would count as a strike mode's target)
         const token = this.token = {};
         V.vehiclesReady().then(() => { if (this.token === token) this.spawn(); });
     }
@@ -540,7 +553,8 @@ export class TelOps {
         if (this.src && this.game.strikes) this.game.strikes.removeSource(this.src);
         this.tel = null; this.src = null; this.panel = null;
     }
-    spot() { const p = this.tel.pos; return { pos: new THREE.Vector3(p.x + Math.cos(this.tel.mesh.rotation.y) * 4, p.y, p.z - Math.sin(this.tel.mesh.rotation.y) * 4), yaw: this.tel.mesh.rotation.y }; }
+    // beside the launch cabin's door, facing the truck (travel)
+    spot() { return { pos: this.sidePoint(new THREE.Vector3(), CABIN_DOOR.lx - 1.2, CABIN_DOOR.lz), yaw: this.tel.mesh.rotation.y - Math.PI / 2 }; }
 
     spawn() {
         const g = this.game, b = BASES.find(x => x.id === 'home') || BASES[0];
@@ -562,14 +576,13 @@ export class TelOps {
                 else { out.copy(u.pos).y += 8; dir.set(0, 1, 0); }
             };
             this.src.prepTime = () => 2.5;
-            this.src.launchEffects = GroundLauncher.prototype.launchEffects.bind(this.src);
         }
         this.panel = new TelPanel(this.panelCtx());
         this.code = String(Math.floor(rand(100000, 999999)));
         this.dial = [0, 0, 0, 0, 0, 0]; this.codeSw = 0;
         this.reloadAt = null;
         const sys = this.sys;
-        sys.addSite({ id: 'tel:cabin', label: 'CLIMB INTO THE LAUNCH CONTROL CABIN', radius: 2.4, dy: 3, at: (o) => (u.alive ? this.sidePoint(o, 1.45, 1.4) : null), enter: () => sys.enterRoom(this.cabin, { text: '9P117 · LAUNCH CONTROL CABIN' }) });
+        sys.addSite({ id: 'tel:cabin', label: 'CLIMB INTO THE LAUNCH CONTROL CABIN', radius: 2.4, dy: 3, at: (o) => (u.alive ? this.sidePoint(o, CABIN_DOOR.lx, CABIN_DOOR.lz) : null), enter: () => sys.enterRoom(this.cabin, { text: '9P117 · LAUNCH CONTROL CABIN' }) });
         sys.addSite({ id: 'tel:cab', label: 'CLIMB INTO THE CAB (DRIVE)', radius: 2.4, dy: 3, at: (o) => (u.alive ? this.sidePoint(o, -1.5, -4.9) : null), enter: () => sys.enterRoom(this.cab, { text: 'MAZ-543 · DRIVER\'S CAB' }) });
     }
     // a point beside the truck (vehicle-local x, z) on the ground
@@ -628,7 +641,7 @@ export class TelOps {
             title: () => '9P117 SCUD TEL · LAUNCH CONTROL CABIN',
             status: () => { const p = P(); if (!p) return ''; return 'JACKS ' + Math.round(p.k.jack * 100) + '% · TABLE ' + Math.round(p.k.pad * 100) + '% · BOOM ' + Math.round(p.k.raise * 100) + '% · ' + (p.target ? 'TARGET ' + p.target.label : 'NO TARGET'); },
             anchor: (out) => { const u = ops.tel; if (!u) return out.identity(); u.mesh.updateMatrixWorld(); return out.makeTranslation(CABIN_OFFSET.x, CABIN_OFFSET.y, CABIN_OFFSET.z).premultiply(u.mesh.matrixWorld); },
-            exitTo: () => { const p = ops.sidePoint(new THREE.Vector3(), -1.45, 1.4); return { pos: p, yaw: ops.tel.mesh.rotation.y + Math.PI / 2 }; },
+            exitTo: () => { const p = ops.sidePoint(new THREE.Vector3(), CABIN_DOOR.lx, CABIN_DOOR.lz); return { pos: p, yaw: ops.tel.mesh.rotation.y + Math.PI / 2 }; },
             onLoad: (room) => { dressRoom(room); for (const l of room.lights || []) l.userData.base = l.intensity; },
             stations: { stand_launch: { label: '2V12M LAUNCH STATION', order: 1 }, stand_code: { label: 'CODE LOCK', order: 2 } },
             bind: {
@@ -655,7 +668,7 @@ export class TelOps {
                 sw_code: { label: () => 'CODE LOCK — ' + (ops.codeSw ? 'О (FIRE)' : 'Н (DIAL)'), value: () => ops.codeSw, press: () => { ops.codeSw = ops.codeSw ? 0 : 1; if (ops.codeSw && !ops.codeOk()) { g.addFeed('CODE REJECTED', '#ff5a4a'); ops.codeSw = 0; } } },
                 lamp_code: lampOf(() => ops.codeOk()),
                 lamp_ready: lampOf(() => ops.ready() === true),
-                btn_launch: { label: 'LAUNCH [ПУСК]', press: () => { const r = ops.ready(); if (r !== true) return report(g, 'NO LAUNCH — ' + r); P().armed = true; const x = P().launch(); if (x !== true) report(g, x); } },
+                btn_launch: { label: 'LAUNCH [ПУСК]', press: () => { const r = ops.ready(); if (r !== true) return report(g, 'NO LAUNCH — ' + r); P().arm(true); const x = P().launch(); if (x !== true) { P().arm(false); report(g, x); } } },
                 guard_launch: { label: 'LAUNCH COVER' },
                 btn_abort: { label: 'ABORT', press: () => { P().armed = false; P().aligning = false; ops.combat = false; ops.batt = false; ops.codeSw = 0; } },
             },
@@ -671,10 +684,8 @@ export class TelOps {
         if (!this.combat) return 'NOT IN COMBAT MODE';
         if (!this.batt) return 'MISSILE BATTERIES OFF';
         if (!this.codeOk()) return 'CODE LOCK SHUT';
-        p.armed = true;
         const r = p.ready();
-        p.armed = false;
-        return r;
+        return r === 'NOT ARMED' ? true : r; // (the launch button arms it)
     }
 
     cabDef() {
@@ -905,11 +916,11 @@ function drawStrikeConsole(ctx, ui, s, g, K, from, title, sub) {
     text(ctx, K.msg || (r === true ? (K.armed ? 'ARMED — LIFT THE GUARD AND PRESS LAUNCH' : 'READY — TURN THE KEY, ARM') : r), 16, H - 22, 16, K.armed ? C.red : r === true ? C.green : C.amber, 700, 'left', W - 32);
 }
 
-function drawGroupMap(ctx, s, g, cv, view, title, scale) {
+function drawGroupMap(ctx, ui, s, g, cv, view, title, scale) {
     const W = s.w, H = s.h;
     if (!cv) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H); return; }
     view.w = W; view.h = H; view.view.cx = cv.pos.x; view.view.cz = cv.pos.z; view.view.scale = scale;
-    view.draw(ctx);
+    view.draw(ctx, { ui });
     ctx.fillStyle = 'rgba(2,7,11,0.8)'; ctx.fillRect(0, 0, W, 38);
     text(ctx, title, 14, 19, 18, C.white, 700);
     text(ctx, clockZ(g), W - 14, 19, 15, C.dim, 600, 'right');
@@ -922,7 +933,7 @@ function drawTheatre(ctx, ui, s, g, view, ops) {
     view.w = W; view.h = H;
     view.view.cx = (home.x + enemy.x) / 2; view.view.cz = (home.z + enemy.z) / 2;
     view.view.scale = Math.min(W, H) / 42000;
-    view.draw(ctx);
+    view.draw(ctx, { ui });
     ctx.fillStyle = 'rgba(2,7,11,0.78)'; ctx.fillRect(0, 0, W, 40);
     text(ctx, 'COMMON OPERATIONAL PICTURE', 14, 20, 20, C.white, 700);
     text(ctx, clockZ(g), W - 14, 20, 16, C.green, 700, 'right');
@@ -933,10 +944,10 @@ function drawMapConsole(ctx, ui, s, g, view, ops) {
     const W = s.w, H = s.h;
     const c = ops.mapC || (ops.mapC = { x: BASES[0].x, z: BASES[0].z - 8000 });
     view.w = W; view.h = H; view.view.cx = c.x; view.view.cz = c.z; view.view.scale = ops.mapZoom || 0.004;
-    view.draw(ctx);
+    ui.hit(0, 40, W, H - 90, (x, y) => { const w = view.toWorld(x, y); g.war.designate({ x: w.x, z: w.z }, 'joc'); }, 'map', { label: 'CLICK: MARK A POINT HERE · WHEEL: ZOOM' });
+    view.draw(ctx, { ui });
     ctx.fillStyle = 'rgba(2,7,11,0.8)'; ctx.fillRect(0, 0, W, 40);
     text(ctx, 'MAP CONSOLE · CLICK: MARK · WHEEL: ZOOM', 14, 20, 16, C.white, 700);
-    ui.hit(0, 40, W, H - 90, (x, y) => { const w = view.toWorld(x, y); g.war.designate({ x: w.x, z: w.z }, 'joc'); }, 'map', { label: 'CLICK: MARK A POINT HERE · WHEEL: ZOOM' });
     const step = 4000 / (view.view.scale / 0.004);
     const pan = [['◀', -1, 0], ['▲', 0, -1], ['▼', 0, 1], ['▶', 1, 0]];
     pan.forEach(([l, dx, dz], i) => ui.button(W - 4 * 58 - 10 + i * 58, H - 50, 52, 42, l, () => { c.x += dx * step; c.z += dz * step; }, { size: 20 }));

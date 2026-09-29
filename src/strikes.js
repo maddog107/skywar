@@ -1148,7 +1148,7 @@ export class StrikeManager {
                 ctx.fillText(Math.round(m.vel.length() * 1.944) + ' KT · ' + Math.round(m.pos.y * 3.281) + ' FT · ' + (d / 1000).toFixed(1) + ' KM TO TARGET · ' + (m.phase === 'boost' ? 'BOOST' : m.phase === 'fall' ? 'BALLISTIC' : m.phase.toUpperCase()), hud.w / 2, hud.h - 44);
             }
             ctx.fillStyle = 'rgba(232,244,255,0.6)';
-            ctx.fillText('V: CAMERA · K: BACK TO THE JET', hud.w / 2, hud.h - 26);
+            ctx.fillText('V: CAMERA · ' + (this.game.takeover ? 'K / ESC: BACK' : 'K: BACK TO THE JET'), hud.w / 2, hud.h - 26);
         }
         ctx.restore();
     }

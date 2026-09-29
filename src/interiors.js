@@ -53,7 +53,7 @@ export class ScreenUI {
         return hov;
     }
     // a selectable list row
-    row(x, y, w, h, cells, fn, { sel = false, disabled = false, colors = null, id = null } = {}) {
+    row(x, y, w, h, cells, fn, { sel = false, disabled = false, colors = null, id = null, label = null } = {}) {
         const ctx = this.screen.ctx, hov = !disabled && this.over(x, y, w, h);
         if (sel || hov) { ctx.fillStyle = sel ? 'rgba(127,212,255,0.28)' : 'rgba(127,212,255,0.12)'; ctx.fillRect(x, y, w, h); }
         if (sel) { ctx.strokeStyle = '#7fd4ff'; ctx.lineWidth = 1.5; ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1); }
@@ -66,7 +66,7 @@ export class ScreenUI {
             ctx.fillText(String(t), al === 'right' ? cx + cw - 4 : cx, y + h / 2, cw - 4);
             cx += cw;
         });
-        if (fn) this.hit(x, y, w, h, fn, id, { disabled });
+        if (fn) this.hit(x, y, w, h, fn, id, { disabled, label: label ?? String(Array.isArray(cells[0]) ? cells[0][0] : cells[0] ?? '') });
         return hov;
     }
     find(x, y) {
@@ -266,7 +266,12 @@ export class Room {
             roomCache.set(def.file, loader.gltf.loadAsync(def.file).then(g => g.scene));
         }
         this.loading = roomCache.get(def.file).then(scene => { this.setModel(scene.clone(true)); return this; })
-            .catch(e => { console.warn('[interiors] room model not loaded:', def.file, e && e.message); if (def.fallback) { const r = new THREE.Group(); def.fallback(r, this); this.setModel(r); } return this; });
+            .catch(e => {
+                console.warn('[interiors] room model not loaded:', def.file, e && e.message);
+                roomCache.delete(def.file); this.loading = null;
+                if (def.fallback) { const r = new THREE.Group(); def.fallback(r, this); this.setModel(r); }
+                return this;
+            });
         return this.loading;
     }
 
@@ -297,7 +302,7 @@ export class Room {
                 if (mesh) this.pickables.push(mesh);
             } else if (spec.t === 'station') {
                 const sd = (this.def.stations && this.def.stations[name]) || {};
-                this.stations.push({ id: name, node: o, fov: spec.fov || sd.fov || 55, label: sd.label || spec.label || name.replace(/^stand_/, '').toUpperCase(), key: sd.key, order: sd.order ?? 99 });
+                this.stations.push({ id: name, node: o, fov: sd.fov || spec.fov || 55, label: sd.label || spec.label || name.replace(/^stand_/, '').toUpperCase(), key: sd.key, order: sd.order ?? 99 });
             } else if (spec.t === 'spawn') {
                 this.spawn = { pos: o.position.clone(), yaw: new THREE.Euler().setFromQuaternion(o.quaternion, 'YXZ').y };
             } else {
@@ -587,9 +592,10 @@ export class RoomController {
         if (!h) { this.hover = null; this.sys.highlight(null); return; }
         let label = '', blocked = '';
         if (h.ref instanceof Screen) {
-            h.ref.hoverAt(h.hit.uv);
-            label = h.ref.label(h.hit.uv);
-            if (!label && !this.cursor) { const st = this.stationFor(h.ref); if (st) label = 'CLICK: SIT AT ' + st.label; }
+            // (walking, a console's screen sits you down at it: its widgets wait for the cursor)
+            const st = !this.cursor && !this.station ? this.stationFor(h.ref) : null;
+            h.ref.hoverAt(st ? null : h.hit.uv);
+            label = st ? 'CLICK: SIT AT ' + st.label : h.ref.label(h.hit.uv);
             this.sys.highlight(null);
         } else {
             const c = h.ref;
@@ -886,7 +892,8 @@ export class Interiors {
     // called by game.update instead of the walking pilot's update while we have the controls
     control(dt, mouse) {
         if (this.fade && this.fade.block) return;
-        if (this.ctl) this.ctl.control(dt, mouse);
+        const watching = !!(this.game.strikes && this.game.strikes.cam); // (the missile camera: nobody walks meanwhile)
+        if (this.ctl && !watching) this.ctl.control(dt, mouse);
         const pm = this.game.pilotMode;
         if (pm && this.ctl && this.ctl.carry) this.ctl.carry(pm);
     }
@@ -904,6 +911,7 @@ export class Interiors {
         };
         this.fadeTo(async () => {
             await room.load();
+            if (!room.loaded) { g.addFeed('THE DOOR WON\'T OPEN', '#ffc23f'); return; }
             room.place();
             room.ensureEnv(this.renderer);
             go();
@@ -917,6 +925,7 @@ export class Interiors {
         if (!room) return;
         this.fadeTo(async () => {
             await room.load();
+            if (!room.loaded) { g.addFeed('THE DOOR WON\'T OPEN', '#ffc23f'); return; }
             room.place();
             room.ensureEnv(this.renderer);
             if (this.ctl && this.ctl.exit) this.ctl.exit();
@@ -1071,7 +1080,8 @@ export class Interiors {
     updateCamera(cam, dt) {
         const g = this.game;
         if (!this.ctl) return false;
-        if (g.strikes && g.strikes.cam) return false;
+        // (watching a missile from in here: the world's view and the missile camera's display, no one's HUD)
+        if (g.strikes && g.strikes.cam) { g.indoors = { sealed: false, lookout: true, kind: 'watch', name: 'MISSILE CAMERA' }; return false; }
         this.ctl.camera(cam, dt);
         const sealed = !!this.ctl.sealed;
         g.indoors = { sealed, lookout: !sealed, kind: this.ctl.kind, name: this.ctl.room ? this.ctl.room.name : this.ctl.kind };
@@ -1089,6 +1099,8 @@ export class Interiors {
         if (g.state !== 'playing') return false;
         if (this.fade && this.fade.block && a !== 'pause' && a !== 'lockLost') return true;
         if (!this.ctl) return false;
+        // the missile camera from a room or a helm: K or Esc comes back in, V cycles its views (strikes.js)
+        if (g.strikes && g.strikes.cam) { if (a === 'missilecam' || a === 'pause') { g.strikes.cam = null; return true; } return a !== 'camera'; }
         if (a === 'click' && this.ctl.kind === 'room') { if (!g.input.locked) g.input.lock(); return true; }
         return !!(this.ctl.action && this.ctl.action(a));
     }

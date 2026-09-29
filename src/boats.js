@@ -28,18 +28,19 @@ export const KT = 1.94384;
 
 // top: design top speed (m/s) at full power, light sea; hump: speed of the resistance hump (m/s) — past ~1.6× it
 // the hull is fully up on the plane; power (W) and eta (propulsive efficiency) give the thrust at speed, capped
-// at `bollard` (m/s² at rest); rMax: the fastest yaw rate (rad/s); turnU: speed for full steering authority;
+// at `bollard` (m/s² at rest), astern `reverse` × that; brake: the extra drag of a crash stop at speed (reversed jets
+// under the hull, the bow squatting: the CB90 stops from 40 kt in ~2.5 lengths); rMax: the fastest yaw rate (rad/s); turnU: speed for full steering authority;
 // sway: how hard the keel resists sliding sideways (1/s); heave / pitch / roll: natural frequency (rad/s) and
 // damping of the hull on the water; lift: how far it rises on the plane (m); trim: bow-up at the hump / on the
 // plane (rad); heel: bank into a full-rate turn (rad); draft: keel below the waterline (m)
 export const BOAT_SPECS = {
     rhib: {
-        name: 'NSW 11 M RHIB', short: 'RHIB', L: 11, B: 3.2, mass: 8200, power: 701e3, eta: 0.52, bollard: 3.3, reverse: 0.5, top: 23.4,
+        name: 'NSW 11 M RHIB', short: 'RHIB', L: 11, B: 3.2, mass: 8200, power: 701e3, eta: 0.52, bollard: 3.3, reverse: 0.9, brake: 0.012, top: 23.4,
         hump: 7.2, rMax: 0.62, turnU: 9, sway: 2.4, heave: [5.4, 0.36], pitch: [5.2, 0.42], roll: [4.4, 0.3],
         lift: 0.32, trim: [0.075, 0.03], heel: 0.2, draft: 0.62, engines: 2, cyl: 6, idleRpm: 650, maxRpm: 2800, eye: 0.72,
     },
     cb90: {
-        name: 'COMBAT BOAT 90H', short: 'CB90', L: 15.9, B: 3.8, mass: 16500, power: 932e3, eta: 0.5, bollard: 3.0, reverse: 0.7, top: 20.8,
+        name: 'COMBAT BOAT 90H', short: 'CB90', L: 15.9, B: 3.8, mass: 16500, power: 932e3, eta: 0.5, bollard: 3.0, reverse: 1.0, brake: 0.012, top: 20.8,
         hump: 8, rMax: 0.58, turnU: 8, sway: 2.8, heave: [4.8, 0.4], pitch: [4.4, 0.45], roll: [3.8, 0.34],
         lift: 0.28, trim: [0.06, 0.025], heel: 0.16, draft: 0.8, engines: 2, cyl: 8, idleRpm: 600, maxRpm: 2300, eye: 0.8,
     },
@@ -108,7 +109,9 @@ export class BoatPhysics {
     sub(dt, ctl) {
         const S = this.spec;
         // the helm: the throttle levers and the nozzles slew to what's asked
-        this.throttle = approach(this.throttle, clamp(ctl.throttle || 0, -1, 1), dt / 0.8);
+        // (the engines spool up in under a second; chopping the power and dropping the reversing buckets is quicker)
+        const want = clamp(ctl.throttle || 0, -1, 1);
+        this.throttle = approach(this.throttle, want, dt / (Math.abs(want) > Math.abs(this.throttle) && want * this.throttle >= 0 ? 0.8 : 0.3));
         this.steer = approach(this.steer, clamp(ctl.steer || 0, -1, 1), dt / 0.35);
         const c = Math.cos(this.h), s = Math.sin(this.h);
         const fx = -s, fz = -c, rx = c, rz = -s;           // forward, starboard
@@ -147,7 +150,9 @@ export class BoatPhysics {
         // ── surge, sway and yaw (body frame; Coriolis terms carry the momentum round a turn) ──
         const T = this.thrustAt(this.throttle, this.u) * this.immersion;
         this.thrust = T;
-        const R = this.resistance(this.u) * Math.sign(this.u);
+        let R = this.resistance(this.u) * Math.sign(this.u);
+        // a crash stop: the buckets' reversed jets wash forward under the hull, the bow squats and digs in
+        if (this.throttle < 0 && this.u > 0) R += -this.throttle * (S.brake || 0) * this.u * this.u * this.immersion;
         // (r is + to port: turning left the hull slides out to starboard, and a turn bleeds speed)
         const du = T - R - this.v * this.r;
         const dv = -S.sway * (this.airborne ? 0.15 : 1) * this.v + this.u * this.r;
