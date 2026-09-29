@@ -719,7 +719,7 @@ export class TaskManager {
         }
         // the task list (top left), with buttons
         const x = 16, W = 380;
-        let y = 16;
+        let y = map.toolsBottom || 16; // (under the map kit's tool strip and legend: it covered them)
         const rows = [];
         const act = this.active;
         if (act) rows.push({ text: '▶ ' + act.title, sub: (act.progress ? act.progress(act) + ' · ' : '') + (this.where(act) ? km(this.where(act).distanceTo(F)) : ''), col: GREEN, btn: 'HOLD', run: () => this.abandon(act) });

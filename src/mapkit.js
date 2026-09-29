@@ -48,6 +48,7 @@ export class MapKit {
         if (this.ruler) this.drawRuler(ctx, map);
         this.drawCursor(ctx, map);
         this.drawTools(ctx, map);
+        map.toolsBottom = this.legend ? 76 + LEGEND_ROWS.length * 19 + 38 : 16 + 28 + 22 + 10; // (other panels on the left start below: tasks.js)
         if (this.legend) this.drawLegend(ctx, map);
         ctx.restore();
         void g;
