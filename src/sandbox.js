@@ -99,6 +99,7 @@ export class SandboxTools {
         this.why = '';
         if (!I) { this.why = 'UNKNOWN UNIT'; return null; }
         if (!I.teams.includes(team)) { this.why = I.label + ' ISN\'T AVAILABLE FOR ' + team.toUpperCase(); return null; }
+        if (I.ownSide && team !== this.war.side) { this.why = I.label + ': YOUR OWN SIDE ONLY'; return null; }
         const alt = o.alt ?? I.alt;
         const v = validatePlacement(item, x, z, this.env, { alt });
         if (!v.ok) { this.why = v.why; return null; }
@@ -333,7 +334,6 @@ export class SandboxTools {
         this.background = on;
         if (g.director) g.director.auto = on;
         if (g.forces && g.forces.auto) for (const k of Object.keys(g.forces.auto)) g.forces.auto[k] = on;
-        if (g.weather) g.weather.auto = on;
         if (g.tasks) { if (on && !g.tasks.enabled) g.tasks.start('sandbox'); else if (!on && g.tasks.enabled) g.tasks.clear(); }
         if (!quiet) this.say('BACKGROUND WAR ' + (on ? 'ON' : 'OFF'), on ? GREEN : DIM);
     }
@@ -441,8 +441,6 @@ export class SandboxTools {
             const D = DRIVERS[rec.kind];
             if (D.update) { try { D.update(this, rec, dt); } catch (e) { if (!rec.err) { rec.err = true; console.warn('[sandbox] update', rec.item, e); } } }
         }
-        // (a map tool lives while the map is open)
-        if (this.tool && !(g.tacmap && g.tacmap.open)) this.tool = null;
     }
 
     updateCamera(cam, dt, mouse) {
@@ -529,6 +527,7 @@ export class SandboxTools {
     drawHud(ctx, hud) {
         if (!this.enabled) return;
         const g = this.game;
+        if (this.tool && !(g.tacmap && g.tacmap.open)) this.tool = null; // (a map tool lives while the map is open)
         if (g.photo || g.hideHud || (g.tacmap && g.tacmap.open)) return;
         const W = hud.w;
         ctx.save();
@@ -869,7 +868,7 @@ export class SandboxTools {
         const I = ITEMS[pal.item];
         this.heading(ctx, x, y, 'SIDE'); y += 14;
         const sides = [['blue', 'BLUE'], ['red', 'RED'], ['neutral', 'CIVIL']];
-        this.row(ctx, map, x, y, W, sides.map(([t, l]) => ({ label: l, on: pal.team === t, enabled: I.teams.includes(t), run: () => { pal.team = t; pal.variant = 0; this.arm(); }, color: t === 'red' ? '255,90,74' : t === 'neutral' ? '207,216,224' : '111,180,255' })));
+        this.row(ctx, map, x, y, W, sides.map(([t, l]) => ({ label: l, on: pal.team === t, enabled: I.teams.includes(t) && (!I.ownSide || t === war.side), run: () => { pal.team = t; pal.variant = 0; this.arm(); }, color: t === 'red' ? '255,90,74' : t === 'neutral' ? '207,216,224' : '111,180,255' })));
         y += 28;
         const V = I.variants && I.variants[pal.team];
         if (V && V.length > 1) {
@@ -904,7 +903,7 @@ export class SandboxTools {
     pick(k) {
         const pal = this.pal, I = ITEMS[k];
         pal.item = k; pal.variant = 0;
-        if (!I.teams.includes(pal.team)) pal.team = I.teams.includes(this.war.side) ? this.war.side : I.teams[0];
+        if (!I.teams.includes(pal.team) || (I.ownSide && pal.team !== this.war.side)) pal.team = I.teams.includes(this.war.side) ? this.war.side : I.teams[0];
         pal.n = I.n || 1;
         pal.alt = I.domain === 'air' ? (k === 'heli' ? 120 : I.alt >= 8000 ? 9000 : I.alt <= 2500 ? 1500 : 5000) : 0;
         this.arm();
@@ -912,7 +911,7 @@ export class SandboxTools {
     arm() {
         const pal = this.pal;
         const I = ITEMS[pal.item];
-        if (!I.teams.includes(pal.team)) return;
+        if (!I.teams.includes(pal.team) || (I.ownSide && pal.team !== this.war.side)) return;
         this.tool = { kind: 'place', item: pal.item, team: pal.team, variant: pal.variant, n: pal.n, alt: pal.item === 'heli' ? pal.alt : pal.alt || I.alt };
     }
 

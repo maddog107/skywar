@@ -1214,7 +1214,7 @@ itself except an armour platoon's gunnery and a helicopter's circuit (no plug-in
     click on its ring or any of its units on the map) gets its actions in the map's panel: FOLLOW WITH THE CAMERA, its
     missions, DELETE (also the Delete key).
   - WAR: fly for BLUE or RED; BACKGROUND WAR on / off (the director's CAPs, raids, GCI, convoys and missile strikes, the
-    forces' own orders, the task board, automatic fronts); SHOW ALL PLACED (the map rings the other side's units too,
+    forces' own orders, the task board); SHOW ALL PLACED (the map rings the other side's units too,
     found or not: intel is untouched); the weather (at once or over two minutes, a storm or clearing front) and the
     time of day and the sky clock.
   - WATCH: the spectator, its view, the sim clock (PAUSE, ×1, ×2, ×4), and whether your jet is held while you watch.

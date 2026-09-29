@@ -19,22 +19,23 @@ export const ITEMS = {
     fighter: {
         label: 'FIGHTERS', cat: 'air', domain: 'air', teams: ['blue', 'red'], n: 2, count: [1, 2, 4], alt: 5000,
         variants: { blue: ['f15', 'f16', 'fa18', 'f22', 'f35', 'typhoon', 'rafale', 'f14'], red: ['su35', 'mig29', 'su57', 'j10', 'j20', 'mig31'] },
-        missions: ['cap', 'patrol', 'escort', 'strike', 'sead', 'recon', 'rtb'],
+        missions: ['cap', 'patrol', 'escort', 'strike', 'sead', 'recon', 'move', 'rtb'],
     },
     attack: {
         label: 'ATTACK JETS', cat: 'air', domain: 'air', teams: ['blue', 'red'], n: 2, count: [1, 2, 4], alt: 2500,
         variants: { blue: ['a10', 'f16', 'fa18', 'jaguar'], red: ['su35', 'j8', 'mig29', 'mirage'] },
-        missions: ['strike', 'sead', 'cap', 'patrol', 'recon', 'rtb'],
+        missions: ['strike', 'sead', 'cap', 'patrol', 'recon', 'move', 'rtb'],
     },
     bomber: {
         label: 'BOMBERS', cat: 'air', domain: 'air', teams: ['blue', 'red'], n: 2, count: [1, 2], alt: 9000,
         variants: { blue: ['b52', 'b2'], red: ['tu95'] },
-        missions: ['strike', 'patrol', 'cap', 'rtb'],
+        missions: ['strike', 'patrol', 'cap', 'move', 'rtb'],
     },
     awacs: { label: 'AWACS', cat: 'air', domain: 'air', teams: ['blue', 'red'], n: 1, alt: 9200, variants: { blue: ['e3'], red: ['a50'] }, missions: ['cap', 'move'] },
     tanker: { label: 'TANKER', cat: 'air', domain: 'air', teams: ['blue', 'red'], n: 1, alt: 6300, variants: { blue: ['kc135'], red: ['il78'] }, missions: ['cap', 'move'] },
-    growler: { label: 'EW JAMMER', cat: 'air', domain: 'air', teams: ['blue'], n: 1, alt: 7000, variants: { blue: ['ea18g'] }, missions: ['cap', 'escort', 'sead'] },
-    drone: { label: 'DRONE', cat: 'air', domain: 'air', teams: ['blue'], n: 1, alt: 5500, variants: { blue: ['mq9', 'rq4'] }, missions: ['recon'] },
+    // (ownSide: the air plug-in flies these for the player's side only — one of each)
+    growler: { label: 'EW JAMMER', cat: 'air', domain: 'air', teams: ['blue', 'red'], ownSide: true, n: 1, alt: 7000, variants: { blue: ['ea18g'], red: ['ea18g'] }, missions: ['cap', 'escort', 'sead'] },
+    drone: { label: 'DRONE', cat: 'air', domain: 'air', teams: ['blue', 'red'], ownSide: true, n: 1, alt: 5500, variants: { blue: ['mq9', 'rq4'], red: ['mq9', 'rq4'] }, missions: ['recon'] },
     heli: { label: 'HELICOPTER', cat: 'air', domain: 'air', teams: ['blue', 'red', 'neutral'], n: 1, alt: 180, variants: { blue: ['uh60'], red: ['uh60'], neutral: ['civil'] }, missions: ['patrol', 'move', 'strike'] },
     csg: { label: 'CARRIER GROUP', cat: 'naval', domain: 'water', teams: ['blue', 'red'], missions: ['move', 'patrol', 'strike', 'escort'] },
     sag: { label: 'SURFACE GROUP', cat: 'naval', domain: 'water', teams: ['blue', 'red'], missions: ['move', 'patrol', 'strike', 'escort'] },

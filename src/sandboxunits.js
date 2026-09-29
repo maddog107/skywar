@@ -237,6 +237,8 @@ const SUPPORT = {
         const g = sb.game, air = g.air;
         if (!air || !air.enabled) { rec.why = 'NO AIR SUPPORT IN THIS MODE'; return null; }
         const team = rec.team;
+        // (one Growler and one of each drone: the air plug-in re-tasks the one there is)
+        if ((rec.item === 'growler' || rec.item === 'drone') && air.flights.some(x => x.sandbox && x.sandbox !== rec && !x.dead && x.ac && x.ac.alive && x.ac.type === rec.type)) { rec.why = 'ONE ' + rec.type.toUpperCase() + ' AT A TIME: GIVE IT NEW ORDERS'; return null; }
         let f = null;
         if (rec.item === 'awacs') f = air.spawnAWACS(team, { x: at.x, z: at.z, alt: at.y });
         else if (rec.item === 'tanker') f = air.spawnTanker(team, { x: at.x, z: at.z, alt: at.y });
