@@ -28,6 +28,7 @@ import { clamp, damp, rand } from './util.js';
 import * as V from './vehicles.js';
 import { dress } from './dressing.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { mergeInPlace, splitTwoSided, drawsTwice } from './meshmerge.js';
 
 const _v = new THREE.Vector3(), _m = new THREE.Matrix4(), _m2 = new THREE.Matrix4();
 const one = new THREE.Vector3(1, 1, 1);
@@ -411,6 +412,10 @@ export class JocOps {
             root.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } if (!meta && typeof o.userData.room === 'string') { try { meta = JSON.parse(o.userData.room); } catch (e) { /* */ } } });
             const fake = { model: root, controls: new Map() };
             dressRoom(fake);
+            // it never moves or changes: its ~40 parts as one mesh per material (meshmerge.js), and see-through glass
+            // as back / front meshes rather than one that switches sides twice a draw
+            mergeInPlace(root);
+            { const two = []; root.traverse(o => { if (o.isMesh && drawsTwice(o.material)) two.push(o); }); for (const o of two) splitTwoSided(o); }
             root.position.copy(this.origin); root.rotation.y = this.yaw;
             g.scene.add(root);
             root.updateMatrixWorld(true);

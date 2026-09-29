@@ -958,7 +958,7 @@ export class Infantry {
         let b = this.pool.find(p => !p.soldier);
         if (!b) {
             if (!create) return false;
-            const ch = new Character('pilot');
+            const ch = new Character('pilot', { merge: false });
             ch.manual = true;
             this.mergeBody(ch);
             b = { ch, soldier: null, team: null, acc: 0 };
@@ -1166,7 +1166,7 @@ export class Infantry {
     // every character made (so a shader-compile pass can see one early)
     prewarm(n = 4) {
         if (!this.render) return;
-        for (let i = this.pool.length; i < n; i++) { const ch = new Character('pilot'); ch.manual = true; this.mergeBody(ch); ch.root.visible = false; this.pool.push({ ch, soldier: null, team: null, acc: 0 }); }
+        for (let i = this.pool.length; i < n; i++) { const ch = new Character('pilot', { merge: false }); ch.manual = true; this.mergeBody(ch); ch.root.visible = false; this.pool.push({ ch, soldier: null, team: null, acc: 0 }); }
     }
 }
 void BODY; void HELMET_Y;

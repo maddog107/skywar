@@ -7,6 +7,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { weaponModel } from './weaponmodels.js';
 import { ArmIK, frameQuat, fingerChains } from './ik.js';
 import { holdFor, bodyHoldFor } from './holds.js';
@@ -44,8 +45,59 @@ function fallbackFigure() {
     return g;
 }
 
+// A character's skinned parts (the SWAT model's nine, all bound to one skeleton and untextured) as one skinned mesh
+// with their colours in its vertices: one draw call, and one in each shadow map, instead of nine. Built once per kind;
+// null when the parts can't be merged exactly (textured, transparent or differently lit parts, other rigs).
+const mergedBodies = {};
+function mergedBody(kind, parts) {
+    if (kind in mergedBodies) return mergedBodies[kind];
+    let out = null;
+    try {
+        const f = parts[0], m0 = f.material;
+        const same = (m) => m && !Array.isArray(m) && m.isMeshStandardMaterial && !m.isMeshPhysicalMaterial && !m.map && !m.transparent && !m.vertexColors
+            && !m.normalMap && !m.emissiveMap && !m.roughnessMap && !m.metalnessMap && !m.aoMap && !m.alphaMap && m.alphaTest === 0
+            && m.roughness === m0.roughness && m.metalness === m0.metalness && m.side === m0.side && m.emissive.equals(m0.emissive)
+            && m.envMapIntensity === m0.envMapIntensity && m.flatShading === m0.flatShading;
+        if (parts.every(p => same(p.material) && p.bindMatrix.equals(f.bindMatrix) && p.bindMode === f.bindMode && !Object.keys(p.geometry.morphAttributes).length && p.castShadow === f.castShadow && p.receiveShadow === f.receiveShadow)) {
+            const keep = ['position', 'normal', 'skinIndex', 'skinWeight', 'color'];
+            const geos = parts.map((p) => {
+                const g = p.geometry.clone(), c = p.material.color, n = g.attributes.position.count, a = new Float32Array(n * 3);
+                for (let i = 0; i < n; i++) { a[i * 3] = c.r; a[i * 3 + 1] = c.g; a[i * 3 + 2] = c.b; }
+                g.setAttribute('color', new THREE.BufferAttribute(a, 3));
+                for (const k of Object.keys(g.attributes)) if (!keep.includes(k)) g.deleteAttribute(k);
+                // the same attribute types in every part (glTF may store joints as bytes in one, shorts in another)
+                const si = g.attributes.skinIndex, sw = g.attributes.skinWeight;
+                if (si && !(si.array instanceof Uint16Array)) g.setAttribute('skinIndex', new THREE.BufferAttribute(Uint16Array.from(si.array), 4));
+                if (sw && !(sw.array instanceof Float32Array)) {
+                    const w = new Float32Array(sw.count * 4);
+                    for (let i = 0; i < sw.count; i++) { w[i * 4] = sw.getX(i); w[i * 4 + 1] = sw.getY(i); w[i * 4 + 2] = sw.getZ(i); w[i * 4 + 3] = sw.getW(i); }
+                    g.setAttribute('skinWeight', new THREE.BufferAttribute(w, 4));
+                }
+                return g;
+            });
+            if (geos.every(g => keep.every(k => !!g.attributes[k]) && !!g.index === !!geos[0].index)) {
+                const geometry = mergeGeometries(geos, false);
+                if (geometry) {
+                    geometry.computeBoundingSphere();
+                    geometry.computeBoundingBox();
+                    const material = new THREE.MeshStandardMaterial({ name: 'character:' + kind, vertexColors: true, color: 0xffffff, roughness: m0.roughness, metalness: m0.metalness, side: m0.side, flatShading: m0.flatShading });
+                    material.emissive.copy(m0.emissive); material.envMapIntensity = m0.envMapIntensity;
+                    // (a posed body stays within its height of its middle: a sphere for frustum culling, in place of
+                    // drawing every body everywhere — the parts had culling off, their rest-pose bounds being wrong)
+                    const size = geometry.boundingBox.getSize(new THREE.Vector3());
+                    const sphere = new THREE.Sphere(geometry.boundingBox.getCenter(new THREE.Vector3()), Math.max(size.x, size.y, size.z) * 1.1);
+                    out = { geometry, material, sphere };
+                }
+            }
+        }
+    } catch (e) { out = null; }
+    mergedBodies[kind] = out;
+    return out;
+}
+
 export class Character {
-    constructor(kind = 'pilot') {
+    // opts.merge false: keep the model's separate skinned parts (for code that recolours or merges them itself)
+    constructor(kind = 'pilot', opts = {}) {
         this.root = new THREE.Group();
         this.root.userData.character = this; // lets containers (wreckage, seats) dispose it
         this.current = null;
@@ -62,6 +114,24 @@ export class Character {
                 if (first && sameRig(o.skeleton, first)) { o.skeleton.dispose(); o.bind(first, o.bindMatrix); }
                 else this.skeletons.push(o.skeleton);
             });
+            if (opts.merge !== false) {
+                const parts = [];
+                clone.traverse(o => { if (o.isSkinnedMesh) parts.push(o); });
+                const body = parts.length > 1 && parts.every(p => p.skeleton === parts[0].skeleton) ? mergedBody(kind, parts) : null;
+                if (body) {
+                    const f = parts[0];
+                    const mesh = new THREE.SkinnedMesh(body.geometry, body.material);
+                    mesh.name = 'body';
+                    mesh.position.copy(f.position); mesh.quaternion.copy(f.quaternion); mesh.scale.copy(f.scale);
+                    mesh.bindMode = f.bindMode;
+                    mesh.bind(f.skeleton, f.bindMatrix);
+                    mesh.castShadow = f.castShadow; mesh.receiveShadow = f.receiveShadow;
+                    mesh.boundingSphere = body.sphere.clone();
+                    f.parent.add(mesh);
+                    for (const p of parts) p.parent.remove(p);
+                    this.merged = mesh;
+                }
+            }
             // Quaternius characters face +Z; the game's "forward" is -Z
             const holder = this.holder = new THREE.Group();
             holder.rotation.y = Math.PI;
