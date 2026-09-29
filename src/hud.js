@@ -663,7 +663,7 @@ export class HUD {
         mono('600', C ? 11 : 12);
         ctx.fillStyle = GREEN_DIM;
         const maxW = C ? W * 0.55 : W * 0.5;
-        if (game.objective) ctx.fillText(game.objective, M, C ? 22 : 34, maxW);
+        if (game.objective && !game.spectating) ctx.fillText(game.objective, M, C ? 22 : 34, maxW); // (watching, the spectator's box has the top: it ran under it)
         ctx.fillText('T+' + game.clockText() + (game.lives !== Infinity && game.lives != null ? '   SPARE JETS ' + game.lives : ''), M, C ? 40 : 52);
         if (game.collateral) {
             ctx.fillStyle = '#ff9f5a';
@@ -764,6 +764,7 @@ export class HUD {
         const b0 = game.banner, t0 = game.tip;
         if (b0 && game.time - b0.t < b0.dur) y = Math.max(y, (C ? this.h * 0.24 : this.h * 0.1) + (b0.sub ? (C ? 56 : 78) : (C ? 20 : 26)));
         if (!C && t0 && game.time - t0.t < t0.dur && !game.pilotMode && !game.groundStart) y = Math.max(y, this.h * 0.1 + 76);
+        if (game.spectating) y = Math.max(y, C ? 150 : 142); // (under the spectator's box: long calls ran into it)
         for (const m of game.feed) {
             const age = game.time - m.t;
             const a = clamp(1 - (age - 4) / 1, 0, 1);
