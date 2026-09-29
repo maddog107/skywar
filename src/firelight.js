@@ -3,7 +3,7 @@
 // on everything around them (the night half of docs/WAR.md "Night and weather").
 //
 // three.js lights change every shader program when their count changes, so this is one fixed-size list instead:
-// every frame the brightest few candidates (the budget: 4 / 8 / 16 / 32 by quality) go into a small float texture,
+// every frame the brightest few candidates (the budget: 3 / 6 / 12 / 24 by quality) go into a small float texture,
 // and every built-in lit material (MeshStandard / Lambert / Phong / Physical / Toon: the terrain, buildings, trees,
 // vehicles, ships, aircraft) runs them through its own BRDF (RE_Direct) in a loop bounded by a uniform count.
 // Nothing recompiles when fires start or go out, and with nothing burning (daylight, or no candidates) the loop is
@@ -33,10 +33,10 @@ export const FIRE_MAX = 32;          // columns in the light texture (the loop b
 const ROWS = 4;
 // per quality: surface lights, lights inside the clouds' march, lights for the haze glow
 export const FIRE_QUALITY = {
-    low: { n: 4, cloud: 0, glow: 0 },
-    medium: { n: 8, cloud: 0, glow: 4 },
-    high: { n: 16, cloud: 4, glow: 6 },
-    ultra: { n: 32, cloud: 8, glow: 8 },
+    low: { n: 3, cloud: 0, glow: 0 },
+    medium: { n: 6, cloud: 0, glow: 4 },
+    high: { n: 12, cloud: 4, glow: 6 },
+    ultra: { n: 24, cloud: 8, glow: 8 },
 };
 export const CLOUD_LIGHTS = 8;       // uniform slots in the cloud march
 export const GLOW_LIGHTS = 8;        // uniform slots in the glow pass

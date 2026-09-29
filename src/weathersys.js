@@ -76,7 +76,7 @@ export class WeatherSystem {
         const f = wx.sendFront(kind, opts);
         if (opts.say !== false) {
             const eta = Math.max(1, Math.round(((opts.eta ?? 30000 / (opts.speed || 18))) / 60));
-            this.radio('WEATHER: ' + SAY[kind] + ' MOVING IN FROM THE ' + compass(f.nx, f.nz, true) + ', ABOUT ' + eta + ' MINUTES OUT');
+            this.radio('WEATHER: ' + SAY[kind] + ' MOVING IN FROM THE ' + compass(f.nx, f.nz, true) + ', ABOUT ' + eta + (eta === 1 ? ' MINUTE' : ' MINUTES') + ' OUT');
         }
         return f;
     }
@@ -305,6 +305,7 @@ export class WeatherSystem {
     // ═════════════ Radio ═════════════
     radio(text) {
         const g = this.game, d = g.director;
+        text = text.replace(/^WEATHER: /, ''); // (the speaker is WEATHER already)
         if (d && d.enabled && d.say) d.say('WEATHER', text, { color: '#9fd4ff', say: false, ttl: 30 });
         else if (g.war) g.war.radio('WEATHER', text, { color: '#9fd4ff', say: false });
     }

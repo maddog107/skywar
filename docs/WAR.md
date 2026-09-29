@@ -524,6 +524,6 @@ parts are pulled out first and every instance gets its own copy, hung on the sec
 - `effects.light(pos, intensity, life, opts)` (as before) → `fireLights.flash`: a burst of light that decays;
   calls at a moving plume merge into one light. `fireLights.keep(key, pos, I, opts)` for a light that lives while
   refreshed every frame; `fireLights.heat(pos, size)` for flames (effects.puffFire and burning smoke columns already
-  report theirs, so anything that burns lights its surroundings). Budget by quality: 4 / 8 / 16 / 32 lights on
+  report theirs, so anything that burns lights its surroundings). Budget by quality: 3 / 6 / 12 / 24 lights on
   surfaces (a quarter by day), 0 / 0 / 4 / 8 in the clouds, 0 / 4 / 6 / 8 glowing in the air. The FLIR sees none.
 - Custom shaders: `FIRE_VIEW_GLSL` / `FIRE_WORLD_GLSL` + `fireUniforms()` (smoke, trails and the sea use them).

@@ -61,7 +61,7 @@ describe('fire lights: the budget and what gets it', () => {
         for (let i = 0; i < 12; i++) fl.flash(new THREE.Vector3(i * 40, 0, -300), 60000, 5, { merge: 0 });
         fl.flash(new THREE.Vector3(0, 0, 2000), 60000, 5, { merge: 0 }); // behind
         fl.update(1 / 60, cam);
-        assert.equal(fl.n, 4, 'day: 16 / 4');
+        assert.equal(fl.n, Math.round(FL.FIRE_QUALITY.high.n / 4), 'day: a quarter of the budget');
         assert.equal(fl.stats.candidates, 12, 'the one behind the camera isn\'t a candidate');
         fl.off = true; fl.update(1 / 60, cam);
         assert.equal(fl.n, 0, 'the FLIR (off): none');

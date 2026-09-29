@@ -325,7 +325,8 @@ export class Weather {
         // settle whatever was blending first
         if (this.tr) this.finishTransition();
         if (this.front) this.collapseFront();
-        const hd = heading ?? this.windAngle;
+        // (windAngle is the wind's angle in the x-z plane; a heading is a compass bearing: +x east, -z north)
+        const hd = heading ?? Math.atan2(Math.cos(this.windAngle), -Math.sin(this.windAngle));
         const nx = Math.sin(hd), nz = -Math.cos(hd);
         // (eta: when the middle of its transition zone reaches `at`; the first cloud comes width / 2 before that)
         const back = dist ?? (eta != null ? eta * speed : 30000 + width / 2);
