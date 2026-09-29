@@ -64,6 +64,11 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap; // soft (Vogel disk) since r182; radius set on the sun
+// three's opaque order (material, then instancing / skinning, then front to back) plus whether the object receives
+// shadows: that's part of the shader program too, so a material shared by receiving and non-receiving meshes (a
+// merged model's plain paint, a shared steel) no longer re-resolves its program at every switch between them
+renderer.setOpaqueSort((a, b) => a.groupOrder - b.groupOrder || a.renderOrder - b.renderOrder || a.material.id - b.material.id
+    || a.materialVariant - b.materialVariant || (a.object.receiveShadow ? 1 : 0) - (b.object.receiveShadow ? 1 : 0) || a.z - b.z || a.id - b.id);
 $('app').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();

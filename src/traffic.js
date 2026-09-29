@@ -249,14 +249,20 @@ export class Traffic {
     }
 
     // ── The cars by grid cell (rebuilt each frame; parked cars once) ──
+    // (only the cells filled last frame are emptied: the map keeps every cell a car ever passed through, and
+    // walking all of them every frame came to half a millisecond after a few minutes)
     indexCars() {
         const G = this._grid || (this._grid = new Map());
-        for (const l of G.values()) l.length = 0;
+        const used = this._gridUsed || (this._gridUsed = []);
+        for (const l of used) l.length = 0;
+        used.length = 0;
+        if (G.size > 4096) G.clear(); // (let the cells nobody drives through any more go)
         for (const list of [this.cars, this.buggies]) for (const c of list) {
             if (!c.pos || c.stolen) continue;
             const k = cellKey(c.pos.x, c.pos.z);
             let l = G.get(k);
             if (!l) G.set(k, l = []);
+            if (!l.length) used.push(l);
             l.push(c);
         }
     }

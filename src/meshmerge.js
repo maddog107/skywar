@@ -228,17 +228,44 @@ function collect(root, keep) {
     return { meshes, used };
 }
 
-// back-face and front-face copies of a two-sided transparent material (one pair per material)
+// back-face and front-face copies of a two-sided transparent material (one pair per material). (A ShaderMaterial's
+// copies share its uniforms object, so whatever updates the original's uniforms updates both.)
 const _twoSided = new WeakMap();
-function twoSided(mat) {
+export function twoSided(mat) {
     let p = _twoSided.get(mat);
     if (!p) {
         const back = mat.clone(), front = mat.clone();
         back.side = THREE.BackSide; front.side = THREE.FrontSide;
         front.shadowSide = mat.shadowSide ?? THREE.DoubleSide; // a DoubleSide material's shadow is drawn both-sided
+        if (mat.isShaderMaterial) back.uniforms = front.uniforms = mat.uniforms;
+        back.name = front.name = mat.name;
+        back.userData = front.userData = mat.userData;
         _twoSided.set(mat, p = [back, front]);
     }
     return p;
+}
+// does three draw this material in two passes (back faces, then front faces), switching the material's side, and
+// so its program, twice a draw?
+export function drawsTwice(mat) {
+    return !!mat && !Array.isArray(mat) && mat.transparent && mat.side === THREE.DoubleSide && !mat.forceSinglePass;
+}
+// Such a mesh as two meshes on the same geometry (the same image, no program switches): the mesh itself draws the
+// back faces and a new one (a later id, so the transparent sort draws it second) the front faces and the shadow.
+// It goes right after the mesh in its parent. Returns the front-face mesh (or null).
+export function splitTwoSided(mesh) {
+    if (!mesh.isMesh || !drawsTwice(mesh.material)) return null;
+    const [back, front] = twoSided(mesh.material);
+    const f = new THREE.Mesh(mesh.geometry, front);
+    f.name = mesh.name; f.renderOrder = mesh.renderOrder; f.frustumCulled = mesh.frustumCulled;
+    f.position.copy(mesh.position); f.quaternion.copy(mesh.quaternion); f.scale.copy(mesh.scale);
+    f.matrixAutoUpdate = mesh.matrixAutoUpdate; f.matrix.copy(mesh.matrix);
+    f.receiveShadow = mesh.receiveShadow; f.castShadow = mesh.castShadow;
+    f.userData = { ...mesh.userData, twoSidedFront: true };
+    mesh.material = back;
+    mesh.castShadow = false;
+    const parent = mesh.parent;
+    if (parent) { parent.add(f); parent.children.pop(); parent.children.splice(parent.children.indexOf(mesh) + 1, 0, f); }
+    return f;
 }
 
 // A new Group (with the object's own transform) holding the object's visible meshes, merged (see collect).

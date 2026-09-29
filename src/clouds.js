@@ -993,8 +993,20 @@ export class Clouds {
         this.shadowRT.scissor.set(0, y0, SHADOW_RES, rows);
         renderer.setRenderTarget(this.shadowRT);
         renderer.render(this.shadowScene, this.marchCam);
-        this._box.min.set(0, y0); this._box.max.set(SHADOW_RES, y0 + rows);
-        renderer.copyTextureToTexture(this.shadowRT.texture, this.shadowTex, this._box, this._pos.set(0, y0));
+        // copy the band into the texture the materials read, straight from the framebuffer just drawn (three's
+        // copyTextureToTexture reads five GL parameters back on every call: a ~0.3 ms stall a frame)
+        const gl = renderer.getContext(), st = renderer.state;
+        let tp = renderer.properties.get(this.shadowTex);
+        if (!tp.__webglTexture || this.shadowTex.version !== tp.__version) { renderer.initTexture(this.shadowTex); tp = renderer.properties.get(this.shadowTex); }
+        if (tp.__webglTexture) {
+            st.activeTexture(gl.TEXTURE0);
+            st.bindTexture(gl.TEXTURE_2D, tp.__webglTexture);
+            gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, y0, 0, y0, SHADOW_RES, rows);
+            st.unbindTexture();
+        } else {
+            this._box.min.set(0, y0); this._box.max.set(SHADOW_RES, y0 + rows);
+            renderer.copyTextureToTexture(this.shadowRT.texture, this.shadowTex, this._box, this._pos.set(0, y0));
+        }
     }
 
     // Runs just before the composite triangle draws, with the opaque scene already in the target
