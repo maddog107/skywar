@@ -917,8 +917,11 @@ export class DeckOps {
             }
         } else if (st.player && (p.onGround || along > 2500)) {
             if (p.onGround && p.deck === this.ship && !st.player.done) {
-                st.player.done = true;
-                if (!p.trap && p.relSpeed > 30) this.say('PADDLES', 'BOLTER, BOLTER, BOLTER', { say: 'Bolter, bolter, bolter.' });
+                // (down short of the wires the hook can still take one rolling through them: call the bolter only once
+                // it's past them without one — it used to call "BOLTER" and then "TRAP! (LATE WIRE)")
+                const past = !this.ship.inWireZone(p.pos.x, p.pos.z) && this.localOf(p.pos).lz < this.geo.touch[1];
+                if (p.trap) st.player.done = true;
+                else if (p.relSpeed > 30 && past) { st.player.done = true; this.say('PADDLES', 'BOLTER, BOLTER, BOLTER', { say: 'Bolter, bolter, bolter.' }); }
             }
             if (!p.onGround || p.relSpeed < 2) st.player = null;
         }

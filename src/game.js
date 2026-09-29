@@ -508,8 +508,10 @@ export class Game {
             const app = refSpeeds(p.spec).approach;
             let fwd, touch, shipVel = new THREE.Vector3(), dist;
             if (kind === 'cv_approach') {
-                fwd = new THREE.Vector3(-Math.sin(cv.heading), 0, -Math.cos(cv.heading));
-                touch = cv.toWorld(-4, cv.deckY, cv.def.L * 0.3);
+                // on the angled deck's centreline at the 3-wire (deckops.js), where the autopilot and the LSO expect you
+                const deck = this.navalops && this.navalops.deckOf && this.navalops.deckOf(cv);
+                if (deck && deck.ok) { fwd = deck.landingDir(new THREE.Vector3()); touch = deck.touchPoint(new THREE.Vector3()); }
+                else { fwd = new THREE.Vector3(-Math.sin(cv.heading), 0, -Math.cos(cv.heading)); touch = cv.toWorld(-4, cv.deckY, cv.def.L * 0.3); }
                 shipVel.copy(cv.vel);
                 dist = distance || 3000;
             } else {
