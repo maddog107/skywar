@@ -65,8 +65,9 @@ export function buildCompound(site, groundAt, seed = 1) {
     for (const [sx, sz] of [[-13, -10], [13, -10]]) {
         for (const px of [-7.8, 0, 7.8]) for (const pz of [-4.3, 4.3]) steel.push(post(sx + px, sz + pz, 5.6, 0.16));
         steel.push(box(16.4, 0.3, 0.3, sx, 5.5, sz - 4.3), box(16.4, 0.3, 0.3, sx, 5.5, sz + 4.3));
-        const r1 = new THREE.BoxGeometry(17.2, 0.12, 5.2); r1.rotateX(0.18); r1.translate(sx, 6.05, sz - 2.3);
-        const r2 = new THREE.BoxGeometry(17.2, 0.12, 5.2); r2.rotateX(-0.18); r2.translate(sx, 6.05, sz + 2.3);
+        // (a pitched roof: each half rises toward the ridge over the middle)
+        const r1 = new THREE.BoxGeometry(17.2, 0.12, 5.2); r1.rotateX(-0.18); r1.translate(sx, 6.05, sz - 2.3);
+        const r2 = new THREE.BoxGeometry(17.2, 0.12, 5.2); r2.rotateX(0.18); r2.translate(sx, 6.05, sz + 2.3);
         roof.push(r1, r2);
         // the back wall
         roof.push(box(16.4, 5.4, 0.12, sx, 0, sz - 4.4));
