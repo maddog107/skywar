@@ -176,7 +176,14 @@ export class Control {
         this.steps = spec.steps || (this.kind === 'knob' ? 6 : 0);
     }
     get open() { return this.kind === 'guard' ? this.target > 0.5 : false; }
-    get label() { const b = this.bind; return b ? (typeof b.label === 'function' ? b.label() : b.label) || this.id : this.id; }
+    get label() { const b = this.bind; return (b && (typeof b.label === 'function' ? b.label() : b.label)) || this.plainName(); }
+    // a control nobody gave a label (a status lamp): its node name in words ("lamp_amber" → "AMBER LAMP"), not the raw id
+    plainName() {
+        const w = this.id.replace(/\.\d+$/, '').split('_').filter(Boolean).map(s => s.toUpperCase());
+        const kinds = { LAMP: 'LAMP', SW: 'SWITCH', BTN: 'BUTTON', KNOB: 'KNOB', GUARD: 'GUARD', LEVER: 'LEVER' };
+        if (w.length > 1 && kinds[w[0]]) return w.slice(1).join(' ') + ' ' + kinds[w[0]];
+        return w.join(' ');
+    }
     enabled() { const b = this.bind; return !b || !b.enabled ? true : !!b.enabled(); }
     // the pose for k (0..1: released … pressed, off … on, closed … open, first … last step)
     pose(k) {

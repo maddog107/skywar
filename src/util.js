@@ -86,6 +86,19 @@ export function freezeLocal(root, moving = []) {
     });
 }
 
+// A node's world matrix brought up to date through its whole parent chain, frozen parts included. three.js'
+// updateWorldMatrix(true, false) only recomposes a node whose own matrix changed, so a part under a frozen node of a
+// moving model (freezeLocal) kept the world matrix of the last frame the scene was rendered: read from inside a sealed
+// room (the CIC, the submarine), a ship's doors, hatches, masts and launch cells were where the ship had been.
+export function updateWorldChain(o) {
+    const p = o.parent;
+    if (p) updateWorldChain(p);
+    if (o.matrixAutoUpdate) o.updateMatrix();
+    if (p) o.matrixWorld.multiplyMatrices(p.matrixWorld, o.matrix);
+    else o.matrixWorld.copy(o.matrix);
+    return o.matrixWorld;
+}
+
 // Static scenery: work out world matrices once, then stop three.js recomposing them every frame.
 // `animated`: objects that move (they keep updating, and everything under them follows).
 export function freezeStatic(root, animated = []) {

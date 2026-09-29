@@ -16,7 +16,7 @@ import { ShipFX, deckHeightAt, foamTexture } from './shipfx.js';
 import { waterHeightLong } from './water.js';
 import { terrainHeight } from './world.js';
 import { loft, createAircraftModel } from './models.js';
-import { rand, clamp, lerp, interceptTime, freezeLocal } from './util.js';
+import { rand, clamp, lerp, interceptTime, freezeLocal, updateWorldChain } from './util.js';
 import { WEAPONS, AIRCRAFT } from './config.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _mp = new THREE.Vector3();
@@ -396,7 +396,7 @@ export function setDepth(ship, d) { ship.depth = Math.max(0, d); return ship.dep
 export function cellFrame(ship, i, pos, dir) {
     const c = ship && ship.rig && ship.rig.cells[i];
     if (!c) return false;
-    c.node.updateWorldMatrix(true, false);
+    updateWorldChain(c.node);
     if (pos) pos.setFromMatrixPosition(c.node.matrixWorld);
     if (dir) dir.set(0, 1, 0).transformDirection(c.node.matrixWorld);
     return true;
@@ -407,7 +407,7 @@ export function pointFrame(ship, name, pos, dir) {
     const r = ship && ship.rig;
     const o = r && (r.points[name] || (r.nodes[name] && r.nodes[name].node));
     if (!o) return false;
-    o.updateWorldMatrix(true, false);
+    updateWorldChain(o);
     if (pos) pos.setFromMatrixPosition(o.matrixWorld);
     if (dir) dir.set(0, 1, 0).transformDirection(o.matrixWorld);
     return true;

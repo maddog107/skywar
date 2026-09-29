@@ -1628,7 +1628,7 @@ export class Game {
             }
         } else if (this.mode === 'naval') {
             const c = this.naval.enemyCarrier;
-            const escorts = this.naval.ships.filter(x => x.team === 'red' && x.type === 'destroyer' && x.alive).length;
+            const escorts = this.naval.ships.filter(x => x.team === 'red' && ['destroyer', 'cruiser', 'slava'].includes(x.type) && x.alive).length; // (the Slava too: it's the group's main SAM ship)
             this.objective = c && c.alive ? 'SINK THE CARRIER — HULL ' + Math.round(c.health / c.maxHealth * 100) + '% · ESCORTS ' + escorts : 'CARRIER SUNK';
             this.navalLaunchT -= dt;
             if (c && c.alive && this.navalLaunchT <= 0 && enemiesAlive < 4) {

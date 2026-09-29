@@ -22,6 +22,7 @@ const { StrikeManager, MISSILES } = await src('strikes.js');
 const { terrainHeight } = await src('world.js');
 globalThis.__aircraftMod = await src('aircraft.js');
 globalThis.__autopilotMod = await src('autopilot.js');
+globalThis.__utilMod = await src('util.js');
 const repo = fileURLToPath(new URL('../', import.meta.url));
 
 // ── helpers ──
@@ -288,6 +289,31 @@ describe('carrier recoveries (deckops.js)', () => {
         assert.ok(touchdowns.every(d => d.vs > -6), 'firm but safe touchdowns (' + touchdowns.map(d => d.vs.toFixed(1)).join(', ') + ' m/s)');
         assert.ok(ac.removed && !g.aircraft.includes(ac), 'struck below: gone into the hangar');
         assert.ok(calls.some(c => /BALL/.test(c)) && calls.some(c => /BOLTER/.test(c)) && calls.some(c => /WIRE/.test(c)), 'the ball call, the bolter call, the wire (' + calls.join(' | ') + ')');
+        g.naval.clear();
+    });
+});
+
+// A ship's rig points (launch cells, doors, hatches) read while its scene isn't being rendered — from inside a sealed
+// room, or headless — follow the ship: its parts are frozen (freezeLocal), and three.js' updateWorldMatrix(true, false)
+// left them where the ship was the last time it was drawn (leaving the CIC dropped you into the sea astern).
+describe('rig points on a moving ship (naval.js, util.js updateWorldChain)', () => {
+    test('cells and doors keep their place on ships steaming on with nothing rendered', () => {
+        const g = navalGame();
+        const sea = openSea(5000);
+        const cv = g.naval.spawn('carrier', 'blue', sea, { orbitR: 2600 });
+        const dd = g.naval.spawn('destroyer', 'blue', { x: sea.x + 1500, z: sea.z }, { orbitR: 2600 });
+        cv.steer(0.4, 14); dd.steer(0.4, 14);
+        g.scene.updateMatrixWorld(true); // (drawn once)
+        const { updateWorldChain } = globalThis.__utilMod;
+        const THREE_ = THREE, p = new THREE_.Vector3();
+        const doorLocal = () => { const n = cv.rig.doors.island_1.node; updateWorldChain(n); p.setFromMatrixPosition(n.matrixWorld); return cv.toLocal(p.x, p.z); };
+        const cellLocal = () => { N.cellFrame(dd, 0, p, null); return dd.toLocal(p.x, p.z); };
+        const d0 = doorLocal(), c0 = cellLocal(), at0 = cv.pos.clone();
+        for (let t = 0; t < 90; t += 1 / 30) { g.time += 1 / 30; g.naval.update(1 / 30); }
+        assert.ok(cv.pos.distanceTo(at0) > 150, 'the carrier steamed on (' + cv.pos.distanceTo(at0).toFixed(0) + ' m)');
+        const d1 = doorLocal(), c1 = cellLocal();
+        assert.ok(Math.hypot(d1.lx - d0.lx, d1.lz - d0.lz) < 1, 'the island door stays on the island (moved ' + Math.hypot(d1.lx - d0.lx, d1.lz - d0.lz).toFixed(1) + ' m on the deck)');
+        assert.ok(Math.hypot(c1.lx - c0.lx, c1.lz - c0.lz) < 1, 'a VLS cell stays in its module (moved ' + Math.hypot(c1.lx - c0.lx, c1.lz - c0.lz).toFixed(1) + ' m)');
         g.naval.clear();
     });
 });

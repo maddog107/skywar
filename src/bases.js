@@ -995,7 +995,7 @@ export class Bases {
     // ═════════════ HUD ═════════════
     drawHud(ctx, hud) {
         const g = this.game;
-        if (!this.active || g.photo || g.hideHud || !g.player) return;
+        if (!this.active || g.photo || g.hideHud || !g.player || (g.indoors && g.indoors.kind === 'room')) return; // (not in a room: its own display has the corner)
         const P = g.pilotMode ? g.pilotMode.pos : g.player.pos;
         let F = null, bd = 22000;
         for (const f of this.fields) { const d = Math.hypot(P.x - f.base.x, P.z - f.base.z); if (d < bd && (f.team === g.war.side || this.enabled)) { bd = d; F = f; } }

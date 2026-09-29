@@ -756,7 +756,9 @@ export class TaskManager {
         const t = this.active, war = g.war;
         ctx.save();
         ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
-        let y = C ? 84 : 72;
+        // (in a room its title and station list have the top left: the task lines go above its key line at the bottom)
+        const room = g.indoors && g.indoors.kind === 'room';
+        let y = room ? hud.h - (t ? 76 : 58) : C ? 84 : 72;
         if (t) {
             const p = this.where(t);
             const d = p ? p.distanceTo(this.focus()) : null;

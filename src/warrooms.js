@@ -22,7 +22,7 @@ import { INTEL, INTEL_NAMES } from './war.js';
 import { BASES, baseToWorld } from './world.js';
 import { terrainHeight } from './terraincore.js';
 import { waterHeight } from './water.js';
-import { clamp, damp, rand } from './util.js';
+import { clamp, damp, rand, updateWorldChain } from './util.js';
 
 export { Interiors };
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _m = new THREE.Matrix4(), _q = new THREE.Quaternion();
@@ -531,7 +531,7 @@ export class SubOps {
             const cells = rig.cells.filter(c => c.door === rig.vls[i]);
             if (!cells.length) continue;
             _v.set(0, 0, 0);
-            for (const c of cells) { c.node.updateWorldMatrix(true, false); _v.add(_v2.setFromMatrixPosition(c.node.matrixWorld)); }
+            for (const c of cells) { updateWorldChain(c.node); _v.add(_v2.setFromMatrixPosition(c.node.matrixWorld)); }
             _v.divideScalar(cells.length).applyMatrix4(inv);
             tubes.push({ i: tubes.length, vls: i, lx: _v.x, lz: _v.z, cells: cells.map(c => rig.cells.indexOf(c)), label: TUBE_NAMES[tubes.length] || 'TUBE ' + (tubes.length + 1), loaded: 0 });
         }
@@ -579,8 +579,8 @@ export class SubOps {
         if (this.feed) this.feed.cam = null;
     }
 
-    hatchPos(out) { const h = this.sub.rig.hatches.escape; h.node.updateWorldMatrix(true, false); out.setFromMatrixPosition(h.node.matrixWorld); return out; }
-    entryPos(out) { const p = this.sub.rig.points.hatch_entry; p.updateWorldMatrix(true, false); return out.setFromMatrixPosition(p.matrixWorld); }
+    hatchPos(out) { const h = this.sub.rig.hatches.escape; updateWorldChain(h.node); out.setFromMatrixPosition(h.node.matrixWorld); return out; }
+    entryPos(out) { const p = this.sub.rig.points.hatch_entry; updateWorldChain(p); return out.setFromMatrixPosition(p.matrixWorld); }
 
     goBelow() {
         const sys = this.sys;
@@ -738,7 +738,7 @@ export class SubOps {
     mastDry(name) {
         const m = this.sub.rig.masts[name];
         if (!m) return false;
-        m.node.updateWorldMatrix(true, false);
+        updateWorldChain(m.node);
         _v.setFromMatrixPosition(m.node.matrixWorld);
         return _v.y > waterHeight(_v.x, _v.z) + 0.3;
     }
@@ -784,7 +784,7 @@ export class SubOps {
     // a camera at a mast's head, looking along compass heading `yaw` (rad, naval.js convention) and pitch
     mastCamera(cam, mast, yaw, pitch, fov) {
         const m = this.sub.rig.masts[mast];
-        m.node.updateWorldMatrix(true, false);
+        updateWorldChain(m.node);
         cam.position.setFromMatrixPosition(m.node.matrixWorld);
         cam.position.y += 0.15;
         cam.quaternion.setFromEuler(_e.set(pitch, yaw, 0, 'YXZ'));
