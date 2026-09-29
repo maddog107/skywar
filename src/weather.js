@@ -327,7 +327,8 @@ export class Weather {
         if (this.front) this.collapseFront();
         const hd = heading ?? this.windAngle;
         const nx = Math.sin(hd), nz = -Math.cos(hd);
-        const back = dist ?? (eta != null ? eta * speed : 30000) + width;
+        // (eta: when the middle of its transition zone reaches `at`; the first cloud comes width / 2 before that)
+        const back = dist ?? (eta != null ? eta * speed : 30000 + width / 2);
         this.front = { x: here.x - nx * back, z: here.z - nz * back, nx, nz, w: width / 2, speed, kind };
         copyParams(kindParams(kind), this.B);
         this.B.kind = kind;

@@ -841,6 +841,8 @@ export class Effects {
         const P = this.tracerPos, C = this.tracerCol;
         let n = 0;
         const a = this._v1, b = this._v2, side = this._v3, toCam = this._tmpV;
+        // [night] against a dark sky a tracer burns brighter and wider (it blooms into a glowing streak)
+        const nk = fireLights.night || 0, glow = 1 + 1.3 * nk, wide = 1 + 0.5 * nk;
         for (let i = 0; i < bullets.length && n < this.maxTracers; i++) {
             const bl = bullets[i];
             if (!bl.tracer) continue;
@@ -849,14 +851,14 @@ export class Effects {
             toCam.subVectors(camPos, a);
             const dist = toCam.length();
             side.subVectors(a, b).cross(toCam).normalize();
-            const w = Math.max(0.22, dist * 0.0021);
+            const w = Math.max(0.22, dist * 0.0021) * wide;
             const k = n * 12;
             P[k] = a.x + side.x * w; P[k + 1] = a.y + side.y * w; P[k + 2] = a.z + side.z * w;
             P[k + 3] = a.x - side.x * w; P[k + 4] = a.y - side.y * w; P[k + 5] = a.z - side.z * w;
             P[k + 6] = b.x + side.x * w * 0.4; P[k + 7] = b.y + side.y * w * 0.4; P[k + 8] = b.z + side.z * w * 0.4;
             P[k + 9] = b.x - side.x * w * 0.4; P[k + 10] = b.y - side.y * w * 0.4; P[k + 11] = b.z - side.z * w * 0.4;
             const c = bl.color;
-            const fade = Math.min(1, bl.life * 2) * (dist > 6000 ? 0 : 1 - dist / 6000);
+            const fade = Math.min(1, bl.life * 2) * (dist > 6000 ? 0 : 1 - dist / 6000) * glow;
             for (let v = 0; v < 2; v++) { C[k + v * 3] = c[0] * fade; C[k + v * 3 + 1] = c[1] * fade; C[k + v * 3 + 2] = c[2] * fade; }
             for (let v = 2; v < 4; v++) { C[k + v * 3] = c[0] * 0.15 * fade; C[k + v * 3 + 1] = c[1] * 0.1 * fade; C[k + v * 3 + 2] = c[2] * 0.05 * fade; }
             n++;

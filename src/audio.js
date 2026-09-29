@@ -641,15 +641,26 @@ export class Audio {
     thunder(dist = 2000) {
         if (!this.running) return;
         const ctx = this.ctx, t = ctx.currentTime;
+        // [weather] close by, a sharp crack and then the rumble; far off, a longer, lower rumble (the sound of the whole
+        // channel arriving over seconds, its highs soaked up by the air)
         const vol = clamp(2.2 / (1 + dist / 1500), 0.1, 1);
+        const len = clamp(3.5 + dist / 1800, 3.5, 9);
+        if (dist < 2200) {
+            const cr = this.noiseSrc(this.white);
+            const hf = ctx.createBiquadFilter(); hf.type = 'highpass'; hf.frequency.value = 700;
+            const cg = ctx.createGain(); cg.gain.setValueAtTime(vol * 0.9 * (1 - dist / 2200), t); cg.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+            cr.connect(hf).connect(cg).connect(this.sfx);
+            cr.start(t, Math.random()); cr.stop(t + 0.4);
+            this.cleanup(cr, hf, cg);
+        }
         const src = this.noiseSrc(this.brown);
         const f = ctx.createBiquadFilter(); f.type = 'lowpass';
-        f.frequency.setValueAtTime(dist < 2500 ? 900 : 300, t); f.frequency.exponentialRampToValueAtTime(60, t + 4);
+        f.frequency.setValueAtTime(dist < 2500 ? 900 : Math.max(140, 300 - dist / 60), t); f.frequency.exponentialRampToValueAtTime(55, t + len * 0.8);
         const g = ctx.createGain();
-        g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol, t + (dist < 2500 ? 0.05 : 0.4));
-        g.gain.setValueAtTime(vol * 0.7, t + 0.8); g.gain.exponentialRampToValueAtTime(0.001, t + 5);
+        g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol, t + (dist < 2500 ? 0.05 : 0.4 + dist / 20000));
+        g.gain.setValueAtTime(vol * 0.7, t + 0.8); g.gain.exponentialRampToValueAtTime(0.001, t + len);
         src.connect(f).connect(g).connect(this.sfx);
-        src.start(t); src.stop(t + 5.2);
+        src.start(t); src.stop(t + len + 0.2);
         this.cleanup(src, f, g);
     }
 

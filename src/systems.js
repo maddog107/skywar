@@ -20,6 +20,7 @@ import { WeatherSystem } from './weathersys.js';
 
 export const SYSTEMS = [
     ['tacmap', TacticalMap],
+    ['weather', WeatherSystem],  // night and weather: light sources, visibility, cues, the clock, fronts (its map layer under the others')
     ['sensors', Sensors],   // targeting pod, helmet sight (before the menu: its video is under it; before strikes: comma)
     ['mapkit', MapKit],     // map tools: legend, layers, ruler, coordinates, steerpoint, air tracks, imagery
     ['command', CommandMenu],
@@ -28,5 +29,4 @@ export const SYSTEMS = [
     ['director', Director],      // enemy and friendly activity, the Living War mode
     ['tasks', TaskManager],      // dynamic tasks
     ['wingmen', Wingmen],        // wingmen that take orders
-    ['weather', WeatherSystem],  // night and weather in play: light sources, visibility, cues, the sky's clock and fronts
 ];

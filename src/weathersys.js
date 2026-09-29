@@ -38,7 +38,7 @@ const BANDS = {
     eye: { haze: 1, fog: 1, rain: 1, cloud: 1 },
     tv: { haze: 1, fog: 1, rain: 1, cloud: 1 },
     ir: { haze: 0.12, fog: 0.85, rain: 0.55, cloud: 1 },     // MWIR / LWIR: through haze, not through cloud or fog
-    radar: { haze: 0, fog: 0, rain: 0.08, cloud: 0 },        // X band: clouds are nothing, heavy rain a little
+    radar: { haze: 0, fog: 0, rain: 0.02, cloud: 0, floor: 0.55 }, // X band: clouds are nothing, heavy rain costs some range
 };
 
 export class WeatherSystem {
@@ -111,7 +111,7 @@ export class WeatherSystem {
         if (B.haze > 0 || B.fog > 0) { const t = wx.fogTaus(a, b, _taus); tau2 += t.haze * t.haze * B.haze; tau += t.ground * B.fog; }
         if (B.rain > 0) tau += wx.rainTau(a, b) * B.rain;
         if (B.cloud > 0) tau += wx.cloudTau(a, b) * B.cloud;
-        return Math.exp(-tau2 - tau);
+        return Math.max(B.floor || 0, Math.exp(-tau2 - tau));
     }
     // An IR seeker's line of sight: no lock through cloud or fog
     irClear(a, b) { return this.transmittance(a, b, 'ir') > 0.25; }
@@ -212,6 +212,28 @@ export class WeatherSystem {
             }
         }
     }
+    // Burning fuel on the sea round a sinking ship: flames low on the water, spreading downwind from the hull as it
+    // goes down (their light, like every fire's, from effects.puffFire → firelight.js; the sea reflects it: ocean.js)
+    burningOil(dt) {
+        const g = this.game, nv = g.naval, fx = g.effects;
+        if (!nv || !nv.ships || !fx) return;
+        const cam = g.camera.position;
+        for (const s of nv.ships) {
+            if (s.alive || !(s.sinkT > 1) || s.sinkT > 62 || !s.def) continue;
+            if (s.pos.distanceToSquared(cam) > 9000 * 9000) continue;
+            s._oilT = (s._oilT || 0) - dt;
+            if (s._oilT > 0) continue;
+            s._oilT = 0.06;
+            const k = Math.min(1, s.sinkT / 25), fade = 1 - Math.max(0, (s.sinkT - 45) / 17);
+            const R = s.def.L * (0.4 + 0.9 * k);
+            const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * R;
+            // (the slick drifts downwind of the hull)
+            const w = g.wind;
+            _v.set(s.pos.x + Math.cos(a) * r + (w ? w.x : 0) * s.sinkT * 0.6, 0.6, s.pos.z + Math.sin(a) * r * 0.6 + (w ? w.z : 0) * s.sinkT * 0.6);
+            fx.puffFire(_v, _v2.set(rand(-1, 1), rand(2, 5), rand(-1, 1)), (3 + 5 * k) * fade, 0.55);
+            if (Math.random() < 0.35) fx.puffSmoke(_v, _v2.set(0, rand(4, 8), 0), 5 + 5 * k, 0.05, 6, 0.7 * fade);
+        }
+    }
     salvoScratch(i) {
         const pool = this._salvoPool || (this._salvoPool = []);
         const s = pool[i] || (pool[i] = { p: new THREE.Vector3(), n: 0, life: 0 });
@@ -223,6 +245,7 @@ export class WeatherSystem {
     update(dt) {
         const g = this.game, wx = this.wx;
         this.scanLights();
+        this.burningOil(dt);
         if (!wx) return;
         // the wind blows as hard as the weather here says (from the west-south-west)
         const ws = wx.local.wind;
@@ -355,12 +378,11 @@ export class WeatherSystem {
                 const cov = Math.max(clamp((wm[0] - P.thr) / (1 - P.thr), 0, 1), P.deck > 0 ? clamp((wm[2] - (1 - P.deck)) / 0.35, 0, 1) : 0);
                 const fog = wx.groundFogAt(w.x, w.z, _gf).D;
                 let r = 0, gg = 0, b = 0, a = 0;
-                if (R > 0.3) {
-                    // radar colours: light green → yellow → red → magenta (the cells)
-                    const k = Math.log10(R);
-                    if (R < 4) { r = 40; gg = 200; b = 70; } else if (R < 15) { r = 230; gg = 210; b = 40; } else if (R < 40) { r = 240; gg = 70; b = 40; } else { r = 230; gg = 60; b = 220; }
-                    a = clamp(0.25 + k * 0.2, 0.25, 0.7);
-                } else if (cov > 0.3) { r = gg = b = 225; a = (cov - 0.3) * 0.28; }
+                if (R > 0.8) {
+                    // radar colours: green (light / moderate) → yellow → red → magenta (the storm cells)
+                    if (R < 10) { r = 40; gg = 200; b = 70; } else if (R < 25) { r = 230; gg = 210; b = 40; } else if (R < 45) { r = 240; gg = 70; b = 40; } else { r = 230; gg = 60; b = 220; }
+                    a = clamp(0.1 + Math.log10(R) * 0.2, 0.12, 0.6);
+                } else if (cov > 0.3) { r = gg = b = 225; a = (cov - 0.3) * 0.25; }
                 if (fog > 0.003 && a < 0.2) { r = 230; gg = 225; b = 170; a = Math.max(a, clamp(fog * 25, 0, 0.3) * (((i + j) & 1) ? 1 : 0.4)); }
                 const o = (j * nx + i) * 4;
                 D[o] = r; D[o + 1] = gg; D[o + 2] = b; D[o + 3] = a * 255;

@@ -469,3 +469,61 @@ parts are pulled out first and every instance gets its own copy, hung on the sec
 - The Living War starts wingmen on COVER ME with rockets. Badly hit (25%) they RTB by themselves; one that
   lands, or is shot down, is replaced by a fresh jet after 75 / 150 s in the war modes.
 - Other plug-ins can give any AI pilot a brain the same way (director.js does for enemy CAS).
+
+## Night and weather (Phase C: firelight.js, weather.js, weathersys.js, nightfx.js)
+
+### How to see it
+- Menu: TIME (dawn, midday, dusk, night) and WEATHER (clear, cloudy, rain, storm, **fog**, **low** cloud).
+- In the Living War the clock runs ×20 (a day in ~72 minutes: the war goes on into dusk and night) and a front
+  comes through every 15-35 minutes, announced by WEATHER on the radio. COMMAND › SANDBOX › WEATHER / TIME (Sandbox,
+  Free Flight and the Living War): any weather over two minutes, a front from upwind, automatic fronts on / off, jump
+  to a time, clock stopped / ×1 / ×20 / ×60 / ×300.
+- I: night-vision goggles (a GPU pass now: amplified, green phosphor, grain, halos, the round eyepiece). The tactical
+  map's WEATHER layer is a weather-radar picture (green → yellow → red → magenta cells), cloud, fog and the front.
+
+### `game.weather` (weathersys.js)
+- `set(kind, { transition, say })`: the weather everywhere, now or blended over `transition` seconds. Kinds:
+  `clear`, `cloudy`, `rain`, `storm`, `fog`, `overcast` (weather.js `WEATHER_KINDS`: cloud cover and heights, the rain
+  deck, rain rates, ground fog, wind, turbulence, lightning).
+- `front(kind, { heading, speed, width, eta, dist, say })`: `kind` moves in behind a line across the map (default: with
+  the wind, 18 m/s, a 16 km transition zone); `eta` is when its middle reaches the camera. Ahead of the line the old
+  weather, behind it the new (the clouds, fog, rain and palette all follow); 60 km past the camera it takes over.
+- `timeScale` (sky clock: game seconds per second; 0 = stopped), `hour`, `setTime(hour | 'dawn' | 'day' | 'dusk' |
+  'night')`, `auto` (the Living War's own fronts). The director (or anyone) drives the weather with these.
+- Queries: `visibility(pos)` (m, Koschmieder), `ceiling(pos)` (lowest cloud base over it, m), `rainAt(pos)` (mm/h),
+  `stormAt(pos)` (0..1: under a thunderstorm cell), `transmittance(a, b, band)` (0..1; band `'eye'`, `'tv'`, `'ir'`,
+  `'radar'`), `irClear(a, b)` (no heat-seeker lock through cloud or fog), `caution(pos)` (how carefully to fly there),
+  `describe(pos)` (the radio's words: "THUNDERSTORMS, CEILING 900 M, VISIBILITY 1.4 KM").
+- **For the airbases (runway lights, searchlights):** `night` (0 day … 1 night, continuous) and `lightsOn` (on from a
+  little before sunset to a little after sunrise; `setNight(on)` is still called on every change), `visibility(pos)`
+  and `ceiling(pos)` (e.g. approach lights by day in fog or under a low ceiling). Events: none needed; poll these.
+- Events: `missileLostInCloud` (owner, { missile, target }) when a heat seeker loses a target hidden in cloud / fog.
+
+### What it does in play
+- **Eyes** (war.js `updateSensors`): each line of sight carries its own haze, ground fog, rain and cloud (contact
+  needs a little contrast, identifying much more); darkness is continuous (`night`); at night what stands in a fire's
+  light is seen as by day. **Radar** ignores cloud; heavy rain costs some range. **Targeting pod**: its line of sight
+  through cloud, fog and rain by band (the FLIR sees through haze and some rain, not cloud or fog).
+- **IR**: the player's and the AI's heat seekers don't lock through cloud or fog (HUD: NO IR — CLOUD); a heat seeker in
+  flight whose target stays hidden for 0.6 s loses it (dive into a cloud to shake one). The HUD's locked target shows
+  TGT OBSCURED — CLOUD / FOG / RAIN when the eye can't see it. Marking a target or accepting a task under bad weather
+  gets WEATHER OVER TARGET on the radio.
+- **AI** (ai.js): finds enemies by radar (nose cone) or by eye (~9 km by day, less at night; an afterburner shows), not
+  through cloud or fog; flies higher and gentler in bad weather and at night (`caution`).
+- **Flight**: gusts and turbulence from `wx.turbulence` (in and under storm cells, in cloud, low down in a strong wind;
+  ~±1-2 m/s² in rain, up to ~±5 in a cell core); the wind follows the weather.
+- **Storms**: rain shafts drawn in the cloud march (dark curtains under the cells), lightning where the cells are (two
+  in three inside the cloud, else a bolt that lights the ground round it), thunder delayed by distance at 343 m/s
+  (a crack close by, a long low rumble far off), rain on the canopy in the cockpit view (and mist from cloud).
+- **Fog**: a ground-fog layer with a flat top in the fog shader (and its JS twin): radiation / valley fog forms toward
+  dawn after a clear night in the low ground (gone by mid-morning), sea fog banks drift with the wind, `fog` weather
+  is dense (~350 m visibility under a 170 m top, clear above: hills stand out of it), `overcast` is a low stratus
+  ceiling (~450 m) with drizzle and sea fog banks.
+
+### Fire light (firelight.js), for plug-ins
+- `effects.light(pos, intensity, life, opts)` (as before) → `fireLights.flash`: a burst of light that decays;
+  calls at a moving plume merge into one light. `fireLights.keep(key, pos, I, opts)` for a light that lives while
+  refreshed every frame; `fireLights.heat(pos, size)` for flames (effects.puffFire and burning smoke columns already
+  report theirs, so anything that burns lights its surroundings). Budget by quality: 4 / 8 / 16 / 32 lights on
+  surfaces (a quarter by day), 0 / 0 / 4 / 8 in the clouds, 0 / 4 / 6 / 8 glowing in the air. The FLIR sees none.
+- Custom shaders: `FIRE_VIEW_GLSL` / `FIRE_WORLD_GLSL` + `fireUniforms()` (smoke, trails and the sea use them).
