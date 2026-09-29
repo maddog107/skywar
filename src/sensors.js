@@ -869,7 +869,7 @@ export class Sensors {
     // Head look off the nose (cockpit: the head; chase: the camera turned by free look or padlock)
     helmetState() {
         const g = this.game, p = g.player;
-        if (!this.flying || this.view || g.missileCam || (g.strikes && g.strikes.cam) || g.photo) return null;
+        if (!this.flying || this.view || g.missileCam || (g.strikes && g.strikes.cam) || g.photo || g.spectating) return null;
         const cockpit = g.cameraMode === 'cockpit';
         if (!cockpit && g.cameraMode !== 'chase') return null;
         const look = g.camera.getWorldDirection(this._look || (this._look = new THREE.Vector3()));

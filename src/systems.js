@@ -24,6 +24,7 @@ import { NavalOps } from './navalops.js';
 import { WarInteriors } from './warinteriors.js';
 import { Underground } from './underground.js';
 import { WeatherSystem } from './weathersys.js';
+import { SandboxTools } from './sandbox.js';
 
 export const SYSTEMS = [
     ['tacmap', TacticalMap],
@@ -43,4 +44,5 @@ export const SYSTEMS = [
     ['wingmen', Wingmen],        // wingmen that take orders
     ['underground', Underground], // hidden mountain complexes: portals, blast doors, tunnels, intel, scrambles
     ['coastal', CoastalDefence], // coastal anti-ship missile batteries (Bastion-P, Harpoon)
+    ['sandbox', SandboxTools],    // the sandbox toolkit: place units, missions, the spectator camera, the side swap, scenarios (last: its camera yields to the missile camera)
 ];
