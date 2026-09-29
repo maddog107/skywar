@@ -807,8 +807,10 @@ export class Aircraft {
         const fwd = this.getForward(_v3);
         const pitch = Math.asin(clamp(fwd.y, -1, 1));
         const flatEnough = surf.h > 0.5 && !surf.water && !surf.hull;
-        const vsLimit = surf.ship ? -9.5 : -7;
-        if (this.gearAnim > 0.9 && vs > vsLimit && upY > 0.94 && pitch > -0.08 && pitch < 0.35 && relSpeed < this.spec.flight.speed * 0.6 && (surf.runway || surf.ship || flatEnough)) {
+        // what the gear survives (forgiving on purpose: a game, not a checkride): up to ~1900 fpm on land and ~2200 fpm
+        // on a deck (carrier gear is built for it), ~30° of bank, 8° nose-down. Beyond "firm" it costs hull (hard landing)
+        const vsLimit = surf.ship ? -11.5 : -9.7;
+        if (this.gearAnim > 0.9 && vs > vsLimit && upY > 0.86 && pitch > -0.14 && pitch < 0.42 && relSpeed < this.spec.flight.speed * 0.6 && (surf.runway || surf.ship || flatEnough)) {
             this.onGround = true;
             this.deck = surf.ship || null; this._dl = null;
             this.pos.y = surf.h + this.gearOffset;
@@ -825,11 +827,20 @@ export class Aircraft {
             }
             this.vel.y = shipVel.y;
             this.alpha = Math.max(0, pitch);
-            this.game.events.emit('touchdown', this, { vs, onRunway: !!surf.runway, onDeck: !!surf.ship, trap: this.trap });
+            // a hard landing: past a firm touchdown (~1000 fpm on land, ~1400 on a deck), a wing-low or nose-first
+            // arrival — it costs some hull, never the jet (it keeps at least 15%)
+            const firm = surf.ship ? -7 : -5;
+            const hardPct = Math.max(0, firm - vs) * 7 + Math.max(0, 0.966 - upY) * 180 + Math.max(0, -0.05 - pitch) * 160;
+            let hard = 0;
+            if (hardPct > 1 && !this.invincible) {
+                hard = Math.min(hardPct, 60);
+                this.health = Math.max(this.maxHealth * 0.15, this.health - hard / 100 * this.maxHealth);
+            }
+            this.game.events.emit('touchdown', this, { vs, onRunway: !!surf.runway, onDeck: !!surf.ship, trap: this.trap, hard });
             return;
         }
         // too hard / gear up / off-field — but still survivable? Then it's a belly landing (or ditching)
-        const canBelly = !surf.hull && vs > -6.5 && upY > 0.8 && pitch > -0.15 && pitch < 0.4 && relSpeed < this.spec.flight.speed * 0.75;
+        const canBelly = !surf.hull && vs > -10 && upY > 0.72 && pitch > -0.25 && pitch < 0.5 && relSpeed < this.spec.flight.speed * 0.75;
         if (canBelly && this.isPlayer) { this.startBelly(surf, rel, relSpeed, vs); return; }
         this.crash(surf.water && !surf.hull);
     }
