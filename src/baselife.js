@@ -418,7 +418,7 @@ export class FieldLife {
             if (vis.loader.alive) vis.loader.pos.set(p.x + hx * 4, this.b.h + 1.2, p.z + hz * 4);
             if (vis.truck.alive) vis.truck.pos.set(p.x - hx * 12 + hz * (working ? 6 : 0), this.b.h + 1.2, p.z - hz * 12 - hx * (working ? 6 : 0));
             for (const u of [vis.loader, vis.truck]) { if (!u.alive) continue; u.vel.set(hx, 0, hz).multiplyScalar(c.state === 'driving' ? 8 : 0); }
-            if (!near) { if (vis.mL) { vis.mL.object.visible = false; vis.mT.object.visible = false; } continue; }
+            if (!near) { if (vis.mL) { vis.mL.object.visible = false; vis.mT.object.visible = false; } vis.stale = true; continue; }
             this.showCrew(c, vis, dt, working);
         }
         void sys;
@@ -455,12 +455,14 @@ export class FieldLife {
         for (const [u, m] of [[vis.loader, vis.mL], [vis.truck, vis.mT]]) {
             m.object.visible = true;
             if (!u.alive) continue;
+            if (vis.stale) { m.pos.copy(u.pos); m.yaw = c.heading; } // (back in view: where the team is now)
             const d = Math.hypot(u.pos.x - m.pos.x, u.pos.z - m.pos.z);
             if (d > 0.3) { m.yaw += clamp(wrap(Math.atan2(-(u.pos.x - m.pos.x), -(u.pos.z - m.pos.z)) - m.yaw), -1.2 * dt, 1.2 * dt); }
             m.pos.x += (u.pos.x - m.pos.x) * Math.min(1, dt * 3); m.pos.z += (u.pos.z - m.pos.z) * Math.min(1, dt * 3);
             m.pos.y = this.b.h;
             m.object.position.copy(m.pos); m.object.rotation.y = m.yaw;
         }
+        vis.stale = false;
         // engineers on foot round the crater while they work
         if (working && !vis.people.length && c.target) {
             for (let k = 0; k < 4; k++) {

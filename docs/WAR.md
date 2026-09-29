@@ -121,7 +121,8 @@ and the conventions every part follows. Read it before touching the war systems.
   system's own list.
 - **Class strings (`cls`):** `sam`, `sam-radar`, `radar`, `aaa`, `tel`, `artillery`, `command`, `vehicle`,
   `convoy`, `tank`, `infantry`, `ship`, `carrier`, `sub`, `aircraft`, `helicopter`, `airbase`, `runway`,
-  `hangar`, `shelter`, `fuel`, `ammo`, `tower`, `bunker`, `facility`, `entrance`, `silo`, `bridge`.
+  `hangar`, `shelter`, `fuel`, `ammo`, `tower`, `bunker`, `facility`, `entrance`, `silo`, `bridge`, `taxiway`,
+  `power`.
 - **Systems plug in, they don't sprawl.** New gameplay lives in its own module (`src/<name>.js`). The game
   creates it and calls optional hooks: `start(mode, opts)`, `update(dt)`, `clear()`, `onAction(a)` (return
   true if consumed), `drawHud(ctx, hud)`, `drawMap(ctx, map)`, `mapActions(sel)`, `mapInfo(sel)`,
@@ -469,3 +470,84 @@ parts are pulled out first and every instance gets its own copy, hung on the sec
 - The Living War starts wingmen on COVER ME with rockets. Badly hit (25%) they RTB by themselves; one that
   lands, or is shot down, is replaced by a fresh jet after 75 / 150 s in the war modes.
 - Other plug-ins can give any AI pilot a brain the same way (director.js does for enemy CAS).
+
+## Airbases (`game.bases`, src/bases.js)
+
+The military fields (home, enemy, Miramar; the civil airport only gets the lighting) are live installations. The
+plan of each field is `baseLayout(b)` in src/baselayout.js (base-local metres: `lx` across the runway toward the
+apron, `lz` along it; shelters, QRA pad, taxi graph, tower, radar, power plant, fuel farms, igloos, depot, sirens,
+searchlights, floods, pads, and the lighting configuration). The logic is plain JS in src/basestate.js (tested
+headless); the visuals are src/basestructures.js (instanced installations), src/baselife.js (people, vehicles,
+repair teams, physical scrambles), src/runwaycraters.js (craters cut into the pavement) and src/airfieldlights.js.
+Models: models/airbases/ (tools/airbases/, see its CREDITS.md). `bases.render = false` runs it headless.
+
+### Alert states
+- Per field `F.fsm` (AlertFSM): `NORMAL` → `ALERT` (a hostile aircraft, flight or missile its side can see coming,
+  or a scramble) → `ATTACK` (a blast on the field, or a threat within 12 km / 4 km) → back down after
+  `ATTACK_HOLD` 40 s / `ALERT_HOLD` 90 s (with a minimum dwell) to `DAMAGED` while craters or losses are
+  unrepaired, else `NORMAL`. Escalation is immediate.
+- What it drives: the siren (rise-and-hold for ALERT, wavering for ATTACK, steady ALL CLEAR), the tower's calls
+  ("ALARM YELLOW", "ALARM RED — TAKE COVER", "ALL CLEAR — DAMAGE: …"), crews running to the bunkers and vehicles
+  pulling off the apron, AAA / SAM readiness (`t.readiness` 0.35 → 1: ground.js fires and locks slower when low; the
+  S-300 launchers erect), the repair teams holding during ATTACK, and at night a blackout (all field lights off
+  during ATTACK or with raiders inside 25 km) with the searchlights sweeping and coning raiders.
+- The enemy field goes to ALERT the same way: SIGINT tells us ("… HAS GONE TO ALERT — EXPECT FIGHTERS").
+
+### Components (war units, `war.add`)
+| class | what | effect when lost |
+|---|---|---|
+| `runway` | RunwayUnit; never destroyed — `closed` when its minimum operating strip (15 m × 1200 m clear of craters and their broken lips) is gone; `hp` = MOS / length | no launches (`launchStatus` → `{ ok: false, why: 'runway' }`), the director's enemy scrambles come from further away, air traffic holds / goes around, the lights show a yellow X, the tower calls it |
+| `taxiway` | TaxiwayUnit; craters on a taxiway cut that edge of the taxi graph | taxi routes go round it (the runway as a last resort) |
+| `tower` | the control tower (airbase.js's building) | no ATC calls (only critical news, from COMMAND), scrambles wait ~34 s longer for no clearance |
+| `radar` | the airfield surveillance radar | no coverage from it (no GCI from it); also dark without power (`u.unpowered`, which `war.coverage` skips) |
+| `power` | the power plant (PowerPlant) | runway / taxiway / flood lights and the beacon out, the radar and the field's own radars unpowered, slower engine starts |
+| `shelter` | each hardened aircraft shelter (hardened 0.7: a 500 lb bomb near it hardly marks it, a penetrator goes through) | the jet inside is lost with it |
+| `fuel` | bulk fuel storage (ground.js fuel sites) | burns with secondaries for a minute; the sortie rate (turnarounds) drops |
+| `ammo` | munitions igloos | cook-off for minutes (blasts that can set off neighbours); sortie rate drops |
+
+Damage persists for the session; only the repair teams repair (runway / taxiway craters: clearing 50 s, filling 70 s,
+capping 40 s for a 500 lb crater, scaled by size; two teams of a loader and a dump truck from the equipment yard,
+two reserve teams if they're killed — the enemy sends attack aircraft after ours sometimes).
+
+### API
+- `bases.field(idOrBase)`, `bases.fieldAt(pos, margin)` → a Field: `{ id, base, team, name, state, stateName,
+  fsm, craters (CraterField), crews, graph (TaxiGraph), airwing (Airwing), units, closed[], powered, blackout,
+  runwayOpen, towerUp, fuelFrac, ammoFrac, rate, threat, threatDist, w(lx, lz, dy), local(pos) }`.
+- `bases.launchStatus(b)` → `{ ok, why }` (why: `'runway' | 'aircraft' | 'fuel'`); `bases.raidAim(b)` → where a raid
+  should aim (along the runway or at an installation). The director uses both.
+- `bases.scramble(from, { team, types, role, callsign, skill, speed, target, setup(flight) })` → `{ field, eta,
+  physical, types, scramble }`, `false` when the field can't launch now (runway, no jets, a pair already going),
+  `null` when `from` is not an airfield with an airwing. Near the camera (< 16 km) it is physical: the horn, pilots
+  running from the QRA building, canopies, engines, the doors, taxi on the graph to the runway, a pair line-up and
+  an afterburner stream take-off, then `director.adopt(flight, jets)` hands the real aircraft to the director at
+  160 m; far away it's the same timeline (`scrambleTimeline`) and `director.spawnFlight` at wheels-up. `setup` is
+  called with the flight either way. The director's GCI scrambles go through it.
+- The alert pair: two jets in the QRA shelters on five-minute alert; after a launch a ready jet from the shelters
+  takes over (REFILL 150 s + a 90 s turnaround); jets back from a sortie turn round in a shelter (TURNAROUND 420 s,
+  longer short of fuel and munitions).
+- Events: `baseAlert` (field, { from, to }), `runwayClosed` / `runwayOpened` (field, { rw }), `baseDamage` (field,
+  { what, unit, source }), `baseScramble` (field, { scramble }), `scrambleAborted` (field, { scramble, why }).
+  Listens to `bombImpact` (weapons.js: every bomb's burst), `strategicImpact` (a runway-attack missile leaves a
+  line of three craters across the runway), `raidDetected`, `raidHit`, `groundKilled`, `flightDone`, `killed`.
+- Radio goes through `director.say` (the field's tower while it stands, else COMMAND; INTEL for the enemy field).
+- HUD: an AIRFIELD block when near a field (state, runway MOS / closed, repair ETA, alert jets). Map: the fields'
+  state rings, craters, crews, runway X; COMMAND › AIRFIELDS lists them.
+- Tasks (`tasks.addGenerator`): cover the runway repair at our field (urgent), crater the enemy runway before their
+  scramble / while they're at alert, stop their repair teams, strike their alert shelters while at ALERT.
+
+### Lighting (src/airfieldlights.js)
+FAA AC 150/5340-30 / ICAO Annex 14 layouts, one `THREE.Points` per field with directional colours: edge lights
+≤ 60 m (yellow caution zone), threshold / end bars, centreline (colour-coded), TDZ, ALSF-2 / MALSR / Calvert
+approach lights with sequenced flashers, REIL, PAPI (4 units, 3°30′ … 2°30′), blue taxiway edges, stop bars and
+wig-wags (lit while a runway is closed), sodium apron floods with pools, obstruction lights, the rotating beacon
+(military double white flash). The approach end is the one the autopilot lands on (`approachDir`). Circuits:
+`lights.setPower(id, on)`, `setBlackout(id, on)`, `setClosed(id, r, closed)`, `setSearch(id, on, targets)`,
+`lit(id)`.
+
+### Coastal missile batteries (`game.coastal`, src/coastal.js)
+A K-300P Bastion-P battery on the red coast (two K-340P launchers, command vehicle, radar) and a Harpoon coastal
+battery on ours (two quad launchers, command post, Sentinel) — `strikes` launch sources of kind `'battery'`
+(`CoastalBattery extends LaunchSource`). They engage ships through `strikes.request('antiship', [ship], team)` only
+when they are the shooter the manager would pick; two salvos, then reloads. The home field also has a hardened
+HIMARS pad (a `GroundLauncher` 'SKYWAR PAD HIMARS', ATACMS × 2 + a penetrator) and the enemy field an S-300 battery
+and its Flap Lid on pads.

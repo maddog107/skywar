@@ -194,9 +194,9 @@ export class FieldStructures {
         }
         // ── sirens, searchlight trailers, personnel bunkers, revetments ──
         const si = L.sirens || [];
-        if (si.length) { this.sirenIM = instanced(parts('siren'), si.length, this.group); si.forEach((s, i) => setAll(this.sirenIM, i, this.at(s.lx, s.lz, 0))); touchAll(this.sirenIM); }
+        if (si.length) { this.sirenIM = instanced(parts('siren'), si.length, this.group, { shadow: false }); si.forEach((s, i) => setAll(this.sirenIM, i, this.at(s.lx, s.lz, 0))); touchAll(this.sirenIM); }
         const sl = L.searchlights || [];
-        if (sl.length) { this.slIM = instanced(parts('searchlight'), sl.length, this.group); sl.forEach((s, i) => setAll(this.slIM, i, this.at(s.lx, s.lz, i * 1.3))); touchAll(this.slIM); }
+        if (sl.length) { this.slIM = instanced(parts('searchlight'), sl.length, this.group, { shadow: false }); sl.forEach((s, i) => setAll(this.slIM, i, this.at(s.lx, s.lz, i * 1.3))); touchAll(this.slIM); }
         this.buildBunkers(L.bunkers || []);
         const pads = L.pads || [];
         if (pads.length) {
@@ -206,7 +206,8 @@ export class FieldStructures {
             touchAll(this.revIM);
         }
         if (WORLD_BUILDINGS.current) WORLD_BUILDINGS.current.index();
-        for (const im of this.group.children) if (im.isInstancedMesh) im.computeBoundingSphere();
+        // culled as a whole (the shadow cascades too) once the instances are placed
+        for (const im of this.group.children) if (im.isInstancedMesh) { im.computeBoundingSphere(); im.frustumCulled = true; }
     }
 
     // the jets in the shelters: one InstancedMesh per part of each type the field flies (hidden when a shelter's empty)
@@ -218,7 +219,8 @@ export class FieldStructures {
         for (const id of JET_TYPES[this.F.team]) {
             const parts = ab.fleetParts(id);
             if (!parts || !parts.length) continue;
-            this.jetIM[id] = instanced(parts, n, this.jetGroup);
+            // (inside the shelters: no shadows of their own; only as many instances drawn as there are jets of the type)
+            this.jetIM[id] = instanced(parts, n, this.jetGroup, { shadow: false });
         }
         this.syncJets();
     }
@@ -226,17 +228,18 @@ export class FieldStructures {
     // show the jet in each shelter as the airwing has it (type; hidden while out, lost or taxiing)
     syncJets() {
         if (!this.jetIM) return;
-        const aw = this.F.airwing;
-        for (const ims of Object.values(this.jetIM)) for (const im of ims) { for (let i = 0; i < im.count; i++) im.setMatrixAt(i, HIDE); }
+        const aw = this.F.airwing, used = {};
         if (aw) for (const s of aw.shelters) {
             const S = this.shelters.get(s.id);
             if (!S || !s.alive || !s.jet || s.jet.state === 'lost' || S.jetOut) continue;
             const ims = this.jetIM[s.jet.type];
             if (!ims) continue;
             _m2.makeTranslation(0, 0.05, -3.5);
-            setAll(ims, S.i, _m.multiplyMatrices(S.M, _m2));
+            const k = used[s.jet.type] = (used[s.jet.type] || 0) + 1;
+            setAll(ims, k - 1, _m.multiplyMatrices(S.M, _m2));
         }
-        for (const ims of Object.values(this.jetIM)) touchAll(ims);
+        // packed: each type draws only its jets
+        for (const [id, ims] of Object.entries(this.jetIM)) for (const im of ims) { im.count = used[id] || 0; im.visible = im.count > 0; im.instanceMatrix.needsUpdate = true; if (im.count) { im.computeBoundingSphere(); im.frustumCulled = true; } }
     }
     // a shelter's jet is being taken out (life drives a real aircraft in its place) or is back in
     jetOut(sid, out) { const S = this.shelters.get(sid); if (S) { S.jetOut = out; this.syncJets(); } }
