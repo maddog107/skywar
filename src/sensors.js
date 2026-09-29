@@ -425,7 +425,7 @@ export class Sensors {
         pod.range = pod.hasSpi ? pod.pos.distanceTo(pod.spi) : 0;
         // clouds on the line of sight (a few times a second)
         pod.cloudT -= dt;
-        if (pod.cloudT <= 0) { pod.cloudT = 0.25; pod.cloud = pod.hasSpi && this.transmittance(pod.pos, pod.spi) < 0.35; }
+        if (pod.cloudT <= 0) { pod.cloudT = 0.25; pod.cloud = pod.hasSpi && this.sightT(pod.pos, pod.spi) < 0.35; }
         // the laser: the trigger (space) with the video up
         pod.lasing = this.view && g.input.down('Space') && !pod.masked && pod.hasSpi && pod.range < POD.laserRange && !pod.cloud;
         if (pod.lasing) pod.lrange = pod.range;
@@ -521,7 +521,7 @@ export class Sensors {
         const g = this.game, war = g.war, pod = this.pod;
         if (!war.enabled || pod.masked) return;
         const fovR = FOVS[pod.fov].deg * DEG, half = fovR * 0.5 * Math.max(g.camera.aspect, 1) * 1.05;
-        const light = war.lightFactor(), sensor = SENSOR_MODES[pod.sensor], weather = g.world.weather;
+        const light = war.lightFactor(), sensor = SENSOR_MODES[pod.sensor], weather = g.weather && g.weather.wx ? 'clear' : g.world.weather; // ([weather] the line of sight carries it: losT)
         for (const u of war.units) {
             const rec = war.recs.get(u);
             if (!u.alive || rec.team === war.side || rec.team === 'neutral' || rec.known >= INTEL.IDENTIFIED) { pod.dwell.delete(u); continue; }
@@ -539,7 +539,7 @@ export class Sensors {
             if (st.check <= 0) {
                 st.check = 0.2;
                 _v2.copy(u.pos).setY(u.pos.y + Math.max((u.radius || 4) * 0.3, 1.5));
-                st.vis = terrainClear(pod.pos, _v2) && this.transmittance(pod.pos, _v2) > 0.35 ? 1 : 0;
+                st.vis = terrainClear(pod.pos, _v2) && this.sightT(pod.pos, _v2) > 0.35 ? 1 : 0;
             }
             if (!st.vis) { st.t = Math.max(0, st.t - dt); continue; }
             st.t += dt * (ang < fovR * 0.12 ? 2 : 1);
@@ -549,6 +549,15 @@ export class Sensors {
     }
 
     decay(u, dt) { const st = this.pod.dwell.get(u); if (st) { st.t -= dt; if (st.t <= 0) this.pod.dwell.delete(u); } }
+
+    // [weather] What the pod's current sensor sees through between two points: with the weather model, the cloud, the
+    // ground fog, the rain and (for the TV camera) the haze, the FLIR seeing through haze and some rain
+    // (weathersys.js transmittance by band); without it, the clouds alone
+    sightT(a, b) {
+        const W = this.game.weather;
+        if (W && W.wx) return W.transmittance(a, b, this.pod && this.pod.sensor === 2 ? 'tv' : 'ir');
+        return this.transmittance(a, b);
+    }
 
     // How much of the light gets through the clouds between two points (the clouds' own density field)
     transmittance(a, b) {
@@ -933,7 +942,7 @@ export class Sensors {
         if (d > 22000) return false;
         const fovR = FOVS[pod.fov].deg * DEG;
         if (Math.acos(clamp(_c.dot(pod.los) / d, -1, 1)) > fovR * 0.45) return false;
-        const ok = terrainClear(pod.pos, _c.copy(pos).setY(pos.y + 4)) && this.transmittance(pod.pos, _c) > 0.35;
+        const ok = terrainClear(pod.pos, _c.copy(pos).setY(pos.y + 4)) && this.sightT(pod.pos, _c) > 0.35;
         if (ok) { pod.bda = pos; pod.bdaT = this.game.time; }
         return ok;
     }

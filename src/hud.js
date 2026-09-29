@@ -950,7 +950,7 @@ export class HUD {
 
     drawScreenEffects(game) {
         const ctx = this.ctx, W = this.w, H = this.h;
-        if (game.nvg) {
+        if (game.nvg && !game.nvgGPU) { // ([night] with the goggles' pass, nightfx.js draws all of this on the GPU)
             // goggle tube vignette + scanlines + sensor noise
             const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.38, W / 2, H / 2, Math.max(W, H) * 0.62);
             g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,12,0,0.9)');

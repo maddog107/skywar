@@ -152,6 +152,7 @@ export class Weapons {
                     // airburst: damages anything close
                     g.effects.fire.emit(b.pos, _v1.set(0, 0, 0), 0.15, 4, 10, [6, 4, 2], [2, 1, 0.3], 1, 0, 0, 0);
                     g.effects.smoke.emit(b.pos, _v1.set(0, 1, 0), 2.5, 5, 14, [0.08, 0.08, 0.08], [0.2, 0.2, 0.2], 0.8, 0, 1, 0);
+                    g.effects.light(b.pos, 22, 0.22, { merge: 12, cloud: 1.2 }); // [night] the burst lights the sky round it
                     for (const ac of g.aircraft) {
                         if (ac.alive && ac.team !== b.team && ac.pos.distanceToSquared(b.pos) < 45 * 45) ac.damage(b.damage, b.owner, 'flak');
                     }
@@ -261,6 +262,20 @@ export class Weapons {
                 }
                 // decoyed by flares?
                 if (t.isFlare !== true && m.kind !== 'sam' && !W.radar) this.checkFlares(m, rhat, dist); // seeker line of sight
+                // [weather] a heat seeker loses a target that stays hidden in cloud or fog (weathersys.js irClear)
+                if (m.kind === 'aam' && !W.radar && g.weather && g.weather.irClear && !m.lost) {
+                    m.irT = (m.irT || 0) - dt;
+                    if (m.irT <= 0) {
+                        m.irT = 0.2;
+                        m.blindT = g.weather.irClear(m.pos, tp) ? 0 : (m.blindT || 0) + 0.2;
+                        if (m.blindT > 0.6) {
+                            m.lost = true;
+                            const k = t.incoming ? t.incoming.indexOf(m) : -1;
+                            if (k >= 0) t.incoming.splice(k, 1);
+                            g.events.emit('missileLostInCloud', m.owner, { missile: m, target: t });
+                        }
+                    }
+                }
                 const vr = _v4.subVectors(tv, m.vel);
                 // Proportional navigation: a = N * Vc * LOS_rate
                 const losRate = _v2.crossVectors(r, vr).divideScalar(Math.max(dist * dist, 1));

@@ -20,9 +20,11 @@ import { AirSupport } from './airsupport.js';
 import { NavalOps } from './navalops.js';
 import { WarInteriors } from './warinteriors.js';
 import { Underground } from './underground.js';
+import { WeatherSystem } from './weathersys.js';
 
 export const SYSTEMS = [
     ['tacmap', TacticalMap],
+    ['weather', WeatherSystem],  // night and weather: light sources, visibility, cues, the clock, fronts (its map layer under the others')
     ['sensors', Sensors],   // targeting pod, helmet sight (before the menu: its video is under it; before strikes: comma)
     ['mapkit', MapKit],     // map tools: legend, layers, ruler, coordinates, steerpoint, air tracks, imagery
     ['command', CommandMenu],

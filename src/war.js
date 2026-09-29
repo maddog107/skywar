@@ -15,6 +15,7 @@ import * as THREE from 'three';
 import { terrainHeight } from './world.js';
 import { AIR_TARGETS } from './softtargets.js';
 import { clamp } from './util.js';
+import { fireLights } from './firelight.js'; // [night] what stands in a fire's light
 
 export const INTEL = { UNKNOWN: 0, CONTACT: 1, IDENTIFIED: 2, CONFIRMED: 3 };
 export const INTEL_NAMES = ['UNKNOWN', 'CONTACT', 'IDENTIFIED', 'CONFIRMED'];
@@ -252,7 +253,10 @@ export class War {
         const eye = g.camera.position;
         const fwd = g.camera.getWorldDirection(_v2);
         const light = this.lightFactor();
-        const weather = { clear: 1, cloudy: 0.85, rain: 0.55, storm: 0.4 }[g.world.weather] ?? 1;
+        // [weather] with the weather model (weathersys.js) every line of sight has its own fog, rain and cloud; a fire
+        // lights what's round it at night (firelight.js)
+        const W = g.weather && g.weather.wx ? g.weather : null;
+        const weather = W ? 1 : ({ clear: 1, cloudy: 0.85, rain: 0.55, storm: 0.4 }[g.world.weather] ?? 1);
         const hasRadar = p && p.alive && !onFoot && p.spec && (p.spec.missiles > 0 || p.spec.radar);
         // (the radar looks along the nose, wherever the camera — the head, the targeting pod — is looking)
         const nose = hasRadar ? p.getForward(_nose) : fwd;
@@ -271,8 +275,9 @@ export class War {
                 // air-to-air radar: contacts to ~45 km in front, the type (NCTR) closer
                 if (hasRadar && airborne && d < 45000) {
                     const inCone = _v.subVectors(u.pos, eye).divideScalar(d).dot(nose) > 0.35;
-                    // (a jammer hides behind its noise strobe until the radar burns through, closer in)
-                    const jf = inCone ? this.jamFactor(this.side, p.pos, u.pos) : 1;
+                    // (a jammer hides behind its noise strobe until the radar burns through, closer in; clouds are
+                    // nothing to it, heavy rain takes a little of its range)
+                    const jf = (inCone ? this.jamFactor(this.side, p.pos, u.pos) : 1) * (W ? W.transmittance(eye, u.pos, 'radar') : 1);
                     if (inCone && d < 45000 * jf) { this.bump(rec, d < 18000 * jf ? INTEL.IDENTIFIED : INTEL.CONTACT, 'radar', step); continue; }
                 }
                 spotR = 9000; idR = 3500;
@@ -281,7 +286,9 @@ export class War {
                 spotR = clamp(r * 600, 1500, 20000);
                 idR = spotR * 0.4;
             }
-            let f = light * weather * (1 - 0.8 * (rec.conceal || 0));
+            // (by night, what stands in a fire's light is seen as by day)
+            const lit = W && light < 1 && fireLights.n > 0 ? Math.max(light, Math.min(1, fireLights.illuminationAt(u.pos) / 1.2)) : light;
+            let f = lit * weather * (1 - 0.8 * (rec.conceal || 0));
             if (onFoot) f *= 0.45;
             if (u.firingT != null && this.time - u.firingT < 3) f = Math.max(f, 1.5); // a launch or a gun firing gives it away
             if (d > spotR * f) { rec.seenT = Math.max(0, rec.seenT - dt); continue; }
@@ -289,7 +296,15 @@ export class War {
             _v.subVectors(u.pos, eye);
             if (_v.dot(fwd) < d * 0.72) { rec.seenT = Math.max(0, rec.seenT - dt); continue; }
             if (!this.lineOfSight(eye, u.pos)) { rec.seenT = Math.max(0, rec.seenT - dt); continue; }
-            this.bump(rec, d < idR * f ? INTEL.IDENTIFIED : INTEL.CONTACT, 'visual', step);
+            // [weather] and not hidden by cloud, fog or rain (a contact needs a trace of contrast, identifying much more)
+            // (held half a second per unit: the scan comes round several times a second)
+            let T = 1;
+            if (W) {
+                if (!(rec.wxAt > this.time - 0.5)) { rec.wxT = W.transmittance(eye, u.pos, 'eye'); rec.wxAt = this.time; }
+                T = rec.wxT;
+            }
+            if (T < 0.06) { rec.seenT = Math.max(0, rec.seenT - dt); continue; }
+            this.bump(rec, d < idR * f && T > 0.25 ? INTEL.IDENTIFIED : INTEL.CONTACT, 'visual', step);
         }
     }
 
@@ -312,9 +327,11 @@ export class War {
 
     // daylight (1) … dusk … night (0.25); night vision brings the night back up
     lightFactor() {
-        const key = this.game.world.timeKey; // (at night world.sunDir is the moon, so go by the time of day)
-        let f = key === 'night' ? 0.25 : key === 'dusk' || key === 'dawn' ? 0.55 : 1;
-        if (this.game.nvg) f = Math.max(f, 0.7);
+        const g = this.game, W = g.weather && g.weather.wx ? g.weather : null;
+        // [weather] as dark as it really is (the clock can run: weather.js nightOf), else by the time of day's name
+        const key = g.world.timeKey; // (at night world.sunDir is the moon, so go by the time of day)
+        let f = W ? 1 - 0.75 * W.night : key === 'night' ? 0.25 : key === 'dusk' || key === 'dawn' ? 0.55 : 1;
+        if (g.nvg) f = Math.max(f, 0.7);
         return f;
     }
 

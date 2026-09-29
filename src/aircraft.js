@@ -27,7 +27,7 @@ const POST_STALL = 0.35; // deepest post-stall AoA, as a fraction past max AoA (
 
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
 const _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
-const _acc = new THREE.Vector3(), _vOld = new THREE.Vector3();
+const _acc = new THREE.Vector3(), _vOld = new THREE.Vector3(), _gust = new THREE.Vector3();
 const AX = new THREE.Vector3(1, 0, 0), AY = new THREE.Vector3(0, 1, 0), AZ = new THREE.Vector3(0, 0, 1);
 
 const navTex = makeRadialTexture(64, [[0, 'rgba(255,255,255,1)'], [0.2, 'rgba(255,255,255,0.8)'], [1, 'rgba(255,255,255,0)']]);
@@ -633,16 +633,11 @@ export class Aircraft {
             .addScaledVector(rightW, side)
             .addScaledVector(vhat, -drag)
             .addScaledVector(bodyFwd, this.falling ? thrustN * 0.2 : thrustN);
-        // wind and weather turbulence (stronger low down and in storms)
+        // wind and weather turbulence: gusts in and under thunderstorm cells, chop in cloud, low down in a strong wind
+        // (weather.js turbulence: smooth in time and space, the same at any frame rate)
         if (this.game.wind) _acc.addScaledVector(this.game.wind, 0.02);
-        const wx = this.game.world && this.game.world.weather;
-        if (wx === 'rain' || wx === 'storm') {
-            const k = (wx === 'storm' ? 3.2 : 1.4) * clamp(1.4 - alt / 3000, 0.3, 1.4);
-            const t = this.game.time * 1.7 + this.id;
-            _acc.x += (Math.sin(t * 1.3) + Math.sin(t * 3.7)) * k * 0.5;
-            _acc.y += (Math.sin(t * 2.1 + 1) + Math.sin(t * 5.3)) * k;
-            _acc.z += Math.sin(t * 1.9 + 2) * k * 0.5;
-        }
+        const wx = this.game.world && this.game.world.wx;
+        if (wx) _acc.add(wx.turbulence(this.pos, this.game.time, this.id || 0, _gust));
 
         // speed brake: extra parasitic drag plus a fixed bite so it works at any speed
         if (this.brakeAnim > 0.05) _acc.addScaledVector(vhat, -1.8 * this.brakeAnim);

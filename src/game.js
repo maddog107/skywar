@@ -1244,7 +1244,8 @@ export class Game {
         const W = this.slotW;
         const ammoOk = p[this.slotDef.ammo] > 0 && !W.unguided;
         const range = t.isGround ? Math.max(6000, W.range * 0.7) : W.range;
-        const inCone = ammoOk && dot > W.lockCone && dist < range;
+        // (a heat seeker can't lock through cloud or fog: weathersys.js checks its line of sight)
+        const inCone = ammoOk && dot > W.lockCone && dist < range && !this.irBlocked;
         if (inCone) this.lockProgress = Math.min(1, this.lockProgress + dt / W.lockTime);
         else this.lockProgress = Math.max(0, this.lockProgress - dt * 2);
         if (inCone || this.lockProgress > 0) {
