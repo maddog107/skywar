@@ -26,6 +26,7 @@ import * as THREE from 'three';
 import { WATER, WAVE_GLSL, SET_DEPTH, SHORE, setSeaState, updateWaveUniforms, setSeaMap, seaFactors } from './water.js';
 import { coarseJob, fineJob, runJob } from './watermap.js';
 import { OceanFFT } from './oceanfft.js';
+import { FIRE_WORLD_GLSL, fireUniforms } from './firelight.js'; // [night] fires, motors and flares glinting on the water
 
 // per quality: patch grid g, finest patch size P0 (m), LOD range ratio, wave fade (in wavelengths), FFT, refraction
 const TIERS = {
@@ -144,6 +145,7 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
     uniform vec2 windDir;
     ${FOG_GLSL}
     ${CLOUD_SHADOW_GLSL}
+    ${FIRE_WORLD_GLSL}
     #if TIER >= 2
     float linDepth(float d) {
         #ifdef USE_REVERSED_DEPTH_BUFFER
@@ -275,6 +277,22 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
             * clamp(vCrest * 0.35 + 0.15, 0.0, 1.0) * (1.0 - F) * csh * max(L.y + 0.1, 0.0);
         under += vec3(0.05, 0.3, 0.26) * sunColor * sss * 0.35;
         col = mix(under, sky, F) + glint;
+        // [night] fires, motors, flares and flashes on the water: a glint off the waves (the sun's slope statistics,
+        // wider for a near light) and a little light in the water body (firelight.js; its first eight)
+        if (fireLightInfo.x > 0.5) {
+            int fn = min(int(fireLightInfo.x), 8);
+            for (int fi = 0; fi < 8; fi++) {
+                if (fi >= fn) break;
+                vec3 fL, fE;
+                if (!fireLightW(fi, vWorld, fL, fE)) continue;
+                vec3 fH = normalize(fL + V);
+                float fNdH = max(dot(N, fH), 1e-3), ft2 = (1.0 - fNdH * fNdH) / (fNdH * fNdH);
+                float fs2 = rough + 0.004;
+                float fP = exp(-ft2 / fs2) / (3.14159 * fs2 * fNdH * fNdH * fNdH * fNdH);
+                float fF = 0.02 + 0.98 * pow(1.0 - max(dot(V, fH), 0.0), 5.0);
+                col += fE * (fF * fP * 0.5 / (4.0 * max(NdV, 0.08)) + (1.0 - F) * max(fL.y, 0.0) * 0.012);
+            }
+        }
         #if TIER < 2
         alpha = mix(0.72, 0.97, clamp(F * 2.0 + smoothstep(200.0, 3000.0, dist), 0.0, 1.0));
         #endif
@@ -318,7 +336,7 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
             #endif
         }
         vec3 ray = vWorld - cameraPosition;
-        vec2 fg = skyFogAmount(ray, cameraPosition.y);
+        vec2 fg = skyFogAmount(ray, cameraPosition);
         col = mix(col, skyFogColor(fogColor, ray, fg.y), fg.x);
         #if TIER < 2
         alpha = mix(alpha, 1.0, fg.x);
@@ -353,7 +371,7 @@ export class Ocean {
             time: { value: 0 }, sunDir: { value: new THREE.Vector3(0, 1, 0) }, sunColor: { value: new THREE.Color() },
             skyColor: { value: new THREE.Color() }, horizonColor: { value: new THREE.Color() }, deepColor: { value: new THREE.Color() },
             fogColor: { value: new THREE.Color() }, detailMap: { value: detailTex }, foamMap: { value: foamTex },
-            skyFogA: { value: SKY_FOG.a }, skyFogB: { value: SKY_FOG.b }, skyFogC: { value: SKY_FOG.c }, skyFogD: { value: SKY_FOG.d },
+            ...SKY_FOG.uniforms(), // (the haze, the mist, and the ground fog and front: world.js FOG_GLSL)
             whitecap: { value: 0 }, foamJ: { value: 0.7 }, windU: { value: 5 }, underwater: { value: 0 }, windDir: { value: new THREE.Vector2(1, 0) },
             shoreInfo: { value: new THREE.Vector4() },
             // the wave field (water.js)
@@ -368,6 +386,7 @@ export class Ocean {
             refrColor: { value: this.blackTex }, refrDepth: { value: empty }, refrOn: { value: 0 },
             camNear: { value: 1 }, camFar: { value: 1000 }, invProj: { value: new THREE.Vector2(1, 1) }, camWorld: { value: new THREE.Matrix4() },
             wakeMap: { value: this.blackTex }, wakeInfo: { value: new THREE.Vector4(0, 0, 1, 0) },
+            ...fireUniforms(), // [night]
         };
         this.FOG_GLSL = FOG_GLSL; this.CLOUD_SHADOW_GLSL = CLOUD_SHADOW_GLSL;
         this.material = new THREE.ShaderMaterial({

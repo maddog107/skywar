@@ -469,6 +469,8 @@ parts are pulled out first and every instance gets its own copy, hung on the sec
 - The Living War starts wingmen on COVER ME with rockets. Badly hit (25%) they RTB by themselves; one that
   lands, or is shot down, is replaced by a fresh jet after 75 / 150 s in the war modes.
 - Other plug-ins can give any AI pilot a brain the same way (director.js does for enemy CAS).
+- A brain with `fly(pilot, dt)` that returns true flies the jet itself that frame (the hook in ai.js
+  `Pilot.update`); the air-support plug-in flies its support aircraft and refuelling receivers that way.
 
 ### `game.forces` (src/forces.js, also `game.mobile`): mobile forces
 TELs, mobile SAM groups, rocket artillery, convoys and a coastal missile battery, all real vehicles with the
@@ -531,6 +533,12 @@ the blue HIMARS / M270 batteries are placed wherever strikes run, everything els
   - Convoy: a column on the road network at the posted speed, spaced ~48 m; attacked, it halts, scatters
     50–110 m off the road on alternate sides, APCs dismount infantry (`game.infantry`), an SA-8 in it sets up
     as an escort; it regroups and drives on after the threat's gone. A downed bridge ahead stops it; it turns back.
+- **With the other plug-ins:** every real launcher is one strikes source: the brigade's TELs and the Bastions here,
+  the Kamenny Log garage's TELs (underground.js `UgLauncher`), the captured Scud at the JOC (commandrooms.js,
+  blue, a ground.js truck) and the navy's ships; `strikes.request` picks among them by range and stock, and the
+  director's stand-in TEL isn't made while any red `launcher` exists. All TELs are war class `tel`, SAM launchers
+  `sam`, fire-control radars `sam-radar`, search radars `radar`. Red cruise strikes on the carrier fly from the
+  navy's Kalibr ships (navalops.js), not from the TELs.
 - **Hooks the Phase C systems use:** `front.addBattery` gets its Grad batteries from `forces.frontBattery(s,
   site, face)` (same `{ sector, units, at, t }` record, plus `forces`: the `RocketBattery`, which fires on the
   front itself); `director.startConvoy` gets columns from `forces.directorConvoy(team, director)` (director
@@ -547,8 +555,9 @@ the blue HIMARS / M270 batteries are placed wherever strikes run, everything els
   `type`, `conceal` (the site's: shelter 0.97, forest 0.85, compound 0.8… firing 0.15), `hardened`,
   `firingT`, `route` (while it drives), `ctrl` (its group), `damage(amount, source, kind)`. `hidden` is true
   for an enemy nobody has found and for our vehicles more than 4 km from the camera (the HUD and target
-  cycling skip them). SAM radars have `radarRange` and `emitting` (war.coverage ignores `emitting === false`),
-  launchers `samRange`. Destroyed, a vehicle burns, cooks off by what it carries (missile, rockets, fuel),
+  cycling skip them). SAM radars have `radarRange` and `emitting` (war.coverage and SIGINT ignore `emitting ===
+  false`) and their own `sigint` signature (ew.js: 30N6 FLAP LID, P-18 SPOON REST, SA-11 FIRE DOME, SA-8 LAND
+  ROLL, AN/MPQ-65, SENTINEL), launchers `samRange`. Destroyed, a vehicle burns, cooks off by what it carries (missile, rockets, fuel),
   may throw its turret or erector, and emits `groundKilled`.
 - **Events:** `telPreparing` (tel, { launchAt, target }), `telLaunched`, `telRelocated`, `samReady`,
   `samActive`, `samBlind`, `samRelocating` (group, { to }), `salvoOrdered`, `convoyStarted`, `convoyScattered`,
@@ -561,3 +570,539 @@ the blue HIMARS / M270 batteries are placed wherever strikes run, everything els
 - **Switches:** `forces.auto` = `{ tel, search, artillery, counterBattery, coastal, convoys }` turns the
   scheduler's own orders off one by one (the units stay); `start(mode, { forces: false })` or mode `'test'`
   places nothing.
+
+## Air support and electronic warfare (`game.air`, src/airsupport.js)
+
+### What flies
+- **Support flights** (`air.flights`, `SupportFlight`): real `Aircraft`, flown by a brain. Tasks: a racetrack, an
+  orbit, a goto, a photo run, an escort, retrograde, RTB. Far from the camera (> 24 km, real again < 18 km) and
+  with no fight near it, a flight is **coarse**: its jet leaves the scene and moves along its path without the
+  flight model. A real one more than ~3 km away is drawn with its **far version** (src/farmodel.js: the model
+  vertex-clustered into one vertex-coloured mesh, 5–7k triangles, one draw call; built once per type). Each
+  support aircraft carries `ac.support` (its flight).
+- **Where**: `ORBITS` — racetracks well behind each side's lines: AWACS at 9–9.4 km, tankers at 6.1–6.5 km, the
+  RC-135 at 10 km, the B-52 at 10.5 km. Our E-3 and KC-135 fly in every combat mode and Free Flight. The enemy's
+  A-50U and Il-78M fly in strike, naval, war and sandbox. The RC-135 flies in strike, war and sandbox, the B-52 in
+  war and sandbox. `start(mode, { airSupport: false })` turns it all off.
+- **Threats**: a bandit targeting a support aircraft, or close and pointing at it, sends it home at full speed
+  ("DEFENSIVE, RETROGRADING"); it comes back on station when clear. The task board offers "PROTECT <callsign>", and
+  a lost drone gives "FINISH <callsign>'S SEARCH". Losing the AWACS: "MAGIC IS DOWN"; the picture goes. In war and
+  sandbox a replacement AWACS comes on station after 6 minutes, and a replacement tanker after 5.
+
+### AWACS (src/awacs.js, src/brevity.js)
+- The E-3G ("MAGIC") and the A-50U have `radarRange` (250 / 220 km), so `war.coverage` counts them. That count
+  includes the radar horizon from their altitude, terrain masking (`war.radarLOS`, sampled finer near the target)
+  and jamming (`war.jamFactor`).
+- Our AWACS sweeps with the rotodome (6 rpm). A target is held when all of these are true:
+  - it is inside the reach for its size (stealth: F-22 ×0.12, Su-57 / J-20 ×0.3);
+  - it is above the horizon and not masked;
+  - it is not jammed below burn-through;
+  - it is not in the Doppler notch (low and beaming).
+
+  A held target gets `war.reveal(u, CONTACT, 'awacs')`. Enemy cruise missiles get `detected`: the map shows them,
+  and the player can lock them.
+- **Calls**, in brevity (through `director.say` while a war runs):
+  - POPUP, NEW GROUP (bullseye), THREAT and MERGED (armed groups only), FADED, and a PICTURE now and then;
+  - cruise missiles inbound, and the director's new flights (`director.announce` asks `air.announceFlight(f)`
+    first).
+
+  BRAA is bearing / range in NM / altitude / aspect (HOT, FLANK, BEAM <dir>, DRAG), e.g. "GROUP BRAA 040/35, 20
+  THOUSAND, HOT". "ANGELS" is only used for friendlies. Groups are contacts within 3 NM of each other, with fill-ins
+  (HEAVY, N CONTACTS, type, FAST). BULLSEYE is (0, −12 km); it is drawn on the map, and the HUD shows the player's
+  position from it.
+- **Requests** (COMMAND › SUPPORT): BOGEY DOPE; PICTURE; DECLARE on the locked target, answered with HOSTILE,
+  BOGEY, FRIENDLY, NEUTRAL, FURBALL or CLEAN.
+
+### Tankers and refuelling (src/refuel.js)
+- **The tankers:**
+  - KC-135R "TEXACO": the flying boom and the MPRS wing hoses. The boom's envelope comes from the rig's userData:
+    20–40° down, ±15° across, telescope 6–18 ft (12 ideal).
+  - Il-78M: three UPAZ hoses.
+  - Rates: boom 6,500 lb/min, MPRS 2,680 lb/min, UPAZ 2,300 l/min. `FUEL_KG` gives each type's internal fuel.
+  - The tanker holds 280 KIAS and its leg while it has receivers.
+- **The procedure** (`RefuelSession`):
+  - rendezvous, 1,000 ft below and behind where the tanker will be;
+  - join: "cleared to join, observation left wing";
+  - pre-contact or astern: "cleared pre-contact" / "cleared astern, left hose";
+  - contact: "cleared contact". The boom operator plugs in when the receptacle holds still inside the envelope.
+    A probe must go into the basket at 2–5 kt and push the hose into its 1–6 m range; the signal lights go red,
+    amber, green, then flashing amber at the inner limit.
+  - Out of limits: "DISCONNECT — <limit>", back to pre-contact. Too fast or too close: "BREAKAWAY". Hitting the
+    tanker: a mid-air.
+  - Full: "YOU'RE FULL — n POUNDS", then the right wing and "CLEARED TO DEPART".
+- **The player:** COMMAND › SUPPORT › TANKER › REQUEST AIR REFUELING. The HUD shows:
+  - the tanker's cue, the RV and the step;
+  - fuel, onload, rate and time to full;
+  - the contact target and its error;
+  - the boom's pilot director lights (UP / DN, FWD / AFT) or the hose's lights.
+
+  **Y** (or the menu) toggles the AR autopilot, which flies the whole procedure; stick input takes control back.
+  Wingmen on COVER ME come along and take their turn (their brain is swapped for the session's and put back
+  afterwards). SEND WINGMEN TO THE TANKER sends them on their own.
+- **Events:** `tankerRequested (rx, { session, tanker })`, `refuelContact`, `refuelDone`, `refuelEnd`,
+  `refuelCollision`.
+
+### Reconnaissance (src/recon.js)
+- **The aircraft:**
+  - MQ-9A "REAPER" (becomes SHADOW when the player is REAPER): EO/IR ball out to 9.5 km, which moves a unit from
+    contact to identified to confirmed with dwell. It carries 4 Hellfires.
+  - RQ-4B "FORTE": radar out to 26 km, through cloud; it identifies only the big things.
+  - U-2S "DRAGON": a photo run at ~67,000 ft that images a 28 km swath.
+  - RC-135W "JAKE": SIGINT (see below).
+- **Tasking:** COMMAND › SUPPORT › RECON sends them to the newest open search area, else the newest mark, else the
+  steerpoint. The map panel's SEND RECON HERE works on any point, unit, mark or search area.
+- **What they do:**
+  - report on the radio ("EYES ON — …");
+  - reveal what they see (`war.reveal(u, level, 'recon')`);
+  - watch struck targets for BDA (`strikes.watchers`);
+  - take pictures: `reconImage()` makes a FLIR, SAR or photo image of the terrain and units (no second render
+    pass) and puts it in `sensors.imagery`. They do this on arrival and on a BDA result. `air.takeImage(flight,
+    pos, bda)` is the hook for other plug-ins.
+- **Hellfires:** the MQ-9's Hellfires answer the strike system's AIR STRIKE (through `strikes.airProviders`) when
+  it is within 12 km of the marked unit. Otherwise HAMMER goes, as before.
+- Units inside a mountain (`u.ugInside`, underground.js) are invisible to recon and SIGINT alike.
+
+### Electronic warfare (src/ew.js)
+- **The model:** noise jamming with `J/N = (K / d)² · gj · gr`, where K is the jammer's power, gj its pod sector and
+  gr the radar's main lobe (side lobes −30 dB). A radar keeps `(1 + ΣJ/N)^(−1/4)` of its range, so a close target
+  burns through (a self-screening jet at ~R0²/K).
+  - `war.jamFactor(team, from, to)` gives that factor; `war.jam` is set by this plug-in.
+  - It cuts war.coverage, the player's radar and ground.js SAM engagement ranges.
+  - Other radar owners should call it too.
+- **Jammers:**
+  - `air.jam(ac, on, { brg | at, half })` turns one on or off.
+  - EA-18G ALQ-99: K 2,500 km, ±45° sectors.
+  - Self-protection: the Su-35 and Su-57 Khibiny and the Tu-95's set, on when one of ours is within ~40 km.
+  - Enemy jammers put strobes on the player's scope; close in, they show BURN-THROUGH. The map draws friendly
+    jamming sectors.
+- **The Growler "ZAPPER 1":**
+  - It escorts strikes (air strikes, B-52 strikes and the director's HAMMER packages) or stands off a point.
+  - It jams the most threatening emitter ("MUSIC ON") and fires HARMs at SAM fire-control radars ("MAGNUM").
+  - From COMMAND › SUPPORT › ELECTRONIC WARFARE: GROWLER: ESCORT ME / JAM THE NEWEST MARK. From the map:
+    GROWLER: STAND-OFF JAMMING HERE.
+- **Flying a Growler:**
+  - **F4** opens the EW page (ALQ-218: emitters with bearing, range, JAMMED / BURN).
+  - **[ ]** select an emitter.
+  - **;** jammer on / off.
+  - **'** points the pods at the selected emitter (press again for along the nose).
+  - **M** (with the page up) fires a HARM at it: `WEAPONS.arm`, 32 km, radar-homing, flown by weapons.js.
+- **Emitters** (`emitterOf(u, rec)`): search radars, SAM trackers, gun-dish AAA, naval radars and AWACS. A unit
+  with `emitting = false` is silent, and `u.sigint` overrides the signature. The RC-135 first fixes an emitter
+  (CONTACT, with the position error shrinking with dwell), then identifies it; events `sigintReport`.
+
+### Bombers (src/bombers.js)
+- **Launch sources and missiles:**
+  - `AirLaunchSource` is a strikes.js `LaunchSource` carried by an aircraft or by a director flight.
+  - `AirMissile` extends `StrategicMissile`: it drops clear, descends to cruise, then follows the terrain. The
+    Hellfire flies a direct top attack instead.
+  - `spec.Missile` picks the class in strikes.js.
+  - Missiles: `kh101`, `jassm`, `hellfire`.
+  - Strike types: `standoff` (the bombers' cruise missiles) and `carpet` (a B-52 run laying Mk-82s across the
+    mark). Both are in COMMAND › TACTICAL SUPPORT (B-52 STAND-OFF STRIKE, B-52 CARPET BOMBING) and in SUPPORT ›
+    BOMBERS.
+- **Red raids:** the director's cruise-missile raids (Tu-95MS) call `air.standoffRaid(f)` in `launchRaid`. The
+  bombers start ~75 km out at 9 km altitude and launch ~34 km from the target through
+  `strikes.request('standoff', …, 'red')`, then turn away. MAGIC calls the launch. The bombers can be intercepted,
+  and so can the Kh-101s (lockable once the AWACS holds them). Missiles shot down emit `strategicIntercepted`.
+
+### API (`game.air`)
+- `air.spawnAWACS(side, orbit)` and `air.spawnTanker(side, orbit)` put a flight on a racetrack. The orbit is
+  `{ x, z, heading (deg, first leg), leg, R, alt, speed }`; missing fields come from `ORBITS`.
+- `air.requestTanker(receiver, { auto, tanker, quiet })` returns a `RefuelSession`, or null. The receiver is the
+  player's jet or any AI aircraft with a refuelling point (rigparts.js REFUEL).
+- `air.sendRecon(kind, area)`: kind `'mq9' | 'rq4' | 'u2' | 'rc135'`; the area is `{ x, z, r }`, a unit, a mark or
+  an intel report.
+- `air.bomberRaid(side, targets)`:
+  - red: two Tu-95MS (escorted from veteran up) through the director, or on their own without one;
+  - blue: the B-52's JASSMs on the targets.
+- Others: `air.jam(ac, on, sector)`, `air.sendGrowler(escortee | point)`, `air.awacs(side)`,
+  `air.tankers(side)`, `air.announceFlight(f)`.
+- Events: `supportThreatened`, `reconReport`, `sigintReport`, `raidLaunch`, `bdaImagery`, and the refuelling
+  events above.
+
+## Naval operations (`game.navalops`: src/navalops.js, src/launchseq.js, src/deckops.js)
+
+### For the player
+- **Naval Strike** and the **Living War** start with a carrier strike group round the home carrier and a red
+  surface action group round the enemy carrier.
+  - Ours: the carrier, a Ticonderoga cruiser, two Arleigh Burkes (USS Mason among them), a supply ship and an
+    attack submarine, plus an Ohio SSGN on its own patrol box 11–19 km away.
+  - Theirs: a Slava, two destroyers, a supply ship and a submarine.
+  - The groups manoeuvre, defend themselves in layers and trade missile salvos every few minutes.
+- **The deck:** the player starts (and respawns, in the war too) on catapult 2, the port bow one, with the
+  deck alive round him: the JBD comes up behind the jet, the shooter and the green shirts, the steam. The
+  chase camera is kept out of the island (`Naval.clearOfIslands`).
+- **COMMAND › NAVAL** (backslash or F3):
+  - LAUNCH ALERT FIGHTERS: two F/A-18s up the elevator and off the catapults.
+  - RECOVER AIRCRAFT: the CAP comes home (Case I pattern, a wire or a bolter, struck below).
+  - GROUP: FLANK / CRUISE SPEED, GROUP: TURN INTO THE WIND (two minutes of flight ops), GROUP: ZIG-ZAG ON / OFF.
+  - SHIP LAUNCH and SUBMARINE LAUNCH: "n× TLAM (or HARPOON) FROM <ship>" at the newest mark (comma marks).
+- **COMMAND › SANDBOX › NAVAL** (sandbox, free flight and the war): SPAWN RED SURFACE GROUP and SPAWN BLUE
+  CARRIER GROUP, 15 km ahead.
+- **Tactical map:**
+  - Our group's SAM umbrella, its screen and its course (ZIG-ZAG, FLIGHT OPS), SAMs in flight, and the SAM
+    envelopes of identified enemy ships.
+  - Click the sea: SEND <carrier> GROUP HERE. Select an enemy ship: HARPOON / TLAM FROM <ship>.
+  - A selected ship of ours shows course, speed, depth, magazine and empty cells; the carrier its deck (jets
+    up, on deck, in the pattern).
+- **HUD:** "CSG … · n VAMPIRES INBOUND · n SAMS IN FLIGHT", while it matters.
+- **Radio:**
+  - Air defence: "VAMPIRE, VAMPIRE — BEARING 040, 23 KM, ON <ship>", "BIRDS AWAY — 2× SM-2, TRACK 4012",
+    "SPLASH ONE VAMPIRE", "MISS, REENGAGING", "LEAKER, LEAKER — CIWS ENGAGING", "CIWS ENGAGING — MOUNT 21".
+  - Surface action: "BRUISER, BRUISER" (Harpoons away), "SHOT — 2× TLAM ON …".
+  - The deck: marshal, "ROGER BALL", the wire, "BOLTER, BOLTER, BOLTER". The LSO talks to the player too:
+    ROGER BALL, YOU'RE HIGH, POWER — YOU'RE LOW, HOOK DOWN!
+  - In a war it all goes through `director.say` (its pacing and priorities); elsewhere through navalops' own
+    queue (a call every 2.5 s).
+- **Tasks** (the Living War, tasks.js): THE CARRIER IS UNDER MISSILE ATTACK (urgent: sink the ship that fired)
+  and ENEMY SURFACE GROUP (within 70 km of our carrier).
+
+### Groups
+- **`navalops.spawnGroup(side, center, opts)`** returns a `Group`, or null without open water near `center`.
+  Emits `navalGroup`. opts:
+  - `composition`: `[[type, role, across, along]]`, metres in the formation's frame, starboard and aft
+    positive. Default `CSG` for blue, `SAG` for red (both exported).
+  - `name`, `course` (rad; default into the wind), `speed` ('cruise' | 'ops' | 'flank'), `deck` (flight ops
+    on its carrier, default true), `areaR` (the patrol box radius, default 6 km).
+- **A group:**
+  - `members`: `{ ship, role, ox, oz }`. Roles are `hvu`, `aaw`, `screen`, `logistics` and `sub`.
+  - `guide`: the carrier, or the first ship. If it's sunk, the next one takes over.
+  - `side`, `name`.
+  - `course` (the base course) and `axis` (the formation's, which follows the course only as fast as the screen
+    can get round).
+  - `order`: 'cruise' (16 kt), 'ops' (24 kt), 'flank' (28 kt) or 'stop'.
+  - `dest` (a fleet move), `area` (the patrol box), `threat` (0..1), `zig` (`{ on }`), `tracks` (the radar
+    picture).
+  - `flightOps`: seconds of steady course into the wind. It's set while the deck has jets moving.
+- **Behaviour:**
+  - The guide patrols legs round its area, steams for `dest`, or turns into the wind for flight ops. Its course
+    is always clear of land 4.5 km ahead (`openCourse`).
+  - Threatened (missiles or aircraft in the picture), the group goes to flank speed and zig-zags ±25° on legs
+    of 45–80 s.
+  - Escorts keep their stations with `stationSteer`: the guide's velocity plus a correction. They never back
+    down, and never run across the formation faster than 70% of their best speed.
+  - An escort pulls in toward the guide where its station is over shallow water. It turns away from ships
+    within 450 m, and checks 1.5 km ahead for land.
+- **Calls:**
+  - `navalops.groupOf(ship)`.
+  - `navalops.moveGroupOf(ship, pos)` returns true if the ship is in a group. director.js sends its fleet moves
+    here.
+  - `navalops.steerGroup(group, heading, speed)`: heading in rad (null keeps it), speed as `order`.
+- **Every ship is enlisted:**
+  - On the helm: `ship.steer(heading, speed)` (naval.js).
+  - `adManaged`: naval.js leaves its missiles to navalops. The CIWS stays in naval.js.
+  - In the war registry: `cls` carrier / ship / sub, full names, and the contact names LARGE SURFACE /
+    SURFACE / SUBSURFACE CONTACT.
+  - `radarRange`, for director.js's air picture.
+  - Its magazine and launch controller (`ship.launcher`), and a strike source for its TLAM / Harpoon /
+    Kalibr / P-1000 (`ship.strikeSource`).
+  - An enemy ship's HUD name is its class (DESTROYER, SLAVA CRUISER). Its registry name is the real one, once
+    identified.
+- **Submarines** stay deep (38–40 m): off `ground.targets`, `conceal` 0.97. They come up to periscope depth to
+  launch, and for the broadcast every few minutes, with their masts raised there (naval.js `raiseMast`).
+
+### Air defence
+- **Twice a second per group:**
+  - The radar picture (`trackPicture`): enemy aircraft, strategic missiles and missiles fired at its ships.
+    Each must be within a radar's range and its radar horizon, and in terrain line of sight. The horizon is
+    `radarHorizon(h1, h2)` = `HORIZON · (√h1 + √h2)`, with HORIZON = 1900 m (game scale).
+  - Then threat evaluation and weapon assignment, `planEngagements` (exported, pure; see below).
+- **`planEngagements(threats, shooters, { mediumReach })`** returns `[{ threat, shooter, key, n }]`.
+  - threats: `{ id, kind: 'missile' | 'aircraft', pos, vel, defend (Vector3), inFlight }`.
+  - shooters: `{ ship, pos, channels, weapons: [{ key, count, ready }] }`.
+  - Missiles come before aircraft, ordered by time to reach what they're after.
+  - The outer layer (SM-2, SM-6, S-300F) fires first. The medium layer (ESSM, RAM, Sea Sparrow, Osa-M, Shtil)
+    fires once a threat is inside its reach.
+  - Two at a missile (shoot-shoot-look), one at an aircraft (shoot-look-shoot).
+  - Nothing inside a weapon's minimum range, and no more than each ship's fire channels.
+- **Aircraft** are engaged inside 21 km if they're closing, or inside 9 km. Red fires one SAM at the player at
+  a time, every 16 s (rookie) to 8 s (ace).
+- **`SAMS`** (exported): range, minimum range, speed, burn, turn, proximity fuse, warhead, Pk against missiles,
+  tip-over time, IR or radar.
+- **Interceptors:**
+  - Fly lead pursuit after the tip-over, and burst at the closest approach within the fuse.
+  - Roll Pk against a missile; an aircraft takes `damage`.
+  - Can be decoyed by flares and chaff. Self-destruct when the target's gone. The SM-6 drops its booster.
+  - Each emits `missileLaunch` when fired at an aircraft (the player's missile warning).
+- **The CIWS** (naval.js) now also engages strategic missiles closing within 1.6 km (`strikes.missiles`,
+  `intercepted`).
+
+### Launches from ships and submarines
+- **`navalops.launchFrom(ship, key, target, n = 1, { quiet })`:**
+  - A SAM key (`SAMS`) engages `target` with interceptors.
+  - Any `MISSILES` key flies a real strike through strikes.js (BDA, the missile camera).
+  - `target` is a unit, a designation or `{ x, z }`.
+  - Returns the strike, the launch sequences, or null.
+- `navalops.magazineOf(ship)` returns the ship's `Magazine`.
+- **`strikes.fireFrom(src, specKey, n, target, { quiet, label, type, spacing })`** (strikes.js): a strike from
+  one given source, with no nearest-shooter search.
+- **`MISSILES.p1000`** (P-1000 Vulkan): the Slava's ship killer, 520 m/s, high over the sea.
+- **Surface action:**
+  - Every few minutes a group fires at the nearest known enemy surface ships within 48 km. Their carrier or
+    Slava comes first (65% of the time).
+  - Blue: cruisers fire Harpoons, destroyers TLAMs. Red: the Slava fires P-1000s, destroyers and submarines
+    Kalibrs.
+  - In Naval Strike the enemy carrier is left to the player.
+
+### Launch sequences (src/launchseq.js)
+- **`LaunchControl`** is on each armed ship (`ship.launcher`). `fire(key, spawn, { target, data })`:
+  1. takes a round from the magazine and opens its hatch (`poseRig`);
+  2. lights the motor when the hatch is open and calls `spawn(phase, pos, dir, seq)`, so the missile starts in
+     a `LaunchPhase`;
+  3. vents the module's uptake while the missile climbs out;
+  4. closes the hatch after it.
+
+  One launch at a time per door (a revolver, a sub's tube hatch). Also: `emptyCells()`, `count(key)`,
+  `has(key)`, `seqs` (the sequences running) and `ready()` (a submarine fires only at periscope depth).
+- **`LaunchPhase`** moves the missile until it's clear of its launcher:
+  - a hot launch out of a cell on its booster: a Tomahawk slowly, in a cloud of exhaust; a Standard out in a
+    fraction of a second;
+  - a cold ejection, with the motor lit in the air (S-300F, Shtil);
+  - an inclined container or canister, or a rail;
+  - a capsule from a submarine: it rises from the tube, broaches in spray and foam, and lights its booster
+    above the water.
+
+  Callbacks: `onClear`, `onIgnite`, `onBroach`, `onExhaust`. strikes.js's `StrategicMissile` takes one as its
+  last argument (phase 'launch'). A source whose host has a launcher launches on the rig
+  (`LaunchSource.launchOnRig`).
+- **`TIMING`:**
+  - Mk 41: the hatch opens in 1.0 s, ignition follows 0.15 s later, the uptake vents 1.2 s, and the hatch
+    closes over 1.6 s, starting 4 s after the missile's out.
+  - Also: container, revolver, canister, rail, popup and subtube.
+- **`LAUNCH`**, per missile: mode, accel, eject, ignite.
+- **`vlsTimeline(key, depth, timing)`** gives, in seconds: the hatch open, ignition, clear, closing and closed.
+- **`LOADOUTS[type][side]`** and **`buildMagazine(ship, load)`** return a `Magazine`:
+  - its tubes are `{ key, kind: 'cell' | 'point' | 'mount', ref, left, door, timing }`;
+  - quad-packed ESSM cells hold four;
+  - rounds are spread through the modules.
+
+### Carrier operations (src/deckops.js)
+- **`navalops.deckOf(carrier)`** returns its `DeckOps`. Only carriers whose model has the deck layout (catSpots,
+  JBDs, shuttles) get one.
+- **`deck.requestLaunch({ type, skill, onAirborne })`:**
+  - Blue jets come up the port-aft elevator; red ones appear by a bow catapult.
+  - Either taxis behind a yellow shirt to a catapult and runs a `CatCycle`: taxi → hookup → tension → salute →
+    stroke → clear → idle. The JBD rises and falls, the shuttle runs, and there's steam (`CAT_TIMING`).
+  - The launch is the aircraft's own `startCatapult`. Airborne, the jet is handed to a Pilot and flies CAP for
+    4–7 minutes before it comes back.
+- **`navalops.catapultLaunch(carrier, ac)`** sends an existing aircraft, with its AI pilot, out by catapult
+  (game.js's enemy carrier launches in Naval Strike). False if no catapult is free.
+- **`navalops.recover(ac, carrier)`** (or `deck.recover(ac)`) flies a Case I recovery:
+  - the initial at 300 m, the break, downwind, the 90, and a 2.6 km groove on a 3.5° glide slope;
+  - the trap is aircraft.js's own wires; a bolter or wave-off goes round again (rookies bolter more often);
+  - then out of the landing area to the elevator, and struck below.
+  - One jet in the pattern at a time; none while the player is on final or the landing area is fouled.
+- **Deck crews:** `deckcrew.glb` (tools/ships/deckcrew_model.py), four instanced meshes per carrier in the
+  jersey colours (`SHIRTS`), about 34 people at their posts. They're drawn and animated only when the carrier is
+  near the camera.
+- **Parked aircraft** stand on their gear (naval.js `parkedModel`), instanced. The elevator is naval.js
+  `setElevator`.
+
+### naval.js additions
+- **Group steaming:** `Ship.steer(heading, speed)`, with `HELM` per type (max speed, acceleration, turn rate,
+  rudder lag) and `ship.nav`. Without it the ship keeps its circle.
+- **Deck and rig:** `ship.catSpot(i, out)` (default cat 2, `ship.playerCat`), `ship.inIsland(p, margin)`,
+  `naval.clearOfIslands(cam, target)`, `pointFrame(ship, name, pos, dir)` (any rig point: `harpoon_1..8`,
+  `muzzle_<n>`) and `parkedModel(kind)`.
+- **Level of detail**, `ship.updateLod()`:
+  - hidden below about 1 px on screen, or deeper than 22 m;
+  - no mounts, radars, doors or deck crew below 70 px;
+  - below 120 px, a merged far model (`ship.far`: the whole ship at rest, one mesh per material) instead of the
+    full one.
+- **Rig additions** (tools/ships/RIG.md): the carrier's `jbd_1..4` (doors) and `shuttle_1..4` (slides), and its
+  layout's `catSpots`, `jbds` and `lso`; the cruiser's `harpoon_1..8` points.
+
+### Events
+- `navalGroup` (group).
+- `vampire` (group, { missiles }).
+- `missileLaunch` (ship, { missile, target }): a SAM fired at an aircraft.
+- strikes.js's own events for the surface-to-surface missiles.
+
+## Interiors and boats (Phase C)
+
+Walk into places and work them with their own buttons and screens; drive small boats. The framework is
+`src/interiors.js`, the content `src/warrooms.js` (harbour, boats, submarine, travel) and `src/commandrooms.js`
+(carrier, JOC, TEL), the console logic `src/firecontrol.js` (pure, tested), the screen drawing kit `src/screens.js`,
+the boats `src/boats.js`. `src/warinteriors.js` plugs it all together as `game.interiors` (systems.js). Room models:
+`models/interiors/*.glb`, built by `tools/interiors/*.py` (`sh tools/interiors/build.sh`; the node / extras contract
+is `tools/interiors/ROOMS.md`).
+
+### Where and how (the player)
+- **COMMAND › TRAVEL** puts you on foot at any of them (from a stopped jet you climb out; in free flight, sandbox
+  and the Living War also from the air: the jet is parked on the apron). Walk up to a door, a hatch or a boat and
+  press **E**.
+- **Small craft pier** west of the home base: the NSW 11 m **RHIB** and the **CB90H** combat boat. W/S throttle,
+  A/D steer, SPACE crash stop, V chase / helm view, mouse look, E steps off at a pier slot, a ship's ladder, a
+  surfaced submarine or a beach (slow down first).
+- **USS Colorado (SSN-788)** lies surfaced off the pier: E at the escape trunk goes below into the control room
+  (or signal for the RHIB from the casing). Ship control: rig for dive, dive / surface / emergency blow, ordered
+  depth, bells, rudder; photonics masts with a live picture on the screens and full screen (mouse trains, wheel
+  zooms, LMB / comma marks); sonar with a waterfall; fire control: target (marks, known units), TLAM / Harpoon,
+  weapon key, spin up, firing point procedures (≤ 160 ft keel, ≤ 6 kt, holding depth), open the muzzle hatch,
+  lift the guard, FIRE. K watches the missile break the surface, then the missile camera (K / Esc back).
+- **The carrier** (home carrier): the island's port doors — CIC (the air and surface pictures, the TAO summary,
+  the radio log, and a strike console that fires the group's Tomahawks / Harpoons from the escorts' VLS or the
+  submarine: shooter, weapon, salvo, target, strike key, ARM, guarded LAUNCH) and Pri-Fly up the ladder (glass on
+  the flight deck, deck status knob and lamps, horn, wind over the deck, the PLAT camera, catapults; SPOT puts an
+  F/A-18 on cat 1 for you to walk out to, the guarded LAUNCH sends the alert fighter, RECOVERY turns the ship into
+  the wind). The accommodation ladder aft of the island calls away the duty boat.
+- **Joint Operations Center** at the home base (a hardened building behind T-walls and HESCO; solid and
+  destructible): the wall (common operational picture, known targets with intel level beside the front's sectors,
+  the director's tasks, strikes and BDA imagery, the radio, a status ticker) and consoles: map (click to mark),
+  intel (click to mark), strike cell (type, AUTO or a specific shooter, REQUEST / ARM, guarded EXECUTE — the same
+  `strikes.request` / `launchFrom`), tasks (ACCEPT / PUT ON HOLD / IGNORE ALL: `tasks.accept`, `abandon`,
+  `dismissOffers`), the whole command menu as buttons, the radio log, the battle cab.
+- **Captured Scud TEL** (free flight, sandbox, Living War) beside the JOC: the launch control cabin (power,
+  generator, parking brake, rear supports, launch table, boom, target, gyrocompass alignment, control-system test,
+  combat mode, batteries, the six-digit code lock (the order's code is on the display), guarded ПУСК); the driver's
+  cab (brake, engine, W/S/A/D) once it's stowed. It reloads two minutes after a launch while stock lasts.
+- Inside a room: WASD walk (Shift faster), mouse look, LMB presses what the crosshair is on (reach 2.6 m), wheel
+  turns knobs, Tab frees a cursor, 1–9 sit at the room's stations (the cursor comes out; clicking a console's
+  screen while walking sits you there too), RMB / Esc stand up, E leaves at the exit. A guarded control needs its
+  guard lifted first; its keyboard shortcut lifts the guard. Hover shows what a control does and why it won't.
+
+### API
+- `game.interiors` (an `Interiors`): `addSite({ id, label, at(out) → Vector3 | null, radius, dy, enter, blocked(),
+  hidden() })`, `removeSite(id)`, `addRoom(def)` → `Room`, `enterRoom(room, { text, spawn })`,
+  `switchRoom(room)`, `leave({ to, then })`, `placePilot(pos, yaw)`, `takeControl(ctl)` / `releaseControl()`
+  (a controller: `control(dt, mouse)`, `camera(cam, dt)`, `hud(ctx, hud)`, `action(a)`, `enter()`, `exit()`,
+  `carry(pilot)`, `tick(dt)`, `kind`), `fadeTo(then, { text })`, `use(plugin)` (plug-ins may have `start`,
+  `clear`, `update`, `commands`, `drawMap`, `mapInfo`, `mapActions`, `drawHud`). `ops` holds the harbour, sub,
+  carrier, joc and tel plug-ins.
+- A room def: `{ id, name, file | build(root, room), sealed (default true: drawn alone in its own scene), shadows,
+  anchor(outMatrix4), exitTo() → { pos, yaw }, canExit(), bind: { node: { label, key, press, turn, value, lit,
+  enabled, why, keepGuard } }, screens: { node: { fps, draw(ctx, ui, screen, game, room), wheel, feed } },
+  stations: { node: { label, order, fov } }, keys, actions, status(), title, onLoad, onEnter, onExit, update,
+  drive }`. `ui.button / row / hit` register click regions on a screen; `Screen.setFeed(texture)` shows a render
+  target under a feed screen's canvas (`CameraFeed` in warrooms.js renders one a few times a second).
+- While a controller has the player: `game.takeover` (game.update calls it instead of the man on foot),
+  `game.indoors = { sealed, lookout, kind, name }` each frame (the HUD hides world markers and postfx drops water,
+  sun and SSR when sealed; war sensors skip; audio is muffled), `game.nearPlane` (0.05 m in a room),
+  `game.scenePass.scene` swapped to a sealed room's scene. `game.platforms` (`at(x, z, y)` → surface) makes the
+  pier, pontoon and gangway walkable through `game.surfaceAt`; pilot.js rides moving decks (`deckRef`).
+- `strikes.launchFrom(src, specKey, marks, { n, all, team, quiet })` fires a specific source at marks (the consoles
+  use it; `strikes.request` still picks the nearest). A submarine's missile isn't counted as hitting the water
+  while it broaches (its first 3 s).
+- `steerShip(ship, heading, speed, yawRate)` drives a naval.js ship (it steams round circles) as if it had a helm.
+- Boats: `new Boat(game, 'rhib' | 'cb90', x, z, heading)`, `BoatPhysics(spec)` (`step(dt, { throttle, steer })`,
+  `sea`, `ground`, `collide` hooks), `Helm(sys, boat, plugin)`, `Harbor(game, site)`; `BOAT_SPECS` carries the
+  real numbers (45.5 / 40.4 kt top, 0–20 kt ~5–6 s, full-helm radius ~23 m, crash stop 4.7 / 2.8 lengths).
+- Harbour docks: `game.interiors.ops.harbor.docks.push({ id, host, label, text, at(out), step(out), yaw(), ok() })`
+  lets a boat put the player aboard anything (the carrier's ladder, the submarine's casing use it).
+
+## Underground bases (`game.underground`, src/underground.js)
+
+Two hidden mountain complexes in red territory, far from towns, roads and airbases (ugsites.js `UG_SITES`):
+- **ZHELEZNAYA GORA** (x 32.4, z −43.6 km): an Objekat 505 / Željava-style underground airbase. Two aircraft portals
+  (N1, N2; inverted-T openings, two ~100 t sliding leaves) and a service portal (N3, hinged doors) in cuttings at the
+  foot of a massif; N1 → tunnel → a 32 × 15 m, 220 m hangar hall (seven jets parked) → N2 is a drive-through loop; N3
+  leads to a stores gallery. Aprons, a taxiway and a 2,200 m runway on the plain 1.1 km out, a support compound.
+- **KAMENNY LOG** (x 35.2, z −23.8 km): a missile operating base (Sakkanmol / "missile city" style). Vehicle portals E1
+  and E2 joined by the TEL garage hall (three Scud TELs), E3 into the magazine; a yard, three launch pads on the rise
+  above the lake, gravel tracks, an access road.
+- Around both: vents on the ridge (warm in the FLIR), relay masts, guard posts, a substation and a power line running
+  into the hillside, camouflage nets over the cuttings, tyre tracks.
+
+**Ground.** `terrainHeight` carves them (ugsites.js `ugCarve`, called at the end of terraincore.js `terrainHeight`, so the
+map workers, terrain workers and physics agree): pads (runway, aprons, pads), capsules (roads, taxiway) and notches
+(portal cuttings, cut only), each continuous and fading to the natural ground within its reach; everything outside the
+sites' boxes is untouched. The terrain mesh is too coarse for a cutting, so each portal's ground is cut out of the
+terrain shader (world.js `TERRAIN_CUT_U`, rectangles; a material drawing replacement ground defines `UG_KEEP`) and drawn
+as a fine mesh with the terrain's own material, with no ground over the tunnel mouth (ugworld.js `PortalGround`). Trees
+and grass keep off (`world.blockTree`, `world.noGrass`). `ugTunnelAt(x, z, y)` says when a point is inside a tunnel or
+hall (floor, arch height): `game.surfaceAt` and the cameras (`game.camGround`, `underground.clampCamera`) use it, and the
+player's jet crashes into the walls and arch. Interiors (ugint.js) are drawn only with a door open and the camera near
+and in front, or the camera inside; their materials (`interiorMaterial`) are lit by the tunnel lamps — baked into the
+lining, the nearest 12 as point lights — instead of the sun, sky and environment.
+
+**Life.** Doors: `complex.openDoor(portalId, user)` / `releaseDoor` (open while anyone needs them, shut 8 s after the
+last one; klaxon, beacons); `doorOpen(id)`, `usable(id)`. Scrambles: `underground.scramble(types, target, { role,
+callsign, route, complex })` → a sortie (the jets taxi out of the hall through the door, down the taxiway, take off,
+and become a director flight with `f.ugHome`), or null; `scrambleOrigin(pos)` is where one would come from (null if
+none can). The director's GCI uses it when the underground airbase is nearer than its other origins. TELs are strikes.js
+red `launcher` sources (`UgLauncher`, held until set up): a launch order sends one out to a pad; it sets up, fires,
+stows and comes back in by the other portal. The missile base also fires on its own every ~7–11 minutes
+(`missileSortie()`, through `strikes.request(type, marks, team, quiet, { only })`).
+
+**Intelligence.** Each complex's units are war units: the `facility` (cls `facility`, UNKNOWN), the `entrance`s (cls
+`entrance`, conceal 0.72), the clues (cls `bunker` / `radar` / `vehicle`) and the airbase's airfield (pre-war imagery).
+Anyone who reveals a clue (eyes, the pod, recon aircraft, drones: `war.reveal`) adds to the complex's score (tracks,
+guard post, power line 1; substation, mast 0.75; a vent 1.5 once IDENTIFIED — its heat, `u.heat` in sensors.js
+`heatOf`; an entrance 2): CONTACT "UNKNOWN FACILITY" at 1, "POSSIBLE MISSILE STORAGE" (or "… UNDERGROUND HANGARS") at
+3, IDENTIFIED "CONFIRMED UNDERGROUND MISSILE FACILITY" (or "… AIRBASE") at 5.5 — or at once when a door is seen moving,
+an entrance is identified or a vehicle is seen coming out. Then: the TARGET IDENTIFIED callout, the radio, the reports
+resolved, penetrators added to the blue missile field. Reports ("… IN THE HILLS 14 KM NORTH-EAST OF VORSK") come a few
+minutes into the war, and when a hidden complex scrambles or launches.
+
+**Striking it.** Only penetrators close an entrance: a strike missile with `hard ≥ 0.9` within ~22 m of the portal
+(`strategicImpact`), a heavy bomber's bomb, or any bomb in the open doorway (weapons.js `worldBlast` emits `'blast'` (at,
+{ r, amount, owner, kind: 'bomb' | 'blast' })). Everything else scars the facade. All entrances down seals the complex:
+what's inside is trapped, its launchers are dead, no more scrambles. BDA: a unit may carry `bdaResult()`, which
+strikes.js `reportBDA` uses ("ENTRANCE 2 OF 3 DESTROYED", "… FACADE SCARRED, DOOR INTACT (PENETRATOR REQUIRED)").
+Tasks: INVESTIGATE REPORTED ACTIVITY, FIND THE ENTRANCES, SEAL <complex>, DESTROY THE ENTRANCES BEFORE THE TEL FIRES
+(urgent). Map: the runway once known, a ring and the entrance count once identified; the panel's PENETRATOR STRIKE ON
+ALL KNOWN ENTRANCES, and COMMAND › TACTICAL SUPPORT › PENETRATORS ON <complex>. Ground targets inside a mountain carry
+`hidden` (off the HUD and target cycling).
+
+**Events:** `ugClue` (complex, { clue, score }), `ugStage` (complex, { stage }), `ugDoor` (complex, { portal, open }),
+`ugScramble` (complex, { sortie }), `ugTelSortie` (complex, { tel }), `ugEntranceDestroyed` (complex, { portal,
+entrance }), `ugSealed` (complex).
+
+
+## Night and weather (Phase C: firelight.js, weather.js, weathersys.js, nightfx.js)
+
+### How to see it
+- Menu: TIME (dawn, midday, dusk, night) and WEATHER (clear, cloudy, rain, storm, **fog**, **low** cloud).
+- In the Living War the clock runs ×20 (a day in ~72 minutes: the war goes on into dusk and night) and a front
+  comes through every 15-35 minutes, announced by WEATHER on the radio. COMMAND › SANDBOX › WEATHER / TIME (Sandbox,
+  Free Flight and the Living War): any weather over two minutes, a front from upwind, automatic fronts on / off, jump
+  to a time, clock stopped / ×1 / ×20 / ×60 / ×300.
+- I: night-vision goggles (a GPU pass now: amplified, green phosphor, grain, halos, the round eyepiece). The tactical
+  map's WEATHER layer is a weather-radar picture (green → yellow → red → magenta cells), cloud, fog and the front.
+
+### `game.weather` (weathersys.js)
+- `set(kind, { transition, say })`: the weather everywhere, now or blended over `transition` seconds. Kinds:
+  `clear`, `cloudy`, `rain`, `storm`, `fog`, `overcast` (weather.js `WEATHER_KINDS`: cloud cover and heights, the rain
+  deck, rain rates, ground fog, wind, turbulence, lightning).
+- `front(kind, { heading, speed, width, eta, dist, say })`: `kind` moves in behind a line across the map (default: with
+  the wind, 18 m/s, a 16 km transition zone); `eta` is when its middle reaches the camera. Ahead of the line the old
+  weather, behind it the new (the clouds, fog, rain and palette all follow); 60 km past the camera it takes over.
+- `timeScale` (sky clock: game seconds per second; 0 = stopped), `hour`, `setTime(hour | 'dawn' | 'day' | 'dusk' |
+  'night')`, `auto` (the Living War's own fronts). The director (or anyone) drives the weather with these.
+- Queries: `visibility(pos)` (m, Koschmieder), `ceiling(pos)` (lowest cloud base over it, m), `rainAt(pos)` (mm/h),
+  `stormAt(pos)` (0..1: under a thunderstorm cell), `transmittance(a, b, band)` (0..1; band `'eye'`, `'tv'`, `'ir'`,
+  `'radar'`), `irClear(a, b)` (no heat-seeker lock through cloud or fog), `caution(pos)` (how carefully to fly there),
+  `describe(pos)` (the radio's words: "THUNDERSTORMS, CEILING 900 M, VISIBILITY 1.4 KM").
+- **For the airbases (runway lights, searchlights):** `night` (0 day … 1 night, continuous) and `lightsOn` (on from a
+  little before sunset to a little after sunrise; `setNight(on)` is still called on every change), `visibility(pos)`
+  and `ceiling(pos)` (e.g. approach lights by day in fog or under a low ceiling). Events: none needed; poll these.
+- Events: `missileLostInCloud` (owner, { missile, target }) when a heat seeker loses a target hidden in cloud / fog.
+
+### What it does in play
+- **Eyes** (war.js `updateSensors`): each line of sight carries its own haze, ground fog, rain and cloud (contact
+  needs a little contrast, identifying much more); darkness is continuous (`night`); at night what stands in a fire's
+  light is seen as by day. **Radar** ignores cloud; heavy rain costs some range. **Targeting pod**: its line of sight
+  through cloud, fog and rain by band (the FLIR sees through haze and some rain, not cloud or fog).
+- **IR**: the player's and the AI's heat seekers don't lock through cloud or fog (HUD: NO IR — CLOUD); a heat seeker in
+  flight whose target stays hidden for 0.6 s loses it (dive into a cloud to shake one). The HUD's locked target shows
+  TGT OBSCURED — CLOUD / FOG / RAIN when the eye can't see it. Marking a target or accepting a task under bad weather
+  gets WEATHER OVER TARGET on the radio.
+- **AI** (ai.js): finds enemies by radar (nose cone) or by eye (~9 km by day, less at night; an afterburner shows), not
+  through cloud or fog; flies higher and gentler in bad weather and at night (`caution`).
+- **Flight**: gusts and turbulence from `wx.turbulence` (in and under storm cells, in cloud, low down in a strong wind;
+  ~±1-2 m/s² in rain, up to ~±5 in a cell core); the wind follows the weather.
+- **Storms**: rain shafts drawn in the cloud march (dark curtains under the cells), lightning where the cells are (two
+  in three inside the cloud, else a bolt that lights the ground round it), thunder delayed by distance at 343 m/s
+  (a crack close by, a long low rumble far off), rain on the canopy in the cockpit view (and mist from cloud).
+- **Fog**: a ground-fog layer with a flat top in the fog shader (and its JS twin): radiation / valley fog forms toward
+  dawn after a clear night in the low ground (gone by mid-morning), sea fog banks drift with the wind, `fog` weather
+  is dense (~350 m visibility under a 170 m top, clear above: hills stand out of it), `overcast` is a low stratus
+  ceiling (~450 m) with drizzle and sea fog banks.
+
+### Fire light (firelight.js), for plug-ins
+- `effects.light(pos, intensity, life, opts)` (as before) → `fireLights.flash`: a burst of light that decays;
+  calls at a moving plume merge into one light. `fireLights.keep(key, pos, I, opts)` for a light that lives while
+  refreshed every frame; `fireLights.heat(pos, size)` for flames (effects.puffFire and burning smoke columns already
+  report theirs, so anything that burns lights its surroundings). Budget by quality: 3 / 6 / 12 / 24 lights on
+  surfaces (a quarter by day), 0 / 0 / 4 / 8 in the clouds, 0 / 4 / 6 / 8 glowing in the air. The FLIR sees none.
+- Custom shaders: `FIRE_VIEW_GLSL` / `FIRE_WORLD_GLSL` + `fireUniforms()` (smoke, trails and the sea use them).

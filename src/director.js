@@ -753,7 +753,8 @@ export class Director {
         const txt = what + ', BRG ' + String(brg).padStart(3, '0') + ' FOR ' + Math.round(km) + ' KM, ANGELS ' + alt + ', HEADING ' + String(hd).padStart(3, '0') + tgt;
         const urgent = f.role === 'raid' || f.role === 'cas' || f.role === 'recon';
         if (!urgent && km > 60) return; // a CAP far off: nothing to say
-        this.say('MAGIC', (f.role === 'raid' ? 'RAID ALERT — ' : f.role === 'recon' ? 'UNKNOWN AIRCRAFT — ' : 'NEW PICTURE — ') + txt, { color: urgent ? '#ff9f5a' : '#ffd24a', say: urgent ? (f.role === 'raid' ? 'Raid alert. ' : 'Magic, new contact. ') + what.toLowerCase() + ', bearing ' + brg + ', ' + Math.round(km) + ' kilometres.' : false, priority: f.role === 'raid' });
+        // with an AWACS on station, its controller makes the call, in brevity (airsupport.js)
+        if (!(g.air && g.air.announceFlight && g.air.announceFlight(f))) this.say('MAGIC', (f.role === 'raid' ? 'RAID ALERT — ' : f.role === 'recon' ? 'UNKNOWN AIRCRAFT — ' : 'NEW PICTURE — ') + txt, { color: urgent ? '#ff9f5a' : '#ffd24a', say: urgent ? (f.role === 'raid' ? 'Raid alert. ' : 'Magic, new contact. ') + what.toLowerCase() + ', bearing ' + brg + ', ' + Math.round(km) + ' kilometres.' : false, priority: f.role === 'raid' });
         g.events.emit(f.role === 'recon' ? 'reconDetected' : f.role === 'raid' || f.role === 'cas' ? 'raidDetected' : 'flightDetected', f);
     }
 
@@ -912,6 +913,13 @@ export class Director {
         const redNear = g.aircraft.filter(a => a.alive && a.team === 'red' && a.pos.distanceTo(p.pos) < 22000).length;
         if (redNear >= 2) return;
         const from = this.redOrigin(p.pos);
+        // an underground airbase nearer than that: its fighters taxi out of the mountain and take off (underground.js)
+        const ug = g.underground, ugFrom = ug && ug.scrambleOrigin ? ug.scrambleOrigin(p.pos) : null;
+        if (ugFrom && ugFrom.distanceTo(p.pos) < from.distanceTo(p.pos) && ug.scramble([pick(RED_FIGHTERS), pick(RED_FIGHTERS)], p.pos, { role: 'intercept', callsign: 'INTERCEPT' })) {
+            this.lastScramble = war.time;
+            this.gciAcc = 0;
+            return;
+        }
         this.lastScramble = war.time;
         this.gciAcc = 0;
         const dir = _v.subVectors(p.pos, from).setY(0).normalize();
@@ -949,6 +957,8 @@ export class Director {
         const f = this.spawnFlight({ team: 'red', role: 'raid', types: Array(n).fill(type), bombs: 4, pos: start, speed: 215, skill: this.redSkill(),
             route: [{ p: ip }, { p: tgtPt, attack: true }, { p: over }, { p: egress }], target: t, callsign: 'RAID', tag: low ? 'low' : 'high' });
         f.home = this.homeFor('red', origin);
+        // a cruise-missile carrier (the Tu-95MS) stands off and launches through the strike system (airsupport.js)
+        if (g.air && g.air.standoffRaid) g.air.standoffRaid(f);
         // escorts from veteran up
         if (this.intensity() > 0.95) {
             const e = this.spawnFlight({ team: 'red', role: 'escort', types: [pick(RED_FIGHTERS), pick(RED_FIGHTERS)], pos: start.clone().add(_v2.set(800, 300, 600)), speed: 215, skill: this.redSkill(), escortOf: f, callsign: 'ESCORT' });
@@ -1306,7 +1316,9 @@ export class Director {
         const o = cv.orbit;
         const spot = findOcean(o.cx, o.cz, 9000, 22000, 3200);
         if (!spot) return;
-        this.fleetMove = { to: new THREE.Vector3(spot.x, 0, spot.z), ships: g.naval.ships.filter(s => s.team === cv.team && s.orbit && Math.hypot(s.orbit.cx - o.cx, s.orbit.cz - o.cz) < 50) };
+        // a group the naval plug-in steams (navalops.js) goes there in formation; otherwise slide the circles along
+        if (g.navalops && g.navalops.moveGroupOf && g.navalops.moveGroupOf(cv, spot)) this.fleetMove = null;
+        else this.fleetMove = { to: new THREE.Vector3(spot.x, 0, spot.z), ships: g.naval.ships.filter(s => s.team === cv.team && s.orbit && Math.hypot(s.orbit.cx - o.cx, s.orbit.cz - o.cz) < 50) };
         if (war.known(cv) >= INTEL.CONTACT) this.say('INTEL', 'THE ENEMY CARRIER GROUP IS ON THE MOVE — LAST KNOWN ' + war.describePos(cv.pos), { color: '#ffd24a', say: false });
     }
 

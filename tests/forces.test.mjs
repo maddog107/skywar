@@ -15,6 +15,7 @@ const N = await src('forcesnav.js');
 const U = await src('forcesunits.js');
 const GR = await src('forcesgroups.js');
 const { War, INTEL } = await src('war.js');
+const { emitterOf } = await src('ew.js');
 
 // Math.random seeded for one test (restored after)
 function seeded(seed, fn) {
@@ -183,7 +184,33 @@ describe('mobile forces: SAM batteries', () => {
         // (its missiles are stubs that never arrive: clear the target's incoming now and then so it keeps shooting)
         g2.run(120, 0.1, () => { if (Math.random() < 0.02) jet.incoming.length = 0; return gr2.moveAt < Infinity; });
         assert.ok(gr2.shots >= 3 && gr2.moveAt < Infinity, 'after firing it plans to move (' + gr2.shots + ' shots)');
+
+        // a base's point defence (fixed) keeps its radar on and stays put however busy it gets, found or not
+        const g3 = forcesGame();
+        const gr3 = g3.forces.spawnSAM('red', 'osa', site, { launchers: 2, fixed: true });
+        assert.equal(gr3.emcon, 'search');
+        g3.war.reveal(gr3.launchers[0], INTEL.IDENTIFIED, 'visual');
+        const jet3 = g3.addJet(site.x + 5000, 2800, site.z, 0, 0);
+        g3.run(150, 0.1, () => { if (Math.random() < 0.02) jet3.incoming.length = 0; return false; });
+        assert.ok(gr3.shots >= 4, 'it fought (' + gr3.shots + ' shots)');
+        assert.equal(gr3.moveAt, Infinity, 'and never planned a move');
+        assert.equal(gr3.state, 'ready');
     }));
+
+    test('SIGINT hears each radar by its own name, and only while it radiates', () => {
+        const g = forcesGame();
+        const gr = g.forces.spawnSAM('red', 's300', { x: RED.x, z: RED.z, heading: 0 }, { emcon: 'ambush' });
+        const fl = gr.radar, ln = gr.launchers[0];
+        assert.equal(fl.cls, 'sam-radar');
+        assert.equal(emitterOf(fl, g.war.rec(fl)), null, 'silent: nothing to hear');
+        gr.setRadar(true);
+        const em = emitterOf(fl, g.war.rec(fl));
+        assert.ok(em && em.name === '30N6 FLAP LID' && em.hot, 'the Flap Lid: ' + (em && em.name));
+        assert.equal(emitterOf(ln, g.war.rec(ln)), null, 'an S-300 launcher has no radar of its own');
+        const osa = g.forces.spawnSAM('red', 'osa', { x: RED.x + 3000, z: RED.z, heading: 0 }, { emcon: 'search' });
+        osa.setRadar(true);
+        assert.equal(emitterOf(osa.launchers[0], g.war.rec(osa.launchers[0])).name, 'SA-8 LAND ROLL');
+    });
 });
 
 describe('mobile forces: roads and routes', () => {

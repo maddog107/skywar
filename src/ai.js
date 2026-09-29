@@ -329,6 +329,7 @@ export class Pilot {
         const fwd = ac.getForward(_f);
         let best = null, bestScore = Infinity;
         for (const e of this.enemiesOf()) {
+            if (!this.detects(e)) continue; // [weather] found by radar or eyes (night, cloud, fog, rain)
             const d = e.pos.distanceTo(ac.pos);
             const dot = _d.subVectors(e.pos, ac.pos).normalize().dot(fwd);
             let score = d * (1.6 - dot * 0.6);
@@ -344,6 +345,42 @@ export class Pilot {
         best = this.pilotTarget(best);
         if (best !== this.target) { this.lockT = 0; this.strafePhase = null; }
         this.target = best;
+    }
+
+    // [weather] Can this pilot find e? Close in, always; its radar (a fighter with missiles; in the nose cone; heavy rain
+    // dims it a little) whatever the cloud; its eyes to ~9 km by day, less at night (an afterburner still shows), not
+    // through cloud, fog or heavy rain (weathersys.js). A decision holds a few seconds; a contact stays found a while
+    // after it's lost. No weather model (the tests' arena): everything is found, as before.
+    detects(e) {
+        const g = this.game, W = g.weather;
+        if (!W || !W.wx || e.isChute) return true;
+        const ac = this.ac, d = e.pos.distanceTo(ac.pos);
+        if (d < 1800) return true;
+        const mem = this.seen || (this.seen = new Map());
+        const now = g.time, last = mem.get(e);
+        if (last && now - last.t < last.hold) return last.ok;
+        let ok = false;
+        if ((ac.spec.missiles > 0 || ac.spec.radar) && d < 42000) {
+            const cone = _d.subVectors(e.pos, ac.pos).divideScalar(d).dot(ac.getForward(_f));
+            if (cone > 0.5 && d < 42000 * W.transmittance(ac.pos, e.pos, 'radar')) ok = true;
+        }
+        if (!ok) {
+            const light = Math.max(1 - W.night * 0.75, e.afterburner ? 0.55 : 0);
+            if (d < 9000 * light && W.transmittance(ac.pos, e.pos, 'eye') > 0.1) ok = true;
+        }
+        if (mem.size > 24) mem.clear();
+        // (lost: it still knows roughly where e went for a few seconds)
+        const keep = !ok && last && last.ok && now - last.seenAt < 6;
+        mem.set(e, { t: now, ok: ok || keep, hold: ok ? 4 : 1, seenAt: ok ? now : last ? last.seenAt : -1e9 });
+        return ok || keep;
+    }
+    // [weather] a heat seeker's line of sight to t (no lock through cloud or fog), checked a few times a second
+    irOk(t) {
+        const W = this.game.weather;
+        if (!W || !W.irClear) return true;
+        const now = this.game.time;
+        if (this._irT == null || now - this._irT > 0.3 || this._irFor !== t) { this._irT = now; this._irFor = t; this._ir = W.irClear(this.ac.pos, t.pos); }
+        return this._ir;
     }
 
     // the incoming missile that arrives first: { m, tti (s) }
@@ -369,6 +406,9 @@ export class Pilot {
     think() {
         const ac = this.ac, sk = this.skill;
         this.thinkT = lerp(0.9, 0.25, sk) + rand(0, 0.2);
+        // [weather] how careful the weather makes it (0 … 1): higher off the ground, less G (weathersys.js caution)
+        const W = this.game.weather;
+        this.caution = W && W.caution ? W.caution(ac.pos) : 0;
         this.pickTarget();
         const threat = this.threatMissile();
         // rookies often don't notice missiles until late
@@ -416,15 +456,19 @@ export class Pilot {
         this.stateT -= dt;
         this.missileCD -= dt;
         if (this.thinkT <= 0) this.think();
+        // an order that flies the jet itself this frame (air-to-air refuelling, a support aircraft's orbit:
+        // airsupport.js) — brain.fly(pilot, dt) → true when it has set the controls
+        if (this.brain && this.brain.fly && this.brain.fly(this, dt)) return;
 
         if (this.waypoint) { this.flyRoute(dt); return; }
         ac.airbrake = false; // engage / strafe put it out when they want it
 
-        const aggr = lerp(0.6, 1.0, sk);
+        const caution = this.caution || 0; // [weather] bad weather and night: gentler, and higher off the ground
+        const aggr = lerp(0.6, 1.0, sk) * (1 - 0.25 * caution);
         let wantDir = _t.set(0, 0, -1).applyQuaternion(ac.qv);
         let throttle = 0.85;
         let wantGuns = false;
-        let gCap = lerp(0.72, 1, sk); // skill-limited G tolerance (share of the pull range)
+        let gCap = lerp(0.72, 1, sk) * (1 - 0.15 * caution); // skill-limited G tolerance (share of the pull range)
         let steer = null;
 
         const FL = this.formation && this.formation.leader;
@@ -505,7 +549,7 @@ export class Pilot {
             }
         }
 
-        const minAGL = lerp(260, 120, sk);
+        const minAGL = lerp(260, 120, sk) * (1 + 0.8 * caution);
         const gunRun = this.target && (this.target === g.pilotMode || this.target.isGround) && this.strafePhase === 'in' && this.target.pos.distanceTo(ac.pos) < 3500;
         if (avoidTerrain(ac, c, minAGL, gunRun)) { wantGuns = false; if (gunRun) this.strafePhase = 'out'; }
 
@@ -580,7 +624,7 @@ export class Pilot {
         // missiles
         const boresightOff = Math.acos(clamp(fwd.dot(los), -1, 1));
         const maxPerTarget = t.isPlayer ? Math.max(1, Math.round(1 + g.difficulty.enemyMissileRate * 1.5)) : 3;
-        if (ac.missiles > 0 && !t.isChute && boresightOff < 0.45 && dist > 500 && dist < WEAPONS.missile.range) {
+        if (ac.missiles > 0 && !t.isChute && boresightOff < 0.45 && dist > 500 && dist < WEAPONS.missile.range && this.irOk(t)) {
             this.lockT += dt;
             t.lockedBy = t.lockedBy || new Set();
             t.lockedBy.add(ac);

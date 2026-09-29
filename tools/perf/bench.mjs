@@ -84,7 +84,9 @@ for (const name of names) {
             Object.defineProperty(p, 'invincible', { value: true, configurable: true });
             const pl = new s.Pilot(g, p, 0.8);
             pl.passive = true; pl.cruise = 0.7;
-            pl.waypoint = circle ? circle.clone() : p.pos.clone().setY(Math.max(p.pos.y, 1500));
+            // (no circle: over the home carrier's group. A waypoint on the jet itself steers along a zero vector: NaN)
+            const cv = g.naval && g.naval.homeCarrier;
+            pl.waypoint = circle ? circle.clone() : cv ? new THREE.Vector3(cv.pos.x, 1500, cv.pos.z) : p.pos.clone().setY(Math.max(p.pos.y, 1500)).addScaledVector(p.getForward(new THREE.Vector3()).setY(0).normalize(), 6000);
             p.benchPilot = pl;
         };
         for (let i = 0; i < WARMUP * 20; i++) { steer(); window.skywarStep(1, 1 / 20); }

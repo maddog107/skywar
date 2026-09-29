@@ -53,6 +53,17 @@ export const UNIT = {
     stryker: { cls: 'vehicle', type: 'tank', hp: 120, score: 250, road: 22, off: 10, accel: 1.0, carry: 'ammo', label: 'M1126 STRYKER', crew: 2, troops: 9 },
 };
 
+// ── what SIGINT hears from each radar (ew.js emitterOf: a unit's own `sigint` signature), while it radiates:
+// { kind, name, power (m: how far out it can be intercepted), hot (fire control: a HARM's favourite) }
+export const SIGINT = {
+    flaplid: { kind: 'track', name: '30N6 FLAP LID', power: 200000, hot: true },
+    p18: { kind: 'search', name: 'P-18 SPOON REST', power: 240000 },
+    buk: { kind: 'track', name: 'SA-11 FIRE DOME', power: 140000, hot: true },
+    osa: { kind: 'track', name: 'SA-8 LAND ROLL', power: 110000, hot: true },
+    patriot_radar: { kind: 'track', name: 'AN/MPQ-65', power: 220000, hot: true },
+    sentinel: { kind: 'search', name: 'AN/MPQ-64 SENTINEL', power: 150000 },
+};
+
 // the rig's pose groups, in a fixed order (static copies are keyed by which are up)
 export const GROUPS = ['jack', 'pad', 'raise', 'door', 'hatch', 'gear', 'side', 'launcher'];
 
@@ -97,6 +108,7 @@ export class ForceVehicle {
         this.alive = true; this.removed = false;
         this.isGround = true;
         this.cls = opts.cls || this.u.cls;
+        if (SIGINT[vid]) this.sigint = SIGINT[vid]; // (heard only while `emitting`)
         this.type = this.u.type;
         this.def = { name: this.realName, score: this.u.score, boom: 1.2 };
         this.conceal = opts.conceal ?? 0.2;

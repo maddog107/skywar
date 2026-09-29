@@ -117,6 +117,11 @@ export class Game {
     surfaceAt(x, z, y = 1e9) {
         const d = this.naval && this.naval.ships.length ? this.naval.deckAt(x, z, y) : null;
         if (d) return d;
+        // piers, pontoons and gangways (boats.js): walkable surfaces over the water
+        if (this.platforms && this.platforms.length) for (const pl of this.platforms) { const s = pl.at(x, z, y); if (s) return s; }
+        // inside an underground complex's tunnels the ground is the tunnel's floor (underground.js)
+        const ug = this.underground && this.underground.surfaceAt(x, z, y);
+        if (ug) return ug;
         const th = terrainHeight(x, z);
         const r = this._surf;
         const bh = this.world.towns ? this.world.towns.bridgeAt(x, z, y) : null;
@@ -344,7 +349,7 @@ export class Game {
         this.applyLivery && this.applyLivery(p);
         const home = base || BASES[0];
         const carrier = this.naval.homeCarrier;
-        if (where === 'carrier' && carrier) {
+        if (where === 'carrier' && carrier && carrier.alive) { // (on the port bow catapult: naval.js catSpot)
             p.spawnDeck(carrier);
             this.addFeed('FULL POWER (9 OR 0) ON DECK TO LAUNCH', '#5dffa0');
         } else if (where === 'water' && p.spec.seaplane && this.spawnOnWater(p)) {
@@ -855,6 +860,7 @@ export class Game {
         ev.on('missileLaunch', (ac, { target, missile }) => {
             if (ac === this.player) {
                 if (missile && missile.kind === 'rkt') return; // rockets aren't missiles: no count, no "Fox two"
+                if (missile && missile.kind === 'arm') { this.missilesFired++; this.audio.whoosh(0.6); return; } // a HARM: "MAGNUM" (airsupport.js)
                 this.missilesFired++;
                 this.audio.whoosh(0.5);
                 this.audio.say(pick(['Fox two!', 'Fox two.', 'Missile away!']));
@@ -1170,8 +1176,16 @@ export class Game {
     candidates() {
         const out = [];
         for (const a of this.aircraft) if (a.alive && a.team !== 'blue' && !a.onGround) out.push(a);
-        if (this.ground) for (const t of this.ground.targets) if (t.alive && t.team !== 'blue' && !t.hidden && (!t.isBridge || t.objective)) out.push(t); // (hidden: not found yet)
+        if (this.ground) for (const t of this.ground.targets) if (t.alive && !t.hidden && t.team !== 'blue' && (!t.isBridge || t.objective)) out.push(t); // (hidden: not found yet)
+        // enemy cruise missiles our side has seen (the AWACS: airsupport.js) can be locked and shot down
+        if (this.strikes) for (const m of this.strikes.missiles) if (m.alive && m.team !== 'blue' && m.detected && m.kind === 'cruise') out.push(m);
         return out;
+    }
+
+    // the ground under a camera: the terrain, or a tunnel's floor when the camera is inside one (underground.js)
+    camGround(x, z, y) {
+        const f = this.underground ? this.underground.floorAt(x, z, y) : null;
+        return f ?? terrainHeight(x, z);
     }
 
     // Neutral air traffic (softtargets.js: the airbase helicopters, airliners, transports): lockable with T after
@@ -1230,7 +1244,8 @@ export class Game {
         const W = this.slotW;
         const ammoOk = p[this.slotDef.ammo] > 0 && !W.unguided;
         const range = t.isGround ? Math.max(6000, W.range * 0.7) : W.range;
-        const inCone = ammoOk && dot > W.lockCone && dist < range;
+        // (a heat seeker can't lock through cloud or fog: weathersys.js checks its line of sight)
+        const inCone = ammoOk && dot > W.lockCone && dist < range && !this.irBlocked;
         if (inCone) this.lockProgress = Math.min(1, this.lockProgress + dt / W.lockTime);
         else this.lockProgress = Math.max(0, this.lockProgress - dt * 2);
         if (inCone || this.lockProgress > 0) {
@@ -1274,7 +1289,8 @@ export class Game {
 
     // ═════════════ Player control ═════════════
     // Stopped on the ground (after a crash landing, or just parked): climb out and walk
-    canClimbOut(p) { return p.onGround && p.speed < 0.8 && p.controls.throttle < 0.06 && !p.deck; }
+    // (on a carrier's deck too: the man on foot rides the deck, pilot.js)
+    canClimbOut(p) { return p.onGround && (p.deck ? p.relSpeed : p.speed) < 0.8 && p.controls.throttle < 0.06 && !p.catapult; }
     climbOut() {
         const p = this.player;
         const seat = this.wreckage.groundSeat(p);
@@ -1461,7 +1477,9 @@ export class Game {
             this.groundStart.update(dt, mouse);
             this.firing = false;
         } else if (pm && this.state === 'playing') {
-            if (pm.alive) pm.update(dt, mouse);
+            // a room, a boat's helm or a vehicle's cab has the controls while you're in it (interiors.js)
+            if (this.takeover) this.takeover.control(dt, mouse);
+            else if (pm.alive) pm.update(dt, mouse);
             this.firing = false;
         } else if (this.state === 'playing' && p.alive) {
             this.updatePlayer(dt, mouse);
@@ -1528,7 +1546,7 @@ export class Game {
         else if (this.cockpit && this.cockpit.enabled && p && p.alive) this.cockpit.update(rawDt, this, this.camera, this.world);
         this.audio.update(rawDt, pm ? null : p, {
             playing: this.state === 'playing' || this.state === 'dead',
-            cockpit: this.cameraMode === 'cockpit',
+            cockpit: this.cameraMode === 'cockpit' || !!(this.indoors && this.indoors.sealed), // (walls muffle the world)
             firing: this.firing,
             seeking: this.lockTarget && this.lockProgress > 0 && this.lockProgress < 1,
             locked: this.lockProgress >= 1,
@@ -1594,14 +1612,17 @@ export class Game {
             this.navalLaunchT -= dt;
             if (c && c.alive && this.navalLaunchT <= 0 && enemiesAlive < 4) {
                 this.navalLaunchT = rand(55, 85);
-                // deck launch: a fighter leaves the bow at flying speed
+                // deck launch: off a catapult when the naval plug-in runs the deck (navalops.js), else straight off
+                // the bow at flying speed
                 const e = new Aircraft(this, pick(['su35', 'su57', 'mig29', 'j20']), { team: 'red' });
-                const bow = c.toWorld(10, c.deckY + 12, -c.def.L * 0.55);
-                e.spawnAir(bow, c.heading, 0.35);
                 const pl = new Pilot(this, e, clamp(this.difficulty.skill + rand(-0.1, 0.1), 0.2, 1));
                 pl.home = c.pos; pl.leash = 14000;
                 this.aircraft.push(e);
-                this.effects.smoke.emit(bow, _v.set(0, 5, 0), 3, 10, 30, [1, 1, 1], [0.9, 0.9, 0.9], 0.6, 0, 1, 2);
+                if (!(this.navalops && this.navalops.catapultLaunch(c, e))) {
+                    const bow = c.toWorld(10, c.deckY + 12, -c.def.L * 0.55);
+                    e.spawnAir(bow, c.heading, 0.35);
+                    this.effects.smoke.emit(bow, _v.set(0, 5, 0), 3, 10, 30, [1, 1, 1], [0.9, 0.9, 0.9], 0.6, 0, 1, 2);
+                }
                 this.addFeed('ENEMY CARRIER LAUNCHING FIGHTERS', '#ff9f5a');
             }
             if (c && !c.alive && !this._navalWon) {
@@ -1716,7 +1737,8 @@ export class Game {
             const dist = under ? 17 : 4.6 - k * 2.4;
             const dir = pm.viewDir(_v2);
             const want = _v3.copy(target).addScaledVector(dir, -dist).add(new THREE.Vector3(0, under ? 1.5 : 0.5 - k * 0.25, 0));
-            const gy = Math.max(terrainHeight(want.x, want.z), 0) + 0.5;
+            if (this.underground) this.underground.clampCamera(want, target);
+            const gy = Math.max(this.camGround(want.x, want.z, want.y), 0) + 0.5;
             if (want.y < gy) want.y = gy;
             // don't back the camera into a wall
             const bl = this.world.towns && this.world.towns.buildings;
@@ -1857,9 +1879,12 @@ export class Game {
             }
             const offset = _v.set(0, height, back).applyQuaternion(this.camQuat);
             const desired = _v2.copy(p.pos).add(offset);
+            // (in a tunnel the camera stays in it: closer, never up through the rock)
+            if (this.underground) this.underground.clampCamera(desired, p.pos);
             // keep above terrain and the waves
-            const gh = Math.max(terrainHeight(desired.x, desired.z), desired.y < WATER.maxCrest + 4 ? waterHeight(desired.x, desired.z) : 0) + 3;
+            const gh = Math.max(this.camGround(desired.x, desired.z, desired.y), desired.y < WATER.maxCrest + 4 ? waterHeight(desired.x, desired.z) : 0) + 3;
             if (desired.y < gh) desired.y = gh;
+            if (this.naval.ships.length) this.naval.clearOfIslands(desired, p.pos); // (never inside a carrier's island)
             cam.position.copy(desired);
             cam.quaternion.copy(this.camQuat);
             // look slightly above the jet so it sits in the lower third

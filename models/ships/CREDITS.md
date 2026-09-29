@@ -18,6 +18,7 @@ names (VLS doors and cells, masts, elevators, hatches, seats, the wheel…) are 
 | `rhib.glb` | 11 m Naval Special Warfare rigid inflatable boat | `rhib_model.py` | United States Marine Inc. (builder); americanspecialops.com; navyseals.com; photographs of Special Boat Teams 12 and 20 |
 | `cb90.glb` | CB90H combat boat (Stridsbåt 90H), Swedish coastal camouflage | `cb90_model.py` | Dockstavarvet general arrangement and specification; KaMeWa FF-450 datasheet; hhogman.se; SoldF; sv.wikipedia |
 | `slava.glb` | Slava-class cruiser (Project 1164, Varyag, pennant 011) | `slava_model.py` | US DoD profile drawing (1986, Commons); navypedia profile and plan; kchf.ru; ru.wikipedia (Project 1164); the annotated armament drawing on Commons; photographs of Varyag and Moskva |
+| `deckcrew.glb` | Flight-deck crew figure (in parts: torso and helmet, head, arm, leg) and an aircraft tow tractor | `deckcrew_model.py` | US Navy flight-deck jersey colours (CV NATOPS); photographs of carrier deck crews and of A/S32A-31A tow tractors |
 
 Positions not published anywhere were measured from the scaled drawings and photographs above (roughly ±1–3 m
 on the ships, ±0.2–0.3 m on the boats).
