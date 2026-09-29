@@ -587,7 +587,7 @@ function buildVeryFar(t, type) {
     const def = TYPES[type];
     if (!t.far || !def || def.cls === 'sub') return null;
     try {
-        const { position, color, index } = clusterTriangles(t.far, def.L / 140);
+        const { position, color, index } = clusterTriangles(t.far, def.L / 140, { colorSplit: true });
         if (index.length >= 30) {
             const g0 = new THREE.BufferGeometry();
             g0.setAttribute('position', new THREE.BufferAttribute(position, 3));

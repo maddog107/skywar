@@ -10,7 +10,7 @@ import * as THREE from 'three';
 const cache = new Map();   // type → { geometry, material } | null (couldn't)
 const texCols = new Map(); // texture → { w, h, data } sampled small
 
-// a texture's colours at 32×32 (null when its image can't be read: no DOM, a tainted canvas)
+// a texture's colours at 64×64 (null when its image can't be read: no DOM, a tainted canvas)
 function sampler(tex) {
     if (texCols.has(tex)) return texCols.get(tex);
     let s = null;
@@ -18,17 +18,19 @@ function sampler(tex) {
         const img = tex && tex.image;
         if (img && typeof document !== 'undefined') {
             const c = document.createElement('canvas');
-            c.width = c.height = 32;
+            c.width = c.height = 64;
             const ctx = c.getContext('2d', { willReadFrequently: true });
-            if (ctx && ctx.getImageData) { ctx.drawImage(img, 0, 0, 32, 32); s = { w: 32, h: 32, data: ctx.getImageData(0, 0, 32, 32).data }; }
+            if (ctx && ctx.getImageData) { ctx.drawImage(img, 0, 0, 64, 64); s = { w: 64, h: 64, data: ctx.getImageData(0, 0, 64, 64).data }; }
         }
     } catch (e) { s = null; }
     texCols.set(tex, s);
     return s;
 }
 
-// the triangles of an object (model space) clustered on a grid `cell` m: { position, color, index } arrays
-export function clusterTriangles(root, cell, { skip = null } = {}) {
+// the triangles of an object (model space) clustered on a grid `cell` m: { position, color, index } arrays.
+// colorSplit: vertices of clearly different colours in one cell stay apart (a red wingtip, a dark window band), so
+// small markings keep their colour instead of averaging into the paint around them
+export function clusterTriangles(root, cell, { skip = null, colorSplit = false } = {}) {
     root.updateMatrixWorld(true);
     const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
     const m = new THREE.Matrix4(), v = new THREE.Vector3(), col = new THREE.Color(), uv = new THREE.Vector2();
@@ -54,9 +56,6 @@ export function clusterTriangles(root, cell, { skip = null } = {}) {
             for (let k = 0; k < 3; k++) {
                 const i = idx ? idx.getX(t + k) : t + k;
                 v.fromBufferAttribute(pos, i).applyMatrix4(m);
-                const kk = key(v.x, v.y, v.z);
-                let c = cells.get(kk);
-                if (c === undefined) { c = sum.length / 7; cells.set(kk, c); sum.push(0, 0, 0, 0, 0, 0, 0); }
                 // the colour: the material's, times the texture's there
                 let r = base.r, gC = base.g, b = base.b;
                 // (a merged model's plain parts carry their colours per vertex: meshmerge.js)
@@ -67,6 +66,10 @@ export function clusterTriangles(root, cell, { skip = null } = {}) {
                     const o4 = (py * tex.w + px) * 4;
                     r *= (tex.data[o4] / 255) ** 2.2; gC *= (tex.data[o4 + 1] / 255) ** 2.2; b *= (tex.data[o4 + 2] / 255) ** 2.2;
                 }
+                // (colours compared in a perceptual-ish space: square roots of the linear values, in eighths)
+                const kk = key(v.x, v.y, v.z) + (colorSplit ? ',' + Math.round(Math.sqrt(r) * 8) + ',' + Math.round(Math.sqrt(gC) * 8) + ',' + Math.round(Math.sqrt(b) * 8) : '');
+                let c = cells.get(kk);
+                if (c === undefined) { c = sum.length / 7; cells.set(kk, c); sum.push(0, 0, 0, 0, 0, 0, 0); }
                 const s = c * 7;
                 sum[s] += v.x; sum[s + 1] += v.y; sum[s + 2] += v.z; sum[s + 3] += r; sum[s + 4] += gC; sum[s + 5] += b; sum[s + 6]++;
                 ids[k] = c;
@@ -97,7 +100,7 @@ export function farModelFor(ac) {
     try {
         const L = ac.spec.length;
         // (a cell of ~1/70 of the length: an E-3 comes out at a couple of thousand triangles)
-        const { position, color, index } = clusterTriangles(ac.model, L / 70, { skip: (o) => /prop|flame|nav/i.test(o.name || '') });
+        const { position, color, index } = clusterTriangles(ac.model, L / 70, { skip: (o) => /prop|flame|nav/i.test(o.name || ''), colorSplit: true });
         if (index.length >= 30) {
             const g = new THREE.BufferGeometry();
             g.setAttribute('position', new THREE.BufferAttribute(position, 3));
