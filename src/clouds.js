@@ -406,7 +406,9 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
             vec4 wm = weatherAt(p);
             float gap = cloudGap(p, wm);
             // clear air: skip whole steps (which keeps the ray on its grid)
-            if (gap > 0.0 && fine <= 0.0) { lastK = clamp(floor(gap / dt * 0.95), 1.0, 5.0) * mult; k += lastK; wasClear = 1.0; continue; }
+            // (up to 8 steps: the steps grow ~0.5 % each, so 8 of them still stay inside the 0.95 margin on the gap;
+            // screenshots with 5 and 8 differ no more than two runs of 5)
+            if (gap > 0.0 && fine <= 0.0) { lastK = clamp(floor(gap / dt * 0.95), 1.0, 8.0) * mult; k += lastK; wasClear = 1.0; continue; }
             float lod = max(0.0, log2(dt / ${(BASE_SIZE / BASE_RES).toFixed(1)}));
             pixFoot = t * pixAngle * 2.0;
             float amb;
