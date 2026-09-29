@@ -416,6 +416,9 @@ export class Pilot {
         this.stateT -= dt;
         this.missileCD -= dt;
         if (this.thinkT <= 0) this.think();
+        // an order that flies the jet itself this frame (air-to-air refuelling, a support aircraft's orbit:
+        // airsupport.js) — brain.fly(pilot, dt) → true when it has set the controls
+        if (this.brain && this.brain.fly && this.brain.fly(this, dt)) return;
 
         if (this.waypoint) { this.flyRoute(dt); return; }
         ac.airbrake = false; // engage / strafe put it out when they want it

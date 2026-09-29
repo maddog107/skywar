@@ -16,6 +16,7 @@ import { FrontLine } from './front.js';
 import { Director } from './director.js';
 import { TaskManager } from './tasks.js';
 import { Wingmen } from './wingmen.js';
+import { AirSupport } from './airsupport.js';
 import { WarInteriors } from './warinteriors.js';
 import { Underground } from './underground.js';
 
@@ -26,6 +27,7 @@ export const SYSTEMS = [
     ['command', CommandMenu],
     ['interiors', WarInteriors],    // rooms, boats and cabs: enter on foot, press buttons (before strikes: a room keeps the comma; it yields its camera to the missile camera)
     ['strikes', StrikeManager],
+    ['air', AirSupport],         // AWACS, tankers, recon, EW, bombers (after strikes: its launch sources)
     ['front', FrontLine],        // the front line and the ground war
     ['director', Director],      // enemy and friendly activity, the Living War mode
     ['tasks', TaskManager],      // dynamic tasks

@@ -860,6 +860,7 @@ export class Game {
         ev.on('missileLaunch', (ac, { target, missile }) => {
             if (ac === this.player) {
                 if (missile && missile.kind === 'rkt') return; // rockets aren't missiles: no count, no "Fox two"
+                if (missile && missile.kind === 'arm') { this.missilesFired++; this.audio.whoosh(0.6); return; } // a HARM: "MAGNUM" (airsupport.js)
                 this.missilesFired++;
                 this.audio.whoosh(0.5);
                 this.audio.say(pick(['Fox two!', 'Fox two.', 'Missile away!']));
@@ -1176,6 +1177,8 @@ export class Game {
         const out = [];
         for (const a of this.aircraft) if (a.alive && a.team !== 'blue' && !a.onGround) out.push(a);
         if (this.ground) for (const t of this.ground.targets) if (t.alive && !t.hidden && t.team !== 'blue' && (!t.isBridge || t.objective)) out.push(t);
+        // enemy cruise missiles our side has seen (the AWACS: airsupport.js) can be locked and shot down
+        if (this.strikes) for (const m of this.strikes.missiles) if (m.alive && m.team !== 'blue' && m.detected && m.kind === 'cruise') out.push(m);
         return out;
     }
 

@@ -186,7 +186,8 @@ export class Weapons {
     // ── Missiles ──
     fireMissile(ac, target, kind = 'aam') {
         if (ac.alive === false) return null;
-        const W = kind === 'sam' ? WEAPONS.sam : kind === 'lrm' ? WEAPONS.lrm : kind === 'rkt' ? WEAPONS.rkt : WEAPONS.missile;
+        // (a kind of its own — 'arm', the HARM of airsupport.js — is WEAPONS[kind])
+        const W = WEAPONS[kind === 'aam' ? 'missile' : kind] || WEAPONS.missile;
         const fwd = ac.getForward ? ac.getForward(_v1) : _v1.copy(ac.launchDir);
         const pos = _v2.copy(ac.pos);
         if (ac.getUp) {
@@ -197,6 +198,7 @@ export class Weapons {
         }
         const mesh = new THREE.Mesh(kind === 'sam' ? this.samGeo : kind === 'rkt' ? this.rocketGeo : this.missileGeo, this.missileMat);
         if (kind === 'lrm') mesh.scale.set(1.25, 1.25, 1.25);
+        else if (W.scale) mesh.scale.setScalar(W.scale);
         mesh.position.copy(pos);
         mesh.castShadow = true;
         this.game.scene.add(mesh);
@@ -238,7 +240,7 @@ export class Weapons {
             if ((W.unguided || m.age > 0.25) && m.age < W.boost + 0.25) m.vel.addScaledVector(dir, W.accelBoost * dt);
             // drag (thinner up high)
             const rho = Math.exp(-Math.max(m.pos.y, 0) / 9000);
-            m.vel.addScaledVector(dir, -speed * speed * 0.00018 * rho * dt);
+            m.vel.addScaledVector(dir, -speed * speed * 0.00018 * (W.drag ?? 1) * rho * dt);
             if (m.age < 0.25 && !W.unguided) m.vel.y -= G * dt; // drop before ignition
             if (W.unguided) m.vel.y -= G * dt * 0.5;
             m.armed = m.age > 0.5;

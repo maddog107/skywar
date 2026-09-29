@@ -307,7 +307,9 @@ export class SubLauncher extends LaunchSource {
 }
 
 // ═════════════ Strategic missiles ═════════════
-class StrategicMissile {
+// (exported so a plug-in can subclass it: a MISSILES entry's `Missile` is the class its rounds are made with —
+// the air-launched cruise missiles of airsupport.js / bombers.js)
+export class StrategicMissile {
     constructor(mgr, spec, team, pos, dir, aim, source, strike) {
         this.mgr = mgr; this.game = mgr.game;
         this.spec = spec; this.kind = spec.kind; this.team = team;
@@ -550,6 +552,8 @@ export class StrikeManager {
         this.nextStrikeId = 1;
         this.cam = null;       // missile camera
         this.silo = null;
+        this.watchers = [];    // plug-ins' BDA eyes: pos → true when they see it (the pod, drones)
+        this.airProviders = []; // plug-ins' aircraft for air strikes (airStrike)
     }
 
     // ═════════════ Lifecycle ═════════════
@@ -619,7 +623,7 @@ export class StrikeManager {
         if (!T) return null;
         marks = (marks || []).filter(Boolean);
         if (!marks.length) { if (!quiet) war.radio('COMMAND', 'NO TARGET DESIGNATED — MARK A TARGET FIRST (COMMA)', { color: '#ff9f5a', say: false }); return null; }
-        if (T.aircraft) return this.airStrike(marks, team, quiet);
+        if (T.aircraft) return this.airStrike(marks, team, quiet, type);
         const specKey = T.use[team];
         const aims = [];
         for (const d of (T.all ? marks : [marks[marks.length - 1]])) {
@@ -710,10 +714,14 @@ export class StrikeManager {
 
     // An air strike: two jets from the nearest friendly airfield bomb the mark and head home (a support plug-in can
     // replace this with proper strike packages)
-    airStrike(marks, team, quiet) {
+    airStrike(marks, team, quiet, type = 'air') {
         const g = this.game, war = g.war, d = marks[marks.length - 1];
         const unit = d.unit || (d.alive !== undefined ? d : null);
         const pos = unit ? unit.pos : d.fixed || d.pos;
+        // aircraft the plug-ins have on call fly it if they can (airProviders: (type, marks, team, quiet) → the
+        // strike or null — a drone on station with Hellfires, a bomber); a type of theirs nobody took is refused
+        for (const p of this.airProviders || []) { const st = p(type, marks, team, quiet); if (st) return st; }
+        if (type !== 'air') { if (!quiet) war.radio('COMMAND', 'UNABLE — NO ' + (STRIKE_TYPES[type] ? STRIKE_TYPES[type].label : 'AIRCRAFT') + ' AVAILABLE', { color: '#ff9f5a', say: 'Unable.' }); return null; }
         if (!g.spawnFriendly || team !== war.side) return null;
         const base = BASES.filter(b => b.friendly && !b.civil).sort((a, b) => Math.hypot(a.x - pos.x, a.z - pos.z) - Math.hypot(b.x - pos.x, b.z - pos.z))[0];
         const strike = { id: this.nextStrikeId++, type: 'air', label: 'AIR STRIKE', team, spec: { name: 'GBU-31', short: 'JDAM', kind: 'air', warhead: 420, blast: 30, hard: 0.55 }, aims: [{ pos, unit, label: unit ? war.label(unit) : 'MARK ' + d.id, mark: d }], launched: 0, planned: 0, impacts: 0, lost: 0, missiles: [], t: g.time, sources: new Set(), done: false, jets: [] };
@@ -736,7 +744,7 @@ export class StrikeManager {
 
     // ═════════════ Missiles ═════════════
     spawnMissile(spec, team, pos, dir, aim, source, strike) {
-        const m = new StrategicMissile(this, spec, team, pos, dir, aim, source, strike);
+        const m = new (spec.Missile || StrategicMissile)(this, spec, team, pos, dir, aim, source, strike);
         this.missiles.push(m);
         if (strike) { strike.launched++; strike.missiles.push(m); }
         this.game.events.emit('strategicLaunch', m);
@@ -812,6 +820,7 @@ export class StrikeManager {
         m.remove();
         this.missiles.splice(this.missiles.indexOf(m), 1);
         if (st) { st.lost++; this.checkStrikeDone(st); if (st.team === g.war.side) g.war.radio('COMMAND', st.spec.short + ' INTERCEPTED', { color: '#ff9f5a', say: false }); }
+        g.events.emit('strategicIntercepted', m);
     }
 
     // All in: what happened is only known if someone saw it — otherwise it waits for battle damage assessment
