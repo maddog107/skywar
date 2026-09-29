@@ -451,6 +451,14 @@ export class TacticalMap {
             case 'infantry': ctx.moveTo(x - s, y - s * 0.6); ctx.lineTo(x + s, y + s * 0.6); ctx.moveTo(x + s, y - s * 0.6); ctx.lineTo(x - s, y + s * 0.6); break;
             case 'bridge': ctx.moveTo(x - s, y - s * 0.4); ctx.lineTo(x + s, y - s * 0.4); ctx.moveTo(x - s, y + s * 0.4); ctx.lineTo(x + s, y + s * 0.4); break;
             case 'facility': case 'entrance': case 'bunker': ctx.rect(x - s * 0.6, y - s * 0.4, s * 1.2, s * 0.8); break;
+            // airbase installations (bases.js)
+            case 'runway': ctx.rect(x - s * 0.22, y - s, s * 0.44, s * 2); ctx.moveTo(x, y - s * 0.7); ctx.lineTo(x, y + s * 0.7); break;
+            case 'taxiway': ctx.moveTo(x - s * 0.5, y + s); ctx.lineTo(x - s * 0.5, y - s * 0.2); ctx.lineTo(x + s, y - s * 0.2); ctx.moveTo(x + s * 0.1, y + s); ctx.lineTo(x + s * 0.1, y + s * 0.4); ctx.lineTo(x + s, y + s * 0.4); break;
+            case 'shelter': case 'hangar': ctx.moveTo(x - s, y + s * 0.5); ctx.arc(x, y + s * 0.5, s, Math.PI, 0); ctx.lineTo(x - s, y + s * 0.5); break;
+            case 'fuel': ctx.ellipse(x, y - s * 0.5, s * 0.6, s * 0.22, 0, 0, Math.PI * 2); ctx.moveTo(x - s * 0.6, y - s * 0.5); ctx.lineTo(x - s * 0.6, y + s * 0.6); ctx.moveTo(x + s * 0.6, y - s * 0.5); ctx.lineTo(x + s * 0.6, y + s * 0.6); break;
+            case 'ammo': ctx.arc(x, y - s * 0.2, s * 0.45, Math.PI, 0); ctx.lineTo(x + s * 0.45, y + s * 0.6); ctx.lineTo(x - s * 0.45, y + s * 0.6); ctx.closePath(); break;
+            case 'tower': ctx.rect(x - s * 0.2, y - s * 0.3, s * 0.4, s * 1.2); ctx.rect(x - s * 0.55, y - s, s * 1.1, s * 0.7); break;
+            case 'power': ctx.moveTo(x + s * 0.2, y - s); ctx.lineTo(x - s * 0.4, y + s * 0.1); ctx.lineTo(x + s * 0.3, y + s * 0.1); ctx.lineTo(x - s * 0.2, y + s); break;
             default: ctx.moveTo(x - s * 0.8, y + s * 0.4); ctx.lineTo(x + s * 0.8, y + s * 0.4); ctx.arc(x - s * 0.45, y + s * 0.4, s * 0.25, 0, Math.PI * 2); ctx.moveTo(x + s * 0.7, y + s * 0.4); ctx.arc(x + s * 0.45, y + s * 0.4, s * 0.25, 0, Math.PI * 2);
         }
         ctx.stroke();

@@ -30,6 +30,7 @@ import { preloadWeapons } from './weaponmodels.js';
 import { SLOTS } from './arsenal.js';
 import { preloadShips } from './naval.js';
 import * as vehicles from './vehicles.js';
+import { preloadAirbaseModels } from './airbasemodels.js';
 import { setupTouch, isTouchDevice } from './touch.js';
 import { Aircraft, refSpeeds } from './aircraft.js';
 import { Pilot } from './ai.js';
@@ -162,6 +163,7 @@ async function boot() {
     $('loadText').textContent = 'LOADING AIRFRAMES…';
     await Promise.all([preloadModels((f) => { $('loadFill').style.width = (10 + f * 60) + '%'; }), preloadProps(), preloadCharacter(), preloadShips(), preloadWeapons()]);
     vehicles.preloadVehicles({ background: true }); // after the airframes; parsed once the page is idle (vehiclesReady())
+    preloadAirbaseModels({ background: true });     // shelters, igloos, repair vehicles… (airbasemodels.js)
     $('loadText').textContent = 'BUILDING TOWNS & ROADS…';
     await new Promise(r => setTimeout(r, 20));
     world.towns = new Towns(scene, world);
@@ -643,6 +645,7 @@ function buildCredits() {
         ['Ships: Nimitz carrier, Arleigh Burke destroyer, Ticonderoga cruiser, Virginia and Ohio submarines, Supply-class AOE, NSW RHIB, CB90, Slava cruiser, flight-deck crew and tow tractor', 'SKYWAR / Blender (tools/ships; sources in models/ships/CREDITS.md)', 'CC0', 'tools/ships/'],
         ['Interiors: Virginia SSN control room, carrier CIC and Pri-Fly, Joint Operations Center (floor and building), Scud TEL launch cabin and cab (see models/interiors/CREDITS.md)', 'SKYWAR / Blender (tools/interiors)', 'CC0', 'tools/interiors/'],
         ['Military vehicles: Scud, Bastion, S-300, Osa, Buk, Smerch, Grad, Flap Lid, P-18 and Soviet support trucks; Patriot, HIMARS, M270, Sentinel, Stryker, HEMTT and US support vehicles (see models/vehicles/CREDITS.md)', 'SKYWAR / Blender (tools/vehicles)', 'CC0', 'tools/vehicles/'],
+        ['Airbase installations and vehicles: hardened aircraft shelters (TAB-V, Soviet arch shelter), QRA building, munitions igloo, fuel tank, power plant, siren, searchlight, revetment, runway-repair loader and dump truck, aircraft tug, follow-me car, Harpoon coastal launcher (see models/airbases/CREDITS.md)', 'SKYWAR / Blender (tools/airbases)', 'CC0', 'tools/airbases/'],
         ['Helicopter (military)', 'Zsky', 'CC BY 3.0', 'https://poly.pizza/m/hG2Qr0A3zR'],
         ['Helicopter (civil)', 'jeremy', 'CC BY 3.0', 'https://poly.pizza/m/eb7b31pjGtQ'],
         ['Humvee', 'madtrollstudio', 'CC BY 3.0', 'https://poly.pizza/m/Ebryot9iKM'],

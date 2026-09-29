@@ -16,6 +16,8 @@ import { FrontLine } from './front.js';
 import { Director } from './director.js';
 import { TaskManager } from './tasks.js';
 import { Wingmen } from './wingmen.js';
+import { Bases } from './bases.js';
+import { CoastalDefence } from './coastal.js';
 import { AirSupport } from './airsupport.js';
 import { NavalOps } from './navalops.js';
 import { WarInteriors } from './warinteriors.js';
@@ -30,6 +32,7 @@ export const SYSTEMS = [
     ['command', CommandMenu],
     ['interiors', WarInteriors],    // rooms, boats and cabs: enter on foot, press buttons (before strikes: a room keeps the comma; it yields its camera to the missile camera)
     ['strikes', StrikeManager],
+    ['bases', Bases],            // airbases alive: alert states, installations, craters and repairs, scrambles, life
     ['air', AirSupport],         // AWACS, tankers, recon, EW, bombers (after strikes: its launch sources)
     ['navalops', NavalOps],      // carrier groups, naval air defence, surface action, launches on the rigs, deck ops
     ['front', FrontLine],        // the front line and the ground war
@@ -37,4 +40,5 @@ export const SYSTEMS = [
     ['tasks', TaskManager],      // dynamic tasks
     ['wingmen', Wingmen],        // wingmen that take orders
     ['underground', Underground], // hidden mountain complexes: portals, blast doors, tunnels, intel, scrambles
+    ['coastal', CoastalDefence], // coastal anti-ship missile batteries (Bastion-P, Harpoon)
 ];

@@ -323,6 +323,23 @@ export class Director {
         f.matT = g.war.time;
     }
 
+    // real jets that already exist (an airbase's scramble took them off its runway: bases.js) become the flight's
+    adopt(f, jets) {
+        const g = this.game;
+        f.members = [];
+        f.types = jets.map(a => a.type); f.hp = jets.map(a => clamp(a.health / a.maxHealth, 0, 1)); f.bombs = jets.map(a => a.bombs | 0);
+        jets.forEach((a, i) => {
+            a.slot = i; a.flight = f;
+            const pl = a.pilot || new Pilot(g, a, clamp(f.skill + rand(-0.08, 0.08), 0.2, 1));
+            this.configure(f, a, pl);
+            if (!g.aircraft.includes(a)) g.aircraft.push(a);
+            g.war.add(a, { cls: 'aircraft', name: f.team === g.war.side ? a.callsign : a.spec.name.toUpperCase() });
+            f.members.push(a);
+        });
+        f.pos.copy(jets[0].pos); f.vel.copy(jets[0].vel);
+        f.matT = g.war.time;
+    }
+
     // what the pilots do, by role
     configure(f, a, pl) {
         const g = this.game;
@@ -880,6 +897,8 @@ export class Director {
             if (!this.airfieldDownCall) { this.airfieldDownCall = true; this.say('COMMAND', 'THE ENEMY AIRFIELD IS OUT OF ACTION — THEIR FIGHTERS WILL HAVE TO COME FROM FURTHER AWAY', { color: '#5dffa0', say: 'The enemy airfield is out of action.' }); }
             return null;
         }
+        // its runway cratered, no jets or no fuel left (bases.js): nothing takes off from there for now
+        if (g.bases && g.bases.enabled && !g.bases.launchStatus(b).ok) return null;
         return new THREE.Vector3(b.x, b.h, b.z);
     }
 
@@ -919,6 +938,19 @@ export class Director {
             this.lastScramble = war.time;
             this.gciAcc = 0;
             return;
+        }
+        // from an airfield we model (bases.js): its alert pair really takes off — the horn, the taxi, the runway
+        if (g.bases && g.bases.scramble) {
+            const skill = this.redSkill() + 0.05;
+            const r = g.bases.scramble(from, { team: 'red', types: [pick(RED_FIGHTERS), pick(RED_FIGHTERS)], role: 'intercept', callsign: 'INTERCEPT', skill, speed: 280, target: p.pos.clone(),
+                setup: (f) => { f.anchor = (g.player && g.player.alive ? g.player.pos : f.pos).clone(); f.endT = war.time + 300; f.home = this.homeFor('red', f.pos); f.detected = true; f.seenT = war.time; f.announced = true; } });
+            if (r === false) { this.gciAcc = 10; return; } // (that field can't launch just now)
+            if (r) {
+                this.lastScramble = war.time; this.gciAcc = 0;
+                const { brg, km } = war.bearingRange(p.pos, from);
+                this.say('MAGIC', 'BANDITS SCRAMBLING FROM ' + r.field.name + ', BRG ' + String(brg).padStart(3, '0') + ' FOR ' + Math.round(km) + ' KM — AIRBORNE IN ABOUT ' + Math.max(30, Math.round(r.eta / 30) * 30) + ' SECONDS', { color: '#ff9f5a', say: 'Magic. Bandits scrambling, bearing ' + brg + '. Their radars have you.' });
+                return;
+            }
         }
         this.lastScramble = war.time;
         this.gciAcc = 0;
@@ -972,7 +1004,8 @@ export class Director {
         const g = this.game, war = g.war;
         const opts = [];
         for (const b of BASES) if (b.friendly && !b.civil) {
-            const w = baseToWorld(b, 300 + rand(-150, 150), rand(-600, 600));
+            // (bases.js picks the aim: a stick across the runway, or an installation)
+            const w = (g.bases && g.bases.raidAim && g.bases.raidAim(b)) || baseToWorld(b, 300 + rand(-150, 150), rand(-600, 600));
             opts.push({ w: b.id === 'home' ? 3 : 2, t: { pos: new THREE.Vector3(w.x, b.h, w.z), unit: null, label: b.name, kind: 'base', base: b } });
         }
         for (const u of this.defences || []) if (u.alive) opts.push({ w: 1.2, t: { pos: u.pos, unit: u, label: u.name + ' AT ' + this.placeName(u.pos), kind: 'unit' } });
