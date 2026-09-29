@@ -690,7 +690,7 @@ export class AirSupport {
         const war = this.game.war;
         this.emitters.length = 0;
         for (const u of war.units) {
-            if (!u.alive || u.team === war.side || u.team === 'neutral') continue;
+            if (!u.alive || u.ugInside || u.team === war.side || u.team === 'neutral') continue; // (not what's inside a mountain: underground.js)
             const rec = war.recs.get(u);
             const em = emitterOf(u, rec);
             if (em) this.emitters.push({ u, rec, em });
@@ -1046,7 +1046,7 @@ export class AirSupport {
         for (let k = 0; k < per; k++) {
             f.scanI = ((f.scanI || 0) + 1) % n;
             const u = units[f.scanI];
-            if (!u.alive || u.team === war.side || u.team === 'neutral') continue;
+            if (!u.alive || u.ugInside || u.team === war.side || u.team === 'neutral') continue; // (not what's inside a mountain: underground.js)
             const rec = war.recs.get(u);
             if (!rec || rec.cls === 'aircraft' || rec.cls === 'helicopter' || rec.known >= INTEL.CONFIRMED) continue;
             if (Math.hypot(u.pos.x - A.x, u.pos.z - A.z) > A.r + 2500) continue;
@@ -1084,7 +1084,7 @@ export class AirSupport {
         if (!run || run.done || !f.task || f.task.kind !== 'run' || f.task.leg !== 1) return;
         const P = f.ac.pos;
         for (const u of war.units) {
-            if (!u.alive || u.team === war.side || u.team === 'neutral' || run.shots.has(u)) continue;
+            if (!u.alive || u.ugInside || u.team === war.side || u.team === 'neutral' || run.shots.has(u)) continue;
             const rec = war.recs.get(u);
             if (!rec || rec.cls === 'aircraft' || rec.cls === 'helicopter') continue;
             if (Math.hypot(u.pos.x - P.x, u.pos.z - P.z) > R.swath || !inSwath(u.pos, run.a, run.b, R.swath)) continue;

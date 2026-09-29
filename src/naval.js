@@ -604,7 +604,7 @@ export class Ship {
         this.mesh.rotation.set(0, this.heading, 0);
         this.listAngle = damp01(this.listAngle || 0, (1 - Math.max(this.hp, 0) / this.maxHp) * 0.05, dt);
         this.mesh.rotation.z = this.listAngle + sink * 0.28 + mo.roll;
-        this.mesh.rotation.x = mo.pitch - (this.alive ? 0 : sink * 0.08);
+        this.mesh.rotation.x = mo.pitch - (this.alive ? 0 : sink * 0.08) + (this.trim || 0); // (trim: a diving submarine's down angle)
         this.deckY = this.def.deckY + y;
         this.center.set(x, y + this.def.deckY * 0.55, z);
     }
@@ -896,6 +896,7 @@ export class Naval {
             if (!s.onDeck(x, z)) continue;
             if (y < -10) continue;
             const r = this._surf;
+            r.vessel = s; // (whatever the deck belongs to: a man walking on it rides along, pilot.js)
             r.h = s.deckHeight(x, z); r.ship = s.type === 'carrier' && s.alive ? s : null; r.water = false; r.runway = null;
             r.hull = y < s.deckY - 4 || s.type !== 'carrier' || !s.alive;
             if (r.hull) r.ship = null;

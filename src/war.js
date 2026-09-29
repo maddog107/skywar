@@ -246,6 +246,7 @@ export class War {
     updateSensors(dt) {
         const g = this.game, units = this.units, n = units.length;
         if (!n) return;
+        if (g.indoors && g.indoors.sealed) return; // (in a closed room nobody's looking out: interiors.js)
         const pm = g.pilotMode, p = g.player;
         const onFoot = !!pm;
         const eye = g.camera.position;
