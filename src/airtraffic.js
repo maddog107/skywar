@@ -189,6 +189,13 @@ class Flight {
         if (!this.alive) { if (!this.downed || !this.downed.update(dt)) this.done = true; return; }
         if (this.hp < this.maxHp * 0.5 && this.game && Math.random() < dt * 10) this.game.effects.puffSmoke(this.pos, _v.set(0, 2, 0), 2, 0.15, 2, 0.5);
         this.t += dt;
+        // the gear's struts and wheels (out on the whole approach) aren't drawn where they'd be a pixel: beyond ~40
+        // lengths of the jet, 600 m at least (gear.visible itself stays the gear's up / down state)
+        const cam = AIR.game && AIR.game.camera;
+        if (cam && this.gear) {
+            const show = cam.position.distanceToSquared(this.mesh.position) < Math.max(600, AIRCRAFT[this.type].length * 40) ** 2;
+            if (this.gearShown !== show) { this.gearShown = show; for (const m of this.gear.children) m.visible = show; }
+        }
         const P = this.perf, b = this.b;
         switch (this.state) {
             case 'approach': {
