@@ -17,6 +17,27 @@ export { BASES, terrainHeight };
 // ═══════════════════════════════════════════════════════════════
 // Global shader patches (applied once at import, before anything compiles)
 // ═══════════════════════════════════════════════════════════════
+// Ground cut away where a plug-in draws its own finer ground instead (the underground complexes' portal cuttings,
+// underground.js): up to TERRAIN_CUTS oriented rectangles, two vec4 each — (centre x, z, across-axis x, z) and
+// (half width, v from, v to, 0) with v along (across z, −across x); cutBox bounds them all. Materials that draw the
+// replacement ground define UG_KEEP.
+export const TERRAIN_CUTS = 8;
+export const TERRAIN_CUT_U = { ugCuts: { value: new Float32Array(TERRAIN_CUTS * 8) }, ugCutBox: { value: new Float32Array([1e9, 1e9, -1e9, -1e9]) } };
+const CUT_GLSL = /* glsl */`
+    uniform vec4 ugCuts[${TERRAIN_CUTS * 2}];
+    uniform vec4 ugCutBox;
+    bool ugCut(vec2 p) {
+        if (p.x < ugCutBox.x || p.y < ugCutBox.y || p.x > ugCutBox.z || p.y > ugCutBox.w) return false;
+        for (int i = 0; i < ${TERRAIN_CUTS}; i++) {
+            vec4 a = ugCuts[i * 2], b = ugCuts[i * 2 + 1];
+            if (b.x <= 0.0) continue;
+            vec2 d = p - a.xy;
+            float u = dot(d, a.zw), v = dot(d, vec2(a.w, -a.z));
+            if (abs(u) < b.x && v > b.y && v < b.z) return true;
+        }
+        return false;
+    }`;
+
 // Aerial perspective for every built-in material: exp² haze whose density thins out with altitude (clear
 // air when you look down from height, hazy valleys and horizons), a low mist layer that pools over lakes
 // and lowlands (denser at dawn, dusk and in rain), warm in-scatter toward the sun that matches the sky's
@@ -745,7 +766,7 @@ export class World {
             shader.uniforms.uTime = this.uTime;
             shader.uniforms.uDetail = this.terrainDetail;
             shader.uniforms.uWaterRefract = this.terrainWaterRefract;
-            Object.assign(shader.uniforms, this.veg.groundU, CRATER_U); // photo ground textures (vegetation.js), craters
+            Object.assign(shader.uniforms, this.veg.groundU, CRATER_U, TERRAIN_CUT_U); // photo ground textures (vegetation.js), craters, cuts
             shader.vertexShader = shader.vertexShader
                 .replace('#include <common>', `#include <common>
                     #ifdef CRATER_MESH
@@ -792,7 +813,8 @@ export class World {
                     float seaFade(float s) { return mix(s, 1.0, smoothstep(-0.5, -4.0, vWPos.y)); }
                     #define SHADOW_FADE( s ) seaFade( s )
                     ${GROUND_GLSL}
-                    ${CRATER_GLSL}`)
+                    ${CRATER_GLSL}
+                    ${CUT_GLSL}`)
                 .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
                     vec4 crT = craterAt(vWPos.xz);
                     #ifdef CRATER_MESH
@@ -903,6 +925,9 @@ export class World {
                 .replace('#include <dithering_fragment>', `#include <dithering_fragment>
                     #ifndef CRATER_MESH
                         if (crT.x < 1.0) discard; // a crater's hole: its mesh is drawn there instead (at the end: after every derivative)
+                    #endif
+                    #ifndef UG_KEEP
+                        if (ugCut(vWPos.xz)) discard; // a plug-in draws this ground itself (the portal cuttings)
                     #endif`)
                 .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
                     #ifndef TERRAIN_LOW
@@ -1547,6 +1572,7 @@ export class World {
                 // no grass on sand, water, rock, snow, roads, buildings or inside airfield fences
                 let m = smoothstep(2.8, 4.5, h) * (1 - smoothstep(900, 1150, h)) * smoothstep(0.86, 0.95, ny);
                 if (m > 0 && this.towns && this.towns.blocked(x, z)) m = 0;
+                if (m > 0 && this.noGrass && this.noGrass(x, z)) m = 0; // (a plug-in's paved ground: underground.js)
                 if (m > 0) for (const b of BASES) {
                     if (Math.abs(x - b.x) > b.r * 2 || Math.abs(z - b.z) > b.r * 2) continue;
                     const l = worldToBase(b, x, z), f = fenceOf(b);

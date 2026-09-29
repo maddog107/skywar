@@ -535,7 +535,7 @@ export class SceneFXPass extends Pass {
     get underActive() { return this.underwater > 0; }
     prepare(cam, blurOn) {
         this.aoActive = this.ao && this.groundDist < this.aoMat.uniforms.fadeFar.value;
-        this.ssrActive = this.ssr > 0 && cam.position.y > 0.3 && this.waterVisible(cam);
+        this.ssrActive = this.ssr > 0 && !this.noWater && cam.position.y > 0.3 && this.waterVisible(cam);
         this.flareActive = this.flare && this.sun.on > 0;
         this.blurActive = this.blur > 0 && blurOn;
         return this.aoActive || this.ssrActive || this.flareActive || this.blurActive || this.underActive;
@@ -1386,7 +1386,11 @@ export class PostFX {
         // under water (or the near plane nearly so): the composite tints what the camera sees through the water
         fx.underwater = 0;
         const ocean = world && world.ocean;
-        if (ocean) {
+        // inside a closed room (interiors.js: the world isn't drawn) there's no sea, no sun and no lens flare
+        const walled = !!(game && game.indoors && game.indoors.sealed);
+        fx.noWater = walled;
+        if (walled) { fx.sun.on = 0; fx.groundDist = 1e9; } // (and no AO: its radius is made for the outdoors)
+        if (ocean && !walled) {
             ocean.shareWaveUniforms(fx.compMat.uniforms);
             const cp = cam.position;
             if (cp.y < WATER.maxCrest + 2 && cp.y < waterHeight(cp.x, cp.z) + 1.5) fx.underwater = 1;

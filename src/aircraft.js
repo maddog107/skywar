@@ -774,7 +774,7 @@ export class Aircraft {
         }
         if (!ship) {
             // rolled off the runway at speed on rough ground?
-            if (!surf.runway && !surf.bridge && V > (this.bellied ? 8 : 40) && surf.h > 1) {
+            if (!surf.runway && !surf.bridge && !surf.tunnel && V > (this.bellied ? 8 : 40) && surf.h > 1) {
                 const e = 5, H = (x, z) => terrainHeight(x, z) + craterAdj(x, z); // (rolling into a crater wrecks it too)
                 const dx = H(this.pos.x + e, this.pos.z) - H(this.pos.x - e, this.pos.z);
                 const dz = H(this.pos.x, this.pos.z + e) - H(this.pos.x, this.pos.z - e);

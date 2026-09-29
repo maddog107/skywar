@@ -550,7 +550,9 @@ class StrategicMissile {
         const ground = terrainHeight(this.pos.x, this.pos.z);
         const unit = this.aim.unit;
         const hitUnit = unit && unit.alive !== false && ((unit.hitTest && unit.hitTest(this.pos)) || d2 < (this.kind === 'rocket' ? 25 : 64));
-        if (hitUnit || (this.kind !== 'rocket' && d2 < 36) || this.pos.y < Math.max(ground, 0) + 0.5 || this.age > 400) {
+        // (a submarine's missile starts under water: it isn't "into the sea" while it's still broaching)
+        const broaching = this.source && this.source.kind === 'sub' && this.age < 3;
+        if (hitUnit || (this.kind !== 'rocket' && d2 < 36) || (!broaching && this.pos.y < Math.max(ground, 0) + 0.5) || this.age > 400) {
             this.mgr.impact(this, this.pos.y < 0.5 && ground < 0);
         }
     }
@@ -644,7 +646,8 @@ export class StrikeManager {
 
     // ═════════════ Requests ═════════════
     // type: a STRIKE_TYPES key; marks: designations (war.js) or units; team: whose strike (the player's by default)
-    request(type, marks = this.game.war.designations, team = this.game.war.side, quiet = false) {
+    // opts.only: launch from these sources only (a plug-in firing its own launchers)
+    request(type, marks = this.game.war.designations, team = this.game.war.side, quiet = false, opts = {}) {
         const T = STRIKE_TYPES[type], g = this.game, war = g.war;
         if (!T) return null;
         marks = (marks || []).filter(Boolean);
@@ -662,7 +665,7 @@ export class StrikeManager {
         for (const aim of aims) {
             let need = T.per;
             // nearest sources first, several if one runs short
-            const cand = this.sources.filter(s => s.team === team && T.sources.includes(s.kind) && s.canFire(specKey) && s.pos.distanceTo(aim.pos) < s.range)
+            const cand = this.sources.filter(s => (!opts.only || opts.only.includes(s)) && s.team === team && T.sources.includes(s.kind) && s.canFire(specKey) && s.pos.distanceTo(aim.pos) < s.range)
                 .sort((a, b) => a.pos.distanceToSquared(aim.pos) - b.pos.distanceToSquared(aim.pos));
             for (const s of cand) {
                 if (need <= 0) break;
@@ -704,6 +707,42 @@ export class StrikeManager {
         strike.planned = k;
         this.strikes.push(strike);
         if (!quiet && src.team === war.side) war.radio(src.name.split(' (')[0], 'COPY — ' + k + '× ' + spec.name + ' ON ' + aim.label + ', TIME ON TARGET ' + this.clock(this.estimate(spec, src.pos, pos) + src.prepTime(specKey)), { color: '#9fd4ff', say: false });
+        g.events.emit('strikeRequested', strike);
+        return strike;
+    }
+
+    // Fire from one chosen shooter (a console: a submarine's fire control, the carrier's strike console, a TEL's launch
+    // panel, the JOC): n missiles of specKey at the newest mark (each mark: all). Same bookkeeping, radio and events as
+    // request(); the strike's type is the STRIKE_TYPES key for that missile. Returns the strike, or null (no mark, no
+    // stock, out of range).
+    launchFrom(src, specKey, marks, { n = 1, all = false, team = src && src.team, quiet = false } = {}) {
+        const g = this.game, war = g.war, spec = MISSILES[specKey];
+        marks = (marks || []).filter(Boolean);
+        if (!spec || !src || !marks.length || !src.canFire(specKey)) return null;
+        const aims = [];
+        for (const d of (all ? marks : [marks[marks.length - 1]])) {
+            const unit = d.unit || (d.alive !== undefined ? d : null);
+            const pos = unit ? unit.pos : d.fixed || d.pos;
+            if (!pos || src.pos.distanceTo(pos) > src.range) continue;
+            aims.push({ pos, unit, label: unit ? war.label(unit) : 'MARK ' + (d.id ?? '?'), mark: 'fixed' in d ? d : null });
+        }
+        if (!aims.length) return null;
+        const type = { cruise: 'cruise', antiship: 'antiship', ballistic: spec.dive ? 'hardened' : 'ballistic', rocket: 'rocket' }[spec.kind] || 'cruise';
+        const strike = { id: this.nextStrikeId++, type, label: STRIKE_TYPES[type].label, team, spec, aims, launched: 0, planned: 0, impacts: 0, lost: 0, missiles: [], t: g.time, sources: new Set([src]), done: false };
+        for (const aim of aims) {
+            const k = src.fire(specKey, n, aim, strike);
+            strike.planned += spec.kind === 'rocket' ? spec.count * k : k;
+        }
+        if (!strike.planned) return null;
+        this.strikes.push(strike);
+        for (const d of marks) if (d.transmitted === false) d.transmitted = true;
+        if (!quiet && team === war.side) {
+            const eta = this.estimate(spec, src.pos, aims[0].pos) + src.prepTime(specKey);
+            const text = 'COPY — ' + strike.planned + '× ' + spec.name + ' ON ' + aims.map(a => a.label).join(', ') + ', TIME ON TARGET ' + this.clock(eta);
+            const d = g.director;
+            if (d && d.enabled && d.say) d.say(src.name.split(' (')[0], text, { color: '#9fd4ff', say: false });
+            else war.radio(src.name.split(' (')[0], text, { color: '#9fd4ff', say: false });
+        }
         g.events.emit('strikeRequested', strike);
         return strike;
     }
@@ -862,6 +901,9 @@ export class StrikeManager {
         else if (!u.alive) res = 'TARGET DESTROYED';
         else if ((u.hp ?? u.health ?? 1) < (u.maxHp ?? u.maxHealth ?? 1) * 0.6) res = 'TARGET DAMAGED — RE-STRIKE RECOMMENDED';
         else res = 'TARGET STILL OPERATIONAL';
+        // (a unit may say it better: "ENTRANCE 2 OF 3 DESTROYED" — underground.js)
+        const own = u && u.bdaResult ? u.bdaResult() : null;
+        if (own) res = own;
         aim.result = res;
         war.radio('COMMAND', 'MISSILE IMPACT — ' + res + (u ? ' (' + war.label(u) + ')' : ''), { color: u && !u.alive ? '#5dffa0' : '#ffd24a', say: res.split(' —')[0].toLowerCase() + '.' });
         if (u && !u.alive) { this.game.score = (this.game.score || 0) + 250; }
@@ -1164,7 +1206,7 @@ export class StrikeManager {
                 ctx.fillText(Math.round(m.vel.length() * 1.944) + ' KT · ' + Math.round(m.pos.y * 3.281) + ' FT · ' + (d / 1000).toFixed(1) + ' KM TO TARGET · ' + (m.phase === 'boost' ? 'BOOST' : m.phase === 'fall' ? 'BALLISTIC' : m.phase.toUpperCase()), hud.w / 2, hud.h - 44);
             }
             ctx.fillStyle = 'rgba(232,244,255,0.6)';
-            ctx.fillText('V: CAMERA · K: BACK TO THE JET', hud.w / 2, hud.h - 26);
+            ctx.fillText('V: CAMERA · ' + (this.game.takeover ? 'K / ESC: BACK' : 'K: BACK TO THE JET'), hud.w / 2, hud.h - 26);
         }
         ctx.restore();
     }

@@ -17,16 +17,20 @@ import { Director } from './director.js';
 import { TaskManager } from './tasks.js';
 import { Wingmen } from './wingmen.js';
 import { NavalOps } from './navalops.js';
+import { WarInteriors } from './warinteriors.js';
+import { Underground } from './underground.js';
 
 export const SYSTEMS = [
     ['tacmap', TacticalMap],
     ['sensors', Sensors],   // targeting pod, helmet sight (before the menu: its video is under it; before strikes: comma)
     ['mapkit', MapKit],     // map tools: legend, layers, ruler, coordinates, steerpoint, air tracks, imagery
     ['command', CommandMenu],
+    ['interiors', WarInteriors],    // rooms, boats and cabs: enter on foot, press buttons (before strikes: a room keeps the comma; it yields its camera to the missile camera)
     ['strikes', StrikeManager],
     ['navalops', NavalOps],      // carrier groups, naval air defence, surface action, launches on the rigs, deck ops
     ['front', FrontLine],        // the front line and the ground war
     ['director', Director],      // enemy and friendly activity, the Living War mode
     ['tasks', TaskManager],      // dynamic tasks
     ['wingmen', Wingmen],        // wingmen that take orders
+    ['underground', Underground], // hidden mountain complexes: portals, blast doors, tunnels, intel, scrambles
 ];

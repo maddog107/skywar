@@ -4,6 +4,7 @@
 // main thread and in the terrain worker (terrainworker.js). world.js re-exports BASES and terrainHeight.
 // ═══════════════════════════════════════════════════════════════
 import { fbm, ridged, smoothstep, lerp } from './noise.js';
+import { ugCarve } from './ugsites.js';
 
 // ── Airbases (terrain is flattened around them) ──
 // Each base lists its runways in base-local metres (lx across, lz along; rot = extra rotation).
@@ -43,7 +44,8 @@ export function terrainHeight(x, z) {
     const detail = fbm(x * 0.0035, z * 0.0035, 3);
     let h = land * (32 + hills * 170 + m * m * 1900 * mountainMask + detail * 22) + (1 - land) * (-140 + detail * 20);
     if (flatten < 1) h = lerp(flatH, h, flatten);
-    return h;
+    // the underground complexes' runways, aprons, roads and portal cuttings (ugsites.js; local, and free elsewhere)
+    return ugCarve(x, z, h);
 }
 
 // Land-cover colour of the ground at (x, z), height h, normal's up component ny → out[o..o+2] (linear)

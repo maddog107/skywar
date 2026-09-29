@@ -667,3 +667,133 @@ parts are pulled out first and every instance gets its own copy, hung on the sec
 - `vampire` (group, { missiles }).
 - `missileLaunch` (ship, { missile, target }): a SAM fired at an aircraft.
 - strikes.js's own events for the surface-to-surface missiles.
+
+## Interiors and boats (Phase C)
+
+Walk into places and work them with their own buttons and screens; drive small boats. The framework is
+`src/interiors.js`, the content `src/warrooms.js` (harbour, boats, submarine, travel) and `src/commandrooms.js`
+(carrier, JOC, TEL), the console logic `src/firecontrol.js` (pure, tested), the screen drawing kit `src/screens.js`,
+the boats `src/boats.js`. `src/warinteriors.js` plugs it all together as `game.interiors` (systems.js). Room models:
+`models/interiors/*.glb`, built by `tools/interiors/*.py` (`sh tools/interiors/build.sh`; the node / extras contract
+is `tools/interiors/ROOMS.md`).
+
+### Where and how (the player)
+- **COMMAND › TRAVEL** puts you on foot at any of them (from a stopped jet you climb out; in free flight, sandbox
+  and the Living War also from the air: the jet is parked on the apron). Walk up to a door, a hatch or a boat and
+  press **E**.
+- **Small craft pier** west of the home base: the NSW 11 m **RHIB** and the **CB90H** combat boat. W/S throttle,
+  A/D steer, SPACE crash stop, V chase / helm view, mouse look, E steps off at a pier slot, a ship's ladder, a
+  surfaced submarine or a beach (slow down first).
+- **USS Colorado (SSN-788)** lies surfaced off the pier: E at the escape trunk goes below into the control room
+  (or signal for the RHIB from the casing). Ship control: rig for dive, dive / surface / emergency blow, ordered
+  depth, bells, rudder; photonics masts with a live picture on the screens and full screen (mouse trains, wheel
+  zooms, LMB / comma marks); sonar with a waterfall; fire control: target (marks, known units), TLAM / Harpoon,
+  weapon key, spin up, firing point procedures (≤ 160 ft keel, ≤ 6 kt, holding depth), open the muzzle hatch,
+  lift the guard, FIRE. K watches the missile break the surface, then the missile camera (K / Esc back).
+- **The carrier** (home carrier): the island's port doors — CIC (the air and surface pictures, the TAO summary,
+  the radio log, and a strike console that fires the group's Tomahawks / Harpoons from the escorts' VLS or the
+  submarine: shooter, weapon, salvo, target, strike key, ARM, guarded LAUNCH) and Pri-Fly up the ladder (glass on
+  the flight deck, deck status knob and lamps, horn, wind over the deck, the PLAT camera, catapults; SPOT puts an
+  F/A-18 on cat 1 for you to walk out to, the guarded LAUNCH sends the alert fighter, RECOVERY turns the ship into
+  the wind). The accommodation ladder aft of the island calls away the duty boat.
+- **Joint Operations Center** at the home base (a hardened building behind T-walls and HESCO; solid and
+  destructible): the wall (common operational picture, known targets with intel level beside the front's sectors,
+  the director's tasks, strikes and BDA imagery, the radio, a status ticker) and consoles: map (click to mark),
+  intel (click to mark), strike cell (type, AUTO or a specific shooter, REQUEST / ARM, guarded EXECUTE — the same
+  `strikes.request` / `launchFrom`), tasks (ACCEPT / PUT ON HOLD / IGNORE ALL: `tasks.accept`, `abandon`,
+  `dismissOffers`), the whole command menu as buttons, the radio log, the battle cab.
+- **Captured Scud TEL** (free flight, sandbox, Living War) beside the JOC: the launch control cabin (power,
+  generator, parking brake, rear supports, launch table, boom, target, gyrocompass alignment, control-system test,
+  combat mode, batteries, the six-digit code lock (the order's code is on the display), guarded ПУСК); the driver's
+  cab (brake, engine, W/S/A/D) once it's stowed. It reloads two minutes after a launch while stock lasts.
+- Inside a room: WASD walk (Shift faster), mouse look, LMB presses what the crosshair is on (reach 2.6 m), wheel
+  turns knobs, Tab frees a cursor, 1–9 sit at the room's stations (the cursor comes out; clicking a console's
+  screen while walking sits you there too), RMB / Esc stand up, E leaves at the exit. A guarded control needs its
+  guard lifted first; its keyboard shortcut lifts the guard. Hover shows what a control does and why it won't.
+
+### API
+- `game.interiors` (an `Interiors`): `addSite({ id, label, at(out) → Vector3 | null, radius, dy, enter, blocked(),
+  hidden() })`, `removeSite(id)`, `addRoom(def)` → `Room`, `enterRoom(room, { text, spawn })`,
+  `switchRoom(room)`, `leave({ to, then })`, `placePilot(pos, yaw)`, `takeControl(ctl)` / `releaseControl()`
+  (a controller: `control(dt, mouse)`, `camera(cam, dt)`, `hud(ctx, hud)`, `action(a)`, `enter()`, `exit()`,
+  `carry(pilot)`, `tick(dt)`, `kind`), `fadeTo(then, { text })`, `use(plugin)` (plug-ins may have `start`,
+  `clear`, `update`, `commands`, `drawMap`, `mapInfo`, `mapActions`, `drawHud`). `ops` holds the harbour, sub,
+  carrier, joc and tel plug-ins.
+- A room def: `{ id, name, file | build(root, room), sealed (default true: drawn alone in its own scene), shadows,
+  anchor(outMatrix4), exitTo() → { pos, yaw }, canExit(), bind: { node: { label, key, press, turn, value, lit,
+  enabled, why, keepGuard } }, screens: { node: { fps, draw(ctx, ui, screen, game, room), wheel, feed } },
+  stations: { node: { label, order, fov } }, keys, actions, status(), title, onLoad, onEnter, onExit, update,
+  drive }`. `ui.button / row / hit` register click regions on a screen; `Screen.setFeed(texture)` shows a render
+  target under a feed screen's canvas (`CameraFeed` in warrooms.js renders one a few times a second).
+- While a controller has the player: `game.takeover` (game.update calls it instead of the man on foot),
+  `game.indoors = { sealed, lookout, kind, name }` each frame (the HUD hides world markers and postfx drops water,
+  sun and SSR when sealed; war sensors skip; audio is muffled), `game.nearPlane` (0.05 m in a room),
+  `game.scenePass.scene` swapped to a sealed room's scene. `game.platforms` (`at(x, z, y)` → surface) makes the
+  pier, pontoon and gangway walkable through `game.surfaceAt`; pilot.js rides moving decks (`deckRef`).
+- `strikes.launchFrom(src, specKey, marks, { n, all, team, quiet })` fires a specific source at marks (the consoles
+  use it; `strikes.request` still picks the nearest). A submarine's missile isn't counted as hitting the water
+  while it broaches (its first 3 s).
+- `steerShip(ship, heading, speed, yawRate)` drives a naval.js ship (it steams round circles) as if it had a helm.
+- Boats: `new Boat(game, 'rhib' | 'cb90', x, z, heading)`, `BoatPhysics(spec)` (`step(dt, { throttle, steer })`,
+  `sea`, `ground`, `collide` hooks), `Helm(sys, boat, plugin)`, `Harbor(game, site)`; `BOAT_SPECS` carries the
+  real numbers (45.5 / 40.4 kt top, 0–20 kt ~5–6 s, full-helm radius ~23 m, crash stop 4.7 / 2.8 lengths).
+- Harbour docks: `game.interiors.ops.harbor.docks.push({ id, host, label, text, at(out), step(out), yaw(), ok() })`
+  lets a boat put the player aboard anything (the carrier's ladder, the submarine's casing use it).
+
+## Underground bases (`game.underground`, src/underground.js)
+
+Two hidden mountain complexes in red territory, far from towns, roads and airbases (ugsites.js `UG_SITES`):
+- **ZHELEZNAYA GORA** (x 32.4, z −43.6 km): an Objekat 505 / Željava-style underground airbase. Two aircraft portals
+  (N1, N2; inverted-T openings, two ~100 t sliding leaves) and a service portal (N3, hinged doors) in cuttings at the
+  foot of a massif; N1 → tunnel → a 32 × 15 m, 220 m hangar hall (seven jets parked) → N2 is a drive-through loop; N3
+  leads to a stores gallery. Aprons, a taxiway and a 2,200 m runway on the plain 1.1 km out, a support compound.
+- **KAMENNY LOG** (x 35.2, z −23.8 km): a missile operating base (Sakkanmol / "missile city" style). Vehicle portals E1
+  and E2 joined by the TEL garage hall (three Scud TELs), E3 into the magazine; a yard, three launch pads on the rise
+  above the lake, gravel tracks, an access road.
+- Around both: vents on the ridge (warm in the FLIR), relay masts, guard posts, a substation and a power line running
+  into the hillside, camouflage nets over the cuttings, tyre tracks.
+
+**Ground.** `terrainHeight` carves them (ugsites.js `ugCarve`, called at the end of terraincore.js `terrainHeight`, so the
+map workers, terrain workers and physics agree): pads (runway, aprons, pads), capsules (roads, taxiway) and notches
+(portal cuttings, cut only), each continuous and fading to the natural ground within its reach; everything outside the
+sites' boxes is untouched. The terrain mesh is too coarse for a cutting, so each portal's ground is cut out of the
+terrain shader (world.js `TERRAIN_CUT_U`, rectangles; a material drawing replacement ground defines `UG_KEEP`) and drawn
+as a fine mesh with the terrain's own material, with no ground over the tunnel mouth (ugworld.js `PortalGround`). Trees
+and grass keep off (`world.blockTree`, `world.noGrass`). `ugTunnelAt(x, z, y)` says when a point is inside a tunnel or
+hall (floor, arch height): `game.surfaceAt` and the cameras (`game.camGround`, `underground.clampCamera`) use it, and the
+player's jet crashes into the walls and arch. Interiors (ugint.js) are drawn only with a door open and the camera near
+and in front, or the camera inside; their materials (`interiorMaterial`) are lit by the tunnel lamps — baked into the
+lining, the nearest 12 as point lights — instead of the sun, sky and environment.
+
+**Life.** Doors: `complex.openDoor(portalId, user)` / `releaseDoor` (open while anyone needs them, shut 8 s after the
+last one; klaxon, beacons); `doorOpen(id)`, `usable(id)`. Scrambles: `underground.scramble(types, target, { role,
+callsign, route, complex })` → a sortie (the jets taxi out of the hall through the door, down the taxiway, take off,
+and become a director flight with `f.ugHome`), or null; `scrambleOrigin(pos)` is where one would come from (null if
+none can). The director's GCI uses it when the underground airbase is nearer than its other origins. TELs are strikes.js
+red `launcher` sources (`UgLauncher`, held until set up): a launch order sends one out to a pad; it sets up, fires,
+stows and comes back in by the other portal. The missile base also fires on its own every ~7–11 minutes
+(`missileSortie()`, through `strikes.request(type, marks, team, quiet, { only })`).
+
+**Intelligence.** Each complex's units are war units: the `facility` (cls `facility`, UNKNOWN), the `entrance`s (cls
+`entrance`, conceal 0.72), the clues (cls `bunker` / `radar` / `vehicle`) and the airbase's airfield (pre-war imagery).
+Anyone who reveals a clue (eyes, the pod, recon aircraft, drones: `war.reveal`) adds to the complex's score (tracks,
+guard post, power line 1; substation, mast 0.75; a vent 1.5 once IDENTIFIED — its heat, `u.heat` in sensors.js
+`heatOf`; an entrance 2): CONTACT "UNKNOWN FACILITY" at 1, "POSSIBLE MISSILE STORAGE" (or "… UNDERGROUND HANGARS") at
+3, IDENTIFIED "CONFIRMED UNDERGROUND MISSILE FACILITY" (or "… AIRBASE") at 5.5 — or at once when a door is seen moving,
+an entrance is identified or a vehicle is seen coming out. Then: the TARGET IDENTIFIED callout, the radio, the reports
+resolved, penetrators added to the blue missile field. Reports ("… IN THE HILLS 14 KM NORTH-EAST OF VORSK") come a few
+minutes into the war, and when a hidden complex scrambles or launches.
+
+**Striking it.** Only penetrators close an entrance: a strike missile with `hard ≥ 0.9` within ~22 m of the portal
+(`strategicImpact`), a heavy bomber's bomb, or any bomb in the open doorway (weapons.js `worldBlast` emits `'blast'` (at,
+{ r, amount, owner, kind: 'bomb' | 'blast' })). Everything else scars the facade. All entrances down seals the complex:
+what's inside is trapped, its launchers are dead, no more scrambles. BDA: a unit may carry `bdaResult()`, which
+strikes.js `reportBDA` uses ("ENTRANCE 2 OF 3 DESTROYED", "… FACADE SCARRED, DOOR INTACT (PENETRATOR REQUIRED)").
+Tasks: INVESTIGATE REPORTED ACTIVITY, FIND THE ENTRANCES, SEAL <complex>, DESTROY THE ENTRANCES BEFORE THE TEL FIRES
+(urgent). Map: the runway once known, a ring and the entrance count once identified; the panel's PENETRATOR STRIKE ON
+ALL KNOWN ENTRANCES, and COMMAND › TACTICAL SUPPORT › PENETRATORS ON <complex>. Ground targets inside a mountain carry
+`hidden` (off the HUD and target cycling).
+
+**Events:** `ugClue` (complex, { clue, score }), `ugStage` (complex, { stage }), `ugDoor` (complex, { portal, open }),
+`ugScramble` (complex, { sortie }), `ugTelSortie` (complex, { tel }), `ugEntranceDestroyed` (complex, { portal,
+entrance }), `ugSealed` (complex).
