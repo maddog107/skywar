@@ -532,7 +532,7 @@ function jocScreens(ops) {
 const TEL_AT = { lx: 468, lz: -452 };                   // (home base: beside the JOC, in the T-wall compound)
 const CABIN_OFFSET = new THREE.Vector3(0, 1.0, -1.83);   // the launch cabin's floor in the vehicle's frame (tools/interiors/tel_cabin.py)
 const CABIN_DOOR = { lx: -1.43, lz: -1.28 };             // its door (in the left wall), vehicle frame
-const CAB_OFFSET = new THREE.Vector3(-0.95, 1.55, -4.9); // the left (driver's) cab's floor
+const CAB_OFFSET = new THREE.Vector3(-1.145, 1.45, -4.337); // the left (driver's) cab's floor (tools/interiors/tel_cab.py)
 export class TelOps {
     constructor(sys) {
         this.sys = sys; this.game = sys.game;
@@ -583,7 +583,7 @@ export class TelOps {
         this.reloadAt = null;
         const sys = this.sys;
         sys.addSite({ id: 'tel:cabin', label: 'CLIMB INTO THE LAUNCH CONTROL CABIN', radius: 2.4, dy: 3, at: (o) => (u.alive ? this.sidePoint(o, CABIN_DOOR.lx, CABIN_DOOR.lz) : null), enter: () => sys.enterRoom(this.cabin, { text: '9P117 · LAUNCH CONTROL CABIN' }) });
-        sys.addSite({ id: 'tel:cab', label: 'CLIMB INTO THE CAB (DRIVE)', radius: 2.4, dy: 3, at: (o) => (u.alive ? this.sidePoint(o, -1.5, -4.9) : null), enter: () => sys.enterRoom(this.cab, { text: 'MAZ-543 · DRIVER\'S CAB' }) });
+        sys.addSite({ id: 'tel:cab', label: 'CLIMB INTO THE CAB (DRIVE)', radius: 2.4, dy: 3, at: (o) => (u.alive ? this.sidePoint(o, -1.5, -4.3) : null), enter: () => sys.enterRoom(this.cab, { text: 'MAZ-543 · DRIVER\'S CAB' }) });
     }
     // a point beside the truck (vehicle-local x, z) on the ground
     sidePoint(out, lx, lz) {
@@ -695,7 +695,7 @@ export class TelOps {
             title: () => 'MAZ-543 · DRIVER\'S CAB',
             status: () => (ops.drive ? Math.round(Math.abs(ops.drive.v) * 3.6) + ' KM/H' : ops.panel && !ops.panel.canDrive ? 'STOW THE LAUNCHER AND RELEASE THE BRAKE BEFORE DRIVING' : 'ENGINE ' + (ops.engine ? 'RUNNING — W/S DRIVE, A/D STEER' : 'OFF')),
             anchor: (out) => { const u = ops.tel; if (!u) return out.identity(); u.mesh.updateMatrixWorld(); return out.makeTranslation(CAB_OFFSET.x, CAB_OFFSET.y, CAB_OFFSET.z).premultiply(u.mesh.matrixWorld); },
-            exitTo: () => { ops.stopDrive(); const p = ops.sidePoint(new THREE.Vector3(), -1.5, -4.9); return { pos: p, yaw: ops.tel.mesh.rotation.y }; },
+            exitTo: () => { ops.stopDrive(); const p = ops.sidePoint(new THREE.Vector3(), -1.5, -4.3); return { pos: p, yaw: ops.tel.mesh.rotation.y + Math.PI / 2 }; },
             onLoad: (room) => dressRoom(room),
             stations: { stand_driver: { label: 'DRIVER', order: 1 } },
             bind: {
@@ -704,7 +704,8 @@ export class TelOps {
                 lamp_brake: { lit: () => !!(ops.panel && ops.panel.brake) },
                 btn_start: { label: () => ops.engine ? 'ENGINE STOP' : 'ENGINE START', press: () => { ops.engine = !ops.engine; if (ops.engine) g.audio.tick(80, 0.5, 0.4); } },
             },
-            keys: [{ code: 'KeyW', label: 'DRIVE', run: () => {} }],
+            drive: 'stand_driver',           // (seated at the wheel: WASD drive the truck, they don't walk)
+            onEnter: (room, rc) => { const st = room.stations.find(x => x.id === 'stand_driver'); if (st) rc.focus(st); },
             update: (dt, room) => ops.cabTick(dt, room),
         };
     }

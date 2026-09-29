@@ -496,7 +496,9 @@ export class RoomController {
             this.pitch = clamp(this.pitch - mouse.dy * sens * (g.settings.invertPitch ? -1 : 1), -1.35, 1.35);
         }
         // walking (not at a station)
-        if (!this.station) this.walk(dt, input);
+        // (a driver's seat: WASD drive whatever the room is in; nobody walks or stands up)
+        if (r.def.drive) { if (!this.station) { const st = r.stations.find(x => x.id === r.def.drive); if (st) this.focus(st); } }
+        else if (!this.station) this.walk(dt, input);
         else if (input.down('KeyW', 'KeyA', 'KeyS', 'KeyD') && this.focusK > 0.9 && !this.anyHeld) this.focus(null);
         this.anyHeld = input.down('KeyW', 'KeyA', 'KeyS', 'KeyD');
         this.updatePose(dt);
