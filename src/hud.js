@@ -736,21 +736,41 @@ export class HUD {
         ctx.fillText((range / 1000) + ' KM', cx, cy + R + 12);
     }
 
+    // split text into lines no wider than maxW in the current font (at word breaks; a single long word stays whole)
+    wrapText(text, maxW) {
+        const ctx = this.ctx;
+        if (ctx.measureText(text).width <= maxW) return [text];
+        const out = [];
+        let line = '';
+        for (const w of text.split(' ')) {
+            const t = line ? line + ' ' + w : w;
+            if (line && ctx.measureText(t).width > maxW) { out.push(line); line = w; } else line = t;
+        }
+        if (line) out.push(line);
+        return out;
+    }
+
     drawMessages(game) {
         const ctx = this.ctx;
         const C = this.compact;
         // kill feed (right, under score; compact: under the one-line weapons readout)
         ctx.textAlign = 'right';
         ctx.font = (C ? '600 11px' : '600 13px') + ' "Share Tech Mono", ui-monospace, monospace';
+        // long lines (radio calls) wrap in a column on the right instead of reaching across the screen, and while
+        // the centre banner or the key tip is up the feed starts below them, so the two never overlap
+        const feedW = C ? this.w * 0.6 : Math.min(this.w * 0.32, 480), lh = C ? 15 : 18;
         let y = C ? 82 : 112, shown = 0;
+        const b0 = game.banner, t0 = game.tip;
+        if (b0 && game.time - b0.t < b0.dur) y = Math.max(y, (C ? this.h * 0.24 : this.h * 0.1) + (b0.sub ? (C ? 56 : 78) : (C ? 20 : 26)));
+        if (!C && t0 && game.time - t0.t < t0.dur && !game.pilotMode && !game.groundStart) y = Math.max(y, this.h * 0.1 + 76);
         for (const m of game.feed) {
             const age = game.time - m.t;
             const a = clamp(1 - (age - 4) / 1, 0, 1);
             if (a <= 0 || (C && shown >= 4)) continue;
             ctx.globalAlpha = a;
             ctx.fillStyle = m.color || GREEN;
-            ctx.fillText(m.text, this.w - (C ? 14 : 28), y, this.w * 0.6);
-            y += C ? 15 : 18; shown++;
+            for (const line of this.wrapText(m.text, feedW)) { ctx.fillText(line, this.w - (C ? 14 : 28), y, feedW); y += lh; }
+            shown++;
         }
         ctx.globalAlpha = 1;
         // centre banner, on a soft dark band so it reads over bright sky
