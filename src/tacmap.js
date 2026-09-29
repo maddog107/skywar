@@ -159,6 +159,8 @@ export class TacticalMap {
                 return;
             }
         }
+        // a plug-in's map tool (the sandbox's placing and route drawing, sandbox.js) takes the click first
+        for (const s of this.game.systems || []) if (s.mapClick && s.mapClick(x, y, this)) return;
         const hit = this.pick(x, y);
         if (hit) { this.sel = hit; this.strikeMenu = false; return; }
         const w = this.toWorld(x, y);
@@ -205,7 +207,7 @@ export class TacticalMap {
 
     // ═════════════ Per frame ═════════════
     update(dt) {
-        if (!this.open) return;
+        if (!this.open || this.game.subStep) return; // (once a frame, whatever the sandbox's clock)
         this.resize();
         this.draw();
         void dt;
@@ -580,7 +582,7 @@ export class TacticalMap {
             ctx.fillRect(x + 8, y - 11, W - 16, 22);
             ctx.fillStyle = a.enabled === false ? 'rgba(232,244,255,0.35)' : '#e8f4ff'; ctx.font = '600 12px "Share Tech Mono", monospace';
             ctx.fillText(a.label, x + 16, y, W - 32);
-            this.buttons.push({ x: x + 8, y: y - 11, w: W - 16, h: 22, run: a.run, enabled: a.enabled });
+            this.buttons.push({ x: x + 8, y: y - 11, w: W - 16, h: 22, run: a.run, enabled: a.enabled, label: a.label });
             y += 26;
         }
         ctx.restore();

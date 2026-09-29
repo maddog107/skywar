@@ -468,7 +468,7 @@ export class Cockpit {
             if (ang < Math.PI * -0.78 || ang > Math.PI * -0.22) continue;
             const x = cx + Math.cos(ang) * R * d / range, y = cy + Math.sin(ang) * R * d / range;
             const locked = a === game.lockTarget;
-            ctx.fillStyle = a.team === 'blue' ? '#4fb4ff' : (locked ? '#ff4040' : '#ffd23f');
+            ctx.fillStyle = a.team === (game.war ? game.war.side : 'blue') ? '#4fb4ff' : (locked ? '#ff4040' : '#ffd23f');
             ctx.fillRect(x - 6, y - 6, 12, 12);
             if (locked) { ctx.strokeStyle = '#ff4040'; ctx.lineWidth = 2; ctx.strokeRect(x - 11, y - 11, 22, 22); }
             ctx.font = 'bold 13px monospace';

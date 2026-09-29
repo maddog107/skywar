@@ -30,6 +30,7 @@ import { WATER, waterHeight } from './water.js';
 import { spawnWater, findSeaplaneBase, buildJetty } from './seaplane.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
+const NO_MOUSE = Object.freeze({ dx: 0, dy: 0, wheel: 0 }); // (the extra steps of a fast sandbox clock: the mouse moved once)
 const _q = new THREE.Quaternion(), _m = new THREE.Matrix4();
 const AIM_LEAD = 0.2; // mouse-aim: s of flight-path turn to lead the aim point by when a pitch/roll key is released
 
@@ -288,6 +289,9 @@ export class Game {
         return { text, t: this.time, dur: 14 };
     }
 
+    // the player's side: 'blue', or 'red' when the sandbox swaps it (war.setSide, sandbox.js)
+    get side() { return this.war ? this.war.side : 'blue'; }
+
     // Free Flight / Sandbox: blowing things up is the point. Everywhere else the towns are civilian.
     get collateralFree() { return this.mode === 'freeflight' || this.mode === 'sandbox'; }
 
@@ -343,11 +347,11 @@ export class Game {
 
     // base: which friendly airfield a runway / apron start uses (the home base by default)
     spawnPlayer(where = this.startPoint(), base = null) {
-        const p = this.player = new Aircraft(this, this.aircraftId, { team: 'blue', isPlayer: true, name: this.callsign });
+        const p = this.player = new Aircraft(this, this.aircraftId, { team: this.side, isPlayer: true, name: this.callsign });
         this.aircraft.push(p);
         this.rearm(p);
         this.applyLivery && this.applyLivery(p);
-        const home = base || BASES[0];
+        const home = base || (this.side === 'blue' ? BASES[0] : BASES.find(b => !b.friendly && !b.civil) || BASES[0]);
         const carrier = this.naval.homeCarrier;
         if (where === 'carrier' && carrier && carrier.alive) { // (on the port bow catapult: naval.js catSpot)
             p.spawnDeck(carrier);
@@ -608,7 +612,7 @@ export class Game {
         if (a.lockedBy) a.lockedBy.clear();
         a.pilot = null; a.pilotAI = null; a.pilotDead = false; a.abandoned = false;
         a.ejected = false; a.ejectT = -1; a.ejectSeat = null;
-        a.team = 'blue'; a.isPlayer = true; a.callsign = this.callsign;
+        a.team = this.side; a.isPlayer = true; a.callsign = this.callsign;
         a.lrm = a.lrm ?? 0; a.rockets = a.rockets ?? 0; a.bombs = a.bombs ?? 0;
         if (!own) {
             a.fuel = Math.max(a.fuel ?? 1, 0.6); a.flameout = false;
@@ -660,7 +664,7 @@ export class Game {
                 }
                 if (!mine && isEnemySeat(s)) {
                     for (const a of this.aircraft) {
-                        if (!a.alive || a.team === 'red') continue;
+                        if (!a.alive || a.team !== this.side) continue;
                         const who = a === this.player ? this.player : a;
                         if (a.pos.distanceToSquared(r) < (a.hitRadius * 0.6) ** 2) { hitEnemySeat(this, s, 999, who); break; }
                         if (seatCanopyUp(s) && a.pos.distanceToSquared(seatCanopyCenter(s, _v3)) < (a.hitRadius * 0.6 + 6) ** 2) shredEnemyCanopy(this, s, 999, who);
@@ -812,7 +816,7 @@ export class Game {
             if (ac.abandoned) return;
             const byPlayer = !!source && (source === this.player || source === this.pilotMode); // rifle kills count too
             const name = ac.spec.name;
-            if (ac.team === 'red') {
+            if (ac.team !== this.side && ac.team !== 'neutral') {
                 if (byPlayer) {
                     this.kills++;
                     if (this.time - this.comboT < 12) this.combo = Math.min(this.combo + 1, 8); else this.combo = 1;
@@ -846,7 +850,7 @@ export class Game {
         ev.on('groundKilled', (t, { source }) => {
             const d = this.camera.position.distanceTo(t.pos);
             this.audio.boom(d, 1.4);
-            if (source === this.player || (source && source.team === 'blue')) {
+            if (source === this.player || (source && source.team === this.side)) {
                 const pts = t.def.score * (source === this.player ? this.combo : 1);
                 this.score += pts;
                 this.groundKills++;
@@ -881,8 +885,9 @@ export class Game {
         ev.on('eject', (ac, { seat }) => {
             if (ac.isPlayer) { this.addFeed('EJECTED', '#ffc23f'); this.enterPilotMode(ac, seat); return; }
             const d = this.player ? ac.pos.distanceTo(this.player.pos) : 1e9;
-            this.addFeed((ac.team === 'red' ? 'ENEMY' : ac.callsign) + ' PILOT EJECTED', ac.team === 'red' ? '#9fb2c4' : '#5ab8ff');
-            if (d < 3000 && ac.team === 'red') this.audio.say(pick(['Good chute!', 'Pilot ejected.', 'I see a chute.']));
+            const foe = ac.team !== this.side;
+            this.addFeed((foe ? 'ENEMY' : ac.callsign) + ' PILOT EJECTED', foe ? '#9fb2c4' : '#5ab8ff');
+            if (d < 3000 && foe) this.audio.say(pick(['Good chute!', 'Pilot ejected.', 'I see a chute.']));
         });
         ev.on('partLost', (ac) => {
             if (ac.isPlayer) { this.addFeed('WING DAMAGED', '#ff4a3d'); this.audio.say('Lost part of my wing!', true); this.shake = 1.5; }
@@ -923,7 +928,7 @@ export class Game {
             this.audio.say('Flameout! Flameout! We are out of gas!', true);
         });
         ev.on('shipSecondary', (ship, { stage }) => {
-            if (ship.team === 'red') this.addFeed(ship.name + (stage === 3 ? ' IS BURNING OUT OF CONTROL' : ' — SECONDARY EXPLOSION'), '#ffc23f');
+            if (ship.team !== this.side) this.addFeed(ship.name + (stage === 3 ? ' IS BURNING OUT OF CONTROL' : ' — SECONDARY EXPLOSION'), '#ffc23f');
             else this.addFeed(ship.name + ' IS TAKING DAMAGE', '#ff4a3d');
         });
         ev.on('flapsBlown', (ac) => { if (ac.isPlayer) this.addFeed('FLAPS AUTO-RETRACTED — OVER 340 KT', '#ffc23f'); });
@@ -935,7 +940,7 @@ export class Game {
         ev.on('soldierKilled', (s, { source, headshot }) => {
             const mine = !!source && (source === this.player || source === this.pilotMode);
             if (!mine || this.state !== 'playing') return;
-            if (s.team === 'red') {
+            if (s.team !== this.side) {
                 const pts = 100 + (headshot ? 50 : 0);
                 this.score += pts; this.groundKills++;
                 this.killmarkerT = this.time; this.hitmarkerT = this.time;
@@ -1169,16 +1174,18 @@ export class Game {
     }
 
     atFriendlyPad(p) {
-        return (isOnRunway(p.pos.x, p.pos.z)?.friendly && !p.deck) || (p.deck && p.deck.team === 'blue');
+        const rw = isOnRunway(p.pos.x, p.pos.z);
+        return (rw && !p.deck && (this.side === 'blue' ? rw.friendly : !rw.friendly && !rw.civil)) || (p.deck && p.deck.team === this.side);
     }
 
     // Hostiles: enemy aircraft and ground targets. Auto-select and the T cycle take these first.
     candidates() {
         const out = [];
-        for (const a of this.aircraft) if (a.alive && a.team !== 'blue' && !a.onGround) out.push(a);
-        if (this.ground) for (const t of this.ground.targets) if (t.alive && !t.hidden && t.team !== 'blue' && (!t.isBridge || t.objective)) out.push(t); // (hidden: not found yet)
+        const side = this.side;
+        for (const a of this.aircraft) if (a.alive && a.team !== side && !a.onGround) out.push(a);
+        if (this.ground) for (const t of this.ground.targets) if (t.alive && !t.hidden && t.team !== side && (!t.isBridge || t.objective)) out.push(t); // (hidden: not found yet)
         // enemy cruise missiles our side has seen (the AWACS: airsupport.js) can be locked and shot down
-        if (this.strikes) for (const m of this.strikes.missiles) if (m.alive && m.team !== 'blue' && m.detected && m.kind === 'cruise') out.push(m);
+        if (this.strikes) for (const m of this.strikes.missiles) if (m.alive && m.team !== side && m.detected && m.kind === 'cruise') out.push(m);
         return out;
     }
 
@@ -1447,30 +1454,11 @@ export class Game {
     }
 
     // ═════════════ Main update ═════════════
-    update(rawDt) {
-        if (this.state === 'paused' || this.state === 'menu') return;
-        if (this.photo) {
-            // frozen world, free orbit camera: mouse orbits, wheel zooms
-            const m = this.input.consumeMouse(), ph = this.photo, cam = this.camera;
-            ph.yaw -= m.dx * 0.005; ph.pitch = clamp(ph.pitch + m.dy * 0.004, -1.4, 1.4);
-            ph.dist = clamp(ph.dist * (1 + m.wheel * 0.08), this.pilotMode && this.pilotMode.walker ? 1.5 : 5, 1500); // (close in on a man on foot)
-            cam.position.set(Math.sin(ph.yaw) * Math.cos(ph.pitch), Math.sin(ph.pitch), Math.cos(ph.yaw) * Math.cos(ph.pitch)).multiplyScalar(ph.dist).add(ph.target);
-            cam.up.set(0, 1, 0); cam.lookAt(ph.target);
-            cam.fov = damp(cam.fov, 50, 4, rawDt); cam.updateProjectionMatrix();
-            this.cockpit.enabled = false;
-            if (this.player) this.player.root.visible = !this.player.exploded;
-            this.world.update(0, cam, ph.target, this.wind);
-            this.audio.update(rawDt, null, { playing: false });
-            return;
-        }
-        // brief slow-motion on kills
-        if (this.slowmoT > 0) { this.slowmoT -= rawDt; this.timeScale = damp(this.timeScale, 0.3, 20, rawDt); }
-        else this.timeScale = damp(this.timeScale, 1, 6, rawDt);
-        const dt = rawDt * this.timeScale;
+    // One step of the world: the player, the AI, weapons, the ground, the ships, the war and its plug-ins. update() runs
+    // it once a frame (the sandbox's clock: none while paused, several at ×2 / ×4)
+    simStep(dt, mouse) {
         this.time += dt;
         if (this.state === 'playing') this.missionTime += dt;
-        const mouse = this.input.consumeMouse();
-
         const p = this.player;
         const pm = this.pilotMode;
         if (this.groundStart && this.state === 'playing') {
@@ -1482,15 +1470,15 @@ export class Game {
             else if (pm.alive) pm.update(dt, mouse);
             this.firing = false;
         } else if (this.state === 'playing' && p.alive) {
-            this.updatePlayer(dt, mouse);
-            this.updateTargeting(dt);
+            // (held: the sandbox parks the jet where it is while you watch: sandbox.js)
+            if (!p.held) { this.updatePlayer(dt, mouse); this.updateTargeting(dt); } else this.firing = false;
         } else if (p && p.isPlayer) {
             p.controls.throttle = 0;
             this.firing = false;
         }
         for (const a of this.aircraft) if (a.lockedBy) a.lockedBy.clear(); // lockers re-register each frame
         for (const a of this.aircraft) if (a.pilot && a.alive && !a.pilotDead) a.pilot.update(dt);
-        for (const a of this.aircraft) a.update(dt);
+        for (const a of this.aircraft) if (!a.held) a.update(dt);
         this.worldCollisions();
         this.weapons.update(dt);
         this.ordnance.update(dt);
@@ -1519,8 +1507,40 @@ export class Game {
             }
         }
         for (const a of this.aircraft) if (a.lockedBy) for (const l of a.lockedBy) if (!l.alive) a.lockedBy.delete(l);
+    }
 
-        this.damageFlash = Math.max(0, this.damageFlash - dt * 1.5);
+    update(rawDt) {
+        if (this.state === 'paused' || this.state === 'menu') return;
+        if (this.photo) {
+            // frozen world, free orbit camera: mouse orbits, wheel zooms
+            const m = this.input.consumeMouse(), ph = this.photo, cam = this.camera;
+            ph.yaw -= m.dx * 0.005; ph.pitch = clamp(ph.pitch + m.dy * 0.004, -1.4, 1.4);
+            ph.dist = clamp(ph.dist * (1 + m.wheel * 0.08), this.pilotMode && this.pilotMode.walker ? 1.5 : 5, 1500); // (close in on a man on foot)
+            cam.position.set(Math.sin(ph.yaw) * Math.cos(ph.pitch), Math.sin(ph.pitch), Math.cos(ph.yaw) * Math.cos(ph.pitch)).multiplyScalar(ph.dist).add(ph.target);
+            cam.up.set(0, 1, 0); cam.lookAt(ph.target);
+            cam.fov = damp(cam.fov, 50, 4, rawDt); cam.updateProjectionMatrix();
+            this.cockpit.enabled = false;
+            if (this.player) this.player.root.visible = !this.player.exploded;
+            this.world.update(0, cam, ph.target, this.wind);
+            this.audio.update(rawDt, null, { playing: false });
+            return;
+        }
+        // brief slow-motion on kills
+        if (this.slowmoT > 0) { this.slowmoT -= rawDt; this.timeScale = damp(this.timeScale, 0.3, 20, rawDt); }
+        else this.timeScale = damp(this.timeScale, 1, 6, rawDt);
+        const dt = rawDt * this.timeScale;
+        const mouse = this.input.consumeMouse();
+        // the sandbox's clock (sandbox.js): 0 holds the world still (the camera, the HUD and the map go on); 2 or 4 run it
+        // in whole extra steps of the same size, so the flight models never see a bigger one
+        const steps = this.simSpeed ?? 1;
+        for (let i = 0; i < steps; i++) { this.subStep = i < steps - 1; this.simStep(dt, i ? NO_MOUSE : mouse); }
+        this.subStep = false;
+        if (!steps && this.tacmap) this.tacmap.update(0); // (the map draws in its update)
+        const vdt = dt * steps; // how far the view's own effects move on
+        const p = this.player;
+        const pm = this.pilotMode;
+
+        this.damageFlash = Math.max(0, this.damageFlash - vdt * 1.5);
         if (pm || !p || !p.alive || this.state !== 'playing') {
             this.gloc = Math.max(0, this.gloc - rawDt * 0.8);
             this.whiteout = Math.max(0, this.whiteout - rawDt * 2);
@@ -1539,9 +1559,9 @@ export class Game {
         }
         this.updateCamera(rawDt, mouse);
         // terrain detail follows you: on foot / in the Ready Room car too, not the parked jet
-        this.world.update(dt, this.camera, pm ? pm.pos : this.groundStart ? this.groundStart.focus : p ? p.pos : this.camera.position, this.wind);
+        this.world.update(vdt, this.camera, this.spectating ? this.camera.position : pm ? pm.pos : this.groundStart ? this.groundStart.focus : p ? p.pos : this.camera.position, this.wind);
         this.world.updateWeather(rawDt, this.camera, this);
-        this.effects.update(dt, this.camera, this.scene.fog, this.fxGround || (this.fxGround = (x, z) => Math.max(terrainHeight(x, z), 0) + craterAdj(x, z)));
+        this.effects.update(vdt, this.camera, this.scene.fog, this.fxGround || (this.fxGround = (x, z) => Math.max(terrainHeight(x, z), 0) + craterAdj(x, z)));
         if (this.cockpit && this.cockpit.enabled && pm) this.cockpit.updateRifle(rawDt, this, this.camera, this.world, pm);
         else if (this.cockpit && this.cockpit.enabled && p && p.alive) this.cockpit.update(rawDt, this, this.camera, this.world);
         this.audio.update(rawDt, pm ? null : p, {
@@ -1717,7 +1737,7 @@ export class Game {
     updateCamera(dt, mouse) {
         const cam = this.camera, p = this.player;
         if (!p) return;
-        for (const s of this.systems) if (s.updateCamera && s.updateCamera(cam, dt)) return;
+        for (const s of this.systems) if (s.updateCamera && s.updateCamera(cam, dt, mouse)) return;
         const pm = this.pilotMode;
         if (this.groundStart) {
             p.root.visible = true;
