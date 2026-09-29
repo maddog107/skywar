@@ -16,6 +16,9 @@ node tools/perf/bench.mjs --url http://localhost:8190/ --scenarios dogfight,war 
   flown before timing, so streaming settles and the war develops).
 - Scenarios: `dogfight`, `strike`, `naval`, `war`, `war-night`, `town-low` (low over the harbour town),
   `storm`. Their settings are in `SCENARIOS` at the top of the script.
+- `Math.random` is seeded (`--seed <n>`, `--seed off`), so both builds fly into the same enemies, ejections and
+  traffic; the heap is read after a full GC (`heapRawMB` in `--out` is the reading before it); `boot s` is the
+  time from navigation to the menu.
 - Other agents and apps share the GPU, so compare runs made back to back, and repeat a surprising one.
 - Needs playwright-core: set `PLAYWRIGHT_CORE` to its `index.mjs` if it isn't installed locally (the script
   also looks in `~/git/flight-tool`). Pages read settings from a stubbed `localStorage.getItem` and never

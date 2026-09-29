@@ -11,7 +11,7 @@ import { propParts } from './props.js';
 import { makeBuildingMaterial } from './towns.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createAircraftModel } from './models.js';
-import { mergeStaticModel, mergeInPlace } from './meshmerge.js';
+import { mergeStaticModel, mergeInPlace, weldGeometry } from './meshmerge.js';
 import { AIRCRAFT } from './config.js';
 import { propInstance, propSize, hasProp } from './props.js';
 import { makeRadialTexture, clamp, rand, freezeStatic, freezeLocal, offsetUnits } from './util.js';
@@ -83,7 +83,7 @@ function mergeStatic(group, skip = []) {
     for (const o of gone) o.parent.remove(o);
     for (const [mat, { geos, shadow }] of by) {
         try {
-            const m = new THREE.Mesh(mergeGeometries(geos), mat);
+            const m = new THREE.Mesh(weldGeometry(mergeGeometries(geos)), mat);
             m.castShadow = shadow; m.receiveShadow = true;
             group.add(m);
         } catch (e) { /* odd attribute sets: leave it out */ }
@@ -714,7 +714,7 @@ export class Airbases {
             byMat.get(o.material).push(ng);
         });
         const parts = [];
-        for (const [mat, geos] of byMat) { try { parts.push({ geometry: mergeGeometries(geos), material: mat }); } catch (e) { /* skip */ } }
+        for (const [mat, geos] of byMat) { try { parts.push({ geometry: weldGeometry(mergeGeometries(geos)), material: mat }); } catch (e) { /* skip */ } }
         this._fleet[id] = parts;
         return parts;
     }

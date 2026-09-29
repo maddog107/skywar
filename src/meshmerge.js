@@ -7,6 +7,86 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
+// ── Welding: exact-duplicate vertices shared through an index ──
+// Merges (and damage.js segmentModel) produce non-indexed triangle soups: three vertices per triangle, every
+// attribute copied each time. A vertex whose every attribute is bit-for-bit the same as another's is the same
+// vertex, so sharing it through an index draws exactly the same image (same triangles, same order) from a
+// third to a half of the memory, and the GPU's vertex cache shades it once. Geometries with morph targets or
+// interleaved attributes are returned as they are.
+function bitsOf(arr) {
+    // integer view of an attribute's array for hashing and comparing (floats by their bit pattern)
+    if (arr instanceof Float32Array) return new Uint32Array(arr.buffer, arr.byteOffset, arr.length);
+    if (arr instanceof Float64Array) return new Float64Array(arr); // (rare: compared by value)
+    return arr;
+}
+export function weldGeometry(geo) {
+    const names = Object.keys(geo.attributes);
+    const pos = geo.attributes.position;
+    if (!pos || pos.count < 3 || Object.keys(geo.morphAttributes).length) return geo;
+    const attrs = names.map(n => geo.attributes[n]);
+    if (attrs.some(a => a.isInterleavedBufferAttribute || a.isInstancedBufferAttribute || a.count !== pos.count)) return geo;
+    const n = pos.count, bits = attrs.map(a => bitsOf(a.array)), sizes = attrs.map(a => a.itemSize);
+    let size = 1; while (size < n * 2) size <<= 1;
+    const table = new Int32Array(size).fill(-1), mask = size - 1;
+    const remap = new Uint32Array(n), rep = new Uint32Array(n);
+    let unique = 0;
+    for (let i = 0; i < n; i++) {
+        let h = 0x811c9dc5 | 0;
+        for (let k = 0; k < bits.length; k++) {
+            const b = bits[k], s = sizes[k], o = i * s;
+            for (let c = 0; c < s; c++) { h = Math.imul(h ^ (b[o + c] | 0), 0x01000193); h ^= h >>> 15; }
+        }
+        let slot = h & mask;
+        for (;;) {
+            const u = table[slot];
+            if (u < 0) { table[slot] = unique; rep[unique] = i; remap[i] = unique++; break; }
+            const j = rep[u];
+            let same = true;
+            for (let k = 0; k < bits.length && same; k++) {
+                const b = bits[k], s = sizes[k], oi = i * s, oj = j * s;
+                for (let c = 0; c < s; c++) if (b[oi + c] !== b[oj + c]) { same = false; break; }
+            }
+            if (same) { remap[i] = u; break; }
+            slot = (slot + 1) & mask;
+        }
+    }
+    const out = new THREE.BufferGeometry();
+    attrs.forEach((a, k) => {
+        const s = sizes[k], src = a.array, dst = new src.constructor(unique * s);
+        for (let u = 0; u < unique; u++) { const oi = rep[u] * s, od = u * s; for (let c = 0; c < s; c++) dst[od + c] = src[oi + c]; }
+        const na = new THREE.BufferAttribute(dst, s, a.normalized);
+        na.name = a.name;
+        out.setAttribute(names[k], na);
+    });
+    const oldIdx = geo.index, count = oldIdx ? oldIdx.count : n;
+    const idx = unique < 65536 ? new Uint16Array(count) : new Uint32Array(count);
+    if (oldIdx) { const ia = oldIdx.array; for (let i = 0; i < count; i++) idx[i] = remap[ia[i]]; } else idx.set(remap);
+    out.setIndex(new THREE.BufferAttribute(idx, 1));
+    for (const g of geo.groups) out.addGroup(g.start, g.count, g.materialIndex);
+    out.setDrawRange(geo.drawRange.start, geo.drawRange.count);
+    out.name = geo.name;
+    out.userData = geo.userData;
+    if (geo.boundingBox) out.boundingBox = geo.boundingBox.clone();
+    if (geo.boundingSphere) out.boundingSphere = geo.boundingSphere.clone();
+    return out;
+}
+
+// mergeGeometries for a mix of indexed and non-indexed geometries (the non-indexed get a plain 0..n-1 index),
+// welded: indexed out
+export function mergeWelded(geos) {
+    const anyIndexed = geos.some(g => g.index);
+    const list = anyIndexed ? geos.map(g => {
+        if (g.index) return g;
+        const n = g.attributes.position.count, c = g.clone();
+        const idx = n < 65536 ? new Uint16Array(n) : new Uint32Array(n);
+        for (let i = 0; i < n; i++) idx[i] = i;
+        c.setIndex(new THREE.BufferAttribute(idx, 1));
+        return c;
+    }) : geos;
+    const m = mergeGeometries(list);
+    return m ? weldGeometry(m) : m;
+}
+
 // A plain material: untextured, opaque, standard. Plain materials that differ only in colour, roughness, metalness
 // and emissive can share one mesh: those go into vertex attributes (see plainMaterial). The signature is
 // everything else that changes how they draw. userData.noMerge keeps a material to itself (one that is changed
@@ -126,7 +206,7 @@ function collect(root, keep) {
     const meshes = [];
     for (const e of groups.values()) {
         let geo = null;
-        try { geo = mergeGeometries(e.geos); } catch (err) { geo = null; }
+        try { geo = mergeGeometries(e.geos); if (geo) geo = weldGeometry(geo); } catch (err) { geo = null; }
         e.geos.forEach(g => g.dispose());
         if (!geo) return { meshes: [], used: [] }; // odd attribute sets: leave everything as it was
         const mat = e.plain ? plainMaterial(e.mat, e.sig) : e.mat;

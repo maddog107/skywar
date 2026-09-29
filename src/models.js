@@ -9,6 +9,7 @@ import { AIRCRAFT } from './config.js';
 import { segmentModel, regionAt } from './damage.js';
 import { cutSurfaces } from './surfaces.js';
 import { extractRigParts, attachRigParts, refuelTemplate, REFUEL } from './rigparts.js';
+import { weldGeometry } from './meshmerge.js';
 
 // Loaded GLB models. rot = Euler to bring nose to -Z / up to +Y.
 // Filled in by MODEL_FILES (see models/CREDITS.md for sources/licences).
@@ -528,6 +529,17 @@ function ensureSurfaces(id) {
     if (!src || src.surfacesCut) return;
     src.surfacesCut = true;
     try { cutSurfaces(src.object, id, AIRCRAFT[id].length); } catch (e) { console.warn('[models] could not cut surfaces for', id, e); }
+    weldModel(src.object); // (the cut needs the segmented soup; every copy shares the welded geometry from here on)
+}
+
+// share each mesh's duplicate vertices through an index (meshmerge.js weldGeometry: the same triangles, a third
+// to a half of the memory)
+export function weldModel(root) {
+    root.traverse((o) => {
+        if (!o.isMesh || o.geometry.index) return;
+        const g = weldGeometry(o.geometry);
+        if (g !== o.geometry) { o.geometry.dispose(); o.geometry = g; }
+    });
 }
 
 // Cut every loaded type's surfaces, one type per idle moment (a type takes up to ~0.4 s), so a type first
@@ -565,6 +577,7 @@ export function createAircraftModel(id) {
         });
         r.rig.props = [];
         r.object = safeSegment(r.object, id);
+        weldModel(r.object);
         cache['proc_' + id] = r;
     }
     const src = cache['proc_' + id];
