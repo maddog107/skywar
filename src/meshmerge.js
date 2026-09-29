@@ -89,6 +89,41 @@ export function mergeWelded(geos) {
     return m ? weldGeometry(m) : m;
 }
 
+// ── Small parts too far to see ──
+// How far away a part still shows: its apparent size is taken as the geometric mean of its two largest extents
+// (a wheel ~0.4 m, a jack or ram ~0.5 m, a rotor blade ~1.5 m, a jeep ~3 m), drawn out to where that spans ~1.4 px
+// on a 900 px screen at 60° (never nearer than 400 m)
+export function sightDistance(size) {
+    const d = [size.x, size.y, size.z].sort((a, b) => b - a);
+    return Math.max(400, Math.sqrt(d[0] * d[1]) * 1100);
+}
+// A moving object's small meshes (a rigged vehicle's wheels, jacks, rams, hatches) hidden while the camera is
+// beyond their sightDistance from the object, and shown again once it's within (only the ones hidden here: what
+// something else hid stays hidden). Each mesh's size is measured once, in the pose it's in then.
+const _cb = new THREE.Box3(), _cs = new THREE.Vector3(), _cp = new THREE.Vector3();
+// `skip`: nodes whose own visibility the game switches (a TEL's missile): left alone, with everything under them.
+export function cullSmallParts(root, camPos, skip = null) {
+    let parts = root.userData.smallParts;
+    if (!parts) {
+        parts = root.userData.smallParts = [];
+        root.updateWorldMatrix(true, true);
+        const skipped = (m) => { if (skip) for (let q = m; q && q !== root; q = q.parent) if (skip.includes(q)) return true; return false; };
+        root.traverse(m => {
+            if (!m.isMesh || m === root || skipped(m)) return;
+            _cb.makeEmpty().expandByObject(m, false);
+            if (_cb.isEmpty()) return;
+            const d = sightDistance(_cb.getSize(_cs));
+            if (d < 20000) parts.push({ m, d });
+        });
+    }
+    const dist = root.getWorldPosition(_cp).distanceTo(camPos);
+    for (const p of parts) {
+        const m = p.m, inSight = dist < p.d;
+        if (!inSight && m.visible) { m.visible = false; m.userData.sightHidden = true; }
+        else if (inSight && m.userData.sightHidden) { m.visible = true; m.userData.sightHidden = false; }
+    }
+}
+
 // A plain material: untextured, opaque, standard. Plain materials that differ only in colour, roughness, metalness
 // and emissive can share one mesh: those go into vertex attributes (see plainMaterial). The signature is
 // everything else that changes how they draw. userData.noMerge keeps a material to itself (one that is changed

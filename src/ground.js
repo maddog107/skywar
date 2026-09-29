@@ -9,6 +9,7 @@ import { rand, clamp, interceptTime, lerp } from './util.js';
 import { WEAPONS } from './config.js';
 import { samplePath, LANE, roadLiftAt } from './roads.js';
 import { craterAdj } from './craters.js';
+import { cullSmallParts } from './meshmerge.js';
 
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3();
 
@@ -413,6 +414,8 @@ class GroundTarget {
             }
             return;
         }
+        // a rigged vehicle's small parts (wheels, jacks, rams) aren't drawn where they'd be under a pixel or two
+        if (this.vehicle && this.rig && g.camera && (this._cullT = (this._cullT || 0) - dt) <= 0) { this._cullT = 0.15; cullSmallParts(this.vehicle, g.camera.position, [this.rig.missile, ...(this.rig.missiles || []), this.erector].filter(Boolean)); }
         if (this.parts.dish && !this.unpowered) this.parts.dish.rotation.y += dt * 1.2;
         if (this.route) this.driveRoute(dt);
         // an airbase's SAM launcher raises its rack when the base goes to alert, lowers it after (bases.js readiness)

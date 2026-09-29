@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 const THREE = await import('three');
 const { mergeVehicleParts, vehicleLod, CarSet, CAR_LOD_NEAR } = await src('carset.js');
 const { makeAircraft, stubGame } = await import('./helpers/flight.mjs');
+const { cullSmallParts, sightDistance } = await src('meshmerge.js');
 
 const car = () => {
     const paint = new THREE.MeshStandardMaterial({ name: 'Paint', color: 0xffffff, roughness: 0.4, metalness: 0.3 });
@@ -86,5 +87,35 @@ describe('Aircraft.updateLod: the far version by size on screen', () => {
         assert.deepEqual(place(g, ac, 5), { model: true, far: false });
         ac.lostRegions.clear(); ac.falling = true;
         assert.deepEqual(place(g, ac, 5), { model: true, far: false });
+    });
+});
+
+describe('small parts too far to see (meshmerge.js cullSmallParts)', () => {
+    const mat = new THREE.MeshStandardMaterial();
+    const truck = () => {
+        const root = new THREE.Group();
+        const body = new THREE.Mesh(new THREE.BoxGeometry(2.5, 3, 9), mat);
+        const wheels = [0, 1, 2, 3].map(i => { const w = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.4, 12), mat); w.position.set(i % 2 ? 1.2 : -1.2, 0.5, i < 2 ? -3 : 3); return w; });
+        const missile = new THREE.Group(); missile.add(new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.8, 8), mat));
+        root.add(body, ...wheels, missile);
+        return { root, body, wheels, missile };
+    };
+    test('sightDistance grows with the part: a wheel a few hundred metres, a truck kilometres', () => {
+        assert.equal(sightDistance(new THREE.Vector3(1, 0.4, 1)), 1100 * 1 > 400 ? 1100 : 400);
+        assert.ok(sightDistance(new THREE.Vector3(9, 3, 2.5)) > 5000);
+        assert.equal(sightDistance(new THREE.Vector3(0.2, 0.1, 0.1)), 400);
+    });
+    test('wheels hidden far out, the body kept; back when near; what else hid stays hidden; skipped nodes untouched', () => {
+        const t = truck();
+        t.wheels[3].visible = false; // (hidden by something else)
+        cullSmallParts(t.root, new THREE.Vector3(50, 0, 0), [t.missile]);
+        assert.ok(t.body.visible && t.wheels.slice(0, 3).every(w => w.visible));
+        cullSmallParts(t.root, new THREE.Vector3(3000, 0, 0), [t.missile]);
+        assert.ok(t.body.visible, 'the body shows at 3 km');
+        assert.ok(t.wheels.every(w => !w.visible), 'the wheels do not');
+        assert.ok(t.missile.children[0].visible, 'a skipped node is left alone');
+        cullSmallParts(t.root, new THREE.Vector3(100, 0, 0), [t.missile]);
+        assert.ok(t.wheels.slice(0, 3).every(w => w.visible), 'back near');
+        assert.equal(t.wheels[3].visible, false, 'still hidden by whatever hid it');
     });
 });

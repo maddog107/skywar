@@ -11,7 +11,7 @@ import { propParts } from './props.js';
 import { makeBuildingMaterial } from './towns.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createAircraftModel } from './models.js';
-import { mergeStaticModel, mergeInPlace, weldGeometry } from './meshmerge.js';
+import { mergeStaticModel, mergeInPlace, weldGeometry, sightDistance } from './meshmerge.js';
 import { AIRCRAFT } from './config.js';
 import { propInstance, propSize, hasProp } from './props.js';
 import { makeRadialTexture, clamp, rand, freezeStatic, freezeLocal, offsetUnits } from './util.js';
@@ -90,14 +90,8 @@ function mergeStatic(group, skip = []) {
     }
 }
 
-// How far away a static part still shows: its apparent size is taken as the geometric mean of its two largest
-// extents (a wheel ~0.4 m, a rotor blade ~1.5 m, a jeep ~3 m, a fence or a car park: tens of metres), and it's drawn
-// out to where that spans ~1.4 px on a 900 px screen at 60° (never nearer than 400 m).
+// (sightDistance, meshmerge.js: how far away a part of that size still shows)
 const _sb = new THREE.Box3(), _ss = new THREE.Vector3();
-export function sightDistance(size) {
-    const d = [size.x, size.y, size.z].sort((a, b) => b - a);
-    return Math.max(400, Math.sqrt(d[0] * d[1]) * 1100);
-}
 // hide a static object's meshes that are too small to see from `cam`, and show them again (only the ones hidden
 // here: what something else hid stays hidden) once they're in sight. Each mesh's world box is measured once.
 function cullSmall(o, cam) {
