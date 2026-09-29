@@ -21,6 +21,7 @@ const { War } = await src('war.js');
 const { StrikeManager, MISSILES } = await src('strikes.js');
 const { terrainHeight } = await src('world.js');
 globalThis.__aircraftMod = await src('aircraft.js');
+globalThis.__autopilotMod = await src('autopilot.js');
 const repo = fileURLToPath(new URL('../', import.meta.url));
 
 // ── helpers ──
@@ -288,6 +289,67 @@ describe('carrier recoveries (deckops.js)', () => {
         assert.ok(ac.removed && !g.aircraft.includes(ac), 'struck below: gone into the hangar');
         assert.ok(calls.some(c => /BALL/.test(c)) && calls.some(c => /BOLTER/.test(c)) && calls.some(c => /WIRE/.test(c)), 'the ball call, the bolter call, the wire (' + calls.join(' | ') + ')');
         g.naval.clear();
+    });
+});
+
+// The player's auto-land (Y) onto the home carrier's angled deck: the real Autopilot and Aircraft on the real deck.
+describe('player auto-land on the carrier (autopilot.js)', () => {
+    const { Autopilot } = globalThis.__autopilotMod;
+    const { refSpeeds } = globalThis.__aircraftMod;
+    function run(place, maxT) {
+        const g = navalGame();
+        const { Aircraft } = globalThis.__aircraftMod;
+        const sea = openSea(9000);
+        const cv = g.naval.spawn('carrier', 'blue', sea, { orbitR: 2600 });
+        cv.steer(1.2, 10); cv.nav.speed = 10; cv.heading = 1.2;
+        const deck = new D.DeckOps(g.navalops, cv, { launches: false, parked: false, crew: false });
+        g.navalops.decks.push(deck);
+        g.naval.homeCarrier = cv;
+        g.input = { spoilersOn: false }; g.aimDir = new THREE.Vector3();
+        const feed = [], touchdowns = [];
+        g.addFeed = (m) => feed.push(m);
+        g.events = { on() {}, emit(k, a, b) { if (k === 'touchdown' && a === ac) touchdowns.push(b); } };
+        const ac = new Aircraft(g, 'fa18', { team: 'blue', isPlayer: true });
+        g.aircraft.push(ac); g.player = ac;
+        g.naval.update(1 / 60);
+        const fwd = deck.landingDir(new THREE.Vector3()), touch = deck.touchPoint(new THREE.Vector3());
+        place(ac, fwd, touch);
+        g.autopilot = new Autopilot(g);
+        g.autopilot.land();
+        assert.equal(g.autopilot.target.kind, 'carrier');
+        const dt = 1 / 60, stall = refSpeeds(ac.spec).stall;
+        let t = 0, minV = Infinity;
+        for (; t < maxT; t += dt) {
+            g.time += dt;
+            g.autopilot.update(dt, ac);
+            ac.update(dt);
+            g.naval.update(dt); cv.steer(1.2, 10);
+            if (!ac.alive) break;
+            if (!ac.onGround && t > 2) minV = Math.min(minV, ac.speed);
+            if (ac.onGround && ac.relSpeed < 1 && !g.autopilot.active) break;
+        }
+        g.naval.clear();
+        return { ac, cv, t, touchdowns, feed, minV, stall };
+    }
+    test('straight in from 6 km on the angled deck\'s centreline: flies the glide slope into the wires and traps', () => {
+        const r = run((ac, fwd, touch) => {
+            const p = touch.clone().addScaledVector(fwd, -6000); p.y = touch.y + 6000 * Math.tan(3.5 * Math.PI / 180) + 3;
+            ac.spawnAir(p, Math.atan2(-fwd.x, -fwd.z), 0.35); ac.gear = true; ac.flaps = 2;
+        }, 200);
+        console.log('    straight in: trapped after', r.t.toFixed(0), 's ·', r.touchdowns.map(d => (d.trap ? 'trap ' : 'bolter ') + d.vs.toFixed(1) + ' m/s').join(', '));
+        assert.ok(r.ac.alive, 'alive');
+        assert.ok(r.touchdowns.length >= 1 && r.touchdowns[0].trap, 'the first touchdown catches a wire (it used to float over the deck and go round)');
+        assert.ok(r.ac.onGround && r.ac.deck === r.cv, 'stopped on the deck');
+    });
+    test('engaged low past the bow (after a bolter): climbs away without zooming onto the stall, comes round and traps', () => {
+        const r = run((ac, fwd, touch) => {
+            const p = touch.clone().addScaledVector(fwd, 900); p.y = touch.y + 12;
+            ac.spawnAir(p, Math.atan2(-fwd.x, -fwd.z), 0.3); ac.gear = true; ac.flaps = 2;
+        }, 600);
+        console.log('    after a bolter: trapped after', r.t.toFixed(0), 's, slowest', r.minV.toFixed(0), 'm/s (stall', r.stall.toFixed(0) + ')');
+        assert.ok(r.ac.alive, 'alive');
+        assert.ok(r.minV > r.stall * 1.1, 'kept flying speed on the climb-out (' + r.minV.toFixed(0) + ' m/s)');
+        assert.ok(r.touchdowns.some(d => d.trap) && r.ac.onGround && r.ac.deck === r.cv, 'trapped in the end (' + r.feed.join(' | ') + ')');
     });
 });
 
