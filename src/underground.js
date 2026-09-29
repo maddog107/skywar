@@ -836,10 +836,10 @@ export class Underground {
             u.mesh.position.y = q.y; u.pos.set(x, q.y + 3, z);
             g.war.add(u, { cls: 'tel', name: 'SS-1C SCUD-B TEL', conceal: 0.55 });
             const tel = { unit: u, bay: { x, y: q.y, z, yaw }, state: 'bay', inside: true, pos: new THREE.Vector3(x, q.y, z), yaw, speed: 0, path: null, i: 0, erect: 0, reloadT: 0, lit: null };
-            dress(u, 'scud', { onRig: () => { tel.lit = null; this.poseTel(tel); } });
             tel.src = st.addSource(new UgLauncher(st, c, tel));
             c.launchers.push(tel.src);
             c.tels.push(tel);
+            dress(u, 'scud', { onRig: () => { tel.lit = null; this.poseTel(tel); } });
             this.placeTel(c, tel);
         }
         c.magazine = 4; // reloads in the magazine gallery
@@ -1023,7 +1023,7 @@ export class Underground {
         const r = tel.unit.rig, e = tel.erect;
         if (!r) return;
         deployJacks(r, clamp(e * 3, 0, 1)); deployPad(r, clamp(e * 3 - 1, 0, 1)); raise(r, clamp(e * 3 - 2, 0, 1));
-        if (r.missile) r.missile.visible = (tel.src.stock.scud || 0) > 0 || tel.src.queue.length > 0;
+        if (r.missile && tel.src) r.missile.visible = (tel.src.stock.scud || 0) > 0 || tel.src.queue.length > 0;
     }
 
     dropTel(c, tel) {

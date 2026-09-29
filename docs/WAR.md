@@ -469,3 +469,61 @@ parts are pulled out first and every instance gets its own copy, hung on the sec
 - The Living War starts wingmen on COVER ME with rockets. Badly hit (25%) they RTB by themselves; one that
   lands, or is shot down, is replaced by a fresh jet after 75 / 150 s in the war modes.
 - Other plug-ins can give any AI pilot a brain the same way (director.js does for enemy CAS).
+
+## Underground bases (`game.underground`, src/underground.js)
+
+Two hidden mountain complexes in red territory, far from towns, roads and airbases (ugsites.js `UG_SITES`):
+- **ZHELEZNAYA GORA** (x 32.4, z −43.6 km): an Objekat 505 / Željava-style underground airbase. Two aircraft portals
+  (N1, N2; inverted-T openings, two ~100 t sliding leaves) and a service portal (N3, hinged doors) in cuttings at the
+  foot of a massif; N1 → tunnel → a 32 × 15 m, 220 m hangar hall (seven jets parked) → N2 is a drive-through loop; N3
+  leads to a stores gallery. Aprons, a taxiway and a 2,200 m runway on the plain 1.1 km out, a support compound.
+- **KAMENNY LOG** (x 35.2, z −23.8 km): a missile operating base (Sakkanmol / "missile city" style). Vehicle portals E1
+  and E2 joined by the TEL garage hall (three Scud TELs), E3 into the magazine; a yard, three launch pads on the rise
+  above the lake, gravel tracks, an access road.
+- Around both: vents on the ridge (warm in the FLIR), relay masts, guard posts, a substation and a power line running
+  into the hillside, camouflage nets over the cuttings, tyre tracks.
+
+**Ground.** `terrainHeight` carves them (ugsites.js `ugCarve`, called at the end of terraincore.js `terrainHeight`, so the
+map workers, terrain workers and physics agree): pads (runway, aprons, pads), capsules (roads, taxiway) and notches
+(portal cuttings, cut only), each continuous and fading to the natural ground within its reach; everything outside the
+sites' boxes is untouched. The terrain mesh is too coarse for a cutting, so each portal's ground is cut out of the
+terrain shader (world.js `TERRAIN_CUT_U`, rectangles; a material drawing replacement ground defines `UG_KEEP`) and drawn
+as a fine mesh with the terrain's own material, with no ground over the tunnel mouth (ugworld.js `PortalGround`). Trees
+and grass keep off (`world.blockTree`, `world.noGrass`). `ugTunnelAt(x, z, y)` says when a point is inside a tunnel or
+hall (floor, arch height): `game.surfaceAt` and the cameras (`game.camGround`, `underground.clampCamera`) use it, and the
+player's jet crashes into the walls and arch. Interiors (ugint.js) are drawn only with a door open and the camera near
+and in front, or the camera inside; their materials (`interiorMaterial`) are lit by the tunnel lamps — baked into the
+lining, the nearest 12 as point lights — instead of the sun, sky and environment.
+
+**Life.** Doors: `complex.openDoor(portalId, user)` / `releaseDoor` (open while anyone needs them, shut 8 s after the
+last one; klaxon, beacons); `doorOpen(id)`, `usable(id)`. Scrambles: `underground.scramble(types, target, { role,
+callsign, route, complex })` → a sortie (the jets taxi out of the hall through the door, down the taxiway, take off,
+and become a director flight with `f.ugHome`), or null; `scrambleOrigin(pos)` is where one would come from (null if
+none can). The director's GCI uses it when the underground airbase is nearer than its other origins. TELs are strikes.js
+red `launcher` sources (`UgLauncher`, held until set up): a launch order sends one out to a pad; it sets up, fires,
+stows and comes back in by the other portal. The missile base also fires on its own every ~7–11 minutes
+(`missileSortie()`, through `strikes.request(type, marks, team, quiet, { only })`).
+
+**Intelligence.** Each complex's units are war units: the `facility` (cls `facility`, UNKNOWN), the `entrance`s (cls
+`entrance`, conceal 0.72), the clues (cls `bunker` / `radar` / `vehicle`) and the airbase's airfield (pre-war imagery).
+Anyone who reveals a clue (eyes, the pod, recon aircraft, drones: `war.reveal`) adds to the complex's score (tracks,
+guard post, power line 1; substation, mast 0.75; a vent 1.5 once IDENTIFIED — its heat, `u.heat` in sensors.js
+`heatOf`; an entrance 2): CONTACT "UNKNOWN FACILITY" at 1, "POSSIBLE MISSILE STORAGE" (or "… UNDERGROUND HANGARS") at
+3, IDENTIFIED "CONFIRMED UNDERGROUND MISSILE FACILITY" (or "… AIRBASE") at 5.5 — or at once when a door is seen moving,
+an entrance is identified or a vehicle is seen coming out. Then: the TARGET IDENTIFIED callout, the radio, the reports
+resolved, penetrators added to the blue missile field. Reports ("… IN THE HILLS 14 KM NORTH-EAST OF VORSK") come a few
+minutes into the war, and when a hidden complex scrambles or launches.
+
+**Striking it.** Only penetrators close an entrance: a strike missile with `hard ≥ 0.9` within ~22 m of the portal
+(`strategicImpact`), a heavy bomber's bomb, or any bomb in the open doorway (weapons.js `worldBlast` emits `'blast'` (at,
+{ r, amount, owner, kind: 'bomb' | 'blast' })). Everything else scars the facade. All entrances down seals the complex:
+what's inside is trapped, its launchers are dead, no more scrambles. BDA: a unit may carry `bdaResult()`, which
+strikes.js `reportBDA` uses ("ENTRANCE 2 OF 3 DESTROYED", "… FACADE SCARRED, DOOR INTACT (PENETRATOR REQUIRED)").
+Tasks: INVESTIGATE REPORTED ACTIVITY, FIND THE ENTRANCES, SEAL <complex>, DESTROY THE ENTRANCES BEFORE THE TEL FIRES
+(urgent). Map: the runway once known, a ring and the entrance count once identified; the panel's PENETRATOR STRIKE ON
+ALL KNOWN ENTRANCES, and COMMAND › TACTICAL SUPPORT › PENETRATORS ON <complex>. Ground targets inside a mountain carry
+`hidden` (off the HUD and target cycling).
+
+**Events:** `ugClue` (complex, { clue, score }), `ugStage` (complex, { stage }), `ugDoor` (complex, { portal, open }),
+`ugScramble` (complex, { sortie }), `ugTelSortie` (complex, { tel }), `ugEntranceDestroyed` (complex, { portal,
+entrance }), `ugSealed` (complex).
