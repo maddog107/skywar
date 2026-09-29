@@ -96,7 +96,7 @@ export class HUD {
         if (game.hideHud) return;
         // in a room, at a boat's helm or in a vehicle's cab (interiors.js draws its own display): radio and systems
         if (game.indoors) { ctx.textBaseline = 'middle'; ctx.lineWidth = 1.6; this.drawSystems(game); this.drawMessages(game); return; }
-        if (game.pilotMode) { this.drawPilotMode(game); this.drawSystems(game); return; }
+        if (game.pilotMode) { if (!(game.strikes && game.strikes.cam)) this.drawPilotMode(game); else this.drawMessages(game); this.drawSystems(game); return; } // (watching a missile: its display, not the man's)
         if (game.groundStart) { this.drawGroundStart(game); this.drawSystems(game); return; }
         const cockpit = game.cameraMode === 'cockpit';
         ctx.lineWidth = 1.6;

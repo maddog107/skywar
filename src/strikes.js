@@ -1073,6 +1073,28 @@ export class StrikeManager {
         const dir = _v.copy(m.vel).normalize();
         const T = m.targetPos;
         let fov = 55;
+        // a vertical launch (a VLS cell, a TEL, a submarine's capsule): "behind" the rising missile is inside the ship or
+        // under the ground, so the chase and follow views watch it go from beside the launcher until it pitches over
+        const rising = (c.mode === 'chase' || c.mode === 'follow') && (m.phase === 'launch' || (dir.y > 0.6 && m.pos.distanceTo(c.launchFor === m ? c.launchAt : m.pos) < 1500));
+        if (rising) {
+            if (c.launchFor !== m) {
+                const back = _v2.subVectors(m.pos, T).setY(0);
+                if (back.lengthSq() < 1) back.set(0, 0, 1);
+                back.normalize();
+                const side = _v3.crossVectors(back, UP).normalize();
+                c.launchAt = m.pos.clone();
+                c.launchCam = m.pos.clone().addScaledVector(side, 42).addScaledVector(back, 24);
+                c.launchCam.y = Math.max(m.pos.y, 0) + 10;
+                c.launchFor = m;
+            }
+            cam.position.copy(c.launchCam);
+            const gh0 = Math.max(terrainHeight(cam.position.x, cam.position.z), 0) + 3;
+            if (cam.position.y < gh0) cam.position.y = gh0;
+            cam.lookAt(m.pos);
+            cam.fov = damp(cam.fov, 60, 4, dt);
+            cam.updateProjectionMatrix();
+            return true;
+        }
         switch (c.mode) {
             case 'chase':
                 cam.position.copy(m.pos).addScaledVector(dir, -22).add(_v2.set(0, 4, 0));
