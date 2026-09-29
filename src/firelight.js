@@ -289,7 +289,8 @@ export class FireLights {
         // what counts as lit: a tenth of the ambient light, never less than 0.002
         const eCut = Math.max(0.002, amb * 0.1);
         _m.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-        _frustum.setFromProjectionMatrix(_m);
+        // (the camera's projection is reversed-depth: the frustum's near and far planes need to know)
+        _frustum.setFromProjectionMatrix(_m, camera.coordinateSystem, camera.reversedDepth);
         const cand = this.cand;
         cand.length = 0;
         const consider = (src, pos, I, color, core, cloud, glow, cap) => {
