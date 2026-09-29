@@ -34,6 +34,7 @@ import { JAMMERS, jamToNoise, JAM_FLOOR, emitterOf, sigintDwell, sigintHears, fi
 import { RECON, reconDwell, inSwath, reconImage } from './recon.js';
 import { AirLaunchSource, CARRIERS, planStandoff, bombImpact } from './bombers.js';
 import { MISSILES } from './strikes.js';
+import { farMesh } from './farmodel.js';
 
 if (!WEAPONS.arm) WEAPONS.arm = HARM; // the HARM joins the missile table (weapons.js fires WEAPONS[kind])
 
@@ -272,8 +273,15 @@ export class SupportFlight {
     // level of detail: coarse when far from the camera and left alone; real when anything's near or at it
     updateLod() {
         const g = this.game, ac = this.ac;
-        if (!ac.alive) { if (this.coarse) this.goReal(); return; }
+        if (!ac.alive) { if (this.coarse) this.goReal(); if (this.far && this.far.visible) { this.far.visible = false; ac.model.visible = true; } return; }
         const d = ac.pos.distanceTo(g.camera.position);
+        // a real jet a few km off is drawn with its far version (farmodel.js: one draw instead of tens); built the
+        // first time it's needed, one type a frame
+        if (!this.coarse) {
+            const want = this.far ? (this.far.visible ? d > 2800 : d > 3200) && !ac.falling : d > 3200;
+            if (want && this.far === undefined && !this.air.farBuilt) { this.air.farBuilt = true; this.far = farMesh(ac) || null; }
+            if (this.far && this.far.visible !== want) { this.far.visible = want; ac.model.visible = !want; }
+        }
         // (a bomb run needs the real jet: its release point comes from the real flight)
         const busy = ac.incoming.length > 0 || !!this.threat || ac.health < ac.maxHealth * 0.999 || g.lockTarget === ac || this.keepReal || (this.task && this.task.kind === 'strike') || this.air.sessions.some(s => !s.done && (s.tanker === this || s.rx === ac));
         if (this.coarse) { if (d < 18000 || busy) this.goReal(); }
@@ -695,6 +703,7 @@ export class AirSupport {
         const g = this.game;
         if (g.state === 'menu' || g.state === 'over') return;
         this.flushRadio();
+        this.farBuilt = false;
         this.emT = (this.emT || 0) - dt;
         if (this.emT <= 0) { this.emT = 1; this.updateEmitters(); }
         for (let i = this.flights.length - 1; i >= 0; i--) {

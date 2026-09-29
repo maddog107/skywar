@@ -150,9 +150,9 @@ export function receiverPoint(ac) {
 // Stand-ins for a tanker whose model has no rig nodes (a procedural fallback, headless tests): the file's nodes as
 // normaliseGLTF leaves them, in fractions of the length (measured in the browser off models/aircraft/*.glb)
 export const TANKER_RIG = {
-    kc135: { boom: { at: [0, -0.0582, 0.3972], L0: 8.0, ud: { pitchMin: 20, pitchMax: 40, yawMax: 15 }, travel: 6 },
-        drogues: { l: { at: [-0.4166, -0.0184, 0.2244], hose: 21, droop: 5 }, r: { at: [0.4166, -0.0184, 0.2244], hose: 21, droop: 5 } } },
-    il78: { drogues: { l: { at: [-0.3305, -0.0266, 0.1937], hose: 26, droop: 6 }, r: { at: [0.3314, -0.0266, 0.1937], hose: 26, droop: 6 }, c: { at: [-0.0573, -0.0340, 0.4661], hose: 26, droop: 4 } } },
+    kc135: { boom: { at: [0, -0.0946, 0.3107], L0: 7.933, ud: { pitchMin: 20, pitchMax: 40, yawMax: 15 }, travel: 6 },
+        drogues: { l: { at: [-0.4131, -0.0662, 0.1364], hose: 21, droop: 5 }, r: { at: [0.4131, -0.0662, 0.1364], hose: 21, droop: 5 } } },
+    il78: { drogues: { l: { at: [-0.3305, -0.071, 0.0194], hose: 26, droop: 6 }, r: { at: [0.3314, -0.071, 0.0194], hose: 26, droop: 6 }, c: { at: [-0.0573, -0.0804, 0.3244], hose: 26, droop: 4 } } },
 };
 
 // A tanker's refuelling equipment in its model frame: { boom: { H, L0, env, node } | null, drogues: { l|r|c: { E, len,
