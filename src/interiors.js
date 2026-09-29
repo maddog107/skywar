@@ -771,7 +771,7 @@ export class RoomController {
             });
         }
         ctx.font = '600 ' + (C ? 10 : 12) + 'px ' + FONT; ctx.fillStyle = 'rgba(255,255,255,0.68)';
-        const keys = this.station ? 'MOUSE: CURSOR · LMB: PRESS · WHEEL: TURN · 1–9: STATIONS · RMB / ESC / WASD: STAND UP · E: LEAVE'
+        const keys = r.def.drive ? 'W/S: DRIVE · A/D: STEER · MOUSE: CURSOR · LMB: PRESS · E: LEAVE' : this.station ? 'MOUSE: CURSOR · LMB: PRESS · WHEEL: TURN · 1–9: STATIONS · RMB / ESC / WASD: STAND UP · E: LEAVE'
             : this.cursor ? 'MOUSE: CURSOR · LMB: PRESS · WHEEL: TURN · TAB: MOUSE LOOK · E: LEAVE'
                 : 'WASD: WALK · MOUSE: LOOK · LMB: PRESS · WHEEL: TURN · TAB: CURSOR · 1–9: STATIONS · E: LEAVE (AT THE ' + (r.def.exitName || 'EXIT') + ')';
         ctx.fillText(keys, M, H - (C ? 20 : 30), W - M * 2);
