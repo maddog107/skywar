@@ -12,11 +12,12 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeInPlace, mergeStaticModel } from './meshmerge.js';
+import { clusterTriangles } from './farmodel.js';
 import { ShipFX, deckHeightAt, foamTexture } from './shipfx.js';
 import { waterHeightLong } from './water.js';
 import { terrainHeight } from './world.js';
 import { loft, createAircraftModel } from './models.js';
-import { rand, clamp, lerp, interceptTime, freezeLocal, updateWorldChain } from './util.js';
+import { rand, clamp, lerp, interceptTime, freezeLocal, updateWorldChain, skipWorldWhileHidden } from './util.js';
 import { WEAPONS, AIRCRAFT } from './config.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _mp = new THREE.Vector3();
@@ -575,6 +576,38 @@ function buildFar(group) {
     return far;
 }
 
+// The very far version: the far model's triangles clustered on a grid a 1/140th of the ship's length (farmodel.js),
+// colours from its materials and textures, one mesh and one draw call. Shown once the ship is under ~30 px long
+// (Ship.updateLod), where the far model's dozen draws and ~100k triangles make a few dozen pixels. Built the first
+// time it's needed; null for a submarine (its paint fades under water, a plain mesh wouldn't) or when it can't be.
+const VFAR_MAT = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.72, metalness: 0.1 });
+function buildVeryFar(t, type) {
+    if (t.vfar !== undefined) return t.vfar;
+    t.vfar = null;
+    const def = TYPES[type];
+    if (!t.far || !def || def.cls === 'sub') return null;
+    try {
+        const { position, color, index } = clusterTriangles(t.far, def.L / 140, { colorSplit: true });
+        if (index.length >= 30) {
+            const g0 = new THREE.BufferGeometry();
+            g0.setAttribute('position', new THREE.BufferAttribute(position, 3));
+            g0.setAttribute('color', new THREE.BufferAttribute(color, 3));
+            g0.setIndex(index);
+            // faceted, like the hull and superstructure it stands for (normals shared across a 90° edge shade it
+            // lighter or darker than the real thing)
+            const geo = g0.toNonIndexed();
+            geo.computeVertexNormals();
+            geo.computeBoundingSphere();
+            const m = new THREE.Mesh(geo, VFAR_MAT);
+            m.name = 'ship:vfar';
+            m.castShadow = false; m.receiveShadow = true;
+            t.vfar = m;
+        }
+    } catch (e) { console.warn('[naval] no very far model for', type, e); }
+    return t.vfar;
+}
+let _vfarBuiltAt = -1;
+
 // Ships are built once per type and cloned: clones share geometry and materials, so a sortie that
 // rebuilds the home carrier (or sinks a group) allocates nothing on the GPU.
 const templates = {};
@@ -597,7 +630,7 @@ function makeShip(type) {
     const radar2 = group.getObjectByName('ship:radar2');
     if (radar2) parts.radar2 = radar2;
     const mounts = t.mounts.map((m, i) => ({ type: m.type, p: m.p.clone(), turret: group.getObjectByName('ship:mount' + i), fireT: rand(0, 2), lockT: 0 }));
-    return { group, parts, mounts, layout: t.layout || null, rig: bindRig(group), far: t.far || null };
+    return { group, parts, mounts, layout: t.layout || null, rig: bindRig(group), far: t.far || null, template: t };
 }
 
 // A fresh model of a ship type with its rig, not in any scene and not simulated (previews, the hangar, tests):
@@ -651,12 +684,16 @@ export class Ship {
         this.details = [...this.mounts.map(m => m.turret), this.parts.radar, this.parts.radar2].filter(Boolean);
         this.mesh.traverse(o => { if (o.isInstancedMesh && o.name.startsWith('ship:rigdoors')) this.details.push(o); });
         this.near = [...this.mesh.children];
+        // (hidden, the full model and the whole ship leave their subtrees out of the per-frame world-matrix pass)
+        for (const c of this.near) skipWorldWhileHidden(c);
+        skipWorldWhileHidden(this.mesh);
         if (built.far) {
             this.far = built.far.clone();
             this.far.visible = false;
             this.far.traverse(o => { o.matrixAutoUpdate = false; o.updateMatrix(); });
             this.mesh.add(this.far);
         }
+        this.template = built.template || null; // (its very far version is built on first need: updateLod)
         this.lodK = 1;
         this.place(0);
     }
@@ -892,7 +929,20 @@ export class Ship {
         const detail = this.mesh.visible && px > 70;
         if (detail !== this.lodDetail) { this.lodDetail = detail; for (const o of this.details) o.visible = detail; }
         const far = !!this.far && px < 120;
-        if (far !== this.lodFar) { this.lodFar = far; for (const c of this.near) c.visible = !far; this.far.visible = far; }
+        // very far: one clustered mesh (buildVeryFar), a type's first one built at most once a frame
+        let vfar = far && px < (this.lodVfar ? 33 : 30) && this.alive && !this.sinkT;
+        if (vfar && !this.vfar && this.template) {
+            const T = this.template;
+            if (T.vfar === undefined) { const f = this.game.time || 0; if (_vfarBuiltAt !== f) { _vfarBuiltAt = f; buildVeryFar(T, this.type); } }
+            if (T.vfar) { this.vfar = T.vfar.clone(); this.vfar.visible = false; this.vfar.matrixAutoUpdate = false; this.vfar.updateMatrix(); this.mesh.add(this.vfar); }
+        }
+        if (!this.vfar) vfar = false;
+        if (far !== this.lodFar || vfar !== this.lodVfar) {
+            this.lodFar = far; this.lodVfar = vfar;
+            for (const c of this.near) c.visible = !far;
+            this.far.visible = far && !vfar;
+            if (this.vfar) this.vfar.visible = vfar;
+        }
         this.lodPx = px;
     }
 

@@ -410,6 +410,19 @@ function applyEnv(mat, env) {
     u.light.value.copy(env.light);
 }
 
+// the bounding sphere of a strip's first n vertices (their box's), for frustum culling
+function fitBounds(geo, n) {
+    const p = geo.attributes.position.array, s = geo.boundingSphere;
+    if (n < 1) { s.radius = 0; return; }
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (let i = 0; i < n * 3; i += 3) {
+        const x = p[i], y = p[i + 1], z = p[i + 2];
+        if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; if (z < z0) z0 = z; if (z > z1) z1 = z;
+    }
+    s.center.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+    s.radius = Math.hypot(x1 - x0, y1 - y0, z1 - z0) / 2 + 10; // (+10 m: the shader's swell)
+}
+
 // ═════════════ Wake ═════════════
 class Wake {
     constructor(scene, ship, geom) {
@@ -427,7 +440,8 @@ class Wake {
         this.meshW = new THREE.Mesh(makeGeo(this.maxPts * 2, stripIndex(this.maxPts)), this.matW);
         this.meshK = new THREE.Mesh(makeGeo((this.maxPts + 8) * 2, stripIndex(this.maxPts + 8)), this.matK);
         for (const m of [this.meshW, this.meshK]) {
-            m.frustumCulled = false;
+            // culled against the strip's own bounds (fitBounds, each rebuild): a wake behind the camera isn't drawn
+            m.geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 0);
             m.renderOrder = 1 + m.material.userData.order;
             m.geometry.setDrawRange(0, 0);
             scene.add(m);
@@ -492,6 +506,7 @@ class Wake {
         }
         uploadUsed(geo, n * 2);
         geo.setDrawRange(0, Math.max(0, n - 1) * 6);
+        fitBounds(geo, n * 2);
     }
 
     buildKelvin(stern) {
@@ -532,6 +547,7 @@ class Wake {
         }
         uploadUsed(geo, used * 2);
         geo.setDrawRange(0, Math.max(0, used - 1) * 6);
+        fitBounds(geo, used * 2);
     }
 
     dispose() {
@@ -792,7 +808,9 @@ export class ShipFX {
             // nothing)
             const wm = this.wakeMap, px = ship.mesh.position.x, pz = ship.mesh.position.z, M = e.wake.maxLen + 300;
             const far = !!wm && (px < wm.x0 - M || px > wm.x0 + wm.size + M || pz < wm.z0 - M || pz > wm.z0 + wm.size + M);
-            e.follow.visible = env.fade > 0.01 && !far;
+            // (the foam round the hull and the hull's shadow on the water go with the ship: not drawn once the ship
+            // itself is too small to draw, naval.js updateLod)
+            e.follow.visible = env.fade > 0.01 && !far && ship.mesh.visible !== false;
             e.wake.meshW.visible = e.wake.meshK.visible = e.shadow.mesh.visible = !far;
             const speed = ship.vel ? Math.hypot(ship.vel.x, ship.vel.z) : 10;
             const speedK = Math.min(1.2, Math.max(0.2, speed / 11));

@@ -13,6 +13,7 @@ import * as THREE from 'three';
 import { rand, clamp, smoothstep, fbm, makeRadialTexture } from './util.js';
 import { terrainHeight } from './world.js';
 import { fireLights, FIRE_VIEW_GLSL, fireUniforms } from './firelight.js'; // [night] light from fires, motors, flashes
+import { splitTwoSided } from './meshmerge.js';
 
 // Squash HDR colours from other systems (muzzle flashes of ~6) into a soft knee that tops out ~2.4:
 // hot enough to bloom, not enough to blow a white halo over half the screen. Keeps the hue.
@@ -415,6 +416,9 @@ export class Trail {
         this.mesh.frustumCulled = false;
         this.mesh.renderOrder = 7;
         effects.scene.add(this.mesh);
+        // a lit (non-additive) ribbon is drawn back faces then front faces: as two meshes, not one material switching
+        // its side (and shader program) twice a draw
+        this.front = splitTwoSided(this.mesh);
     }
 
     get pts() { return { length: this.n }; } // (compat: callers only ever read .length)
@@ -482,6 +486,7 @@ export class Trail {
 
     dispose() {
         this.fx.scene.remove(this.mesh);
+        if (this.front) this.fx.scene.remove(this.front);
         this.geo.dispose();
         this.alive = false;
     }

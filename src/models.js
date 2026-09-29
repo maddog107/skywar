@@ -9,6 +9,7 @@ import { AIRCRAFT } from './config.js';
 import { segmentModel, regionAt } from './damage.js';
 import { cutSurfaces } from './surfaces.js';
 import { extractRigParts, attachRigParts, refuelTemplate, REFUEL } from './rigparts.js';
+import { weldGeometry, splitTwoSided, drawsTwice } from './meshmerge.js';
 
 // Loaded GLB models. rot = Euler to bring nose to -Z / up to +Y.
 // Filled in by MODEL_FILES (see models/CREDITS.md for sources/licences).
@@ -119,6 +120,7 @@ export async function preloadModels(onProgress) {
                 } catch (e) { r.gear = null; console.warn('[models] could not set up the gear of', id, e); }
             }
             r.object = safeSegment(r.object, id);
+            weldModel(r.object); // (surfaces.js unwelds only what a flap or brake is cut from, models.js ensureSurfaces)
             cache[id] = r;
         } catch (e) {
             console.warn('[models] failed to load', info.file, e);
@@ -528,6 +530,29 @@ function ensureSurfaces(id) {
     if (!src || src.surfacesCut) return;
     src.surfacesCut = true;
     try { cutSurfaces(src.object, id, AIRCRAFT[id].length); } catch (e) { console.warn('[models] could not cut surfaces for', id, e); }
+    weldModel(src.object); // (the cut needs the segmented soup; every copy shares the welded geometry from here on)
+    splitTwoSidedAll(src.object);
+}
+
+// see-through two-sided parts (canopies) as back- and front-face meshes: three would switch such a material's side,
+// and with it the shader program, twice every draw (meshmerge.js splitTwoSided)
+function splitTwoSidedAll(root) {
+    const list = [];
+    root.traverse((o) => { if (o.isMesh && drawsTwice(o.material)) list.push(o); });
+    for (const o of list) splitTwoSided(o);
+}
+
+// share each mesh's duplicate vertices through an index (meshmerge.js weldGeometry: the same triangles, a third
+// to a half of the memory)
+export function weldModel(root) {
+    const done = new Map(); // (meshes sharing a geometry share its welded copy)
+    root.traverse((o) => {
+        if (!o.isMesh) return;
+        if (done.has(o.geometry)) { o.geometry = done.get(o.geometry); o.userData.welded = true; return; }
+        if (o.geometry.index) return;
+        const src = o.geometry, g = weldGeometry(src);
+        if (g !== src) { done.set(src, g); src.dispose(); o.geometry = g; o.userData.welded = true; }
+    });
 }
 
 // Cut every loaded type's surfaces, one type per idle moment (a type takes up to ~0.4 s), so a type first
@@ -565,6 +590,8 @@ export function createAircraftModel(id) {
         });
         r.rig.props = [];
         r.object = safeSegment(r.object, id);
+        weldModel(r.object);
+        splitTwoSidedAll(r.object);
         cache['proc_' + id] = r;
     }
     const src = cache['proc_' + id];

@@ -15,7 +15,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { paintMaterial } from './vehicles.js';
-import { mergeStaticModel } from './meshmerge.js';
+import { mergeStaticModel, weldGeometry } from './meshmerge.js';
 
 export const AB_MODELS = {
     has_nato: { file: 'has_nato.glb', paint: 'blue_green', name: 'Hardened aircraft shelter (TAB-V, 3rd generation)' },
@@ -208,7 +208,7 @@ function mergeMap(map) {
         geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
         geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
         geo.computeBoundingSphere();
-        parts.push({ geometry: geo, material });
+        parts.push({ geometry: weldGeometry(geo), material });
     }
     return parts;
 }

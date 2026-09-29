@@ -27,50 +27,85 @@ export function regionAt(x, z, length, halfSpan) {
     return regionOf(x, z, length, Math.max(0.085 * length, 1.0), halfSpan);
 }
 
-// Split every mesh in `holder` into region groups. Returns a new Group.
+// Split every mesh in `holder` into region groups. Returns a new Group. (Two passes over typed arrays: count
+// each bucket's triangles, then copy them straight into its arrays; the output is non-indexed, as surfaces.js
+// cuts it, and models.js welds it once the surfaces are cut.)
 export function segmentModel(holder, length) {
     holder.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(holder);
     const hs = Math.max(-box.min.x, box.max.x);
     const L = length;
     const W = Math.max(0.085 * L, 1.0);
-    const buckets = {}; // region -> [{material, arrays}]
+    const buckets = {}; // key -> { region, material, names, sizes, tris, data, fill, shadow }
+    const order = []; // bucket keys in first-seen order (the draw order stays as before)
     const out = new THREE.Group();
+    const jobs = [];
 
+    // pass 1: every mesh's triangles, their region and bucket
     holder.traverse((mesh) => {
         if (!mesh.isMesh || mesh.isSprite || !mesh.geometry || !mesh.geometry.attributes.position) return;
         if (mesh.geometry.morphAttributes && Object.keys(mesh.geometry.morphAttributes).length) return;
-        let geo = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
+        const geo = mesh.geometry.clone();
         geo.applyMatrix4(mesh.matrixWorld);
         const flip = mesh.matrixWorld.determinant() < 0;
         const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        const idx = geo.index ? geo.index.array : null;
+        const nv = idx ? geo.index.count : geo.attributes.position.count;
         const groups = geo.groups && geo.groups.length && Array.isArray(mesh.material)
-            ? geo.groups : [{ start: 0, count: geo.attributes.position.count, materialIndex: 0 }];
+            ? geo.groups : [{ start: 0, count: nv, materialIndex: 0 }];
         const names = Object.keys(geo.attributes);
         const sig = names.map(n => n + geo.attributes[n].itemSize).join(',');
-        const pos = geo.attributes.position;
+        // each attribute as plain floats (normalized bytes / quantized uvs / interleaved read once per vertex)
+        const arrs = names.map((n) => {
+            const a = geo.attributes[n];
+            if (!a.isInterleavedBufferAttribute && !a.normalized && a.array instanceof Float32Array) return a.array;
+            const f = new Float32Array(a.count * a.itemSize);
+            for (let i = 0; i < a.count; i++) for (let c = 0; c < a.itemSize; c++) f[i * a.itemSize + c] = a.getComponent(i, c);
+            return f;
+        });
+        const P = arrs[names.indexOf('position')];
+        const vi = idx ? (k) => idx[k] : (k) => k;
+        const tris = [];
         for (const grp of groups) {
             const mat = mats[grp.materialIndex] || mats[0];
-            for (let t = grp.start; t < grp.start + grp.count; t += 3) {
-                const cx = (pos.getX(t) + pos.getX(t + 1) + pos.getX(t + 2)) / 3;
-                const cz = (pos.getZ(t) + pos.getZ(t + 1) + pos.getZ(t + 2)) / 3;
+            const end = Math.min(grp.start + grp.count, nv);
+            for (let t = grp.start; t + 2 < end; t += 3) {
+                const a = vi(t) * 3, b = vi(t + 1) * 3, c = vi(t + 2) * 3;
+                const cx = (P[a] + P[b] + P[c]) / 3;
+                const cz = (P[a + 2] + P[b + 2] + P[c + 2]) / 3;
                 const r = regionOf(cx, cz, L, W, hs);
                 const key = r + '|' + mat.uuid + '|' + sig;
-                let b = buckets[key];
-                if (!b) {
-                    b = buckets[key] = { region: r, material: mat, data: {}, sizes: {}, shadow: mesh.castShadow };
-                    for (const n of names) { b.data[n] = []; b.sizes[n] = geo.attributes[n].itemSize; }
+                let bk = buckets[key];
+                if (!bk) {
+                    bk = buckets[key] = { region: r, material: mat, names, sizes: names.map(n => geo.attributes[n].itemSize), tris: 0, data: null, fill: 0, shadow: mesh.castShadow };
+                    order.push(key);
                 }
-                const order = flip ? [0, 2, 1] : [0, 1, 2];
-                for (const n of names) {
-                    const a = geo.attributes[n];
-                    // getComponent: the value as a float (normalized byte colours / quantized uvs), interleaved or not
-                    for (const k of order) for (let c = 0; c < a.itemSize; c++) b.data[n].push(a.getComponent(t + k, c));
+                bk.tris++;
+                tris.push(t, bk);
+            }
+        }
+        jobs.push({ arrs, vi, flip, tris, names });
+    });
+    // pass 2: copy the triangles into their buckets
+    for (const key of order) {
+        const bk = buckets[key];
+        bk.data = bk.sizes.map(sz => new Float32Array(bk.tris * 3 * sz));
+    }
+    const ord = [0, 1, 2], ordF = [0, 2, 1];
+    for (const { arrs, vi, flip, tris } of jobs) {
+        const o3 = flip ? ordF : ord;
+        for (let i = 0; i < tris.length; i += 2) {
+            const t = tris[i], bk = tris[i + 1];
+            for (let k = 0; k < 3; k++) {
+                const v = vi(t + o3[k]), dst = bk.fill++;
+                for (let n = 0; n < arrs.length; n++) {
+                    const sz = bk.sizes[n], src = arrs[n], d = bk.data[n], so = v * sz, doff = dst * sz;
+                    for (let c = 0; c < sz; c++) d[doff + c] = src[so + c];
                 }
             }
         }
-        geo.dispose();
-    });
+    }
+    for (const key of order) { const bk = buckets[key]; bk.data = Object.fromEntries(bk.names.map((n, k) => [n, bk.data[k]])); }
 
     // Build region groups pivoted at their own centroid
     const regionGroups = {};
@@ -89,9 +124,10 @@ export function segmentModel(holder, length) {
         const c = centroids[r];
         if (c && c.n) regionGroups[r].position.set(c.x / c.n, c.y / c.n, c.z / c.n);
     }
-    for (const b of Object.values(buckets)) {
+    for (const key of order) {
+        const b = buckets[key];
         const geo = new THREE.BufferGeometry();
-        for (const n of Object.keys(b.data)) geo.setAttribute(n, new THREE.Float32BufferAttribute(b.data[n], b.sizes[n]));
+        b.names.forEach((n, k) => geo.setAttribute(n, new THREE.BufferAttribute(b.data[n], b.sizes[k])));
         const pivot = regionGroups[b.region].position;
         geo.translate(-pivot.x, -pivot.y, -pivot.z);
         if (!geo.attributes.normal) geo.computeVertexNormals();

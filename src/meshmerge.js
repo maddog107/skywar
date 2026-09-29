@@ -7,6 +7,123 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
+// ── Welding: exact-duplicate vertices shared through an index ──
+// Merges (and damage.js segmentModel) produce non-indexed triangle soups: three vertices per triangle, every
+// attribute copied each time. A vertex whose every attribute is bit-for-bit the same as another's is the same
+// vertex, so sharing it through an index draws exactly the same image (same triangles, same order) from a
+// third to a half of the memory, and the GPU's vertex cache shades it once. Geometries with morph targets or
+// interleaved attributes are returned as they are.
+function bitsOf(arr) {
+    // integer view of an attribute's array for hashing and comparing (floats by their bit pattern)
+    if (arr instanceof Float32Array) return new Uint32Array(arr.buffer, arr.byteOffset, arr.length);
+    if (arr instanceof Float64Array) return new Float64Array(arr); // (rare: compared by value)
+    return arr;
+}
+export function weldGeometry(geo) {
+    const names = Object.keys(geo.attributes);
+    const pos = geo.attributes.position;
+    if (!pos || pos.count < 3 || Object.keys(geo.morphAttributes).length) return geo;
+    const attrs = names.map(n => geo.attributes[n]);
+    if (attrs.some(a => a.isInterleavedBufferAttribute || a.isInstancedBufferAttribute || a.count !== pos.count)) return geo;
+    const n = pos.count, bits = attrs.map(a => bitsOf(a.array)), sizes = attrs.map(a => a.itemSize);
+    const pk = names.indexOf('position'), P = bits[pk];
+    let size = 1; while (size < n * 2) size <<= 1;
+    const table = new Int32Array(size).fill(-1), mask = size - 1;
+    const remap = new Uint32Array(n), rep = new Uint32Array(n);
+    let unique = 0;
+    for (let i = 0; i < n; i++) {
+        // (hashed on the position alone: vertices that share one and differ elsewhere, a hard edge, just probe on)
+        const o = i * sizes[pk];
+        let h = Math.imul((P[o] | 0) ^ 0x811c9dc5, 0x01000193);
+        h = Math.imul(h ^ (P[o + 1] | 0), 0x01000193);
+        h = Math.imul(h ^ (P[o + 2] | 0), 0x01000193);
+        h ^= h >>> 15; h = Math.imul(h, 0x2c1b3c6d); h ^= h >>> 12;
+        let slot = h & mask;
+        for (;;) {
+            const u = table[slot];
+            if (u < 0) { table[slot] = unique; rep[unique] = i; remap[i] = unique++; break; }
+            const j = rep[u];
+            let same = true;
+            for (let k = 0; k < bits.length && same; k++) {
+                const b = bits[k], s = sizes[k], oi = i * s, oj = j * s;
+                for (let c = 0; c < s; c++) if (b[oi + c] !== b[oj + c]) { same = false; break; }
+            }
+            if (same) { remap[i] = u; break; }
+            slot = (slot + 1) & mask;
+        }
+    }
+    const out = new THREE.BufferGeometry();
+    attrs.forEach((a, k) => {
+        const s = sizes[k], src = a.array, dst = new src.constructor(unique * s);
+        for (let u = 0; u < unique; u++) { const oi = rep[u] * s, od = u * s; for (let c = 0; c < s; c++) dst[od + c] = src[oi + c]; }
+        const na = new THREE.BufferAttribute(dst, s, a.normalized);
+        na.name = a.name;
+        out.setAttribute(names[k], na);
+    });
+    const oldIdx = geo.index, count = oldIdx ? oldIdx.count : n;
+    const idx = unique < 65536 ? new Uint16Array(count) : new Uint32Array(count);
+    if (oldIdx) { const ia = oldIdx.array; for (let i = 0; i < count; i++) idx[i] = remap[ia[i]]; } else idx.set(remap);
+    out.setIndex(new THREE.BufferAttribute(idx, 1));
+    for (const g of geo.groups) out.addGroup(g.start, g.count, g.materialIndex);
+    out.setDrawRange(geo.drawRange.start, geo.drawRange.count);
+    out.name = geo.name;
+    out.userData = geo.userData;
+    if (geo.boundingBox) out.boundingBox = geo.boundingBox.clone();
+    if (geo.boundingSphere) out.boundingSphere = geo.boundingSphere.clone();
+    return out;
+}
+
+// mergeGeometries for a mix of indexed and non-indexed geometries (the non-indexed get a plain 0..n-1 index),
+// welded: indexed out
+export function mergeWelded(geos) {
+    const anyIndexed = geos.some(g => g.index);
+    const list = anyIndexed ? geos.map(g => {
+        if (g.index) return g;
+        const n = g.attributes.position.count, c = g.clone();
+        const idx = n < 65536 ? new Uint16Array(n) : new Uint32Array(n);
+        for (let i = 0; i < n; i++) idx[i] = i;
+        c.setIndex(new THREE.BufferAttribute(idx, 1));
+        return c;
+    }) : geos;
+    const m = mergeGeometries(list);
+    return m ? weldGeometry(m) : m;
+}
+
+// ── Small parts too far to see ──
+// How far away a part still shows: its apparent size is taken as the geometric mean of its two largest extents
+// (a wheel ~0.4 m, a jack or ram ~0.5 m, a rotor blade ~1.5 m, a jeep ~3 m), drawn out to where that spans ~1.4 px
+// on a 900 px screen at 60° (never nearer than 400 m)
+export function sightDistance(size) {
+    const d = [size.x, size.y, size.z].sort((a, b) => b - a);
+    return Math.max(400, Math.sqrt(d[0] * d[1]) * 1100);
+}
+// A moving object's small meshes (a rigged vehicle's wheels, jacks, rams, hatches) hidden while the camera is
+// beyond their sightDistance from the object, and shown again once it's within (only the ones hidden here: what
+// something else hid stays hidden). Each mesh's size is measured once, in the pose it's in then.
+const _cb = new THREE.Box3(), _cs = new THREE.Vector3(), _cp = new THREE.Vector3();
+// `skip`: nodes whose own visibility the game switches (a TEL's missile): left alone, with everything under them.
+export function cullSmallParts(root, camPos, skip = null) {
+    let parts = root.userData.smallParts;
+    if (!parts) {
+        parts = root.userData.smallParts = [];
+        root.updateWorldMatrix(true, true);
+        const skipped = (m) => { if (skip) for (let q = m; q && q !== root; q = q.parent) if (skip.includes(q)) return true; return false; };
+        root.traverse(m => {
+            if (!m.isMesh || m === root || skipped(m)) return;
+            _cb.makeEmpty().expandByObject(m, false);
+            if (_cb.isEmpty()) return;
+            const d = sightDistance(_cb.getSize(_cs));
+            if (d < 20000) parts.push({ m, d });
+        });
+    }
+    const dist = root.getWorldPosition(_cp).distanceTo(camPos);
+    for (const p of parts) {
+        const m = p.m, inSight = dist < p.d;
+        if (!inSight && m.visible) { m.visible = false; m.userData.sightHidden = true; }
+        else if (inSight && m.userData.sightHidden) { m.visible = true; m.userData.sightHidden = false; }
+    }
+}
+
 // A plain material: untextured, opaque, standard. Plain materials that differ only in colour, roughness, metalness
 // and emissive can share one mesh: those go into vertex attributes (see plainMaterial). The signature is
 // everything else that changes how they draw. userData.noMerge keeps a material to itself (one that is changed
@@ -126,7 +243,7 @@ function collect(root, keep) {
     const meshes = [];
     for (const e of groups.values()) {
         let geo = null;
-        try { geo = mergeGeometries(e.geos); } catch (err) { geo = null; }
+        try { geo = mergeGeometries(e.geos); if (geo) geo = weldGeometry(geo); } catch (err) { geo = null; }
         e.geos.forEach(g => g.dispose());
         if (!geo) return { meshes: [], used: [] }; // odd attribute sets: leave everything as it was
         const mat = e.plain ? plainMaterial(e.mat, e.sig) : e.mat;
@@ -148,17 +265,44 @@ function collect(root, keep) {
     return { meshes, used };
 }
 
-// back-face and front-face copies of a two-sided transparent material (one pair per material)
+// back-face and front-face copies of a two-sided transparent material (one pair per material). (A ShaderMaterial's
+// copies share its uniforms object, so whatever updates the original's uniforms updates both.)
 const _twoSided = new WeakMap();
-function twoSided(mat) {
+export function twoSided(mat) {
     let p = _twoSided.get(mat);
     if (!p) {
         const back = mat.clone(), front = mat.clone();
         back.side = THREE.BackSide; front.side = THREE.FrontSide;
         front.shadowSide = mat.shadowSide ?? THREE.DoubleSide; // a DoubleSide material's shadow is drawn both-sided
+        if (mat.isShaderMaterial) back.uniforms = front.uniforms = mat.uniforms;
+        back.name = front.name = mat.name;
+        back.userData = front.userData = mat.userData;
         _twoSided.set(mat, p = [back, front]);
     }
     return p;
+}
+// does three draw this material in two passes (back faces, then front faces), switching the material's side, and
+// so its program, twice a draw?
+export function drawsTwice(mat) {
+    return !!mat && !Array.isArray(mat) && mat.transparent && mat.side === THREE.DoubleSide && !mat.forceSinglePass;
+}
+// Such a mesh as two meshes on the same geometry (the same image, no program switches): the mesh itself draws the
+// back faces and a new one (a later id, so the transparent sort draws it second) the front faces and the shadow.
+// It goes right after the mesh in its parent. Returns the front-face mesh (or null).
+export function splitTwoSided(mesh) {
+    if (!mesh.isMesh || !drawsTwice(mesh.material)) return null;
+    const [back, front] = twoSided(mesh.material);
+    const f = new THREE.Mesh(mesh.geometry, front);
+    f.name = mesh.name; f.renderOrder = mesh.renderOrder; f.frustumCulled = mesh.frustumCulled;
+    f.position.copy(mesh.position); f.quaternion.copy(mesh.quaternion); f.scale.copy(mesh.scale);
+    f.matrixAutoUpdate = mesh.matrixAutoUpdate; f.matrix.copy(mesh.matrix);
+    f.receiveShadow = mesh.receiveShadow; f.castShadow = mesh.castShadow;
+    f.userData = { ...mesh.userData, twoSidedFront: true };
+    mesh.material = back;
+    mesh.castShadow = false;
+    const parent = mesh.parent;
+    if (parent) { parent.add(f); parent.children.pop(); parent.children.splice(parent.children.indexOf(mesh) + 1, 0, f); }
+    return f;
 }
 
 // A new Group (with the object's own transform) holding the object's visible meshes, merged (see collect).

@@ -157,7 +157,18 @@ function cutOne(obj, def, kind, side, L) {
         if (!g.userData.region) continue;
         const off = g.position;
         for (const mesh of [...g.children]) {
-            if (!mesh.isMesh || mesh.userData.surfaceWell || mesh.geometry.index) continue;
+            if (!mesh.isMesh || mesh.userData.surfaceWell) continue;
+            if (mesh.geometry.index) {
+                // a segmented skin welded to save memory (models.js weldModel): back to its triangle soup if the
+                // region reaches it (the same triangles in the same order; welded again after the cut)
+                if (!mesh.userData.welded) continue;
+                const bb = mesh.geometry.boundingBox || (mesh.geometry.computeBoundingBox(), mesh.geometry.boundingBox);
+                if (!tbox.copy(bb).translate(off).intersectsBox(R.box)) continue;
+                const soup = mesh.geometry.toNonIndexed();
+                mesh.geometry.dispose();
+                mesh.geometry = soup;
+                delete mesh.userData.welded;
+            }
             const geo = mesh.geometry, pos = geo.attributes.position;
             // triangles that reach into the region's box (usually a small share of the model)
             const hits = [];

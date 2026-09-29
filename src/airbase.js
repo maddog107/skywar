@@ -11,7 +11,7 @@ import { propParts } from './props.js';
 import { makeBuildingMaterial } from './towns.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createAircraftModel } from './models.js';
-import { mergeStaticModel, mergeInPlace } from './meshmerge.js';
+import { mergeStaticModel, mergeInPlace, weldGeometry, sightDistance } from './meshmerge.js';
 import { AIRCRAFT } from './config.js';
 import { propInstance, propSize, hasProp } from './props.js';
 import { makeRadialTexture, clamp, rand, freezeStatic, freezeLocal, offsetUnits } from './util.js';
@@ -83,10 +83,34 @@ function mergeStatic(group, skip = []) {
     for (const o of gone) o.parent.remove(o);
     for (const [mat, { geos, shadow }] of by) {
         try {
-            const m = new THREE.Mesh(mergeGeometries(geos), mat);
+            const m = new THREE.Mesh(weldGeometry(mergeGeometries(geos)), mat);
             m.castShadow = shadow; m.receiveShadow = true;
             group.add(m);
         } catch (e) { /* odd attribute sets: leave it out */ }
+    }
+}
+
+// (sightDistance, meshmerge.js: how far away a part of that size still shows)
+const _sb = new THREE.Box3(), _ss = new THREE.Vector3();
+// hide a static object's meshes that are too small to see from `cam`, and show them again (only the ones hidden
+// here: what something else hid stays hidden) once they're in sight. Each mesh's world box is measured once.
+function cullSmall(o, cam) {
+    let parts = o.userData.sightParts;
+    if (!parts) {
+        parts = o.userData.sightParts = [];
+        o.updateWorldMatrix(true, true);
+        o.traverse(m => {
+            if (!(m.isMesh || m.isLine) || !m.geometry) return;
+            _sb.makeEmpty().expandByObject(m, false);
+            if (_sb.isEmpty()) return;
+            const d = sightDistance(_sb.getSize(_ss));
+            if (d < 40000) parts.push({ m, box: _sb.clone(), d });
+        });
+    }
+    for (const p of parts) {
+        const m = p.m, inSight = p.box.distanceToPoint(cam) < p.d;
+        if (!inSight && m.visible) { m.visible = false; m.userData.sightHidden = true; }
+        else if (inSight && m.userData.sightHidden) { m.visible = true; m.userData.sightHidden = false; }
     }
 }
 
@@ -159,9 +183,16 @@ function makeRotor(R, blades, tail = false) {
     return g;
 }
 
+// a helicopter's airframe (the prop model's ~7 parts) merged once per type: every copy shares it (the rotor stays apart)
+const _heliBody = new Map();
+function heliBody(id) {
+    if (!_heliBody.has(id)) { const m = propInstance(id); _heliBody.set(id, m ? mergeStaticModel(m) : null); }
+    const t = _heliBody.get(id);
+    return t ? t.clone() : null;
+}
 export function makeHelicopter(id) {
     const root = new THREE.Group();
-    const m = propInstance(id);
+    const m = heliBody(id);
     const size = propSize(id);
     if (m) root.add(m);
     else box(2.5, 2.5, 10, MAT.olive, 0, 0.5, 0, root);
@@ -714,7 +745,7 @@ export class Airbases {
             byMat.get(o.material).push(ng);
         });
         const parts = [];
-        for (const [mat, geos] of byMat) { try { parts.push({ geometry: mergeGeometries(geos), material: mat }); } catch (e) { /* skip */ } }
+        for (const [mat, geos] of byMat) { try { parts.push({ geometry: weldGeometry(mergeGeometries(geos)), material: mat }); } catch (e) { /* skip */ } }
         this._fleet[id] = parts;
         return parts;
     }
@@ -968,10 +999,14 @@ export class Airbases {
     update(dt, traffic, wind, cam) {
         this.time += dt;
         const t = this.time;
-        if (cam) for (const [map, R, kr] of [[this._heavy, 11000, 0], [this._heavyAc, 4000, 0.5], [this._near, 7000, 0.5], [this._far, 16000, 0.5]]) if (map) for (const [b, list] of map) {
+        if (cam) for (const [map, R, kr, fine] of [[this._heavy, 11000, 0, false], [this._heavyAc, 4000, 0.5, true], [this._near, 7000, 0.5, true], [this._far, 16000, 0.5, false]]) if (map) for (const [b, list] of map) {
             const near = (cam.x - b.x) ** 2 + (cam.z - b.z) ** 2 < (R + b.r * kr) ** 2;
             if (list.near !== near) { list.near = near; for (const o of list) o.visible = near; }
+            // the small parts (a sign, a jeep, a parked jet's wheels, a helicopter's skids) also go by their own size:
+            // each is drawn only while the camera is within its sightDistance (checked a few times a second)
+            if (fine && near && (this.frameN || 0) % 8 === 0) for (const o of list) cullSmall(o, cam);
         }
+        this.frameN = (this.frameN || 0) + 1;
         for (const h of this.helis) h.update(dt);
         const blink = Math.floor(t * 1.2) % 2 === 0;
         for (const b of this.beacons) { b.visible = !!this.night && (!b.userData.rec || b.userData.rec.alive); b.material.color.setHex(blink ? 0x6dff8a : 0xffffff); }

@@ -17,6 +17,7 @@ import { terrainHeight, BASES } from './world.js';
 import { INTEL } from './war.js';
 import { Ship } from './naval.js';
 import { clamp, damp, lerp, rand, G } from './util.js';
+import { mergeInPlace } from './meshmerge.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _q = new THREE.Quaternion();
 const UP = new THREE.Vector3(0, 1, 0), FWD = new THREE.Vector3(0, 0, -1);
@@ -244,6 +245,9 @@ export class SiloSite extends LaunchSource {
         mast.position.set(-(11 * n + 12), 12, 3); g.add(mast);
         g.position.copy(this.at);
         g.traverse(o => { if (o.isMesh) o.receiveShadow = true; });
+        // (the pad, rings, shelter and mast never move: merged per material; each hatch's parts likewise)
+        mergeInPlace(g, this.silos.map(s => s.lid));
+        for (const s of this.silos) mergeInPlace(s.lid);
         this.game.war.addClearing(this.at.x, this.at.z, 11 * n + 40);
         this.mesh = g;
         this.game.scene.add(g);

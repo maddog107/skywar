@@ -12,7 +12,7 @@
 //   frame   — the whole frame (update + render + HUD) p50 / p95; with --sync the GPU is waited for every frame
 //             (a 1-pixel readPixels), so the time includes the GPU's work, not just its submission
 //   calls / tris — draw calls and triangles per frame, every pass (shadows, scene, post) counted
-//   heap    — JS heap after the run (Chrome only)
+//   heap    — JS heap after the run and a full GC (Chrome only; heapRawMB in --out: before the GC)
 // Needs playwright-core: PLAYWRIGHT_CORE=<path to playwright-core/index.mjs>, or a local install, or the copy in
 // ~/git/flight-tool. Test pages never write localStorage (the owner's saved settings are left alone).
 // ═══════════════════════════════════════════════════════════════
@@ -25,6 +25,9 @@ const args = Object.fromEntries(process.argv.slice(2).reduce((a, s, i, all) => {
 }, []));
 const URL0 = args.url || 'http://localhost:8080/';
 const FRAMES = +(args.frames || 600), WARMUP = +(args.warmup || 60), SYNC = !!args.sync;
+// Math.random is seeded (the same enemies, ejections and traffic every run, so two builds see the same scene);
+// --seed <n> picks another sequence, --seed off leaves it random
+const SEED = args.seed === 'off' ? null : +(args.seed || 1);
 const [W, H] = String(args.size || '1600x900').split('x').map(Number);
 
 // what each scenario sets before launching (the menu's own settings keys) and where the jet circles
@@ -47,7 +50,7 @@ async function loadPlaywright() {
 }
 
 const chromium = await loadPlaywright();
-const browser = await chromium.launch({ headless: true, args: ['--use-angle=metal', '--enable-gpu', '--ignore-gpu-blocklist', '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'] });
+const browser = await chromium.launch({ headless: true, args: ['--js-flags=--expose-gc', '--enable-precise-memory-info', '--use-angle=metal', '--enable-gpu', '--ignore-gpu-blocklist', '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'] });
 const results = [];
 const t0 = Date.now();
 const log = (...a) => console.log(((Date.now() - t0) / 1000).toFixed(0).padStart(4) + 's', ...a);
@@ -60,6 +63,10 @@ for (const name of names) {
     page.on('pageerror', e => errors.push(String(e.message)));
     page.on('console', m => { if (m.type() === 'error') errors.push(m.text().slice(0, 200)); });
     // the settings arrive through localStorage.getItem; nothing is ever written
+    if (SEED != null) await page.addInitScript((seed) => {
+        let a = seed >>> 0; // mulberry32
+        Math.random = () => { a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    }, SEED);
     await page.addInitScript((s) => {
         try {
             const get = Storage.prototype.getItem;
@@ -67,9 +74,11 @@ for (const name of names) {
             Storage.prototype.setItem = function () { };
         } catch (e) { /* no storage */ }
     }, settings);
+    const tBoot = Date.now();
     await page.goto(URL0 + (URL0.includes('?') ? '&' : '?') + 'bench=' + Date.now(), { timeout: 600000 });
     await page.waitForSelector('#menu.show', { timeout: 600000 });
-    log(name, 'menu up');
+    const bootMs = Date.now() - tBoot;
+    log(name, 'menu up', bootMs, 'ms');
     const r = await page.evaluate(async ({ sc, WARMUP, FRAMES, SYNC }) => {
         const s = window.skywar, g = s.game, renderer = s.renderer, gl = renderer.getContext();
         const THREE = await import('three');
@@ -115,17 +124,20 @@ for (const name of names) {
         g.update = gu; for (const [x, o] of wraps) x.update = o;
         const q = (arr, f) => { const b = arr.slice().sort((x, y) => x - y); return b[Math.min(b.length - 1, Math.floor(b.length * f))]; };
         const p = g.player;
+        const heapRaw = performance.memory ? performance.memory.usedJSHeapSize / 1048576 : null;
+        if (window.gc) { window.gc(); window.gc(); }
         return {
             mode: g.mode, update: tu / FRAMES, p50: q(fts, 0.5), p95: q(fts, 0.95), mean: fts.reduce((x, y) => x + y, 0) / FRAMES,
             calls: q(calls, 0.5), tris: q(tris, 0.5),
             systems: Object.fromEntries(Object.entries(sys).map(([k, v]) => [k, +(v / FRAMES).toFixed(3)])),
             aircraft: g.aircraft.length, ground: g.ground ? g.ground.targets.length : 0, warUnits: g.war ? g.war.units.length : 0,
-            heapMB: performance.memory ? performance.memory.usedJSHeapSize / 1048576 : null,
+            heapMB: performance.memory ? performance.memory.usedJSHeapSize / 1048576 : null, // live, after a full GC
+            heapRawMB: heapRaw,                                                                // before it (garbage included)
             geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures,
             alive: !!(p && p.alive), alt: p ? Math.round(p.pos.y) : null,
         };
     }, { sc, WARMUP, FRAMES, SYNC }).catch(e => ({ error: String(e) }));
-    r.scenario = name; r.errors = errors.slice(0, 5); r.errorCount = errors.length;
+    r.scenario = name; r.bootMs = bootMs; r.errors = errors.slice(0, 5); r.errorCount = errors.length;
     results.push(r);
     log(name, r.error ? 'ERROR ' + r.error : `frame p50 ${r.p50.toFixed(2)} ms, update ${r.update.toFixed(2)} ms, ${r.calls} calls`);
     await page.close();
@@ -134,10 +146,10 @@ await browser.close();
 
 const f = (v, d = 2) => (v == null ? '—' : (+v).toFixed(d));
 console.log(`\nSKYWAR bench  ${URL0}  ${W}x${H}  quality ${args.quality || 'high'}  ${FRAMES} frames${SYNC ? ', GPU-synced' : ''}\n`);
-console.log('scenario'.padEnd(11) + 'frame p50'.padStart(10) + 'p95'.padStart(8) + 'update'.padStart(9) + 'calls'.padStart(8) + 'tris'.padStart(10) + 'heap MB'.padStart(9) + '  errors');
+console.log('scenario'.padEnd(11) + 'frame p50'.padStart(10) + 'p95'.padStart(8) + 'update'.padStart(9) + 'calls'.padStart(8) + 'tris'.padStart(10) + 'heap MB'.padStart(9) + 'boot s'.padStart(8) + '  errors');
 for (const r of results) {
     if (r.error) { console.log(r.scenario.padEnd(11) + '  ' + r.error); continue; }
-    console.log(r.scenario.padEnd(11) + f(r.p50).padStart(10) + f(r.p95).padStart(8) + f(r.update).padStart(9) + String(r.calls).padStart(8) + String(r.tris).padStart(10) + f(r.heapMB, 0).padStart(9) + '  ' + r.errorCount);
+    console.log(r.scenario.padEnd(11) + f(r.p50).padStart(10) + f(r.p95).padStart(8) + f(r.update).padStart(9) + String(r.calls).padStart(8) + String(r.tris).padStart(10) + f(r.heapMB, 0).padStart(9) + f(r.bootMs / 1000, 1).padStart(8) + '  ' + r.errorCount);
     const top = Object.entries(r.systems).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, v]) => `${k} ${v}`).join(', ');
     if (top) console.log(' '.repeat(11) + 'plug-ins: ' + top);
 }

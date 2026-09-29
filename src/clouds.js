@@ -53,9 +53,13 @@ const QUALITY = {
     // camera); shadowRows: rows of the cloud-shadow map redrawn per frame; lightDither: how much of the light
     // march's sample offset is random per pixel (the rest is shared)
     // (rain: steps of the rain shafts below the clouds)
-    high:   { scale: 0.5, up: 2, steps: 120, light: 5, detail: 2, shadowRows: 32, lightDither: 1, rain: 12 },
-    medium: { scale: 0.42, up: 2, steps: 88, light: 4, detail: 1, shadowRows: 32, lightDither: 1, rain: 8 },
-    low:    { scale: 0.28, up: 1.5, steps: 56, light: 3, detail: 0, shadowRows: 16, lightDither: 0.3, rain: 6 },
+    // under: the march's size (and on medium / low its steps) while the camera is under (or in) a closed overcast (a
+    // storm, low cloud): the view is a soft grey ceiling and rain, and screenshots at high's full size and this one
+    // don't differ (the camera in the storm's cells, under them, above the deck). (Fewer steps on high did show: the
+    // far edge of a cell comes out lighter.)
+    high:   { scale: 0.5, up: 2, steps: 120, light: 5, detail: 2, shadowRows: 32, lightDither: 1, rain: 12, under: { scale: 0.42 } },
+    medium: { scale: 0.42, up: 2, steps: 88, light: 4, detail: 1, shadowRows: 32, lightDither: 1, rain: 8, under: { scale: 0.36, steps: 72 } },
+    low:    { scale: 0.28, up: 1.5, steps: 56, light: 3, detail: 0, shadowRows: 16, lightDither: 0.3, rain: 6, under: { scale: 0.24, steps: 48 } },
 };
 const SHADOW_RES = 512;              // cloud-shadow map: the whole weather tile, 64 m a texel
 const SHADOW_STEPS = 24;
@@ -194,7 +198,7 @@ const TRI_VERT = /* glsl */`
 const marchFrag = (FOG_GLSL) => /* glsl */`
     precision highp float;
     uniform sampler2D tDepth;
-    uniform float hasDepth, camNear, camFar, maxDist, sunScale, frame, pixAngle, flash;
+    uniform float hasDepth, camNear, camFar, maxDist, sunScale, frame, pixAngle, flash, stepCap;
     uniform mat4 projInv, camWorld;
     uniform vec2 lowRes, jitter;
     uniform vec3 camPos, sunDir, litColor, shadowColor, fogColor;
@@ -390,6 +394,7 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
         float T = 1.0, entry = NO_HIT, tw = 0.0, aw = 0.0, fine = 0.0, lastK = 0.0, refines = 0.0, inside = 0.0, wasClear = 0.0;
         vec3 C = vec3(0.0);
         for (int i = 0; i < MAX_STEPS; i++) {
+            if (float(i) >= stepCap) break;
             float t = tOf(k);
             if (t >= t1) break;
             vec3 p = ro + rd * t;
@@ -401,7 +406,9 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
             vec4 wm = weatherAt(p);
             float gap = cloudGap(p, wm);
             // clear air: skip whole steps (which keeps the ray on its grid)
-            if (gap > 0.0 && fine <= 0.0) { lastK = clamp(floor(gap / dt * 0.95), 1.0, 5.0) * mult; k += lastK; wasClear = 1.0; continue; }
+            // (up to 8 steps: the steps grow ~0.5 % each, so 8 of them still stay inside the 0.95 margin on the gap;
+            // screenshots with 5 and 8 differ no more than two runs of 5)
+            if (gap > 0.0 && fine <= 0.0) { lastK = clamp(floor(gap / dt * 0.95), 1.0, 8.0) * mult; k += lastK; wasClear = 1.0; continue; }
             float lod = max(0.0, log2(dt / ${(BASE_SIZE / BASE_RES).toFixed(1)}));
             pixFoot = t * pixAngle * 2.0;
             float amb;
@@ -773,7 +780,7 @@ export class Clouds {
             defines: {},
             uniforms: {
                 ...this.fieldU,
-                tDepth: { value: null }, hasDepth: { value: 0 }, camNear: { value: 1 }, camFar: { value: 1000 }, maxDist: { value: 18000 }, sunScale: { value: 1.0 }, frame: { value: 0 }, pixAngle: { value: 0.0025 }, flash: { value: 0 },
+                tDepth: { value: null }, hasDepth: { value: 0 }, stepCap: { value: 1e4 }, camNear: { value: 1 }, camFar: { value: 1000 }, maxDist: { value: 18000 }, sunScale: { value: 1.0 }, frame: { value: 0 }, pixAngle: { value: 0.0025 }, flash: { value: 0 },
                 projInv: { value: new THREE.Matrix4() }, camWorld: { value: new THREE.Matrix4() }, lowRes: { value: new THREE.Vector2(4, 4) }, jitter: { value: new THREE.Vector2() },
                 camPos: { value: new THREE.Vector3() }, sunDir: { value: new THREE.Vector3(0, 1, 0) },
                 litColor: { value: new THREE.Color(1, 1, 1) }, shadowColor: { value: new THREE.Color(0.5, 0.55, 0.6) }, fogColor: { value: new THREE.Color() },
@@ -933,7 +940,7 @@ export class Clouds {
     // the shadow map catches up band by band
     setParams(A, B, front, force = false) {
         const f = this.fieldU;
-        this.weather = A;
+        this.weather = A; this.weatherB = B;
         f.cu.value.set(A.thr, A.base, A.thick, A.baseVar);
         f.dk.value.set(A.deck, A.deckY ?? DECK_Y, A.deckThick ?? DECK_THICK, 0);
         f.cuB.value.set(B.thr, B.base, B.thick, B.baseVar);
@@ -993,8 +1000,20 @@ export class Clouds {
         this.shadowRT.scissor.set(0, y0, SHADOW_RES, rows);
         renderer.setRenderTarget(this.shadowRT);
         renderer.render(this.shadowScene, this.marchCam);
-        this._box.min.set(0, y0); this._box.max.set(SHADOW_RES, y0 + rows);
-        renderer.copyTextureToTexture(this.shadowRT.texture, this.shadowTex, this._box, this._pos.set(0, y0));
+        // copy the band into the texture the materials read, straight from the framebuffer just drawn (three's
+        // copyTextureToTexture reads five GL parameters back on every call: a ~0.3 ms stall a frame)
+        const gl = renderer.getContext(), st = renderer.state;
+        let tp = renderer.properties.get(this.shadowTex);
+        if (!tp.__webglTexture || this.shadowTex.version !== tp.__version) { renderer.initTexture(this.shadowTex); tp = renderer.properties.get(this.shadowTex); }
+        if (tp.__webglTexture) {
+            st.activeTexture(gl.TEXTURE0);
+            st.bindTexture(gl.TEXTURE_2D, tp.__webglTexture);
+            gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, y0, 0, y0, SHADOW_RES, rows);
+            st.unbindTexture();
+        } else {
+            this._box.min.set(0, y0); this._box.max.set(SHADOW_RES, y0 + rows);
+            renderer.copyTextureToTexture(this.shadowRT.texture, this.shadowTex, this._box, this._pos.set(0, y0));
+        }
     }
 
     // Runs just before the composite triangle draws, with the opaque scene already in the target
@@ -1003,7 +1022,14 @@ export class Clouds {
         const target = renderer.getRenderTarget();
         let w, h;
         if (target) { w = target.width; h = target.height; } else { const v = renderer.getDrawingBufferSize(_size); w = v.x; h = v.y; }
-        const s = this.q.scale / renderer.getPixelRatio();
+        // under a closed overcast (with a margin either way, so it doesn't flip back and forth at the deck top)
+        const W = this.weather, top = (W.deckY ?? DECK_Y) + (W.deckThick ?? DECK_THICK), cy = camera.matrixWorld.elements[13];
+        const closed = W.deck >= 1 && (!this.front || (this.weatherB && this.weatherB.deck >= 1));
+        if (!closed || cy > top + 120) this.underDeck = false;
+        else if (cy < top - 120) this.underDeck = true;
+        const budget = this.underDeck && this.q.under ? this.q.under : this.q;
+        this.marchMat.uniforms.stepCap.value = this.underDeck && this.q.under && this.q.under.steps ? this.q.under.steps : 1e4;
+        const s = budget.scale / renderer.getPixelRatio();
         const lw = Math.max(1, Math.round(w * s)), lh = Math.max(1, Math.round(h * s));
         const hw = Math.max(1, Math.round(lw * this.q.up)), hh = Math.max(1, Math.round(lh * this.q.up));
         if (this.rt.width !== lw || this.rt.height !== lh || this.hist[0].width !== hw || this.hist[0].height !== hh) {

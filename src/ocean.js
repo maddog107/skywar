@@ -458,6 +458,10 @@ export class Ocean {
     // Build both maps around (x, z) right now (at the start of a sortie: nothing may float on lake water that
     // still thinks it's the open sea)
     prime(x, z) {
+        // (already built right here, for this wind: the boot primes twice at the home base)
+        const M1 = this.maps[1], M0 = this.maps[0];
+        if (this.coarse && !M1.pending && !M0.pending && M1.cx === x && M1.cz === z && M0.cx === x && M0.cz === z
+            && M1.wind === WATER.windX.toFixed(3) + WATER.windZ.toFixed(3)) return;
         const c = runJob(coarseJob(x, z, WATER.windX, WATER.windZ));
         this.coarse = c;
         this.applyMap(1, c);

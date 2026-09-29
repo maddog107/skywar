@@ -86,6 +86,30 @@ export function freezeLocal(root, moving = []) {
     });
 }
 
+// A subtree that's often hidden (a ship's full model while it's drawn with its far version): while `obj` is hidden,
+// three's per-frame world-matrix pass updates obj itself but not what's under it; the first pass after it's shown
+// again brings them all up to date. (Code that needs a hidden node's world transform reads it through
+// updateWorldChain / updateWorldMatrix(true, false) first, as cellFrame / pointFrame / muzzleWorld do.)
+export function skipWorldWhileHidden(obj) {
+    obj.updateMatrixWorld = function (force) {
+        if (this.visible) {
+            const f = force || this._staleWorld;
+            this._staleWorld = false;
+            return Object.getPrototypeOf(this).updateMatrixWorld.call(this, f);
+        }
+        if (this.matrixAutoUpdate) this.updateMatrix();
+        if (this.matrixWorldNeedsUpdate || force) {
+            if (this.matrixWorldAutoUpdate) {
+                if (this.parent === null) this.matrixWorld.copy(this.matrix);
+                else this.matrixWorld.multiplyMatrices(this.parent.matrixWorld, this.matrix);
+            }
+            this.matrixWorldNeedsUpdate = false;
+        }
+        this._staleWorld = true;
+    };
+    return obj;
+}
+
 // A node's world matrix brought up to date through its whole parent chain, frozen parts included. three.js'
 // updateWorldMatrix(true, false) only recomposes a node whose own matrix changed, so a part under a frozen node of a
 // moving model (freezeLocal) kept the world matrix of the last frame the scene was rendered: read from inside a sealed
