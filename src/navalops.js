@@ -1015,6 +1015,8 @@ export class NavalOps {
     surfaceAction(grp) {
         const g = this.game, war = g.war;
         if (!grp.alive) return;
+        // (only where there's a war at sea: in Free Flight the destroyers sank the unarmed target ships themselves)
+        if (!['naval', 'war', 'sandbox'].includes(this.mode)) return;
         const ours = grp.side === war.side;
         // who it can see: our side through the war's intel; the enemy's reconnaissance knows roughly where we are
         const enemies = [];

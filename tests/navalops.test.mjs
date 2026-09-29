@@ -318,6 +318,27 @@ describe('rig points on a moving ship (naval.js, util.js updateWorldChain)', () 
     });
 });
 
+describe('surface action (navalops.js)', () => {
+    test('our destroyers fire on a known enemy ship in the war, and leave Free Flight\'s unarmed target ships alone', () => {
+        for (const mode of ['war', 'freeflight']) {
+            const g = navalGame(mode);
+            const sea = openSea(7000);
+            const grp = g.navalops.spawnGroup('blue', sea, { composition: [['destroyer', 'screen', 0, 0]], name: 'TEST GROUP' });
+            assert.ok(grp, 'a group');
+            const red = g.naval.spawn('destroyer', 'red', { x: sea.x + 9000, z: sea.z }, { orbitR: 2000 });
+            g.war.add(red, { cls: 'ship' });
+            g.war.reveal(red, 2, 'test');
+            g.time = 120;
+            const n0 = g.strikes.strikes.length;
+            g.navalops.surfaceAction(grp);
+            const fired = g.strikes.strikes.length - n0;
+            if (mode === 'war') assert.ok(fired > 0, 'the war: a salvo');
+            else assert.equal(fired, 0, 'Free Flight: no salvo');
+            g.naval.clear();
+        }
+    });
+});
+
 // The player's auto-land (Y) onto the home carrier's angled deck: the real Autopilot and Aircraft on the real deck.
 describe('player auto-land on the carrier (autopilot.js)', () => {
     const { Autopilot } = globalThis.__autopilotMod;
