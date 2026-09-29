@@ -9,6 +9,7 @@ const THREE = await import('three');
 const { mergeVehicleParts, vehicleLod, CarSet, CAR_LOD_NEAR } = await src('carset.js');
 const { makeAircraft, stubGame } = await import('./helpers/flight.mjs');
 const { cullSmallParts, sightDistance } = await src('meshmerge.js');
+const { skipWorldWhileHidden } = await src('util.js');
 
 const car = () => {
     const paint = new THREE.MeshStandardMaterial({ name: 'Paint', color: 0xffffff, roughness: 0.4, metalness: 0.3 });
@@ -117,5 +118,28 @@ describe('small parts too far to see (meshmerge.js cullSmallParts)', () => {
         cullSmallParts(t.root, new THREE.Vector3(100, 0, 0), [t.missile]);
         assert.ok(t.wheels.slice(0, 3).every(w => w.visible), 'back near');
         assert.equal(t.wheels[3].visible, false, 'still hidden by whatever hid it');
+    });
+});
+
+describe('skipWorldWhileHidden (util.js): a hidden subtree skips the world-matrix pass', () => {
+    test('stale while hidden, right again the first pass after it shows; updateWorldMatrix still exact', () => {
+        const scene = new THREE.Scene(), ship = new THREE.Group(), full = new THREE.Group(), cell = new THREE.Object3D();
+        cell.position.set(0, 5, 10); full.add(cell); ship.add(full); scene.add(ship);
+        skipWorldWhileHidden(full);
+        scene.updateMatrixWorld();
+        const world = (o) => new THREE.Vector3().setFromMatrixPosition(o.matrixWorld);
+        assert.deepEqual(world(cell).toArray(), [0, 5, 10]);
+        full.visible = false;
+        ship.position.set(1000, 0, 0);
+        scene.updateMatrixWorld();
+        assert.equal(world(full).x, 1000, 'the hidden node itself keeps up');
+        assert.equal(world(cell).x, 0, 'what is under it waits');
+        cell.updateWorldMatrix(true, false);
+        assert.equal(world(cell).x, 1000, 'updateWorldMatrix(true, false) gives the true transform');
+        ship.position.set(2000, 0, 0);
+        scene.updateMatrixWorld();
+        full.visible = true;
+        scene.updateMatrixWorld();
+        assert.deepEqual(world(cell).toArray(), [2000, 5, 10], 'caught up once shown');
     });
 });

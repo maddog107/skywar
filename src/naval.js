@@ -17,7 +17,7 @@ import { ShipFX, deckHeightAt, foamTexture } from './shipfx.js';
 import { waterHeightLong } from './water.js';
 import { terrainHeight } from './world.js';
 import { loft, createAircraftModel } from './models.js';
-import { rand, clamp, lerp, interceptTime, freezeLocal } from './util.js';
+import { rand, clamp, lerp, interceptTime, freezeLocal, skipWorldWhileHidden } from './util.js';
 import { WEAPONS, AIRCRAFT } from './config.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _mp = new THREE.Vector3();
@@ -684,6 +684,9 @@ export class Ship {
         this.details = [...this.mounts.map(m => m.turret), this.parts.radar, this.parts.radar2].filter(Boolean);
         this.mesh.traverse(o => { if (o.isInstancedMesh && o.name.startsWith('ship:rigdoors')) this.details.push(o); });
         this.near = [...this.mesh.children];
+        // (hidden, the full model and the whole ship leave their subtrees out of the per-frame world-matrix pass)
+        for (const c of this.near) skipWorldWhileHidden(c);
+        skipWorldWhileHidden(this.mesh);
         if (built.far) {
             this.far = built.far.clone();
             this.far.visible = false;
