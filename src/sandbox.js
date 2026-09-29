@@ -646,7 +646,9 @@ export class SandboxTools {
             ctx.beginPath(); ctx.arc(m.x, m.y, 13, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
             if (!ok) { ctx.beginPath(); ctx.moveTo(m.x - 7, m.y - 7); ctx.lineTo(m.x + 7, m.y + 7); ctx.moveTo(m.x + 7, m.y - 7); ctx.lineTo(m.x - 7, m.y + 7); ctx.stroke(); }
             ctx.font = '700 11px ' + FONT; ctx.textAlign = 'left'; ctx.fillStyle = ok ? GREEN : FOE;
+            ctx.strokeStyle = 'rgba(6,12,18,0.85)'; ctx.lineWidth = 3; ctx.lineJoin = 'round';
             const label = T.kind === 'dest' ? 'CONVOY DESTINATION' : (ITEMS[T.item].label + (ITEMS[T.item].domain === 'air' ? ' · ' + Math.round(T.alt * 3.281).toLocaleString('en-US') + ' FT' : ''));
+            ctx.strokeText(ok ? label : why, m.x + 18, m.y - 2); // (a dark rim: it reads over the map's own labels)
             ctx.fillText(ok ? label : why, m.x + 18, m.y - 2);
             return;
         }
@@ -820,7 +822,7 @@ export class SandboxTools {
         const bottom = map.h - 86;
         const top = y;
         // the frame (drawn first, its height known at the end: a reserved box)
-        ctx.fillStyle = 'rgba(6,12,18,0.86)';
+        ctx.fillStyle = 'rgba(6,12,18,0.93)';
         ctx.fillRect(x, top, W, Math.max(60, bottom - top));
         ctx.strokeStyle = 'rgba(93,255,160,0.45)'; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, top + 0.5, W - 1, Math.max(60, bottom - top) - 1);
         const ix = x + 10, IW = W - 20;
