@@ -8,6 +8,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { PostFX, ScenePass } from './postfx.js'; // [postfx] AO, water SSR, motion blur, DOF, flare, FXAA, adaptive resolution
+import { NightFX } from './nightfx.js'; // [night] glow in the air round lights, rain on the canopy, night-vision goggles
 import { AIRCRAFT, MODES, DIFFICULTY, TIMES } from './config.js';
 import { World, BASES, terrainHeight } from './world.js';
 import { Effects } from './effects.js';
@@ -108,10 +109,12 @@ composer.addPass(grade);
 // [postfx] inserts the scene effects (AO / water reflections / flare, motion blur, photo DOF) before the
 // cockpit pass and FXAA at the end; also owns the pixel ratio (adaptive resolution)
 const postfx = new PostFX({ renderer, composer, camera, scenePass: renderPass, cockpitPass });
+const nightfx = new NightFX({ composer, camera, scenePass: renderPass, cockpitPass, bloom, postfx }); // [night] nightfx.js
 
 function applyQuality() {
     const q = settings.quality;
     postfx.setQuality(q, settings); // [postfx] pixel ratio (fixed or adaptive), MSAA, AO, SSR, blur, flare
+    nightfx.setQuality(q);
     renderer.shadowMap.enabled = q !== 'low';
     bloom.enabled = q !== 'low';
     if (world) {
@@ -154,7 +157,7 @@ async function boot() {
     $('loadText').textContent = 'GENERATING TERRAIN…';
     await new Promise(r => setTimeout(r, 30));
     world = new World(scene, renderer);
-    world.weather = settings.weather || 'clear';
+    world.setWeather(settings.weather || 'clear'); // [weather] the sky model (weather.js)
     world.setTime(settings.time);
     world.updateTerrain(new THREE.Vector3(0, 0, 0), true);
     $('loadText').textContent = 'LOADING AIRFRAMES…';
@@ -174,8 +177,10 @@ async function boot() {
     world.updateTerrain(new THREE.Vector3(0, 0, 0), true);
     $('loadFill').style.width = '95%';
     game = new Game({ scene, camera, world, effects, audio, input, hud, cockpit, settings });
+    game.scenePass = renderPass; // (interiors.js: a closed room is drawn instead of the world while you're in it)
     game.onGameOver = showGameOver;
-    game.onNvg = (on) => { renderer.domElement.style.filter = on ? 'grayscale(1) brightness(2.3) contrast(1.35) sepia(1) hue-rotate(55deg) saturate(3.5)' : ''; };
+    game.onNvg = (on) => nightfx.setNvg(on); // [night] the goggles are a pass now (nightfx.js), not a CSS filter
+    game.nvgGPU = true;
     career.attach(game);
     career.onChange(() => { refreshLocks(); renderPilotBadge(); });
     game.onPause = (on) => {
@@ -187,6 +192,7 @@ async function boot() {
     game.applyLivery = (ac) => applyLivery(ac.model, settings.livery, ac.type);
     window.skywar = { game, settings, world, effects, cockpit, camera, Pilot, renderer, post: { composer, bloom, grade, postfx } };
     window.skywar.vehicles = vehicles; // debug / test hook: spawn and pose rigged ground vehicles from the console
+    window.skywar.nightfx = nightfx; // [night] debug / test hook
     applyQuality();
     audio.setVolume(settings.volume);
     audio.callouts = settings.callouts;
@@ -269,7 +275,7 @@ function buildMenu() {
     seg('segDifficulty', Object.entries(DIFFICULTY).map(([k, v]) => [k, v.label]), 'difficulty', updateBest);
     seg('segTime', Object.entries(TIMES).map(([k, v]) => [k, v.label]), 'time', () => world.setTime(settings.time));
     seg('segWingmen', [[0, 'SOLO'], [1, '1'], [2, '2']], 'wingmen');
-    seg('segWeather', [['clear', 'CLEAR'], ['cloudy', 'CLOUDY'], ['rain', 'RAIN'], ['storm', 'STORM']], 'weather', () => world.setWeather(settings.weather));
+    seg('segWeather', [['clear', 'CLEAR'], ['cloudy', 'CLOUDY'], ['rain', 'RAIN'], ['storm', 'STORM'], ['fog', 'FOG'], ['overcast', 'LOW']], 'weather', () => world.setWeather(settings.weather));
     seg('segStart', [['auto', 'AUTO'], ['air', 'AIR'], ['runway', 'RWY'], ['apron', 'TAXI'], ['carrier', 'CVN'], ['water', 'WATER'], ['barracks', 'BARRACKS']], 'start'); // WATER: seaplanes afloat by a jetty
     seg('segLoadout', Object.entries(LOADOUT_LABELS).map(([k, v]) => [k, v.label.split(' ')[0]]), 'loadout');
     seg('segLivery', Object.entries(LIVERIES).map(([k, v]) => [k, v.label]), 'livery', () => { if (showcase) applyLivery(showcase.model, settings.livery, showcase.type); });
@@ -636,7 +642,8 @@ function buildCredits() {
         ['Tu95 (tu95)', 'manilov.ap', 'CC BY 4.0', 'https://sketchfab.com/3d-models/tu95-1eac97ec49ed4f1da8b7deb1e1b2cc7a'],
         ['Low poly 1:1 F/A-18F SuperHornet (ea18g: the EA-18G Growler, derived from fa18)', 'WTigerTw', 'CC BY 4.0', 'https://sketchfab.com/3d-models/low-poly-11-fa-18f-superhornet-635e68b7a0d24ac29c10f5fb9110129f'],
         ['NASA Airborne Science ER-2 model (u2, U-2S)', 'NASA', 'Public domain', 'https://airbornescience.nasa.gov/3d-models'],
-        ['Ships: Nimitz carrier, Arleigh Burke destroyer, Ticonderoga cruiser, Virginia and Ohio submarines, Supply-class AOE, NSW RHIB, CB90, Slava cruiser', 'SKYWAR / Blender (tools/ships; sources in models/ships/CREDITS.md)', 'CC0', 'tools/ships/'],
+        ['Ships: Nimitz carrier, Arleigh Burke destroyer, Ticonderoga cruiser, Virginia and Ohio submarines, Supply-class AOE, NSW RHIB, CB90, Slava cruiser, flight-deck crew and tow tractor', 'SKYWAR / Blender (tools/ships; sources in models/ships/CREDITS.md)', 'CC0', 'tools/ships/'],
+        ['Interiors: Virginia SSN control room, carrier CIC and Pri-Fly, Joint Operations Center (floor and building), Scud TEL launch cabin and cab (see models/interiors/CREDITS.md)', 'SKYWAR / Blender (tools/interiors)', 'CC0', 'tools/interiors/'],
         ['Military vehicles: Scud, Bastion, S-300, Osa, Buk, Smerch, Grad, Flap Lid, P-18 and Soviet support trucks; Patriot, HIMARS, M270, Sentinel, Stryker, HEMTT and US support vehicles (see models/vehicles/CREDITS.md)', 'SKYWAR / Blender (tools/vehicles)', 'CC0', 'tools/vehicles/'],
         ['Airbase installations and vehicles: hardened aircraft shelters (TAB-V, Soviet arch shelter), QRA building, munitions igloo, fuel tank, power plant, siren, searchlight, revetment, runway-repair loader and dump truck, aircraft tug, follow-me car, Harpoon coastal launcher (see models/airbases/CREDITS.md)', 'SKYWAR / Blender (tools/airbases)', 'CC0', 'tools/airbases/'],
         ['Helicopter (military)', 'Zsky', 'CC BY 3.0', 'https://poly.pizza/m/hG2Qr0A3zR'],
@@ -658,6 +665,8 @@ function buildCredits() {
         ['m67 frag grenade', 'mypPi', 'CC BY 4.0', 'https://sketchfab.com/3d-models/m67-frag-grenadem67-256b80fab7204f35a9284c5f5ee93dad'],
         ['fps arms (first-person gloved arms)', 'bumstrum', 'CC BY 4.0', 'https://sketchfab.com/3d-models/fps-arms-08ec4403a47645d8ad80633abf13d39d'],
         ['Trees, grass, ferns and ground textures (photoscans; see models/vegetation and models/ground)', 'Poly Haven', 'CC0', 'https://polyhaven.com'],
+        ['Underground complexes: portals, blast doors, vents, guard posts, substation, poles, masts (see models/underground/CREDITS.md)', 'SKYWAR / Blender (tools/underground)', 'CC0', 'tools/underground/'],
+        ['Concrete, shotcrete, asphalt, gravel and painted-steel textures of the underground complexes', 'Poly Haven', 'CC0', 'https://polyhaven.com'],
     ];
     const body = $('creditsBody');
     body.innerHTML = '';
@@ -704,8 +713,9 @@ function frame(dt) {
     // Depth precision: push the near plane out as the camera climbs (the cockpit has its own camera),
     // so distant beaches and the water plane don't fight in the depth buffer.
     const agl = camera.position.y - Math.max(terrainHeight(camera.position.x, camera.position.z), 0);
-    const near = clamp(agl / 80, 0.5, 6);
+    const near = game.nearPlane || clamp(agl / 80, 0.5, 6); // (inside a room the consoles are an arm's length away)
     if (Math.abs(camera.near - near) > 0.05) { camera.near = near; camera.updateProjectionMatrix(); }
+    nightfx.update(dt, game); // [night] which night / weather passes run this frame
     postfx.render(dt, game); // [postfx] composer.render + GPU timing for adaptive resolution
     hud.draw(game, dt);
     music.update(dt, game);

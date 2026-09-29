@@ -675,7 +675,22 @@ export class Bases {
         if (r) this.tower(F, 'ALERT ONE, ALERT TWO — SCRAMBLE, SCRAMBLE. RAID INBOUND, ' + Math.round(raid.pos.distanceTo(F.w(0, 0)) / 1000) + ' KILOMETRES', { say: 'Alert one, scramble, scramble!', priority: true });
     }
 
-    night() { const k = this.game.world && this.game.world.timeKey; return k === 'night' || k === 'dusk'; }
+    // dark enough for a blackout and searchlights (the weather system's continuous night, else the menu's time)
+    night() {
+        const wx = this.game.weather;
+        if (wx && typeof wx.night === 'number') return wx.night > 0.5;
+        const k = this.game.world && this.game.world.timeKey; return k === 'night' || k === 'dusk';
+    }
+    // runway and approach lights by day when the weather needs them (fog, a low ceiling), and after dark
+    weatherLights(ab) {
+        const wx = this.game.weather;
+        if (!wx || !wx.visibility || !ab || !ab.lights || !ab.lights.setWeather) return;
+        for (const L of ab.lights.fields.values()) {
+            const c = _v.set(L.base.x, L.base.h + 5, L.base.z);
+            const on = !!wx.lightsOn || wx.visibility(c) < 5000 || (wx.ceiling ? wx.ceiling(c) < 450 : false);
+            ab.lights.setWeather(L.base.id, on);
+        }
+    }
 
     // ═════════════ Per frame ═════════════
     update(dt) {
@@ -688,6 +703,7 @@ export class Bases {
         const think = this.thinkT <= 0;
         if (think) this.thinkT = 1;
         const cam = g.camera ? g.camera.position : null;
+        if (think) this.weatherLights(g.world && g.world.airbases);
         for (const F of this.fields) {
             if (think) this.threats(F);
             // repairs (crews shelter while the field is under attack), turnarounds

@@ -441,7 +441,8 @@ class Wake {
         return out.set(s.mesh.position.x + lx * c + lz * sn, 0, s.mesh.position.z - lx * sn + lz * c);
     }
 
-    update(dt, env) {
+    // far: the wake can't reach the wake map — keep recording the path, skip rebuilding the strips
+    update(dt, env, far = false) {
         const s = this.ship;
         this.time += dt;
         const stern = this.local(0, this.g.sternZ, _v);
@@ -460,6 +461,7 @@ class Wake {
             m.uniforms.fade.value = fade;
             m.uniforms.speedK.value = speedK;
         }
+        if (far) return;
         this.buildWake(stern);
         this.buildKelvin(stern);
     }
@@ -786,10 +788,15 @@ export class ShipFX {
             env.fade = (1 - sinking) * (1 - under);
             e.follow.position.set(ship.mesh.position.x, 0, ship.mesh.position.z);
             e.follow.rotation.set(0, ship.heading, 0);
-            e.follow.visible = env.fade > 0.01;
+            // (a ship whose wake can't reach the wake map's square is drawn nowhere: record its path, rebuild and draw
+            // nothing)
+            const wm = this.wakeMap, px = ship.mesh.position.x, pz = ship.mesh.position.z, M = e.wake.maxLen + 300;
+            const far = !!wm && (px < wm.x0 - M || px > wm.x0 + wm.size + M || pz < wm.z0 - M || pz > wm.z0 + wm.size + M);
+            e.follow.visible = env.fade > 0.01 && !far;
+            e.wake.meshW.visible = e.wake.meshK.visible = e.shadow.mesh.visible = !far;
             const speed = ship.vel ? Math.hypot(ship.vel.x, ship.vel.z) : 10;
             const speedK = Math.min(1.2, Math.max(0.2, speed / 11));
-            e.wake.update(dt, env);
+            e.wake.update(dt, env, far);
             e.foam.update(env, speedK);
             e.shadow.update(ship, env, sunDir);
             // bow spray: a few puffs where the bow wave breaks (more for fast, fine-bowed escorts)

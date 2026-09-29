@@ -122,6 +122,14 @@ export function shredEnemyCanopy(g, s, amount, source) {
 
 const DIGITS = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7'];
 
+// a carrier's island (layout.island: ship-local x0, x1, z0, z1) is solid to a man walking the flight deck
+function islandAt(ship, x, z) {
+    const I = ship.layout && ship.layout.island;
+    if (!I) return false;
+    const l = ship.toLocal(x, z);
+    return l.lx > I[0] - 0.35 && l.lx < I[1] + 0.35 && l.lz > I[2] - 0.35 && l.lz < I[3] + 0.35;
+}
+
 export class PilotOnFoot {
     constructor(game, seat, fromAircraft) {
         this.game = game;
@@ -504,17 +512,41 @@ export class PilotOnFoot {
         w.speed = damp(w.speed, speed, 8, dt);
         this.moveSpeed = w.speed;
         const p = s.root.position;
+        this.rideDeck(p);
         const nx = p.x + mx * w.speed * dt, nz = p.z + mz * w.speed * dt;
         const bl = g.world.towns && g.world.towns.buildings;
         if (bl && bl.blocks(nx, nz, p.y)) { w.speed = 0; this.placeWalker(); this.animateWalker(0, 0, aiming); return; } // walls are solid
         const ahead = g.surfaceAt(nx, nz, p.y + 1.5);
+        const island = ahead.vessel && islandAt(ahead.vessel, nx, nz);
         const wasWet = g.surfaceAt(p.x, p.z, p.y + 1.5).water;
-        if (!ahead.water || wasWet) { p.x = nx; p.z = nz; } // no walking out onto lakes (you can wade ashore)
-        else { w.speed = 0; this.hint = this.hint || 'WATER — FIND ANOTHER WAY'; }
+        if ((!ahead.water || wasWet) && !island) { p.x = nx; p.z = nz; } // no walking out onto lakes (you can wade ashore)
+        else if (!island) { w.speed = 0; this.hint = this.hint || 'WATER — FIND ANOTHER WAY'; }
+        else w.speed = 0;
         const su = g.surfaceAt(p.x, p.z, p.y + 1.5);
         p.y = (su.water ? -0.9 : su.h) + 0.3;
+        this.keepDeck(p, su);
         this.placeWalker();
         this.animateWalker(f, r, aiming);
+    }
+
+    // Standing on a ship (a carrier's flight deck, a submarine's casing): the deck carries you — you keep your place
+    // on it (ship-local, heading only, so nothing drifts) and turn with it. naval.js deckAt reports the vessel.
+    rideDeck(p) {
+        const d = this.deckRef;
+        if (!d) return;
+        const v = d.ship;
+        if (v.gone) { this.deckRef = null; return; }
+        const c = Math.cos(v.heading), sn = Math.sin(v.heading), P = v.mesh.position;
+        p.x = P.x + d.lx * c + d.lz * sn; p.z = P.z - d.lx * sn + d.lz * c;
+        const dh = v.heading - d.h;
+        if (dh) { this.yaw += dh; if (this.walker) this.walker.yaw += dh; d.h = v.heading; }
+    }
+    keepDeck(p, su) {
+        const v = su && !su.water ? su.vessel : null;
+        if (!v) { this.deckRef = null; return; }
+        const l = v.toLocal(p.x, p.z);
+        const d = this.deckRef && this.deckRef.ship === v ? this.deckRef : (this.deckRef = { ship: v, h: v.heading });
+        d.lx = l.lx; d.lz = l.lz;
     }
 
     // legs: forward / back / sidestep while aiming (the body faces the aim), plain walk / run otherwise

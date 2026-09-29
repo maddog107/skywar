@@ -16,7 +16,7 @@ import { clamp, MS_TO_KTS, M_TO_FT } from './util.js';
 
 const FONT = '"Share Tech Mono", monospace';
 const BLUE = '#6fb4ff', RED = '#ff5a4a', UNK = '#ffd24a', GREEN = '#5dffa0';
-const LAYERS = [['threats', 'THREATS'], ['intel', 'INTEL'], ['roads', 'ROADS'], ['units', 'UNITS'], ['labels', 'LABELS']];
+const LAYERS = [['threats', 'THREATS'], ['intel', 'INTEL'], ['roads', 'ROADS'], ['units', 'UNITS'], ['labels', 'LABELS'], ['weather', 'WEATHER']]; // (weather: weathersys.js)
 const P = { x: 0, y: 0 }, Q = { x: 0, y: 0 };
 
 export class MapKit {

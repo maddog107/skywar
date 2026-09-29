@@ -152,6 +152,7 @@ export class Weapons {
                     // airburst: damages anything close
                     g.effects.fire.emit(b.pos, _v1.set(0, 0, 0), 0.15, 4, 10, [6, 4, 2], [2, 1, 0.3], 1, 0, 0, 0);
                     g.effects.smoke.emit(b.pos, _v1.set(0, 1, 0), 2.5, 5, 14, [0.08, 0.08, 0.08], [0.2, 0.2, 0.2], 0.8, 0, 1, 0);
+                    g.effects.light(b.pos, 22, 0.22, { merge: 12, cloud: 1.2 }); // [night] the burst lights the sky round it
                     for (const ac of g.aircraft) {
                         if (ac.alive && ac.team !== b.team && ac.pos.distanceToSquared(b.pos) < 45 * 45) ac.damage(b.damage, b.owner, 'flak');
                     }
@@ -186,7 +187,8 @@ export class Weapons {
     // ── Missiles ──
     fireMissile(ac, target, kind = 'aam') {
         if (ac.alive === false) return null;
-        const W = kind === 'sam' ? WEAPONS.sam : kind === 'lrm' ? WEAPONS.lrm : kind === 'rkt' ? WEAPONS.rkt : WEAPONS.missile;
+        // (a kind of its own — 'arm', the HARM of airsupport.js — is WEAPONS[kind])
+        const W = WEAPONS[kind === 'aam' ? 'missile' : kind] || WEAPONS.missile;
         const fwd = ac.getForward ? ac.getForward(_v1) : _v1.copy(ac.launchDir);
         const pos = _v2.copy(ac.pos);
         if (ac.getUp) {
@@ -197,6 +199,7 @@ export class Weapons {
         }
         const mesh = new THREE.Mesh(kind === 'sam' ? this.samGeo : kind === 'rkt' ? this.rocketGeo : this.missileGeo, this.missileMat);
         if (kind === 'lrm') mesh.scale.set(1.25, 1.25, 1.25);
+        else if (W.scale) mesh.scale.setScalar(W.scale);
         mesh.position.copy(pos);
         mesh.castShadow = true;
         this.game.scene.add(mesh);
@@ -238,7 +241,7 @@ export class Weapons {
             if ((W.unguided || m.age > 0.25) && m.age < W.boost + 0.25) m.vel.addScaledVector(dir, W.accelBoost * dt);
             // drag (thinner up high)
             const rho = Math.exp(-Math.max(m.pos.y, 0) / 9000);
-            m.vel.addScaledVector(dir, -speed * speed * 0.00018 * rho * dt);
+            m.vel.addScaledVector(dir, -speed * speed * 0.00018 * (W.drag ?? 1) * rho * dt);
             if (m.age < 0.25 && !W.unguided) m.vel.y -= G * dt; // drop before ignition
             if (W.unguided) m.vel.y -= G * dt * 0.5;
             m.armed = m.age > 0.5;
@@ -259,6 +262,20 @@ export class Weapons {
                 }
                 // decoyed by flares?
                 if (t.isFlare !== true && m.kind !== 'sam' && !W.radar) this.checkFlares(m, rhat, dist); // seeker line of sight
+                // [weather] a heat seeker loses a target that stays hidden in cloud or fog (weathersys.js irClear)
+                if (m.kind === 'aam' && !W.radar && g.weather && g.weather.irClear && !m.lost) {
+                    m.irT = (m.irT || 0) - dt;
+                    if (m.irT <= 0) {
+                        m.irT = 0.2;
+                        m.blindT = g.weather.irClear(m.pos, tp) ? 0 : (m.blindT || 0) + 0.2;
+                        if (m.blindT > 0.6) {
+                            m.lost = true;
+                            const k = t.incoming ? t.incoming.indexOf(m) : -1;
+                            if (k >= 0) t.incoming.splice(k, 1);
+                            g.events.emit('missileLostInCloud', m.owner, { missile: m, target: t });
+                        }
+                    }
+                }
                 const vr = _v4.subVectors(tv, m.vel);
                 // Proportional navigation: a = N * Vc * LOS_rate
                 const losRate = _v2.crossVectors(r, vr).divideScalar(Math.max(dist * dist, 1));
@@ -459,8 +476,10 @@ export class Weapons {
     }
 
     // blast damage to buildings and anything flying close
-    worldBlast(at, R, amount, owner) {
+    // kind: 'bomb', or 'blast' for anything else (plug-ins listen for 'blast': underground.js)
+    worldBlast(at, R, amount, owner, kind = 'blast') {
         const g = this.game;
+        if (g.events) g.events.emit('blast', at, { r: R, amount, owner, kind });
         const bl = g.world.towns && g.world.towns.buildings;
         if (bl) bl.explode(at, R, amount, g, owner);
         for (const t of AIR_TARGETS) {
@@ -563,7 +582,7 @@ export class Weapons {
                 if (d < W.splash + t.radius) t.damage(W.damage * clamp(1.2 - d / (W.splash + t.radius), 0.2, 1), b.owner, 'bomb');
             }
             g.world.towns?.traffic.blast(at, W.splash * 0.7, g);
-            this.worldBlast(at, W.splash, W.damage * 4, b.owner);
+            this.worldBlast(at, W.splash, W.damage * 4, b.owner, 'bomb');
             this.blastPeople(at, 75, 180, b.owner, b.team);
             for (const a of g.aircraft) {
                 if (!a.alive || a.team === b.team) continue;

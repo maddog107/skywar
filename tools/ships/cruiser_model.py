@@ -367,6 +367,14 @@ for k in range(1, 6):
     Dp.box('Dark', -4.2, 4.2, yy - 0.025, yy + 0.025, ZX(125.0) + 0.12, ZX(125.0) + 0.14)
 K.sliding(Dp, 'door_hangar_1', (0.0, FLIGHT + 0.03, ZX(125.0) + 0.07), root, (0, 1, 0), 4.3, t='door')
 
+# Harpoon canister mouths harpoon_1..8 (the two Mk 141 quads on the fantail): +Y along the canister, 35° up and out
+# to port — where an RGM-84 leaves (naval plug-in, src/navalops.js)
+hn = 0
+for k, xx in enumerate((168.0, 171.2)):
+    for (tip, ang) in K.harpoon_quad_mouths((-4.2 + k * 0.4, FANTAIL + 0.1, ZX(xx)), facing=-1):
+        hn += 1
+        K.point('harpoon_%d' % hn, tip, root, rot=((0, 0, 1), ang))
+
 def mk45_mod2(part, o, mat='Super', dark='Dark'):
     """5-in/54 Mk 45 Mod 2: the rounded gun house of the cruisers' older mounts"""
     x, y, z = o

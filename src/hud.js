@@ -58,7 +58,7 @@ export class HUD {
         out.front = _v.z < 1 && _v.z > -1;
         // behind-camera check via view-space
         _v2.copy(p).applyMatrix4(cam.matrixWorldInverse);
-        out.front = _v2.z < 0;
+        out.front = _v2.z < 0 && !this.walled; // (inside a closed room nothing out in the world shows: interiors.js)
         out.depth = -_v2.z;
         return out;
     }
@@ -78,6 +78,7 @@ export class HUD {
         if (!p || game.state === 'menu') return;
         const cam = game.camera;
         cam.updateMatrixWorld();
+        this.walled = !!(game.indoors && game.indoors.sealed);
 
         if (game.photo) {
             ctx.font = '600 12px "Share Tech Mono", ui-monospace, monospace';
@@ -93,6 +94,8 @@ export class HUD {
         }
         this.drawScreenEffects(game);
         if (game.hideHud) return;
+        // in a room, at a boat's helm or in a vehicle's cab (interiors.js draws its own display): radio and systems
+        if (game.indoors) { ctx.textBaseline = 'middle'; ctx.lineWidth = 1.6; this.drawSystems(game); this.drawMessages(game); return; }
         if (game.pilotMode) { this.drawPilotMode(game); this.drawSystems(game); return; }
         if (game.groundStart) { this.drawGroundStart(game); this.drawSystems(game); return; }
         const cockpit = game.cameraMode === 'cockpit';
@@ -426,8 +429,8 @@ export class HUD {
         const add = (a, kind) => entries.push({ a, kind, dist: a.pos.distanceTo(p.pos) });
         for (const a of game.aircraft) if (a !== game.player && a.alive) add(a, a.team === p.team ? 'friend' : 'air');
         if (game.pilotMode && game.player && game.player.alive && game.player.abandoned) add(game.player, 'friend');
-        // (our own airfields' installations and crews — t.noHud, bases.js — would only clutter the view)
-        if (game.ground) for (const t of game.ground.targets) if (t.alive && (!t.isBridge || t.objective) && !(t.noHud && t.team === p.team)) add(t, t.team === p.team ? 'friend' : 'ground');
+        // (our own airfields' installations and crews — t.noHud, bases.js — would only clutter the view; hidden: inside a mountain, underground.js)
+        if (game.ground) for (const t of game.ground.targets) if (t.alive && !t.hidden && (!t.isBridge || t.objective) && !(t.noHud && t.team === p.team)) add(t, t.team === p.team ? 'friend' : 'ground');
         for (const t of AIR_TARGETS) if (t.alive && !t.done) add(t, 'neutral');
         const RANK = { air: 1, friend: 2, ground: 3, neutral: 4 };
         for (const e of entries) e.rank = e.a === lock ? 0 : RANK[e.kind];
@@ -948,7 +951,7 @@ export class HUD {
 
     drawScreenEffects(game) {
         const ctx = this.ctx, W = this.w, H = this.h;
-        if (game.nvg) {
+        if (game.nvg && !game.nvgGPU) { // ([night] with the goggles' pass, nightfx.js draws all of this on the GPU)
             // goggle tube vignette + scanlines + sensor noise
             const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.38, W / 2, H / 2, Math.max(W, H) * 0.62);
             g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,12,0,0.9)');

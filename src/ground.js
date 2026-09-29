@@ -451,9 +451,11 @@ class GroundTarget {
             }
         }
 
-        if (this.role === 'sam' && this.ammo > 0 && dist < WEAPONS.sam.range && dist > 600 && agl > 50) {
+        // noise jamming (war.jamFactor, airsupport.js): the fire-control radar only burns through closer in
+        const jf = this.role === 'sam' && g.war ? g.war.jamFactor(this.team, this.pos, t.pos) : 1;
+        if (this.role === 'sam' && this.ammo > 0 && dist < WEAPONS.sam.range * jf && dist > 600 && agl > 50) {
             const radarsUp = this.type === 'msam' || this.sys.targets.some(x => x.alive && x.type === 'radar' && !x.unpowered);
-            this.lockT += dt * (radarsUp ? 1 : 0.4) * ready;
+            this.lockT += dt * (radarsUp ? 1 : 0.4) * (jf < 0.9 ? 0.5 : 1) * ready;
             t.lockedBy = t.lockedBy || new Set();
             t.lockedBy.add(this);
             this.fireT -= dt;

@@ -37,6 +37,8 @@ function basesGame() {
     const lights = {
         setPower(id, on) { lightsLog.push(['power', id, on]); }, setBlackout(id, on) { lightsLog.push(['blackout', id, on]); },
         setClosed(id, r, c) { lightsLog.push(['closed', id, r, c]); }, setSearch() {},
+        setWeather(id, on) { lightsLog.push(['weather', id, on]); },
+        fields: new Map(world.BASES.map(b => [b.id, { base: b }])),
     };
     const g = {
         time: 0, state: 'playing', mode: 'war', callsign: 'TEST', score: 0,
@@ -260,6 +262,27 @@ describe('components', () => {
         for (const u of F.units.igloos) u.damage(1e6, null, 'strike');
         assert.ok(F.ammoFrac === 0 && F.units.igloos.every(u => u.cook > 0), 'the igloos cook off');
     });
+    test('the weather: lights on by day in fog or under a low ceiling; its night drives the blackout', () => {
+        const g = basesGame(), F = g.bases.field('home');
+        const fogAt = world.BASES.find(b => b.id === 'enemy');
+        g.weather = { night: 0, lightsOn: false, visibility: (p) => (Math.hypot(p.x - fogAt.x, p.z - fogAt.z) < 3000 ? 350 : 30000), ceiling: () => Infinity };
+        g.step(1);
+        const last = (id) => g.lightsLog.filter(e => e[0] === 'weather' && e[1] === id).at(-1);
+        assert.deepEqual(last('enemy'), ['weather', 'enemy', true], 'fog at the enemy field: its lights on');
+        assert.deepEqual(last('home'), ['weather', 'home', false], 'clear at home: off by day');
+        g.weather.ceiling = () => 300;
+        g.step(1);
+        assert.deepEqual(last('home'), ['weather', 'home', true], 'a 300 m ceiling: on');
+        // the weather's night: blackout under attack
+        F.fsm.impact(g.bases.time);
+        g.step(1);
+        assert.equal(F.blackout, false, 'by day no blackout');
+        g.weather.night = 1;
+        F.fsm.impact(g.bases.time);
+        g.step(1);
+        assert.equal(F.blackout, true);
+        assert.ok(g.lightsLog.some(e => e[0] === 'blackout' && e[1] === 'home' && e[2] === true));
+    });
     test('air defence readiness follows the alert state', () => {
         const g = basesGame(), F = g.bases.field('enemy');
         assert.ok(F.units.aaa.length + F.units.pads.length > 0);
@@ -384,6 +407,10 @@ describe('airfield lighting', () => {
         assert.equal(F.pools.visible, false);
         p = apply({ blackout: false, main: false });
         assert.equal(p.reduce((a, x) => a + x, 0), 0, 'no power: all dark');
+        // by day the lights show only when the weather asks for them
+        const day = (o) => { Object.assign(F, o); AL.AirfieldLights.prototype.apply.call({ night: false }, F); return F.points.visible; };
+        assert.equal(day({ main: true, wx: false }), false);
+        assert.equal(day({ wx: true }), true, 'fog by day: on');
     });
 });
 

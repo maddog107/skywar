@@ -37,7 +37,6 @@ const K = { PLAIN: 0, PAPI: 1, FLASH: 2, BEACON_MIL: 3, BEACON_CIV: 4, WIGWAG: 5
 // colours (linear, HDR: bloom picks them up)
 const WHITE = [2.6, 2.35, 1.9], YELLOW = [2.6, 1.7, 0.35], GREEN = [0.25, 2.4, 0.7], RED = [2.6, 0.12, 0.08], BLUE = [0.25, 0.55, 2.6];
 const OFF = [0, 0, 0], STROBE = [6, 6, 6.5], SODIUM = [2.4, 1.3, 0.45], XLIGHT = [3, 2.2, 0.3];
-const GS = 3 * Math.PI / 180; // the glide path the PAPI is set for
 
 // ═════════════ Layout (pure: counts and positions are tested) ═════════════
 // The approach end of runway frame F: dir = +1 lands toward −v (threshold at v = +half), −1 toward +v. The same
@@ -490,7 +489,7 @@ export class AirfieldLights {
         p[CIRCUIT.FLOOD] = lit ? 1 : 0;
         p[CIRCUIT.BEACON] = lit ? 1 : 0;
         p[CIRCUIT.OBST] = F.main ? 1 : 0; // (obstruction lights have their own supply… not with the main power gone)
-        F.points.visible = this.night;
+        F.points.visible = this.night || !!F.wx;
         if (F.pools) F.pools.visible = this.night && lit;
     }
 
@@ -500,6 +499,8 @@ export class AirfieldLights {
     setBlackout(id, on) { const F = this.field(id); if (F && F.blackout !== on) { F.blackout = on; this.apply(F); } }
     setClosed(id, r, closed) { const F = this.field(id); if (F && F.closed[r] !== closed) { F.closed[r] = closed; this.apply(F); } }
     setNight(on) { this.night = on; for (const F of this.fields.values()) this.apply(F); }
+    // by day in poor visibility or under a low ceiling (bases.js polls game.weather): the lights on anyway
+    setWeather(id, on) { const F = this.field(id); if (F && !!F.wx !== on) { F.wx = on; this.apply(F); } }
     lit(id) { const F = this.field(id); return !!F && F.main && !F.blackout; }
 
     // searchlights on / off for a field; targets: aircraft to cone (the rest sweep)

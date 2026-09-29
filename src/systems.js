@@ -18,17 +18,27 @@ import { TaskManager } from './tasks.js';
 import { Wingmen } from './wingmen.js';
 import { Bases } from './bases.js';
 import { CoastalDefence } from './coastal.js';
+import { AirSupport } from './airsupport.js';
+import { NavalOps } from './navalops.js';
+import { WarInteriors } from './warinteriors.js';
+import { Underground } from './underground.js';
+import { WeatherSystem } from './weathersys.js';
 
 export const SYSTEMS = [
     ['tacmap', TacticalMap],
+    ['weather', WeatherSystem],  // night and weather: light sources, visibility, cues, the clock, fronts (its map layer under the others')
     ['sensors', Sensors],   // targeting pod, helmet sight (before the menu: its video is under it; before strikes: comma)
     ['mapkit', MapKit],     // map tools: legend, layers, ruler, coordinates, steerpoint, air tracks, imagery
     ['command', CommandMenu],
+    ['interiors', WarInteriors],    // rooms, boats and cabs: enter on foot, press buttons (before strikes: a room keeps the comma; it yields its camera to the missile camera)
     ['strikes', StrikeManager],
     ['bases', Bases],            // airbases alive: alert states, installations, craters and repairs, scrambles, life
+    ['air', AirSupport],         // AWACS, tankers, recon, EW, bombers (after strikes: its launch sources)
+    ['navalops', NavalOps],      // carrier groups, naval air defence, surface action, launches on the rigs, deck ops
     ['front', FrontLine],        // the front line and the ground war
     ['director', Director],      // enemy and friendly activity, the Living War mode
     ['tasks', TaskManager],      // dynamic tasks
     ['wingmen', Wingmen],        // wingmen that take orders
+    ['underground', Underground], // hidden mountain complexes: portals, blast doors, tunnels, intel, scrambles
     ['coastal', CoastalDefence], // coastal anti-ship missile batteries (Bastion-P, Harpoon)
 ];
