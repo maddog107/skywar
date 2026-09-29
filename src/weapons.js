@@ -459,8 +459,10 @@ export class Weapons {
     }
 
     // blast damage to buildings and anything flying close
-    worldBlast(at, R, amount, owner) {
+    // kind: 'bomb', or 'blast' for anything else (plug-ins listen for 'blast': underground.js)
+    worldBlast(at, R, amount, owner, kind = 'blast') {
         const g = this.game;
+        if (g.events) g.events.emit('blast', at, { r: R, amount, owner, kind });
         const bl = g.world.towns && g.world.towns.buildings;
         if (bl) bl.explode(at, R, amount, g, owner);
         for (const t of AIR_TARGETS) {
@@ -562,7 +564,7 @@ export class Weapons {
                 if (d < W.splash + t.radius) t.damage(W.damage * clamp(1.2 - d / (W.splash + t.radius), 0.2, 1), b.owner, 'bomb');
             }
             g.world.towns?.traffic.blast(at, W.splash * 0.7, g);
-            this.worldBlast(at, W.splash, W.damage * 4, b.owner);
+            this.worldBlast(at, W.splash, W.damage * 4, b.owner, 'bomb');
             this.blastPeople(at, 75, 180, b.owner, b.team);
             for (const a of g.aircraft) {
                 if (!a.alive || a.team === b.team) continue;
