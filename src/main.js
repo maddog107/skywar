@@ -574,7 +574,7 @@ function launch() {
 // launch only the sortie's new ships, jets and targets still need uploading.
 let warmTarget = null;
 // the menu's share of the warm-up: a few milliseconds a frame of the world drawn into the 1x1 target, a slice of its
-// objects at a time (they go on layer 31 for the draw, with the lights; shadows off, so the shadow maps the real frame
+// objects at a time (they go on layer 31 for the draw, with the lights; the shadow maps the real frame
 // uses aren't touched); hidden or culled objects are drawn too, as in warmUpload
 let warmQueue = null, warmPending = false, warmCam = null;
 const WARM_LAYER = 31;
@@ -589,7 +589,9 @@ function warmUploadStep(budgetMs = 6) {
     const t0 = performance.now(), lights = [];
     scene.traverse(o => { if (o.isLight) { lights.push(o); o.layers.enable(WARM_LAYER); } });
     warmTarget = warmTarget || new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType });
-    const se = renderer.shadowMap.enabled;
+    // (the shadow maps aren't redrawn for these draws: autoUpdate off, not enabled off, which would compile shadowless
+    // variants of every shader the real frames never use)
+    const sm = renderer.shadowMap, au = sm.autoUpdate, nu = sm.needsUpdate;
     try {
         while (warmQueue.length && performance.now() - t0 < budgetMs) {
             const chunk = warmQueue.splice(0, 24).filter(o => { for (let q = o; q; q = q.parent) if (q === scene) return true; return false; });
@@ -602,13 +604,18 @@ function warmUploadStep(budgetMs = 6) {
             }
             warmCam.copy(camera, false); warmCam.layers.set(WARM_LAYER);
             const prev = renderer.getRenderTarget();
+            // (until the shadow maps exist, a draw with them skipped would bind a plain texture to the shadow samplers:
+            // the first draw makes the maps, and the far one is redrawn whole on the next real frame)
+            const maps = lights.every(l => !l.castShadow || l.shadow.map);
             try {
-                renderer.shadowMap.enabled = false;
+                if (maps) { sm.autoUpdate = false; sm.needsUpdate = false; }
+                else if (world.sunFar) world.sunFar.shadow.needsUpdate = true;
                 renderer.setRenderTarget(warmTarget);
                 renderer.render(scene, warmCam);
             } finally {
                 renderer.setRenderTarget(prev);
-                renderer.shadowMap.enabled = se;
+                sm.autoUpdate = au; sm.needsUpdate = nu;
+                if (!maps && world.sunFar) world.sunFar.shadow.needsUpdate = true;
                 for (const o of chunk) o.layers.disable(WARM_LAYER);
                 for (const q of hidden) q.visible = false;
                 for (const o of culled) o.frustumCulled = true;
