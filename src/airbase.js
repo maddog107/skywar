@@ -90,6 +90,36 @@ function mergeStatic(group, skip = []) {
     }
 }
 
+// How far away a static part still shows: its apparent size is taken as the geometric mean of its two largest
+// extents (a wheel ~0.4 m, a rotor blade ~1.5 m, a jeep ~3 m, a fence or a car park: tens of metres), and it's drawn
+// out to where that spans ~1.4 px on a 900 px screen at 60° (never nearer than 400 m).
+const _sb = new THREE.Box3(), _ss = new THREE.Vector3();
+export function sightDistance(size) {
+    const d = [size.x, size.y, size.z].sort((a, b) => b - a);
+    return Math.max(400, Math.sqrt(d[0] * d[1]) * 1100);
+}
+// hide a static object's meshes that are too small to see from `cam`, and show them again (only the ones hidden
+// here: what something else hid stays hidden) once they're in sight. Each mesh's world box is measured once.
+function cullSmall(o, cam) {
+    let parts = o.userData.sightParts;
+    if (!parts) {
+        parts = o.userData.sightParts = [];
+        o.updateWorldMatrix(true, true);
+        o.traverse(m => {
+            if (!(m.isMesh || m.isLine) || !m.geometry) return;
+            _sb.makeEmpty().expandByObject(m, false);
+            if (_sb.isEmpty()) return;
+            const d = sightDistance(_sb.getSize(_ss));
+            if (d < 40000) parts.push({ m, box: _sb.clone(), d });
+        });
+    }
+    for (const p of parts) {
+        const m = p.m, inSight = p.box.distanceToPoint(cam) < p.d;
+        if (!inSight && m.visible) { m.visible = false; m.userData.sightHidden = true; }
+        else if (inSight && m.userData.sightHidden) { m.visible = true; m.userData.sightHidden = false; }
+    }
+}
+
 // gear geometry is shared between every parked / taxiing aircraft of the same size (never disposed)
 const _gearGeo = new Map();
 function gearGeo(key, make) { if (!_gearGeo.has(key)) _gearGeo.set(key, make()); return _gearGeo.get(key); }
@@ -968,10 +998,14 @@ export class Airbases {
     update(dt, traffic, wind, cam) {
         this.time += dt;
         const t = this.time;
-        if (cam) for (const [map, R, kr] of [[this._heavy, 11000, 0], [this._heavyAc, 4000, 0.5], [this._near, 7000, 0.5], [this._far, 16000, 0.5]]) if (map) for (const [b, list] of map) {
+        if (cam) for (const [map, R, kr, fine] of [[this._heavy, 11000, 0, false], [this._heavyAc, 4000, 0.5, true], [this._near, 7000, 0.5, true], [this._far, 16000, 0.5, false]]) if (map) for (const [b, list] of map) {
             const near = (cam.x - b.x) ** 2 + (cam.z - b.z) ** 2 < (R + b.r * kr) ** 2;
             if (list.near !== near) { list.near = near; for (const o of list) o.visible = near; }
+            // the small parts (a sign, a jeep, a parked jet's wheels, a helicopter's skids) also go by their own size:
+            // each is drawn only while the camera is within its sightDistance (checked a few times a second)
+            if (fine && near && (this.frameN || 0) % 8 === 0) for (const o of list) cullSmall(o, cam);
         }
+        this.frameN = (this.frameN || 0) + 1;
         for (const h of this.helis) h.update(dt);
         const blink = Math.floor(t * 1.2) % 2 === 0;
         for (const b of this.beacons) { b.visible = !!this.night && (!b.userData.rec || b.userData.rec.alive); b.material.color.setHex(blink ? 0x6dff8a : 0xffffff); }
