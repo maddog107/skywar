@@ -120,6 +120,7 @@ export async function preloadModels(onProgress) {
                 } catch (e) { r.gear = null; console.warn('[models] could not set up the gear of', id, e); }
             }
             r.object = safeSegment(r.object, id);
+            weldModel(r.object); // (surfaces.js unwelds only what a flap or brake is cut from, models.js ensureSurfaces)
             cache[id] = r;
         } catch (e) {
             console.warn('[models] failed to load', info.file, e);
@@ -538,7 +539,7 @@ export function weldModel(root) {
     root.traverse((o) => {
         if (!o.isMesh || o.geometry.index) return;
         const g = weldGeometry(o.geometry);
-        if (g !== o.geometry) { o.geometry.dispose(); o.geometry = g; }
+        if (g !== o.geometry) { o.geometry.dispose(); o.geometry = g; o.userData.welded = true; }
     });
 }
 
