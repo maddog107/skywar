@@ -478,11 +478,11 @@ and destroy op), `forcesunits.js` (`ForceVehicle`, `VehicleLauncher`), `forcesgr
 finders), `forcesites.js` (compound and shelter meshes). Runs in every mode but rings, practice and mission;
 the blue HIMARS / M270 batteries are placed wherever strikes run, everything else only in `'war'` and
 `'sandbox'`.
-- **Order of battle (war / sandbox):** a SCUD brigade (3 TELs, 12–22 km behind the line) with forest, valley
-  and roadside hides, a camouflaged compound (sheds, nets, a crane truck and a command vehicle: the reload
-  point), a hardened shelter they back into, and firing points 0.5–1.7 km from each hide; an S-300 group, two
-  Buk and two Osa batteries covering the enemy's rear; a Patriot battery at a friendly base; a Bastion coastal
-  battery; a Smerch battery; the front's Grad batteries (below); blue GMLRS (2× HIMARS + M270, `ROCKET
+- **Order of battle (war / sandbox):** a SCUD brigade (2 TELs, 3 on ace; 12–22 km behind the line) with
+  forest, valley and roadside hides, a camouflaged compound (sheds, nets, a crane truck and a command
+  vehicle: the reload point), a hardened shelter they back into, and firing points 0.5–1.7 km from each hide;
+  an S-300 group, a Buk battery and an Osa platoon covering the enemy's rear; a Patriot battery at the home
+  base and at Miramar; a Bastion coastal battery; a Smerch battery; the front's Grad batteries (below); blue GMLRS (2× HIMARS + M270, `ROCKET
   ARTILLERY STRIKE`) and ATACMS (HIMARS + M270, `BALLISTIC` / `HARDENED`, callsign STEEL RAIN).
 - **Spawn API** (each takes `(team, …, pos)` or `(pos, team, …)`; `pos` is `{ x, z, heading? }`; returns the
   unit's controller, or null if nothing fits there):
@@ -490,7 +490,8 @@ the blue HIMARS / M270 batteries are placed wherever strikes run, everything els
     finds a few hides and firing points round `pos`). Registers a red (or blue) `launcher` source, so
     `strikes.request('ballistic', marks, 'red')` and the director use it, and the director's stand-in TEL isn't made.
   - `forces.spawnSAM(team, 's300' | 'buk' | 'osa' | 'patriot', pos, { launchers, deployed, emcon:
-    'search' | 'ambush', support, relocateEvery })` → `SamGroup`.
+    'search' | 'ambush', support, relocateEvery, fixed })` → `SamGroup` (`fixed`: a base's point defence, which
+    stays put and radiates instead of shooting and scooting; our Patriots are placed that way).
   - `forces.spawnArtillery(team, 'grad' | 'smerch' | 'himars' | 'm270' | 'gmlrs' | 'atacms', pos, { count,
     name, support, command })` → `RocketBattery` (`'gmlrs'` is our mixed battery, kind `artillery`;
     `'atacms'` is kind `launcher` with ATACMS and penetrators).

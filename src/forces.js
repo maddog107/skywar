@@ -72,7 +72,7 @@ export class MobileForces {
         this.full = mode === 'war' || mode === 'sandbox';
         this.buildEnv();
         vehiclesReady().then(() => { this.meshOK = true; }).catch(() => {});
-        this.tacking = { tel: rand(300, 420), search: rand(240, 400), coastal: rand(360, 540), artillery: rand(60, 120), convoy: rand(40, 90) };
+        this.tacking = { tel: rand(300, 420), search: rand(240, 400), coastal: rand(540, 840), artillery: rand(60, 120), convoy: rand(40, 90) };
         if (opts.forces === false || mode === 'test') return;
         try { this.populate(); } catch (e) { console.warn('[forces] populate', e); }
     }
@@ -162,7 +162,7 @@ export class MobileForces {
         for (const b of [home, mir]) {
             if (!b) continue;
             const s = this.place('sam', 'blue', b, b.r + 700, b.r + 3200);
-            if (s) this.spawnSAM('blue', 'patriot', s, { name: 'PATRIOT BATTERY ' + (b === home ? 'ALPHA' : 'BRAVO') });
+            if (s) this.spawnSAM('blue', 'patriot', s, { name: 'PATRIOT BATTERY ' + (b === home ? 'ALPHA' : 'BRAVO'), fixed: true });
         }
     }
 
@@ -975,7 +975,7 @@ export class MobileForces {
 
     // compounds and shelters: in the scene near the camera
     updateSites() {
-        const cam = this.game.camera && this.game.camera.position;
+        const cam = this.lodFocus || (this.game.camera && this.game.camera.position);
         if (!cam) return;
         for (const s of this.sites) {
             const near = Math.hypot(s.x - cam.x, s.z - cam.z) < SITE_R;
@@ -1056,7 +1056,7 @@ export class MobileForces {
             if (war.coverage('red', s.pos) <= 0 && !(g.director && g.director.reconSawCarrier && s === g.naval.homeCarrier) && Math.random() > 0.3) continue;
             bd = d; best = s;
         }
-        if (best) bat.fireMission(best, { per: 2, label: best.name });
+        if (best) bat.fireMission(best, { per: 1, label: best.name }); // (a pair: enough to threaten a ship, not a certain kill)
     }
     // red rocket artillery: batteries tied to a front sector shell our side of it; free ones hit our units near the
     // line (or a town there)

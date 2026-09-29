@@ -11,11 +11,11 @@ import { mulberry32 } from './util.js';
 const MAT = {};
 function mats() {
     if (MAT.steel) return MAT;
-    MAT.steel = new THREE.MeshStandardMaterial({ color: 0x5f6258, roughness: 0.8, metalness: 0.25, envMapIntensity: 0.5 });
-    MAT.roof = new THREE.MeshStandardMaterial({ color: 0x565c48, roughness: 0.85, metalness: 0.15, envMapIntensity: 0.4 }); // (olive-painted sheeting)
-    MAT.concrete = new THREE.MeshStandardMaterial({ color: 0x8b8a82, roughness: 0.95, metalness: 0 });
-    MAT.earth = new THREE.MeshStandardMaterial({ color: 0x5c6440, roughness: 1, metalness: 0 });
-    MAT.door = new THREE.MeshStandardMaterial({ color: 0x55594f, roughness: 0.75, metalness: 0.35, envMapIntensity: 0.5 });
+    MAT.steel = new THREE.MeshStandardMaterial({ color: 0x6c6f64, roughness: 0.85, metalness: 0.1, envMapIntensity: 0.3 });
+    MAT.roof = new THREE.MeshStandardMaterial({ color: 0x6b7156, roughness: 0.9, metalness: 0, envMapIntensity: 0.25 }); // (olive-painted sheeting)
+    MAT.concrete = new THREE.MeshStandardMaterial({ color: 0xa39d90, roughness: 0.95, metalness: 0, envMapIntensity: 0.15 });
+    MAT.earth = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, envMapIntensity: 0.3 }); // (grassed: colours per vertex)
+    MAT.door = new THREE.MeshStandardMaterial({ color: 0x6a6d60, roughness: 0.8, metalness: 0.1, envMapIntensity: 0.3 });
     MAT.dark = new THREE.MeshStandardMaterial({ color: 0x141512, roughness: 1, metalness: 0 });
     // camouflage net: garnished netting in woodland colours, seen from above and below (matte: no sky in it)
     MAT.net = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, envMapIntensity: 0.25, side: THREE.DoubleSide });
@@ -107,22 +107,54 @@ export function buildShelter(site, groundAt) {
     const inner = new THREE.CylinderGeometry(W / 2, W / 2, D - 0.2, 20, 1, true, -Math.PI / 2, Math.PI);
     inner.rotateX(Math.PI / 2); inner.scale(1, H / (W / 2), 1);
     inner.index && inner.index.array.reverse(); // (faces inward)
-    const rim = new THREE.RingGeometry(W / 2, W / 2 + T, 20, 1, 0, Math.PI);
-    rim.scale(1, (H + T) / (W / 2 + T), 1); rim.translate(0, 0, -D / 2);
     const back = box(W + T * 2, H + T, T, 0, 0, D / 2 - T / 2);
-    const floor = box(W + 4, 0.25, D + 8, 0, -0.2, -4);
-    const concrete = [arch, inner, rim.rotateY(Math.PI), back, floor];
-    // the earth over it: a long mound, grassed
-    const mound = new THREE.SphereGeometry(1, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2);
-    mound.scale(W / 2 + 6.5, H + 3, D / 2 + 5); mound.translate(0, 0, 2.5);
-    // (the door face is cut straight: the front of the mound pushed back behind the portal)
-    const mp = mound.attributes.position;
-    for (let i = 0; i < mp.count; i++) if (mp.getZ(i) < -D / 2) mp.setZ(i, -D / 2 + (mp.getZ(i) + D / 2) * 0.12);
+    const floor = box(W + 4, 1.8, D + 8, 0, -1.65, -4); // (deep: the apron stays flush on a slope)
+    // the earth over it: a long barrow, the arch's shape grown by 4 m of earth, rounded off behind, cut square at
+    // the door by a concrete headwall
+    const A = W / 2 + T + 4.2, B = H + T + 2.2, CAP = 8, nu = 18, nv = 14;
+    const rnd = mulberry32(Math.floor(Math.abs(site.x * 7 + site.z * 13)) >>> 0);
+    const mpos = [], mc = [], idx = [];
+    for (let j = 0; j <= nv; j++) {
+        // rows: 6 along the arch, the rest round the back cap
+        const body = j <= 6, t = body ? j / 6 : (j - 6) / (nv - 6);
+        const z = body ? -D / 2 + t * D : D / 2 + Math.sin(t * Math.PI / 2) * CAP;
+        const f = body ? 1 : Math.max(0.02, Math.cos(t * Math.PI / 2));
+        for (let i = 0; i <= nu; i++) {
+            const th = Math.PI * i / nu, n = (i > 0 && i < nu && j > 0) ? (rnd() - 0.5) * 0.5 : 0;
+            // (a flattened section: steep sides, a broad crown; the foot flares out a little)
+            const sx = Math.cos(th), sy = Math.pow(Math.sin(th), 0.7);
+            const x = sx * (A * f + (1 - sy) * 1.5 * f), y = sy * (B * f) + n * f;
+            mpos.push(x, Math.max(0, y), z);
+            const k = rnd(), foot = 1 - Math.min(1, y / B * 2.5), bare = Math.min(1, foot * 0.35 + (k < 0.1 ? 0.3 : 0));
+            const c = [0.3 + k * 0.05 + bare * 0.1, 0.42 + k * 0.06 - bare * 0.07, 0.17 + k * 0.03];
+            mc.push(...c.map(v => Math.pow(v, 2.2)));
+        }
+    }
+    for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) {
+        const a = j * (nu + 1) + i, b = a + nu + 1;
+        idx.push(a, a + 1, b, a + 1, b + 1, b);
+    }
+    const mound = new THREE.BufferGeometry();
+    mound.setAttribute('position', new THREE.Float32BufferAttribute(mpos, 3));
+    mound.setAttribute('color', new THREE.Float32BufferAttribute(mc, 3));
+    mound.setIndex(idx);
     mound.computeVertexNormals();
+    // the headwall: the barrow's section with the arch cut out of it (one outline: over the barrow from the right
+    // foot to the left, then back under the arch), facing out of the door (−Z)
+    const hw = new THREE.Shape();
+    for (let i = 0; i <= nu; i++) {
+        const th = Math.PI * i / nu, sy = Math.pow(Math.sin(th), 0.7), x = Math.cos(th) * (A + (1 - sy) * 1.5), y = sy * B + 0.25;
+        if (i === 0) hw.moveTo(x, 0); else hw.lineTo(x, y);
+    }
+    hw.lineTo(-(A + 1.5), 0);
+    for (let i = nu; i >= 0; i--) { const th = Math.PI * i / nu; hw.lineTo(Math.cos(th) * W / 2, Math.sin(th) * H); }
+    const head = new THREE.ShapeGeometry(hw);
+    head.rotateY(Math.PI); head.translate(0, 0, -D / 2 - 0.02);
+    const concrete = [arch, inner, back, floor, head];
     const group = new THREE.Group();
     const cm = new THREE.Mesh(mergeGeometries(concrete.map(g => g.index ? g.toNonIndexed() : g)), M.concrete);
     const em = new THREE.Mesh(mound, M.earth);
-    const dark = new THREE.Mesh(new THREE.PlaneGeometry(W, H * 0.98).translate(0, H * 0.49, D / 2 - T - 0.05).rotateY(Math.PI), M.dark);
+    const dark = new THREE.Mesh(new THREE.PlaneGeometry(W, H * 0.98).rotateY(Math.PI).translate(0, H * 0.49, D / 2 - T - 0.05), M.dark);
     for (const m of [cm, em]) { m.castShadow = true; m.receiveShadow = true; group.add(m); }
     group.add(dark);
     // the blast doors: two leaves on a track across the opening

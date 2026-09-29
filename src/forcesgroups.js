@@ -232,7 +232,18 @@ export class TelUnit extends Group {
         this.state = 'move';
         v.drive(r, { onArrive: () => this.arrive() });
         this.setConceal();
-        if (this.site && this.site.kind === 'shelter' && this.site.building) this.site.building.open = 1;
+        // the shelter's doors: open to let it out (shut again once it's clear), or ready for it coming in
+        const out = this.site && this.site !== site && this.site.kind === 'shelter' && this.site.building ? this.site : null;
+        if (out) {
+            out.building.open = 1;
+            const shut = () => {
+                if (this.target === out && this.state !== 'move') return; // (back already)
+                if (this.v.alive && this.target !== out && Math.hypot(this.v.pos.x - out.x, this.v.pos.z - out.z) < 60) { this.sys.later(10, shut); return; }
+                if (this.target !== out) out.building.open = 0;
+            };
+            this.sys.later(30, shut);
+        }
+        if (site.kind === 'shelter' && site.building) site.building.open = 1;
         return true;
     }
     goFire() {
@@ -383,7 +394,8 @@ export class SamGroup extends Group {
         this.site = { x: site.x, z: site.z, heading: site.heading ?? 0 };
         this.visited = [{ x: site.x, z: site.z }];
         this.state = 'ready';
-        this.emcon = opts.emcon || (type === 'osa' || Math.random() < 0.35 ? 'ambush' : 'search');
+        this.fixed = !!opts.fixed; // (point defence of a base: stays put, radiating, instead of shooting and scooting)
+        this.emcon = opts.emcon || (this.fixed ? 'search' : type === 'osa' || Math.random() < 0.35 ? 'ambush' : 'search');
         this.radarOn = false;
         this.tracks = new Map();   // target → { lockT, seenT, launcher, shots, nextT }
         this.shots = 0;            // since the last move
@@ -510,7 +522,7 @@ export class SamGroup extends Group {
         if (!war || !this.alive) return;
         const T = this.T;
         // shoot and scoot: found, or a busy day, or just time to move
-        if (this.state === 'ready' && !this.adopted) {
+        if (this.state === 'ready' && !this.adopted && !this.fixed) {
             if (this.moveAt === Infinity) {
                 if (this.exposed()) this.moveAt = war.time + rand(25, 70);
                 else if (this.shots >= (this.type === 'osa' ? 3 : 4)) this.moveAt = war.time + rand(15, 40);
