@@ -58,7 +58,7 @@ export class HUD {
         out.front = _v.z < 1 && _v.z > -1;
         // behind-camera check via view-space
         _v2.copy(p).applyMatrix4(cam.matrixWorldInverse);
-        out.front = _v2.z < 0;
+        out.front = _v2.z < 0 && !this.walled; // (inside a closed room nothing out in the world shows: interiors.js)
         out.depth = -_v2.z;
         return out;
     }
@@ -78,6 +78,7 @@ export class HUD {
         if (!p || game.state === 'menu') return;
         const cam = game.camera;
         cam.updateMatrixWorld();
+        this.walled = !!(game.indoors && game.indoors.sealed);
 
         if (game.photo) {
             ctx.font = '600 12px "Share Tech Mono", ui-monospace, monospace';
@@ -93,6 +94,8 @@ export class HUD {
         }
         this.drawScreenEffects(game);
         if (game.hideHud) return;
+        // in a room, at a boat's helm or in a vehicle's cab (interiors.js draws its own display): radio and systems
+        if (game.indoors) { ctx.textBaseline = 'middle'; ctx.lineWidth = 1.6; this.drawSystems(game); this.drawMessages(game); return; }
         if (game.pilotMode) { this.drawPilotMode(game); this.drawSystems(game); return; }
         if (game.groundStart) { this.drawGroundStart(game); this.drawSystems(game); return; }
         const cockpit = game.cameraMode === 'cockpit';

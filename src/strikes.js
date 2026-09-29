@@ -517,7 +517,9 @@ class StrategicMissile {
         const ground = terrainHeight(this.pos.x, this.pos.z);
         const unit = this.aim.unit;
         const hitUnit = unit && unit.alive !== false && ((unit.hitTest && unit.hitTest(this.pos)) || d2 < (this.kind === 'rocket' ? 25 : 64));
-        if (hitUnit || (this.kind !== 'rocket' && d2 < 36) || this.pos.y < Math.max(ground, 0) + 0.5 || this.age > 400) {
+        // (a submarine's missile starts under water: it isn't "into the sea" while it's still broaching)
+        const broaching = this.source && this.source.kind === 'sub' && this.age < 3;
+        if (hitUnit || (this.kind !== 'rocket' && d2 < 36) || (!broaching && this.pos.y < Math.max(ground, 0) + 0.5) || this.age > 400) {
             this.mgr.impact(this, this.pos.y < 0.5 && ground < 0);
         }
     }
@@ -649,6 +651,42 @@ export class StrikeManager {
             const eta = this.estimate(strike.spec, src.pos, aims[0].pos) + src.prepTime(specKey);
             const n = strike.planned, what = strike.spec.kind === 'rocket' ? n + ' ROCKETS' : n + '× ' + strike.spec.name;
             war.radio(src.name.split(' (')[0], 'COPY STRIKE ON ' + aims.map(a => a.label).filter((x, i, arr) => arr.indexOf(x) === i).join(', ') + ' — ' + what + ', TIME ON TARGET ' + this.clock(eta), { color: '#9fd4ff', say: 'Copy. ' + (strike.spec.kind === 'rocket' ? 'Rockets' : strike.spec.name.toLowerCase()) + ' inbound, time on target ' + Math.round(eta) + ' seconds.' });
+        }
+        g.events.emit('strikeRequested', strike);
+        return strike;
+    }
+
+    // Fire from one chosen shooter (a console: a submarine's fire control, the carrier's strike console, a TEL's launch
+    // panel, the JOC): n missiles of specKey at the newest mark (each mark: all). Same bookkeeping, radio and events as
+    // request(); the strike's type is the STRIKE_TYPES key for that missile. Returns the strike, or null (no mark, no
+    // stock, out of range).
+    launchFrom(src, specKey, marks, { n = 1, all = false, team = src && src.team, quiet = false } = {}) {
+        const g = this.game, war = g.war, spec = MISSILES[specKey];
+        marks = (marks || []).filter(Boolean);
+        if (!spec || !src || !marks.length || !src.canFire(specKey)) return null;
+        const aims = [];
+        for (const d of (all ? marks : [marks[marks.length - 1]])) {
+            const unit = d.unit || (d.alive !== undefined ? d : null);
+            const pos = unit ? unit.pos : d.fixed || d.pos;
+            if (!pos || src.pos.distanceTo(pos) > src.range) continue;
+            aims.push({ pos, unit, label: unit ? war.label(unit) : 'MARK ' + (d.id ?? '?'), mark: 'fixed' in d ? d : null });
+        }
+        if (!aims.length) return null;
+        const type = { cruise: 'cruise', antiship: 'antiship', ballistic: spec.dive ? 'hardened' : 'ballistic', rocket: 'rocket' }[spec.kind] || 'cruise';
+        const strike = { id: this.nextStrikeId++, type, label: STRIKE_TYPES[type].label, team, spec, aims, launched: 0, planned: 0, impacts: 0, lost: 0, missiles: [], t: g.time, sources: new Set([src]), done: false };
+        for (const aim of aims) {
+            const k = src.fire(specKey, n, aim, strike);
+            strike.planned += spec.kind === 'rocket' ? spec.count * k : k;
+        }
+        if (!strike.planned) return null;
+        this.strikes.push(strike);
+        for (const d of marks) if (d.transmitted === false) d.transmitted = true;
+        if (!quiet && team === war.side) {
+            const eta = this.estimate(spec, src.pos, aims[0].pos) + src.prepTime(specKey);
+            const text = 'COPY — ' + strike.planned + '× ' + spec.name + ' ON ' + aims.map(a => a.label).join(', ') + ', TIME ON TARGET ' + this.clock(eta);
+            const d = g.director;
+            if (d && d.enabled && d.say) d.say(src.name.split(' (')[0], text, { color: '#9fd4ff', say: false });
+            else war.radio(src.name.split(' (')[0], text, { color: '#9fd4ff', say: false });
         }
         g.events.emit('strikeRequested', strike);
         return strike;
@@ -1110,7 +1148,7 @@ export class StrikeManager {
                 ctx.fillText(Math.round(m.vel.length() * 1.944) + ' KT · ' + Math.round(m.pos.y * 3.281) + ' FT · ' + (d / 1000).toFixed(1) + ' KM TO TARGET · ' + (m.phase === 'boost' ? 'BOOST' : m.phase === 'fall' ? 'BALLISTIC' : m.phase.toUpperCase()), hud.w / 2, hud.h - 44);
             }
             ctx.fillStyle = 'rgba(232,244,255,0.6)';
-            ctx.fillText('V: CAMERA · K: BACK TO THE JET', hud.w / 2, hud.h - 26);
+            ctx.fillText('V: CAMERA · ' + (this.game.takeover ? 'K / ESC: BACK' : 'K: BACK TO THE JET'), hud.w / 2, hud.h - 26);
         }
         ctx.restore();
     }

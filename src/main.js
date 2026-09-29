@@ -172,6 +172,7 @@ async function boot() {
     world.updateTerrain(new THREE.Vector3(0, 0, 0), true);
     $('loadFill').style.width = '95%';
     game = new Game({ scene, camera, world, effects, audio, input, hud, cockpit, settings });
+    game.scenePass = renderPass; // (interiors.js: a closed room is drawn instead of the world while you're in it)
     game.onGameOver = showGameOver;
     game.onNvg = (on) => { renderer.domElement.style.filter = on ? 'grayscale(1) brightness(2.3) contrast(1.35) sepia(1) hue-rotate(55deg) saturate(3.5)' : ''; };
     career.attach(game);
@@ -635,6 +636,7 @@ function buildCredits() {
         ['Low poly 1:1 F/A-18F SuperHornet (ea18g: the EA-18G Growler, derived from fa18)', 'WTigerTw', 'CC BY 4.0', 'https://sketchfab.com/3d-models/low-poly-11-fa-18f-superhornet-635e68b7a0d24ac29c10f5fb9110129f'],
         ['NASA Airborne Science ER-2 model (u2, U-2S)', 'NASA', 'Public domain', 'https://airbornescience.nasa.gov/3d-models'],
         ['Ships: Nimitz carrier, Arleigh Burke destroyer, Ticonderoga cruiser, Virginia and Ohio submarines, Supply-class AOE, NSW RHIB, CB90, Slava cruiser', 'SKYWAR / Blender (tools/ships; sources in models/ships/CREDITS.md)', 'CC0', 'tools/ships/'],
+        ['Interiors: Virginia SSN control room, carrier CIC and Pri-Fly, Joint Operations Center (floor and building), Scud TEL launch cabin and cab (see models/interiors/CREDITS.md)', 'SKYWAR / Blender (tools/interiors)', 'CC0', 'tools/interiors/'],
         ['Military vehicles: Scud, Bastion, S-300, Osa, Buk, Smerch, Grad, Flap Lid, P-18 and Soviet support trucks; Patriot, HIMARS, M270, Sentinel, Stryker, HEMTT and US support vehicles (see models/vehicles/CREDITS.md)', 'SKYWAR / Blender (tools/vehicles)', 'CC0', 'tools/vehicles/'],
         ['Helicopter (military)', 'Zsky', 'CC BY 3.0', 'https://poly.pizza/m/hG2Qr0A3zR'],
         ['Helicopter (civil)', 'jeremy', 'CC BY 3.0', 'https://poly.pizza/m/eb7b31pjGtQ'],
@@ -701,7 +703,7 @@ function frame(dt) {
     // Depth precision: push the near plane out as the camera climbs (the cockpit has its own camera),
     // so distant beaches and the water plane don't fight in the depth buffer.
     const agl = camera.position.y - Math.max(terrainHeight(camera.position.x, camera.position.z), 0);
-    const near = clamp(agl / 80, 0.5, 6);
+    const near = game.nearPlane || clamp(agl / 80, 0.5, 6); // (inside a room the consoles are an arm's length away)
     if (Math.abs(camera.near - near) > 0.05) { camera.near = near; camera.updateProjectionMatrix(); }
     postfx.render(dt, game); // [postfx] composer.render + GPU timing for adaptive resolution
     hud.draw(game, dt);
