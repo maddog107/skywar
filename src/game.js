@@ -399,6 +399,7 @@ export class Game {
         this.aimDir.copy(p.vel.lengthSq() > 1 && !p.onGround ? p.vel : _v.set(0, 0, -1).applyQuaternion(p.quat)).normalize();
         this.camQuat.copy(p.quat);
         this.camPos.copy(p.pos).add(_v.set(0, 6, 30).applyQuaternion(p.quat));
+        this.deckCamLift = p.deck ? 5 : 0;
         this.rotateSpeed = refSpeeds(p.spec).takeoff;
         this.lockTarget = null; this.lockProgress = 0;
         this._lowHpCall = false;
@@ -1879,7 +1880,10 @@ export class Game {
             }
             const far = mode === 'far';
             const back = far ? L * 4.2 + 30 : L * 1.55 + 14;
-            const height = far ? L * 1.1 + 10 : L * 0.3 + 3.5;
+            // (on a carrier's deck a little higher: from the usual height the raised blast deflector behind the
+            // catapult hid the jet's lower half; eased back once it's off the deck)
+            this.deckCamLift = damp(this.deckCamLift || 0, p.onGround && p.deck ? 5 : 0, 1.5, dt);
+            const height = (far ? L * 1.1 + 10 : L * 0.3 + 3.5) + this.deckCamLift;
             let targetQ;
             if (this.settings.controlMode === 'mouseaim' && !holdLook) {
                 // camera looks along the aim direction (horizon stays level)

@@ -874,9 +874,14 @@ export class HUD {
         if (p.onGround && p.speed < 4) {
             ctx.font = '600 13px "Share Tech Mono", ui-monospace, monospace';
             ctx.fillStyle = GREEN;
-            const msg = p.bellied ? 'CRASH LANDED — E: CLIMB OUT · ENTER: ' + (game.lives > 0 ? 'NEW JET' : game.mission ? 'END (NO JETS LEFT)' : 'END THE SORTIE') : p.speed < 0.8 && p.controls.throttle < 0.06 && !p.deck ? 'E: CLIMB OUT AND WALK · Z / 1–0: THROTTLE · U: AUTO-TAKEOFF' : p.deck ? 'FULL POWER (9 or 0) TO FIRE THE CATAPULT · U: AUTO-TAKEOFF' : 'Z / 1–0: THROTTLE · ←/→: STEER · S: ROTATE AT ' + Math.round(game.rotateSpeed * MS_TO_KTS) + ' KTS · U: AUTO-TAKEOFF';
+            const msg = p.bellied ? 'CRASH LANDED — E: CLIMB OUT · ENTER: ' + (game.lives > 0 ? 'NEW JET' : game.mission ? 'END (NO JETS LEFT)' : 'END THE SORTIE') : p.speed < 0.8 && p.controls.throttle < 0.06 && !p.deck ? 'E: CLIMB OUT AND WALK · Z / 1–0: THROTTLE · U: AUTO-TAKEOFF' : p.deck ? 'FULL POWER (9 OR 0): CATAPULT · E: CLIMB OUT · U: AUTO-TAKEOFF' : 'Z / 1–0: THROTTLE · ←/→: STEER · S: ROTATE AT ' + Math.round(game.rotateSpeed * MS_TO_KTS) + ' KTS · U: AUTO-TAKEOFF';
+            const pad = game.atFriendlyPad(p) && !p.bellied ? 'STOPPED ON A FRIENDLY PAD: REPAIR · REFUEL · REARM  (L: CHANGE LOADOUT)' : '';
+            // (on a dark backing: at 720 p these lines cross the speed / fuel block and the pitch ladder)
+            const bw = Math.min(this.w - 30, Math.max(ctx.measureText(msg).width, pad ? ctx.measureText(pad).width : 0) + 20);
+            ctx.fillStyle = 'rgba(0,8,6,0.5)'; ctx.fillRect(this.w / 2 - bw / 2, this.h * 0.8 - 10, bw, pad ? 40 : 20);
+            ctx.fillStyle = GREEN;
             ctx.fillText(msg, this.w / 2, this.h * 0.8, this.w - 30);
-            if (game.atFriendlyPad(p) && !p.bellied) ctx.fillText('STOPPED ON A FRIENDLY PAD: REPAIR · REFUEL · REARM  (L: CHANGE LOADOUT)', this.w / 2, this.h * 0.8 + 20, this.w - 30);
+            if (pad) ctx.fillText(pad, this.w / 2, this.h * 0.8 + 20, this.w - 30);
         }
     }
 

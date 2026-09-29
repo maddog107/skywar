@@ -290,8 +290,11 @@ describe('missions', () => {
     });
     test('a bomber patrol flies its route round and round', () => {
         const g = sandboxGame(), sb = g.sandbox;
-        const rec = sb.place('bomber', 'blue', 0, -5000, { alt: 9000 });
-        sb.assign(rec, { type: 'patrol', route: [{ x: 0, z: -12000 }, { x: 10000, z: -12000 }] }, { quiet: true });
+        // (a route well back on our side, the background war off: along the front at z −12 km the red CAPs shot the
+        // bombers down in about one run in eight, and the test failed for it)
+        sb.setBackground(false, { quiet: true });
+        const rec = sb.place('bomber', 'blue', 0, 20000, { alt: 9000 });
+        sb.assign(rec, { type: 'patrol', route: [{ x: 0, z: 14000 }, { x: 10000, z: 14000 }] }, { quiet: true });
         const f = rec.handle;
         assert.equal(f.loop, true);
         let wrapped = false, last = f.wp;
