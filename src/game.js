@@ -1176,7 +1176,7 @@ export class Game {
     candidates() {
         const out = [];
         for (const a of this.aircraft) if (a.alive && a.team !== 'blue' && !a.onGround) out.push(a);
-        if (this.ground) for (const t of this.ground.targets) if (t.alive && !t.hidden && t.team !== 'blue' && (!t.isBridge || t.objective)) out.push(t);
+        if (this.ground) for (const t of this.ground.targets) if (t.alive && !t.hidden && t.team !== 'blue' && (!t.isBridge || t.objective)) out.push(t); // (hidden: not found yet)
         // enemy cruise missiles our side has seen (the AWACS: airsupport.js) can be locked and shot down
         if (this.strikes) for (const m of this.strikes.missiles) if (m.alive && m.team !== 'blue' && m.detected && m.kind === 'cruise') out.push(m);
         return out;

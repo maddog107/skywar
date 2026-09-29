@@ -12,6 +12,7 @@ import { CommandMenu } from './command.js';
 import { StrikeManager } from './strikes.js';
 import { Sensors } from './sensors.js';
 import { MapKit } from './mapkit.js';
+import { MobileForces } from './forces.js';
 import { FrontLine } from './front.js';
 import { Director } from './director.js';
 import { TaskManager } from './tasks.js';
@@ -33,6 +34,7 @@ export const SYSTEMS = [
     ['interiors', WarInteriors],    // rooms, boats and cabs: enter on foot, press buttons (before strikes: a room keeps the comma; it yields its camera to the missile camera)
     ['strikes', StrikeManager],
     ['bases', Bases],            // airbases alive: alert states, installations, craters and repairs, scrambles, life
+    ['forces', MobileForces],    // TELs, mobile SAMs, rocket artillery, convoys (before the front: its batteries are ours)
     ['air', AirSupport],         // AWACS, tankers, recon, EW, bombers (after strikes: its launch sources)
     ['navalops', NavalOps],      // carrier groups, naval air defence, surface action, launches on the rigs, deck ops
     ['front', FrontLine],        // the front line and the ground war

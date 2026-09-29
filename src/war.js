@@ -464,7 +464,7 @@ export class War {
     coverage(team, pos) {
         let best = 0;
         for (const u of this.units) {
-            if (!u.alive || u.team !== team) continue;
+            if (!u.alive || u.team !== team || u.emitting === false) continue; // (emitting false: packed up or silent)
             const rec = this.recs.get(u);
             if (rec.cls !== 'radar' && rec.cls !== 'sam-radar' && rec.cls !== 'awacs' && !u.radarRange) continue;
             if (u.jammed && this.time < u.jammed) continue;

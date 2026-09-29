@@ -412,7 +412,7 @@ parts are pulled out first and every instance gets its own copy, hung on the sec
   pad and erector run before each launch, the rail stays empty for 90 s after; war class `tel`, conceal 0.6)
   hides 12–22 km behind the line, relocates a few minutes after firing when nobody's watching (event
   `telRelocated`), and a new one comes up ten minutes after it's destroyed. It isn't made if another plug-in
-  has added red `launcher` sources.
+  has added red `launcher` sources (in the war and sandbox, the mobile forces' SCUD brigade does).
 - **Friendly:** a CAP over our side, strike packages (HAMMER) against high-value targets the player
   identified and left alone, convoys to the front that draw enemy attack aircraft, and calls for help.
   An AN/TPS-75 radar at the home base and at Miramar, a Patriot battery at home and the carriers'
@@ -472,6 +472,105 @@ parts are pulled out first and every instance gets its own copy, hung on the sec
 - Other plug-ins can give any AI pilot a brain the same way (director.js does for enemy CAS).
 - A brain with `fly(pilot, dt)` that returns true flies the jet itself that frame (the hook in ai.js
   `Pilot.update`); the air-support plug-in flies its support aircraft and refuelling receivers that way.
+
+### `game.forces` (src/forces.js, also `game.mobile`): mobile forces
+TELs, mobile SAM groups, rocket artillery, convoys and a coastal missile battery, all real vehicles with the
+rigged models from src/vehicles.js. Files: `forces.js` (the system, the spawn API, LOD, tasking, the search
+and destroy op), `forcesunits.js` (`ForceVehicle`, `VehicleLauncher`), `forcesgroups.js` (`TelUnit`,
+`SamGroup`, `RocketBattery`, `Convoy`, `CoastalBattery`), `forcesnav.js` (road graph, routes, hide-site
+finders), `forcesites.js` (compound and shelter meshes). Runs in every mode but rings, practice and mission;
+the blue HIMARS / M270 batteries are placed wherever strikes run, everything else only in `'war'` and
+`'sandbox'`.
+- **Order of battle (war / sandbox):** a SCUD brigade (2 TELs, 3 on ace; 12–22 km behind the line) with
+  forest, valley and roadside hides, a camouflaged compound (sheds, nets, a crane truck and a command
+  vehicle: the reload point), a hardened shelter they back into, and firing points 0.5–1.7 km from each hide;
+  an S-300 group, a Buk battery and an Osa platoon covering the enemy's rear; a Patriot battery at the home
+  base and at Miramar; a Bastion coastal battery; a Smerch battery; the front's Grad batteries (below); blue GMLRS (2× HIMARS + M270, `ROCKET
+  ARTILLERY STRIKE`) and ATACMS (HIMARS + M270, `BALLISTIC` / `HARDENED`, callsign STEEL RAIN).
+- **Spawn API** (each takes `(team, …, pos)` or `(pos, team, …)`; `pos` is `{ x, z, heading? }`; returns the
+  unit's controller, or null if nothing fits there):
+  - `forces.spawnTEL(team, pos, { vehicle: 'scud', loaded, site, sourceName })` → `TelUnit` (on its own it
+    finds a few hides and firing points round `pos`). Registers a red (or blue) `launcher` source, so
+    `strikes.request('ballistic', marks, 'red')` and the director use it, and the director's stand-in TEL isn't made.
+  - `forces.spawnSAM(team, 's300' | 'buk' | 'osa' | 'patriot', pos, { launchers, deployed, emcon:
+    'search' | 'ambush', support, relocateEvery, fixed })` → `SamGroup` (`fixed`: a base's point defence, which
+    stays put and radiates instead of shooting and scooting; our Patriots are placed that way).
+  - `forces.spawnArtillery(team, 'grad' | 'smerch' | 'himars' | 'm270' | 'gmlrs' | 'atacms', pos, { count,
+    name, support, command })` → `RocketBattery` (`'gmlrs'` is our mixed battery, kind `artillery`;
+    `'atacms'` is kind `launcher` with ATACMS and penetrators).
+  - `forces.spawnConvoy(team, from, to, composition, { callsign, destName, cap, spacing, quiet })` → `Convoy`.
+    `from` / `to` are points near a road, a `BASES` id or a town; `composition` a list of vehicle ids or an
+    index into `CONVOYS[team]`. The column plans over the road graph (Dijkstra, downed bridges avoided).
+  - `forces.spawnCoastal(team, pos, { shore })` → `CoastalBattery` (2 Bastion launchers, P-18, command post).
+  - `forces.startSearch()` → the search-and-destroy op (below); `forces.spawnVehicle(vid, team, pos)` for a
+    bare vehicle.
+- **Commands:**
+  - `forces.fireMission(who, target, { n, label, missile })`: `who` is a group or one of its vehicles; `target`
+    a unit, a war mark or `{ x, z }`. A rocket battery lays and ripples its launchers (only that vehicle when
+    given one), a TEL drives to a firing point, sets up and launches, a coastal battery sorties and fires at
+    a ship. Returns the launches ordered. Our side's missions get a strike record (HUD, BDA); the enemy's don't.
+  - `forces.relocate(who, to?)`: a SAM group packs up and moves (to a new site if none given), a TEL goes to
+    another hide, rocket launchers scoot.
+  - The map panel on one of ours adds FIRE MISSION ON MARK n and RELOCATE; COMMAND › SANDBOX › GROUND
+    FORCES spawns any of them near the player, and START SEARCH AND DESTROY.
+- **Behaviour:**
+  - TEL: hide → drive (roads, then off-road; slows for turns, grades and rough ground, dust off-road) →
+    jacks, pad, erector → prep (40–60 s) → launch → erector down, jacks up → away to another hide, or to the
+    compound to reload (crane animation) if it has reserves. Driving with a jet close, it stops and sits still
+    (25 s after the last threat); a hit during set-up aborts the launch. `tel.prepEstimate()` gives the
+    seconds to launch from the real route and the remaining set-up (`op.eta()` for the search op). Half the orders are announced (`telPreparing`, war.report, a task
+    "DESTROY THE TEL BEFORE IT FIRES"); the launch itself is detected (`strategicLaunch`, the missile's origin
+    is known).
+  - SAM group: radar(s), command post, launchers. Set-up and pack-up are timed by the rig's animations. The
+    engagement radar sees within its range, above `altMin` and over the radar horizon, with terrain line of
+    sight; the launchers fire `weapons.fireMissile(…, 'sam')` with the type's range, lock time, salvo and
+    ammunition, then reload (a support truck quickens it). Radar dead: S-300 and Patriot are blind; Buk and
+    Osa fall back to their launchers' own radars (Buk shorter and slower). They move after they've been seen
+    or fired a few times (shoot and scoot), and `emcon: 'ambush'` groups stay silent until a target is in
+    reach. Their radars feed `war.coverage` while emitting and give the RWR spike on entering their reach.
+  - Rocket battery: lay (elevation from range), ripple from each muzzle (Grad 0.5 s, Smerch 2.6 s, GMLRS
+    1.2 s), stow, reload, scoot 0.4–1.5 km. Far from the camera (>12 km) salvos are simulated (impacts only).
+    Counter-battery: an enemy salvo within reach of our GMLRS gets a FIREFINDER call and a reply 30–60 s later.
+  - Convoy: a column on the road network at the posted speed, spaced ~48 m; attacked, it halts, scatters
+    50–110 m off the road on alternate sides, APCs dismount infantry (`game.infantry`), an SA-8 in it sets up
+    as an escort; it regroups and drives on after the threat's gone. A downed bridge ahead stops it; it turns back.
+- **With the other plug-ins:** every real launcher is one strikes source: the brigade's TELs and the Bastions here,
+  the Kamenny Log garage's TELs (underground.js `UgLauncher`), the captured Scud at the JOC (commandrooms.js,
+  blue, a ground.js truck) and the navy's ships; `strikes.request` picks among them by range and stock, and the
+  director's stand-in TEL isn't made while any red `launcher` exists. All TELs are war class `tel`, SAM launchers
+  `sam`, fire-control radars `sam-radar`, search radars `radar`. Red cruise strikes on the carrier fly from the
+  navy's Kalibr ships (navalops.js), not from the TELs.
+- **Hooks the Phase C systems use:** `front.addBattery` gets its Grad batteries from `forces.frontBattery(s,
+  site, face)` (same `{ sector, units, at, t }` record, plus `forces`: the `RocketBattery`, which fires on the
+  front itself); `director.startConvoy` gets columns from `forces.directorConvoy(team, director)` (director
+  convoy fields, `managed: true`: forces.js drives it and ends it through `director.endConvoy`). Radio goes
+  through `director.say`, tasks through `game.tasks.offer`.
+- **Search and destroy:** a TEL with an Osa escort enters 3–7 km from a firing point in the enemy's rear
+  ("ENEMY TEL ENTERING <place>"), drives to it and fires on the countdown shown on the task. SUPPORT › RECON
+  DRONE (or 30–42% into the countdown on its own) narrows the search area to 1.6 km and reveals a contact;
+  the escort's radar comes on and it fights once the player is within 9 km or the TEL is identified. Marking
+  the TEL and calling BALLISTIC works on the move: our ballistic missiles aimed at a unit steer to it on the
+  way down (`StrategicMissile.tracked`). Events `searchStarted`, `searchEnded` (op, { why }).
+- **Unit interface:** each vehicle (`ForceVehicle`) is in `ground.targets` and `war`: `pos`, `center`, `vel`,
+  `heading`, `radius`, `hp`, `alive`, `team`, `cls` (tel, sam, radar, command, artillery, vehicle, apc…),
+  `type`, `conceal` (the site's: shelter 0.97, forest 0.85, compound 0.8… firing 0.15), `hardened`,
+  `firingT`, `route` (while it drives), `ctrl` (its group), `damage(amount, source, kind)`. `hidden` is true
+  for an enemy nobody has found and for our vehicles more than 4 km from the camera (the HUD and target
+  cycling skip them). SAM radars have `radarRange` and `emitting` (war.coverage and SIGINT ignore `emitting ===
+  false`) and their own `sigint` signature (ew.js: 30N6 FLAP LID, P-18 SPOON REST, SA-11 FIRE DOME, SA-8 LAND
+  ROLL, AN/MPQ-65, SENTINEL), launchers `samRange`. Destroyed, a vehicle burns, cooks off by what it carries (missile, rockets, fuel),
+  may throw its turret or erector, and emits `groundKilled`.
+- **Events:** `telPreparing` (tel, { launchAt, target }), `telLaunched`, `telRelocated`, `samReady`,
+  `samActive`, `samBlind`, `samRelocating` (group, { to }), `salvoOrdered`, `convoyStarted`, `convoyScattered`,
+  `convoyArrived`, `convoyLost`, `searchStarted`, `searchEnded`.
+- **Levels of detail:** far vehicles are points on their route; within ~7 km (by size, down to 2.5 km for
+  small ones) a merged static copy of the rig in its current pose (2–4 draw calls, templates built one per
+  frame and shared); up to 5 live rigs for vehicles that are close and moving, or animating within 3.8 km.
+  `forces.lodFocus` (a Vector3) overrides the camera for tools and stills. `forces.stats` has `{ units,
+  meshed, live, ms }`; a full war costs ~0.02–0.15 ms of CPU a frame.
+- **Switches:** `forces.auto` = `{ tel, search, artillery, counterBattery, coastal, convoys }` turns the
+  scheduler's own orders off one by one (the units stay); `start(mode, { forces: false })` or mode `'test'`
+  places nothing.
 
 ## Air support and electronic warfare (`game.air`, src/airsupport.js)
 

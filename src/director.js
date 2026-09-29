@@ -1064,11 +1064,16 @@ export class Director {
     startConvoy(team) {
         const g = this.game, war = g.war;
         if (!g.ground || !g.ground.addTarget) return null;
-        const road = this.pickRoad(team);
-        if (!road) return null;
-        const k = this.intensity();
-        const types = team === 'red' ? RED_CONVOY.slice(0, Math.round(5 + k * 1.5)) : BLUE_CONVOY.slice(0, 5);
-        const c = new Convoy(this, { team, path: road.p, sign: road.sign, types, callsign: team === war.side ? pick(CONVOY_CALLS) + ' ' + (1 + Math.floor(Math.random() * 3)) : 'CONVOY' });
+        // the mobile forces (forces.js), when they're there, drive it: a mixed column of rigged vehicles between a base
+        // or town in the rear and one behind the line, that scatters when attacked (c.managed: it runs itself)
+        let c = g.forces && g.forces.directorConvoy ? g.forces.directorConvoy(team, this) : null;
+        if (!c) {
+            const road = this.pickRoad(team);
+            if (!road) return null;
+            const k = this.intensity();
+            const types = team === 'red' ? RED_CONVOY.slice(0, Math.round(5 + k * 1.5)) : BLUE_CONVOY.slice(0, 5);
+            c = new Convoy(this, { team, path: road.p, sign: road.sign, types, callsign: team === war.side ? pick(CONVOY_CALLS) + ' ' + (1 + Math.floor(Math.random() * 3)) : 'CONVOY' });
+        }
         c.reportT = war.time + rand(50, 90);
         c.attackT = team === war.side ? war.time + rand(70, 140) : Infinity;
         this.convoys.push(c);
@@ -1081,6 +1086,7 @@ export class Director {
         const g = this.game, war = g.war;
         for (let i = this.convoys.length - 1; i >= 0; i--) {
             const c = this.convoys[i];
+            if (c.managed) { if (c.done) this.convoys.splice(i, 1); continue; } // (forces.js drives it and ends it: endConvoy)
             c.t += dt;
             const alive = c.alive();
             if (!alive.length) { this.endConvoy(c, 'destroyed'); this.convoys.splice(i, 1); continue; }
