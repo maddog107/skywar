@@ -329,7 +329,7 @@ export class TacticalMap {
         // airfields: the runways, and the name
         for (const b of BASES) {
             const c = Math.cos(b.heading), s = Math.sin(b.heading);
-            const red = !b.friendly === (war.side === 'blue'); // (whose field it is, as seen from the player's side)
+            const red = !b.civil && !b.friendly === (war.side === 'blue'); // (whose field it is, as seen from the player's side)
             ctx.strokeStyle = red ? RED : b.civil ? '#e9e2cf' : BLUE; ctx.lineWidth = Math.max(2, 55 * this.view.scale);
             for (const rw of b.runways) {
                 const cx = b.x + rw.lx * c + rw.lz * s, cz = b.z - rw.lx * s + rw.lz * c;

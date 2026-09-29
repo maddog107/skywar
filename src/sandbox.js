@@ -767,16 +767,16 @@ export class SandboxTools {
                 for (const k of missionsFor(rec.item)) acts.push({ label: '▸ ' + MISSIONS[k].label, run: () => this.startMission(rec, k) });
             }
             acts.push({ label: '✕ DELETE', run: () => { this.remove(rec); this.say('DELETED ' + rec.label, DIM); } });
-            return acts;
-        }
-        if (sel.kind === 'unit' && sel.unit.alive) acts.push({ label: '◉ FOLLOW WITH THE CAMERA', run: () => { g.tacmap.close(); this.spectate({ unit: sel.unit }); } });
+        } else if (sel.kind === 'unit' && sel.unit.alive) acts.push({ label: '◉ FOLLOW WITH THE CAMERA', run: () => { g.tacmap.close(); this.spectate({ unit: sel.unit }); } });
         if (sel.kind === 'point') acts.push({ label: '◉ FREE CAMERA HERE', run: () => { g.tacmap.close(); this.spec.start(); this.spec.target = null; this.spec.setMode('free'); this.spec.free.pos.set(sel.pos.x, Math.max(terrainHeight(sel.pos.x, sel.pos.z), 0) + 600, sel.pos.z + 900); this.spec.free.pitch = -0.5; this.spec.free.yaw = 0; } });
         // the other side's strike on this (a unit of ours, or a point): the sandbox can order either side's missiles
-        if ((sel.kind === 'unit' && sel.unit.alive) || sel.kind === 'point' || sel.kind === 'mark') {
-            const foe = war.enemyTeam;
+        const unit = sel.kind === 'unit' ? sel.unit : rec ? this.leadOf(rec) : null;
+        const foe = war.enemyTeam;
+        const onUnit = unit && unit.alive && (unit.isGround || unit.isShip) && unit.team !== foe;
+        if (onUnit || sel.kind === 'point' || (sel.kind === 'mark' && !(sel.mark.unit && sel.mark.unit.team === foe))) {
             for (const [key, label] of [['ballistic', 'BALLISTIC'], ['cruise', 'CRUISE'], ['rocket', 'ROCKETS']]) {
                 if (!STRIKE_TYPES[key]) continue;
-                acts.push({ label: foe.toUpperCase() + ' STRIKE HERE: ' + label, run: () => this.enemyStrike(sel, key) });
+                acts.push({ label: foe.toUpperCase() + ' STRIKE HERE: ' + label, run: () => this.enemyStrike(onUnit ? { kind: 'unit', unit } : sel, key) });
             }
         }
         return acts;
