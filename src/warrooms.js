@@ -337,7 +337,7 @@ export class HarborOps {
         this.boats.push(b);
         this.game.war.add(b, { cls: 'boat', name: b.name });
         this.sys.addSite({
-            id: 'boat:' + b.name + ':' + this.boats.length, label: () => 'TAKE THE ' + b.spec.short + ' (DRIVE)', radius: 3.4, dy: 3.5,
+            id: 'boat:' + b.name + ':' + this.boats.length, label: () => 'TAKE THE ' + b.spec.short + ' (DRIVE)', radius: 5.2, dy: 3.5, // (its entry is mid-boat: from the pontoon's edge the RHIB's was 3.5 m off, the CB90's 3.95 — never in a 3.4 m reach)
             at: (out) => (b.alive && !b.driver && !b.removed ? b.point('hatch_entry', out) : null),
             enter: () => this.board(b),
         });
