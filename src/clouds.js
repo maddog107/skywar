@@ -757,6 +757,9 @@ export class Clouds {
         if (this.disposed) return;
         this.weatherData = weather; this.baseData = base;
         const [tw, tb, td] = this.textures;
+        // the stand-ins were allocated at one texel (immutable storage): free them so the upload allocates the
+        // full size, rather than writing the whole volume into a 1×1×1 texture (GL_INVALID_VALUE)
+        for (const t of this.textures) t.dispose();
         tw.image = { data: weatherHalf, width: WEATHER_RES, height: WEATHER_RES };
         tb.image = { data: baseHalf, width: BASE_RES, height: BASE_RES, depth: BASE_RES };
         td.image = { data: detail, width: DETAIL_RES, height: DETAIL_RES, depth: DETAIL_RES };
