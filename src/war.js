@@ -294,7 +294,12 @@ export class War {
             if (_v.dot(fwd) < d * 0.72) { rec.seenT = Math.max(0, rec.seenT - dt); continue; }
             if (!this.lineOfSight(eye, u.pos)) { rec.seenT = Math.max(0, rec.seenT - dt); continue; }
             // [weather] and not hidden by cloud, fog or rain (a contact needs a trace of contrast, identifying much more)
-            const T = W ? W.transmittance(eye, u.pos, 'eye') : 1;
+            // (held half a second per unit: the scan comes round several times a second)
+            let T = 1;
+            if (W) {
+                if (!(rec.wxAt > this.time - 0.5)) { rec.wxT = W.transmittance(eye, u.pos, 'eye'); rec.wxAt = this.time; }
+                T = rec.wxT;
+            }
             if (T < 0.06) { rec.seenT = Math.max(0, rec.seenT - dt); continue; }
             this.bump(rec, d < idR * f && T > 0.25 ? INTEL.IDENTIFIED : INTEL.CONTACT, 'visual', step);
         }
