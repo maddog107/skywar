@@ -189,9 +189,16 @@ function makeRotor(R, blades, tail = false) {
     return g;
 }
 
+// a helicopter's airframe (the prop model's ~7 parts) merged once per type: every copy shares it (the rotor stays apart)
+const _heliBody = new Map();
+function heliBody(id) {
+    if (!_heliBody.has(id)) { const m = propInstance(id); _heliBody.set(id, m ? mergeStaticModel(m) : null); }
+    const t = _heliBody.get(id);
+    return t ? t.clone() : null;
+}
 export function makeHelicopter(id) {
     const root = new THREE.Group();
-    const m = propInstance(id);
+    const m = heliBody(id);
     const size = propSize(id);
     if (m) root.add(m);
     else box(2.5, 2.5, 10, MAT.olive, 0, 0.5, 0, root);

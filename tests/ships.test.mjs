@@ -168,3 +168,38 @@ describe('every ship type spawns and steams', () => {
         });
     }
 });
+
+describe('ship levels of detail by size on screen (Ship.updateLod)', () => {
+    // near (the full rig) above ~120 px, the merged far model below it, one clustered mesh below ~30 px (not for a
+    // submarine), nothing at all under a pixel or two
+    const game = { scene: new THREE.Scene(), ground: { targets: [] }, aircraft: [], camera: new THREE.PerspectiveCamera(60, 1, 1, 90000), time: 0 };
+    const draws = (s) => { let n = 0; s.mesh.traverseVisible(o => { if (o.isMesh) n++; }); return n; };
+    const at = (s, px) => {
+        const d = s.def.L / px * 450 / Math.tan(Math.PI / 6);
+        game.camera.position.set(s.mesh.position.x + d, 30, s.mesh.position.z); game.camera.updateMatrixWorld();
+        game.time += 1;
+        s.updateLod();
+        return { near: s.near.some(c => c.visible), far: !!(s.far && s.far.visible), vfar: !!(s.vfar && s.vfar.visible), shown: s.mesh.visible, draws: draws(s) };
+    };
+    for (const type of ['destroyer', 'carrier', 'ssn']) {
+        test(type, { skip: !types.some(([t]) => t === type) }, () => {
+            const naval = new N.Naval(game);
+            const s = naval.spawn(type, 'blue', { x: 0, z: 0 }, { passive: true, angle: 0 });
+            const near = at(s, 400), far = at(s, 80), vfar = at(s, 20), speck = at(s, 0.5);
+            assert.deepEqual([near.near, near.far, near.vfar], [true, false, false], 'near');
+            assert.deepEqual([far.near, far.far, far.vfar], [false, true, false], 'far');
+            assert.ok(far.draws < near.draws, `far ${far.draws} draws < near ${near.draws}`);
+            if (s.cls === 'sub') assert.equal(vfar.vfar, false, 'no very far version for a submarine');
+            else {
+                assert.deepEqual([vfar.near, vfar.far, vfar.vfar], [false, false, true], 'very far');
+                assert.equal(vfar.draws, 1, 'one draw');
+                const back = at(s, 32);
+                assert.equal(back.vfar, true, 'hysteresis: stays very far just above the threshold');
+                assert.equal(at(s, 60).far, true, 'far again');
+            }
+            assert.equal(speck.shown, false, 'a speck is not drawn');
+            assert.deepEqual([at(s, 400).near, s.far.visible], [true, false], 'near again');
+            naval.clear();
+        });
+    }
+});

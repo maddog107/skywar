@@ -273,6 +273,7 @@ export class SupportFlight {
     // level of detail: coarse when far from the camera and left alone; real when anything's near or at it
     updateLod() {
         const g = this.game, ac = this.ac;
+        ac.farManaged = true; // (not Aircraft.updateLod's: this one also goes coarse far out)
         if (!ac.alive) { if (this.coarse) this.goReal(); if (this.far && this.far.visible) { this.far.visible = false; ac.model.visible = true; } return; }
         const d = ac.pos.distanceTo(g.camera.position);
         // a real jet a few km off is drawn with its far version (farmodel.js: one draw instead of tens); built the

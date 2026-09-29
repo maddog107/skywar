@@ -19,6 +19,7 @@ import { createEngineFlame } from './afterburner.js';
 import { surfaceTravel, surfaceWells } from './surfaces.js';
 import { waveTilt } from './float.js';
 import { waterStep, waterContact, enterWater } from './seaplane.js';
+import { farMesh } from './farmodel.js';
 
 const LIFT_K = 0.0016;
 const CL_MAX = 1.65;
@@ -113,6 +114,8 @@ const GEAR_MATS = {
     hubMat: new THREE.MeshStandardMaterial({ color: 0x777b80, metalness: 0.6, roughness: 0.4 }),
 };
 for (const m of Object.values(GEAR_MATS)) m.userData.noPaint = true;
+
+let _farBuiltAt = -1;
 
 export class Aircraft {
     constructor(game, typeId, { team = 'blue', isPlayer = false, name = null } = {}) {
@@ -1060,6 +1063,29 @@ export class Aircraft {
         this.updateSurfaces(dt);
         this.updateFlight(dt);
         this.updateVisuals(dt);
+        this.updateLod();
+    }
+
+    // Level of detail: a jet other than the player's that is small on screen (under ~12 px long at the camera's current
+    // field of view, so a zoomed targeting pod still sees the real one) is drawn with its far version (farmodel.js:
+    // one draw instead of 15-30, and one in the shadow map), while it's whole and flying normally. Built once per
+    // type, at most one type a frame. (Air support manages its own: farManaged.)
+    updateLod() {
+        if (this.isPlayer || this.farManaged || !this.model) return;
+        const g = this.game, cam = g && g.camera;
+        if (!cam || !cam.isPerspectiveCamera) return;
+        const d = Math.max(cam.position.distanceTo(this.pos), 1);
+        const px = this.spec.length / d * 450 / Math.tan((cam.fov || 60) * Math.PI / 360);
+        const intact = this.alive && !this.falling && !this.exploded && this.lostRegions.size === 0;
+        const want = intact && px < (this.farLod && this.farLod.visible ? 14 : 12);
+        if (want && this.farLod === undefined) {
+            const f = g.time || 0;
+            if (_farBuiltAt === f) return; // (one new type a frame: building one takes a few ms)
+            _farBuiltAt = f;
+            this.farLod = farMesh(this) || null;
+            if (this.farLod) this.farLod.castShadow = true;
+        }
+        if (this.farLod && this.farLod.visible !== want) { this.farLod.visible = want; this.model.visible = !want; }
     }
 
     // Prop speed (rad/s) the engine drives toward: a running engine holds the prop near its governed speed (a bit

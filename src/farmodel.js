@@ -48,6 +48,7 @@ export function clusterTriangles(root, cell, { skip = null } = {}) {
         const n = idx ? idx.count : pos.count;
         const tex = mat0.map ? sampler(mat0.map) : null;
         const base = mat0.color || col.set(0.6, 0.6, 0.6);
+        const vcol = mat0.vertexColors && g.attributes.color ? g.attributes.color : null;
         const ids = [0, 0, 0];
         for (let t = 0; t + 2 < n; t += 3) {
             for (let k = 0; k < 3; k++) {
@@ -58,6 +59,8 @@ export function clusterTriangles(root, cell, { skip = null } = {}) {
                 if (c === undefined) { c = sum.length / 7; cells.set(kk, c); sum.push(0, 0, 0, 0, 0, 0, 0); }
                 // the colour: the material's, times the texture's there
                 let r = base.r, gC = base.g, b = base.b;
+                // (a merged model's plain parts carry their colours per vertex: meshmerge.js)
+                if (vcol) { r *= vcol.getX(i); gC *= vcol.getY(i); b *= vcol.getZ(i); }
                 if (tex && uvA) {
                     uv.fromBufferAttribute(uvA, i);
                     const px = ((Math.floor(uv.x * tex.w) % tex.w) + tex.w) % tex.w, py = ((Math.floor(uv.y * tex.h) % tex.h) + tex.h) % tex.h;
