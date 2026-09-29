@@ -9,6 +9,10 @@ import * as THREE from 'three';
 import { propParts } from './props.js';
 import { liftWithDistance } from './roads.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { weldGeometry } from './meshmerge.js';
+
+// beyond this distance (m) a car is drawn with its far version (vehicleLod): ~15 px long at most
+export const CAR_LOD_NEAR = 320;
 
 export const CAR_TYPES = [
     { id: 'car_sedan', weight: 5, paint: 'Blue', len: 4.7 },
@@ -104,7 +108,61 @@ export function mergeVehicleParts(parts, paintName = null) {
         g.setAttribute('aMat', new THREE.BufferAttribute(mat, 3));
         return g;
     });
-    try { return mergeGeometries(geos); } catch (e) { return null; }
+    try { const m = mergeGeometries(geos); return m ? weldGeometry(m) : m; } catch (e) { return null; }
+}
+
+// A far version of a mergeVehicleParts geometry (level of detail): vertices clustered on a `cell`-metre grid,
+// kept apart by colour, paint mask and which way they face (so panels keep their colours and the body its edges),
+// each cluster's attributes averaged, collapsed and repeated triangles dropped. A ~3000-triangle car comes out at a
+// few hundred: what's drawn beyond a few hundred metres, where a car is a dozen pixels long.
+export function vehicleLod(geo, cell = 0.25) {
+    const P = geo.attributes.position, N = geo.attributes.normal, C = geo.attributes.color, M = geo.attributes.aMat;
+    if (!P || !N || !C || !M) return null;
+    const idx = geo.index, n = idx ? idx.count : P.count;
+    const keyOf = new Map(), sum = []; // cluster: x y z nx ny nz r g b m0 m1 m2 count
+    const cid = new Int32Array(P.count).fill(-1);
+    for (let v = 0; v < P.count; v++) {
+        const nx = N.getX(v), ny = N.getY(v), nz = N.getZ(v), ax = Math.abs(nx), ay = Math.abs(ny), az = Math.abs(nz);
+        const face = ax >= ay && ax >= az ? (nx > 0 ? 0 : 1) : ay >= az ? (ny > 0 ? 2 : 3) : (nz > 0 ? 4 : 5);
+        const key = Math.round(P.getX(v) / cell) + ',' + Math.round(P.getY(v) / cell) + ',' + Math.round(P.getZ(v) / cell) + ',' + face + ','
+            + Math.round(C.getX(v) * 64) + ',' + Math.round(C.getY(v) * 64) + ',' + Math.round(C.getZ(v) * 64) + ',' + M.getX(v) + ',' + Math.round(M.getY(v) * 16) + ',' + Math.round(M.getZ(v) * 16);
+        let c = keyOf.get(key);
+        if (c === undefined) { c = sum.length / 13; keyOf.set(key, c); sum.push(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0); }
+        const o = c * 13;
+        sum[o] += P.getX(v); sum[o + 1] += P.getY(v); sum[o + 2] += P.getZ(v);
+        sum[o + 3] += nx; sum[o + 4] += ny; sum[o + 5] += nz;
+        sum[o + 6] += C.getX(v); sum[o + 7] += C.getY(v); sum[o + 8] += C.getZ(v);
+        sum[o + 9] += M.getX(v); sum[o + 10] += M.getY(v); sum[o + 11] += M.getZ(v); sum[o + 12]++;
+        cid[v] = c;
+    }
+    const tris = [], seen = new Set();
+    for (let t = 0; t + 2 < n; t += 3) {
+        const a = cid[idx ? idx.getX(t) : t], b = cid[idx ? idx.getX(t + 1) : t + 1], c = cid[idx ? idx.getX(t + 2) : t + 2];
+        if (a === b || b === c || a === c) continue;
+        const lo = Math.min(a, b, c), hi = Math.max(a, b, c), mid = a + b + c - lo - hi;
+        const s = lo + ':' + mid + ':' + hi;
+        if (seen.has(s)) continue;
+        seen.add(s);
+        tris.push(a, b, c);
+    }
+    const nc = sum.length / 13;
+    const pos = new Float32Array(nc * 3), nor = new Float32Array(nc * 3), col = new Float32Array(nc * 3), mat = new Float32Array(nc * 3);
+    for (let c = 0; c < nc; c++) {
+        const o = c * 13, k = sum[o + 12];
+        pos[c * 3] = sum[o] / k; pos[c * 3 + 1] = sum[o + 1] / k; pos[c * 3 + 2] = sum[o + 2] / k;
+        const l = Math.hypot(sum[o + 3], sum[o + 4], sum[o + 5]) || 1;
+        nor[c * 3] = sum[o + 3] / l; nor[c * 3 + 1] = sum[o + 4] / l; nor[c * 3 + 2] = sum[o + 5] / l;
+        col[c * 3] = sum[o + 6] / k; col[c * 3 + 1] = sum[o + 7] / k; col[c * 3 + 2] = sum[o + 8] / k;
+        mat[c * 3] = sum[o + 9] / k; mat[c * 3 + 1] = sum[o + 10] / k; mat[c * 3 + 2] = sum[o + 11] / k;
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    g.setAttribute('aMat', new THREE.BufferAttribute(mat, 3));
+    g.setIndex(tris);
+    g.computeBoundingSphere();
+    return g;
 }
 
 // The material for mergeVehicleParts geometry (shared by every vehicle type): vertex colours, the instance colour
@@ -129,6 +187,17 @@ export function vehicleMaterial(onRoad = false) {
     };
     m.customProgramCacheKey = () => 'vehicle:' + liftKey;
     return (_vehicleMats[key] = m);
+}
+
+// far versions, one per vehicle type (shared by every set)
+const _farGeo = new Map();
+function farGeometry(t, geo) {
+    if (!_farGeo.has(t.id)) {
+        let g = null;
+        try { g = vehicleLod(geo, Math.max(0.25, (t.len || 4.5) / 14)); } catch (e) { g = null; }
+        _farGeo.set(t.id, g && g.index && g.index.count >= 36 ? g : null);
+    }
+    return _farGeo.get(t.id);
 }
 
 export class CarSet {
@@ -167,13 +236,17 @@ export class CarSet {
                     return { geometry: pt.geometry, material: mat, merged: false, paint: isPaint };
                 });
             for (const d of drawn) {
-                const im = new THREE.InstancedMesh(d.geometry, d.material, count);
-                im.frustumCulled = false;
-                im.castShadow = castShadow;
-                im.receiveShadow = castShadow;
-                for (let k = 0; k < count; k++) im.setColorAt(k, white);
-                parent.add(im);
-                list.push({ im, paint: d.paint, merged: d.merged });
+                const make = (geometry) => {
+                    const im = new THREE.InstancedMesh(geometry, d.material, count);
+                    im.frustumCulled = false;
+                    im.castShadow = castShadow;
+                    im.receiveShadow = castShadow;
+                    for (let k = 0; k < count; k++) im.setColorAt(k, white);
+                    parent.add(im);
+                    return im;
+                };
+                const far = d.merged ? farGeometry(t, d.geometry) : null;
+                list.push({ im: make(d.geometry), far: far ? make(far) : null, paint: d.paint, merged: d.merged });
             }
             this.meshes.set(t, list);
         }
@@ -189,35 +262,40 @@ export class CarSet {
 
     restore(slot, hex) { this.setPaint(slot, hex); }
 
-    // Upload only the cars within `radius` of `center` (compacting each type's instances).
+    // Upload only the cars within `radius` of `center` (compacting each type's instances): those within `near` as the
+    // full model, the rest as its far version (a type without one draws the full model all the way out).
     // Far cars cost nothing on the GPU.
-    commit(center, radius) {
-        const r2 = radius * radius, M = this.mats, P = this.paints;
+    commit(center, radius, near = CAR_LOD_NEAR) {
+        const r2 = radius * radius, n2 = near * near, M = this.mats, P = this.paints;
         const dark = [0.08, 0.075, 0.07];
         for (const [t, list] of this.meshes) {
             const slots = this.byType.get(t);
-            let k = 0;
+            const lod = list.every(p => p.far);
+            let k = 0, kf = 0;
             for (const i of slots) {
-                const o = i * 16, dx = M[o + 12] - center.x, dz = M[o + 14] - center.z;
-                if (dx * dx + dz * dz > r2 || M[o] === 0 && M[o + 5] === 0) continue; // far away, or hidden (zero scale)
+                const o = i * 16, dx = M[o + 12] - center.x, dz = M[o + 14] - center.z, d2 = dx * dx + dz * dz;
+                if (d2 > r2 || M[o] === 0 && M[o + 5] === 0) continue; // far away, or hidden (zero scale)
+                const isFar = lod && d2 > n2, j = isFar ? kf : k;
                 for (const p of list) {
-                    const A = p.im.instanceMatrix.array, d = k * 16;
+                    const im = isFar ? p.far : p.im;
+                    const A = im.instanceMatrix.array, d = j * 16;
                     for (let c = 0; c < 16; c++) A[d + c] = M[o + c];
-                    const ca = p.im.instanceColor.array, co = k * 3;
+                    const ca = im.instanceColor.array, co = j * 3;
                     // (a merged vehicle reads a negative colour as "burnt out": every part darkens, see vehicleMaterial)
                     if (this.wrecked[i]) { const sg = p.merged ? -1 : 1; ca[co] = dark[0] * sg; ca[co + 1] = dark[1] * sg; ca[co + 2] = dark[2] * sg; }
                     else if (p.paint) { ca[co] = P[i * 3]; ca[co + 1] = P[i * 3 + 1]; ca[co + 2] = P[i * 3 + 2]; }
                     else { ca[co] = ca[co + 1] = ca[co + 2] = 1; }
                 }
-                k++;
+                if (isFar) kf++; else k++;
             }
-            for (const p of list) {
-                const was = p.im.count;
-                p.im.count = k;
-                p.im.visible = k > 0;
-                if (!k && !was) continue; // nothing near before or now: no upload
-                upload(p.im.instanceMatrix, k * 16);
-                upload(p.im.instanceColor, k * 3);
+            for (const p of list) for (const [im, cnt] of [[p.im, k], [p.far, kf]]) {
+                if (!im) continue;
+                const was = im.count;
+                im.count = cnt;
+                im.visible = cnt > 0;
+                if (!cnt && !was) continue; // nothing near before or now: no upload
+                upload(im.instanceMatrix, cnt * 16);
+                upload(im.instanceColor, cnt * 3);
             }
         }
     }
