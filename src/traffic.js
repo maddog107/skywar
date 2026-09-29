@@ -517,7 +517,7 @@ export class Traffic {
         const lp = this.lights.geometry.attributes.position;
         const cam = game && game.camera ? game.camera.position : null;
         this.frame = (this.frame || 0) + 1;
-        const FAR2 = 5000 * 5000;
+        const FAR2 = 5000 * 5000, MID2 = 1200 * 1200;
         this.lanes();
         this.indexCars();
         // who's in which junction box (for stop signs: wait until it's clear)
@@ -537,7 +537,11 @@ export class Traffic {
                 continue;
             }
             // far from the camera: simulate every 4th frame (with the saved-up time) — nobody can see them
-            if (cam && c.pos && dt > 0 && !c.fall && (c.pos.x - cam.x) ** 2 + (c.pos.z - cam.z) ** 2 > FAR2 && (this.frame + c.i) % 4) { c.acc = (c.acc || 0) + dt; continue; }
+            // (and past 1.2 km, where a car is two or three pixels long, every other frame)
+            if (cam && c.pos && dt > 0 && !c.fall) {
+                const d2 = (c.pos.x - cam.x) ** 2 + (c.pos.z - cam.z) ** 2;
+                if ((d2 > FAR2 && (this.frame + c.i) % 4) || (d2 > MID2 && (this.frame + c.i) % 2)) { c.acc = (c.acc || 0) + dt; continue; }
+            }
             const cdt = dt + (c.acc || 0); c.acc = 0;
             if (!c.dead) this.move(c, cdt);
             this.fallUpdate(c, dt, game);
