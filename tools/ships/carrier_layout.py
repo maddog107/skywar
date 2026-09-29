@@ -94,6 +94,10 @@ CATS = [
     (-35.0, 26.0, -44.0),     # 4  waist, outboard
 ]
 CAT_SPAWN = (12.0, -6.4)
+# where a jet sits on each catapult (its reference point; the tail clears the JBD by ~1 m), and how far ahead of
+# that the nose-gear launch bar meets the shuttle (an F/A-18)
+CAT_SPOTS = [(x, z0 - 4.4) for (x, z0, z1) in CATS]
+NOSE_GEAR = 5.5
 # jet blast deflectors: (x centre, z hinge, width, raised?) — hinged at z, raised panel leans aft
 JBDS = [
     (12.0, 3.2, 11.0, True),
@@ -122,8 +126,8 @@ PARKED = [
     ('fa18', 27.5, -89.0, 0.95),    # on elevator 1, tail over the side
     ('f14', 27.5, -55.0, 0.95),     # on elevator 2
     ('fa18', 27.5, 69.0, 0.95),     # on elevator 3
-    ('fa18', -15.5, -128.0, -0.95), # bow, port side, tails over the port edge
-    ('f14', -15.5, -108.0, -0.95),
+    ('fa18', -18.5, -128.0, -0.95), # bow, port side, tails over the port edge (clear of a jet launching off cat 2)
+    ('f14', -18.5, -108.0, -0.95),
     ('fa18', 16.0, 56.0, 0.75),     # the "junkyard" just aft of the island
 ]
 

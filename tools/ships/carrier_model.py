@@ -388,25 +388,7 @@ S.box('NavGreen', 26.4, 26.75, 31.4, 31.8, 13.0, 13.5)
 S.box('NavWhite', MX - 0.2, MX + 0.2, 57.2, 57.6, MZ - 1.3, MZ - 0.9)
 
 # ═════════════ Deck gear ═════════════
-# raised jet blast deflector behind cat 1 (three hinged panels leaning aft)
-cx, zh, wd, _ = C.JBDS[0]
-ang = math.radians(52)
-for k in range(3):
-    xa = cx - wd / 2 + k * wd / 3 + 0.1
-    xb = xa + wd / 3 - 0.2
-    Lp = 4.2
-    y1, z1 = DY + Lp * math.sin(ang), zh + Lp * math.cos(ang)
-    t = 0.28
-    ny, nz = math.cos(ang) * t, -math.sin(ang) * t
-    front = [(xa, DY, zh), (xb, DY, zh), (xb, y1, z1), (xa, y1, z1)]
-    back = [(p[0], p[1] - ny, p[2] - nz) for p in front]
-    S.g('Super').face(front, None, (0, math.cos(ang), -math.sin(ang)))
-    S.g('Super').face(back, None, (0, -math.cos(ang), math.sin(ang)))
-    S.g('Super').face([front[2], front[3], back[3], back[2]], None, (0, 1, 0))
-    S.g('Super').face([front[0], back[0], back[3], front[3]], None, (-1, 0, 0))
-    S.g('Super').face([front[1], front[2], back[2], back[1]], None, (1, 0, 0))
-    for xs in (xa + 0.8, xb - 0.8):
-        S.beam('Dark', (xs, DY + 0.1, zh + 3.6), (xs, DY + Lp * 0.5 * math.sin(ang) - 0.2, zh + Lp * 0.5 * math.cos(ang) + 0.2), 0.18)
+# (the jet blast deflectors and the catapult shuttles move: they're rig nodes, built with the rig below)
 # arresting wires (raised on their bow-spring supports) and deck sheaves
 for i in range(len(C.WIRES_Z)):
     (ax, az), (bx, bz) = C.wire_ends(i)
@@ -515,6 +497,37 @@ swing_door('door_accom', xt, ACC_TOP[1], '+x', y0=ACC_TOP[0], w=1.2, h=2.0)
 # where a boat's crew steps off (and where the player boards): the ladder's bottom platform
 K.point('hatch_entry', (xb + 1.2, ACC_BOT[0], ACC_BOT[1] - 0.8), root)
 
+# jet blast deflectors jbd_1..4: three water-cooled panels hinged on their forward edge, flush with the deck
+# (k = 0) and raised 52° behind a jet on the catapult (k = 1), leaning aft. One mesh for all four (the deck's
+# painted JBD 1 panels on top, so a lowered one reads as the deck; the others are painted the same), so naval.js
+# draws them as one instanced mesh.
+JBD_RAISE = math.radians(52)
+cx0, zh0, wd0, _ = C.JBDS[0]
+Jm = Part('jbd')
+for k in range(3):
+    xa = cx0 - wd0 / 2 + k * wd0 / 3 + 0.1
+    xb = xa + wd0 / 3 - 0.2
+    Jm.box('Deck', xa, xb, DY - 0.24, DY + 0.02, zh0, zh0 + 4.2, uvf=deck_uv)
+    # hydraulic rams on the underside (inside the deck while it's down, behind the panel when it's up)
+    for xs in (xa + 0.7, xb - 0.7):
+        Jm.box('Dark', xs - 0.12, xs + 0.12, DY - 0.5, DY - 0.24, zh0 + 1.2, zh0 + 3.0)
+jbd_mesh = Jm.mesh(origin=(cx0, DY, zh0))
+for i, (cx, zh, wd, _) in enumerate(C.JBDS):
+    K.rig_node('jbd_%d' % (i + 1), jbd_mesh, (cx, DY, zh), root, None, {'t': 'door', 'hinge': [1, 0, 0], 'open': round(-JBD_RAISE, 4)})
+
+# catapult shuttles shuttle_1..4: the towing lug proud of the track slot, where the nose-gear launch bar engages.
+# At rest (k = 0) under the nose wheel of a jet on the catapult spot (C.CAT_SPOTS); k = 1 at the end of the stroke,
+# just short of the water brake. One mesh for all four (drawn instanced).
+Sh = Part('shuttle')
+Sh.box('Dark', -0.22, 0.22, DY - 0.05, DY + 0.16, -0.7, 0.7)
+Sh.box('Dark', -0.1, 0.1, DY + 0.16, DY + 0.34, -0.5, 0.1)
+Sh.box('Yellow', -0.3, 0.3, DY + 0.01, DY + 0.05, -0.85, -0.7)
+shuttle_mesh = Sh.mesh(origin=(0, DY, 0))
+for i, (x, z0, z1) in enumerate(C.CATS):
+    zs = C.CAT_SPOTS[i][1] - C.NOSE_GEAR
+    travel = zs - (z1 + 3.0)
+    K.rig_node('shuttle_%d' % (i + 1), shuttle_mesh, (x, DY, zs), root, None, {'t': 'door', 'slide': [0, 0, -1], 'travel': round(travel, 3)})
+
 # ═════════════ Rotating radars ═════════════
 # SPS-49-style air-search dish on the aft pedestal: node "radar" (pivot on its axis)
 R = Part('radar')
@@ -593,6 +606,9 @@ layout = {
     'wires': [[[round(v, 2) for v in C.wire_ends(i)[0]], [round(v, 2) for v in C.wire_ends(i)[1]]] for i in range(len(C.WIRES_Z))],
     'cats': [list(c) for c in C.CATS],
     'catSpawn': list(C.CAT_SPAWN),
+    'catSpots': [[round(x, 2), round(z, 2)] for x, z in C.CAT_SPOTS],
+    'jbds': [[cx, zh, wd] for (cx, zh, wd, _) in C.JBDS],
+    'lso': list(C.LSO),
     'mounts': mount_info,
     'parked': [list(p) for p in C.PARKED],
     'lens': list(C.LENS),

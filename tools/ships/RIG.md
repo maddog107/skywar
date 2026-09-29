@@ -73,6 +73,12 @@ only its masts through clear water.
   `door_accom` (the hull door at the top of the accommodation ladder, hangar-deck level).
 - `hatch_entry`: the bottom platform of the starboard-quarter accommodation ladder, 1.5 m above the water.
   A boat comes alongside here (the platform's outboard edge is ~2.3 m off the hull).
+- `jbd_1..4`: the jet blast deflectors behind catapults 1–4 (doors hinged at their forward edge, flush in the
+  deck at 0, standing ~50° at 1). `shuttle_1..4`: the catapult shuttles (slides, `travel` m down the track: 0 at
+  the launch spot, 1 at the end of the stroke). deckops.js drives both (`poseRig`).
+- Layout for flight-deck operations (carrier_layout.py): `catSpots` (the nose-gear spot on each catapult, deck
+  local x, z), `jbds` (the deflector behind each), `lso` (the LSO platform), plus the landing area and wires the
+  trap already used. The model's `parked` jets were moved outboard of cat 1's track.
 
 Mk 41 on both US escorts (United Defense data sheets, launch photographs): 8-cell modules of 3.16 × 2.18 m,
 two rows of four cells (0.79 m pitch) either side of a 0.24 m exhaust-uptake slot; the rows run athwartships
