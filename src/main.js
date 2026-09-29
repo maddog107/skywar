@@ -657,6 +657,8 @@ function buildCredits() {
         ['m67 frag grenade', 'mypPi', 'CC BY 4.0', 'https://sketchfab.com/3d-models/m67-frag-grenadem67-256b80fab7204f35a9284c5f5ee93dad'],
         ['fps arms (first-person gloved arms)', 'bumstrum', 'CC BY 4.0', 'https://sketchfab.com/3d-models/fps-arms-08ec4403a47645d8ad80633abf13d39d'],
         ['Trees, grass, ferns and ground textures (photoscans; see models/vegetation and models/ground)', 'Poly Haven', 'CC0', 'https://polyhaven.com'],
+        ['Underground complexes: portals, blast doors, vents, guard posts, substation, poles, masts (see models/underground/CREDITS.md)', 'SKYWAR / Blender (tools/underground)', 'CC0', 'tools/underground/'],
+        ['Concrete, shotcrete, asphalt, gravel and painted-steel textures of the underground complexes', 'Poly Haven', 'CC0', 'https://polyhaven.com'],
     ];
     const body = $('creditsBody');
     body.innerHTML = '';

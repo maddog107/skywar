@@ -613,7 +613,8 @@ export class StrikeManager {
 
     // ═════════════ Requests ═════════════
     // type: a STRIKE_TYPES key; marks: designations (war.js) or units; team: whose strike (the player's by default)
-    request(type, marks = this.game.war.designations, team = this.game.war.side, quiet = false) {
+    // opts.only: launch from these sources only (a plug-in firing its own launchers)
+    request(type, marks = this.game.war.designations, team = this.game.war.side, quiet = false, opts = {}) {
         const T = STRIKE_TYPES[type], g = this.game, war = g.war;
         if (!T) return null;
         marks = (marks || []).filter(Boolean);
@@ -631,7 +632,7 @@ export class StrikeManager {
         for (const aim of aims) {
             let need = T.per;
             // nearest sources first, several if one runs short
-            const cand = this.sources.filter(s => s.team === team && T.sources.includes(s.kind) && s.canFire(specKey) && s.pos.distanceTo(aim.pos) < s.range)
+            const cand = this.sources.filter(s => (!opts.only || opts.only.includes(s)) && s.team === team && T.sources.includes(s.kind) && s.canFire(specKey) && s.pos.distanceTo(aim.pos) < s.range)
                 .sort((a, b) => a.pos.distanceToSquared(aim.pos) - b.pos.distanceToSquared(aim.pos));
             for (const s of cand) {
                 if (need <= 0) break;
@@ -846,6 +847,9 @@ export class StrikeManager {
         else if (!u.alive) res = 'TARGET DESTROYED';
         else if ((u.hp ?? u.health ?? 1) < (u.maxHp ?? u.maxHealth ?? 1) * 0.6) res = 'TARGET DAMAGED — RE-STRIKE RECOMMENDED';
         else res = 'TARGET STILL OPERATIONAL';
+        // (a unit may say it better: "ENTRANCE 2 OF 3 DESTROYED" — underground.js)
+        const own = u && u.bdaResult ? u.bdaResult() : null;
+        if (own) res = own;
         aim.result = res;
         war.radio('COMMAND', 'MISSILE IMPACT — ' + res + (u ? ' (' + war.label(u) + ')' : ''), { color: u && !u.alive ? '#5dffa0' : '#ffd24a', say: res.split(' —')[0].toLowerCase() + '.' });
         if (u && !u.alive) { this.game.score = (this.game.score || 0) + 250; }

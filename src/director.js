@@ -912,6 +912,13 @@ export class Director {
         const redNear = g.aircraft.filter(a => a.alive && a.team === 'red' && a.pos.distanceTo(p.pos) < 22000).length;
         if (redNear >= 2) return;
         const from = this.redOrigin(p.pos);
+        // an underground airbase nearer than that: its fighters taxi out of the mountain and take off (underground.js)
+        const ug = g.underground, ugFrom = ug && ug.scrambleOrigin ? ug.scrambleOrigin(p.pos) : null;
+        if (ugFrom && ugFrom.distanceTo(p.pos) < from.distanceTo(p.pos) && ug.scramble([pick(RED_FIGHTERS), pick(RED_FIGHTERS)], p.pos, { role: 'intercept', callsign: 'INTERCEPT' })) {
+            this.lastScramble = war.time;
+            this.gciAcc = 0;
+            return;
+        }
         this.lastScramble = war.time;
         this.gciAcc = 0;
         const dir = _v.subVectors(p.pos, from).setY(0).normalize();

@@ -429,7 +429,7 @@ export class HUD {
         const add = (a, kind) => entries.push({ a, kind, dist: a.pos.distanceTo(p.pos) });
         for (const a of game.aircraft) if (a !== game.player && a.alive) add(a, a.team === p.team ? 'friend' : 'air');
         if (game.pilotMode && game.player && game.player.alive && game.player.abandoned) add(game.player, 'friend');
-        if (game.ground) for (const t of game.ground.targets) if (t.alive && (!t.isBridge || t.objective)) add(t, t.team === p.team ? 'friend' : 'ground');
+        if (game.ground) for (const t of game.ground.targets) if (t.alive && !t.hidden && (!t.isBridge || t.objective)) add(t, t.team === p.team ? 'friend' : 'ground'); // (hidden: inside a mountain, underground.js)
         for (const t of AIR_TARGETS) if (t.alive && !t.done) add(t, 'neutral');
         const RANK = { air: 1, friend: 2, ground: 3, neutral: 4 };
         for (const e of entries) e.rank = e.a === lock ? 0 : RANK[e.kind];

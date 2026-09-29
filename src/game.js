@@ -119,6 +119,9 @@ export class Game {
         if (d) return d;
         // piers, pontoons and gangways (boats.js): walkable surfaces over the water
         if (this.platforms && this.platforms.length) for (const pl of this.platforms) { const s = pl.at(x, z, y); if (s) return s; }
+        // inside an underground complex's tunnels the ground is the tunnel's floor (underground.js)
+        const ug = this.underground && this.underground.surfaceAt(x, z, y);
+        if (ug) return ug;
         const th = terrainHeight(x, z);
         const r = this._surf;
         const bh = this.world.towns ? this.world.towns.bridgeAt(x, z, y) : null;
@@ -1172,8 +1175,14 @@ export class Game {
     candidates() {
         const out = [];
         for (const a of this.aircraft) if (a.alive && a.team !== 'blue' && !a.onGround) out.push(a);
-        if (this.ground) for (const t of this.ground.targets) if (t.alive && t.team !== 'blue' && (!t.isBridge || t.objective)) out.push(t);
+        if (this.ground) for (const t of this.ground.targets) if (t.alive && !t.hidden && t.team !== 'blue' && (!t.isBridge || t.objective)) out.push(t);
         return out;
+    }
+
+    // the ground under a camera: the terrain, or a tunnel's floor when the camera is inside one (underground.js)
+    camGround(x, z, y) {
+        const f = this.underground ? this.underground.floorAt(x, z, y) : null;
+        return f ?? terrainHeight(x, z);
     }
 
     // Neutral air traffic (softtargets.js: the airbase helicopters, airliners, transports): lockable with T after
@@ -1721,7 +1730,8 @@ export class Game {
             const dist = under ? 17 : 4.6 - k * 2.4;
             const dir = pm.viewDir(_v2);
             const want = _v3.copy(target).addScaledVector(dir, -dist).add(new THREE.Vector3(0, under ? 1.5 : 0.5 - k * 0.25, 0));
-            const gy = Math.max(terrainHeight(want.x, want.z), 0) + 0.5;
+            if (this.underground) this.underground.clampCamera(want, target);
+            const gy = Math.max(this.camGround(want.x, want.z, want.y), 0) + 0.5;
             if (want.y < gy) want.y = gy;
             // don't back the camera into a wall
             const bl = this.world.towns && this.world.towns.buildings;
@@ -1862,8 +1872,10 @@ export class Game {
             }
             const offset = _v.set(0, height, back).applyQuaternion(this.camQuat);
             const desired = _v2.copy(p.pos).add(offset);
+            // (in a tunnel the camera stays in it: closer, never up through the rock)
+            if (this.underground) this.underground.clampCamera(desired, p.pos);
             // keep above terrain and the waves
-            const gh = Math.max(terrainHeight(desired.x, desired.z), desired.y < WATER.maxCrest + 4 ? waterHeight(desired.x, desired.z) : 0) + 3;
+            const gh = Math.max(this.camGround(desired.x, desired.z, desired.y), desired.y < WATER.maxCrest + 4 ? waterHeight(desired.x, desired.z) : 0) + 3;
             if (desired.y < gh) desired.y = gh;
             cam.position.copy(desired);
             cam.quaternion.copy(this.camQuat);

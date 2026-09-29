@@ -17,6 +17,7 @@ import { Director } from './director.js';
 import { TaskManager } from './tasks.js';
 import { Wingmen } from './wingmen.js';
 import { WarInteriors } from './warinteriors.js';
+import { Underground } from './underground.js';
 
 export const SYSTEMS = [
     ['tacmap', TacticalMap],
@@ -29,4 +30,5 @@ export const SYSTEMS = [
     ['director', Director],      // enemy and friendly activity, the Living War mode
     ['tasks', TaskManager],      // dynamic tasks
     ['wingmen', Wingmen],        // wingmen that take orders
+    ['underground', Underground], // hidden mountain complexes: portals, blast doors, tunnels, intel, scrambles
 ];

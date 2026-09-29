@@ -577,6 +577,7 @@ export class Sensors {
         const war = this.game.war;
         const cls = rec ? rec.cls : u.cls;
         if (!u.alive) return u.burnT > 0 || (u.sinkT > 0 && u.sinkT < 60) ? 0.9 : 0.08;
+        if (u.heat != null) return u.heat; // (a unit's own: an underground complex's warm air vents, underground.js)
         let h = 0.1;
         if (cls === 'aircraft' || cls === 'helicopter') h = u.onGround ? (u.throttle > 0.08 ? 0.4 : 0.08) : 0.5;
         else if (u.isShip || cls === 'ship' || cls === 'carrier') h = 0.28;
@@ -644,6 +645,7 @@ export class Sensors {
         const cls = rec ? rec.cls : u.cls;
         out.w = 0;
         if (!u.alive) { out.copy(u.pos); out.w = u.burnT > 0 ? 0.9 : 0; return out; }
+        if (u.heat != null) { out.copy(u.pos); out.w = u.heat; return out; } // (its own heat, at its top)
         if (air || cls === 'aircraft' || cls === 'helicopter') {
             const L = (u.spec && u.spec.length) || 15;
             if (u.getForward) u.getForward(_a); else _a.set(0, 0, -1);
