@@ -716,8 +716,8 @@ export class SandboxTools {
     }
 
     // a record's marker (or one of its units) near the cursor
-    pickRec(x, y, map) {
-        let best = null, bd = 16 * 16;
+    pickRec(x, y, map, R = 16) {
+        let best = null, bd = R * R;
         for (const r of this.placed) {
             const c = this.posOf(r, _v);
             map.toScreen(c.x, c.z, P);
@@ -731,7 +731,7 @@ export class SandboxTools {
         if (hit && hit.kind === 'unit') { const r = this.recOfUnit(hit.unit); return r ? { rec: r, unit: hit.unit } : { unit: hit.unit }; }
         if (hit && hit.kind === 'sbx') return { rec: hit.rec };
         if (hit && hit.kind === 'mark' && hit.mark.unit) return { unit: hit.mark.unit };
-        const r = this.pickRec(x, y, map);
+        const r = this.pickRec(x, y, map, 34); // (a generous reach: what's picked flies on while you aim)
         return r ? { rec: r } : null;
     }
     mapPick(x, y, map) {

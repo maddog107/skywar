@@ -149,7 +149,7 @@ const FLIGHT = {
         if (m.type === 'patrol' && f.loiter && m.route && m.route.length > 1) {
             rec.leg = rec.leg || 0;
             const here = f.members && f.lead() ? f.lead().pos : f.pos;
-            if (flat(here, f.loiter.center) < 3000) {
+            if (flat(here, f.loiter.center) < Math.max(3000, f.loiter.R * 1.25)) { // (on station: orbiting the point)
                 rec.leg = (rec.leg + 1) % m.route.length;
                 const p = m.route[rec.leg];
                 f.loiter.center.set(p.x, Math.max(rec.alt || 4000, groundHeight(p.x, p.z) + 400), p.z);

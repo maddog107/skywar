@@ -303,11 +303,11 @@ export const PRESETS = [
         id: 'ambush', label: 'CONVOY AMBUSH',
         desc: 'A supply column leaves the enemy airfield; an armour platoon and a squad wait by the road, A-10s on call.',
         build(env) {
-            void env;
+            const gate = need(findSpot('convoy', { x: 7700, z: -17300 }, env, { rMax: 3000, step: 150 }), 'the convoy');
             return {
                 v: FORMAT, name: 'CONVOY AMBUSH', faction: 'blue', background: false, weather: 'clear', hour: 17, clock: 1,
                 units: [
-                    { item: 'convoy', team: 'red', from: 'enemy', to: 'auto', x: 7000, z: -17000 },
+                    { item: 'convoy', team: 'red', from: 'enemy', to: 'auto', x: gate.x, z: gate.z },
                     { item: 'armour', team: 'blue', n: 4, near: { ref: 0, along: 0.55, side: 260 }, x: 0, z: 0, mission: { type: 'strike', target: { ref: 0 } } },
                     { item: 'infantry', team: 'blue', n: 6, near: { ref: 0, along: 0.5, side: -120 }, x: 0, z: 0 },
                     { item: 'attack', team: 'blue', variant: 0, n: 2, alt: 2500, x: 2000, z: -6000, mission: { type: 'strike', target: { ref: 0 } } },

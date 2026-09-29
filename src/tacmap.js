@@ -258,7 +258,8 @@ export class TacticalMap {
         this.toScreen(F[0].x - 200000, -300000, P); ctx.lineTo(P.x, P.y);
         ctx.closePath();
         ctx.fillStyle = 'rgba(255,60,40,0.10)';
-        ctx.fill();
+        // (flying for red, sandbox.js: the enemy's ground is everything else)
+        if (war.side !== 'blue') { ctx.rect(-10, -10, this.w + 20, this.h + 20); ctx.fill('evenodd'); } else ctx.fill();
         ctx.beginPath();
         for (let i = 0; i < F.length; i++) { this.toScreen(F[i].x, F[i].z, P); if (i) ctx.lineTo(P.x, P.y); else ctx.moveTo(P.x, P.y); }
         ctx.strokeStyle = 'rgba(255,90,74,0.85)'; ctx.lineWidth = 2.2; ctx.setLineDash([10, 6]); ctx.stroke();
@@ -314,7 +315,7 @@ export class TacticalMap {
                 if (P.x < -50 || P.y < -50 || P.x > this.w + 50 || P.y > this.h + 50) return;
                 const r = Math.max(3, t.radius * this.view.scale);
                 const red = war.sideAt(t.x, t.z) === 'red';
-                ctx.fillStyle = red ? 'rgba(255,140,120,0.45)' : 'rgba(255,240,210,0.45)';
+                ctx.fillStyle = red === (war.side === 'blue') ? 'rgba(255,140,120,0.45)' : 'rgba(255,240,210,0.45)';
                 ctx.beginPath(); ctx.arc(P.x, P.y, r, 0, Math.PI * 2); ctx.fill();
                 if (!t.mapName) t.mapName = red ? RED_TOWNS[ri++ % RED_TOWNS.length] : BLUE_TOWNS[bi++ % BLUE_TOWNS.length];
                 else red ? ri++ : bi++;
@@ -328,7 +329,7 @@ export class TacticalMap {
         // airfields: the runways, and the name
         for (const b of BASES) {
             const c = Math.cos(b.heading), s = Math.sin(b.heading);
-            const red = !b.friendly;
+            const red = !b.friendly === (war.side === 'blue'); // (whose field it is, as seen from the player's side)
             ctx.strokeStyle = red ? RED : b.civil ? '#e9e2cf' : BLUE; ctx.lineWidth = Math.max(2, 55 * this.view.scale);
             for (const rw of b.runways) {
                 const cx = b.x + rw.lx * c + rw.lz * s, cz = b.z - rw.lx * s + rw.lz * c;
@@ -534,7 +535,7 @@ export class TacticalMap {
             add('SEARCH AREA ' + (rp.radius / 1000).toFixed(1) + ' KM · GRID ' + war.grid(rp.center.x, rp.center.z));
         } else if (sel && sel.kind === 'point') {
             add('GRID ' + war.grid(sel.pos.x, sel.pos.z), '#e8f4ff', '700 15px');
-            add(war.sideAt(sel.pos.x, sel.pos.z) === 'red' ? 'ENEMY TERRITORY' : 'FRIENDLY TERRITORY', war.sideAt(sel.pos.x, sel.pos.z) === 'red' ? RED : BLUE);
+            add(war.sideAt(sel.pos.x, sel.pos.z) !== war.side ? 'ENEMY TERRITORY' : 'FRIENDLY TERRITORY', war.sideAt(sel.pos.x, sel.pos.z) !== war.side ? RED : BLUE);
             actions.push({ label: 'MARK POINT', run: () => { const d = war.designate({ x: sel.pos.x, z: sel.pos.z }, 'map'); this.sel = { kind: 'mark', mark: d }; } });
         } else if (!sel) {
             add('TACTICAL MAP', '#9fd4ff', '700 15px');
