@@ -1050,7 +1050,15 @@ export class Naval {
     }
 
     spawnEnemyGroup(passive = false) {
-        const spot = (passive ? findOcean(0, 0, 7000, 16000, 2600) : null) || findOcean(0, 0, 20000, 32000, 3000) || findOcean(0, 0, 12000, 40000, 2200) || { x: 22000, z: 10000 };
+        // (an armed group on the enemy's side of the front and out of SAM reach of our field, the air start and our carrier:
+        // anywhere 20–32 km out, its Slava's S-300F — 24 km — fired at the player within three seconds of a Living War)
+        let spot = passive ? findOcean(0, 0, 7000, 16000, 2600) : null;
+        if (!passive) {
+            const war = this.game.war, cv = this.homeCarrier;
+            const clear = (s) => Math.hypot(s.x, s.z) > 34000 && Math.hypot(s.x, s.z - 2500) > 34000 && (!cv || Math.hypot(s.x - cv.pos.x, s.z - cv.pos.z) > 34000) && (!war || !war.sideAt || war.sideAt(s.x, s.z) !== 'blue');
+            for (let i = 0; i < 40 && !spot; i++) { const s = findOcean(0, 0, 30000, 50000, 3000); if (s && clear(s)) spot = s; }
+        }
+        spot = spot || findOcean(0, 0, 20000, 32000, 3000) || findOcean(0, 0, 12000, 40000, 2200) || { x: 22000, z: 10000 };
         const a0 = Math.random() * Math.PI * 2;
         const carrier = new Ship(this, 'carrier', 'red', spot, 3000, a0, -1, 'ENEMY CARRIER');
         const d1 = new Ship(this, 'destroyer', 'red', spot, 3350, a0 + 0.09, -1, 'DESTROYER');

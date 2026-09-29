@@ -318,6 +318,19 @@ describe('rig points on a moving ship (naval.js, util.js updateWorldChain)', () 
     });
 });
 
+describe('the enemy surface group (naval.js spawnEnemyGroup)', () => {
+    test('starts on the enemy\'s side of the front, beyond its SAMs\' reach of our field and the air start', () => {
+        const g = navalGame('war');
+        for (let i = 0; i < 12; i++) {
+            const cv = g.naval.spawnEnemyGroup();
+            const p = cv.orbit ? { x: cv.orbit.cx, z: cv.orbit.cz } : cv.pos;
+            assert.ok(Math.hypot(p.x, p.z) > 34000 && Math.hypot(p.x, p.z - 2500) > 34000, 'at ' + (p.x / 1000).toFixed(1) + ', ' + (p.z / 1000).toFixed(1) + ' km');
+            assert.equal(g.war.sideAt(p.x, p.z), 'red', 'on the red side');
+            g.naval.clear();
+        }
+    });
+});
+
 describe('surface action (navalops.js)', () => {
     test('our destroyers fire on a known enemy ship in the war, and leave Free Flight\'s unarmed target ships alone', () => {
         for (const mode of ['war', 'freeflight']) {
