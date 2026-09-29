@@ -777,13 +777,26 @@ export class AirSupport {
             const hot = !tanking && d < hotR && BR.aspectAngle(f.ac.pos, a.pos, a.vel) < 45;
             if ((after || hot) && d < bd) { bd = d; best = a; }
         }
+        // an enemy warship's SAM umbrella: a surface group can steam within reach of the racetrack (the Slava's S-300F shot
+        // the player down on the drogue, the AR autopilot holding him on the tanker) — out of it, as from a bandit
+        let ship = false;
+        if (!best && (f.role === 'tanker' || f.role === 'awacs') && g.naval && g.navalops && g.navalops.samReachOf) {
+            for (const s of g.naval.ships) {
+                if (!s.alive || s.team === f.team || s.team === 'neutral') continue;
+                const reach = g.navalops.samReachOf(s);
+                if (!reach) continue;
+                const d = Math.hypot(s.pos.x - f.ac.pos.x, s.pos.z - f.ac.pos.z);
+                if (d < reach + 5000 && d < bd) { bd = d; best = s; ship = true; }
+            }
+        }
         if (best && !f.threat) {
             f.threat = best; f.clearT = 0;
             f.saved = f.task;
             f.task = { kind: 'retro', from: best.pos.clone() };
             if (f.team === war.side) {
                 const b = BR.braa(f.ac.pos, best.pos, best.vel);
-                this.say(f.callsign, (f.role === 'awacs' ? 'DEFENSIVE, RETROGRADING — BANDIT ' : 'BANDIT ON US, BUGGING OUT — ') + 'BRAA ' + BR.pad3(b.brg) + '/' + Math.round(b.rng), { color: '#ff9f5a', say: f.callsign.toLowerCase() + ', ' + (f.role === 'awacs' ? 'defensive, retrograding.' : 'bandit on us, bugging out.'), priority: f.role === 'awacs' });
+                const what = ship ? 'SAM THREAT, ' + (best.name || 'SURFACE GROUP') + ' ' : 'BANDIT ';
+                this.say(f.callsign, (f.role === 'awacs' ? 'DEFENSIVE, RETROGRADING — ' + what : (ship ? what + '— BUGGING OUT, ' : 'BANDIT ON US, BUGGING OUT — ')) + 'BRAA ' + BR.pad3(b.brg) + '/' + Math.round(b.rng), { color: '#ff9f5a', say: f.callsign.toLowerCase() + ', ' + (f.role === 'awacs' ? 'defensive, retrograding.' : ship ? 'SAM threat, bugging out.' : 'bandit on us, bugging out.'), priority: f.role === 'awacs' });
                 g.events.emit('supportThreatened', f, { threat: best });
             }
         } else if (f.threat) {

@@ -741,6 +741,17 @@ export class NavalOps {
     groupOf(ship) { return ship && ship.group && this.groups.includes(ship.group) ? ship.group : null; }
     deckOf(carrier) { return this.decks.find(d => d.ship === carrier) || null; }
     magazineOf(ship) { return ship && ship.launcher ? ship.launcher.mag : null; }
+    // how far a ship's longest-range SAM reaches (0: none left), re-read every 10 s
+    samReachOf(ship) {
+        if (!ship || !ship.alive || !ship.launcher) return 0;
+        const t = this.game.time;
+        if (ship._samR == null || t > (ship._samRT || 0)) {
+            let R = 0;
+            for (const k of ship.launcher.mag.keys()) if (SAMS[k] && ship.launcher.count(k) > 0) R = Math.max(R, SAMS[k].range);
+            ship._samR = R; ship._samRT = t + 10;
+        }
+        return ship._samR;
+    }
 
     addDeck(carrier, opts) {
         let d = this.deckOf(carrier);
