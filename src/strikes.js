@@ -272,7 +272,7 @@ export class SiloSite extends LaunchSource {
         s.closeT = 5;
         dir.set(0, 1, 0);
     }
-    remove() { this.game.scene.remove(this.mesh); }
+    remove() { this.game.scene.remove(this.mesh); this.mesh.traverse(o => { if (o.isMesh) o.geometry.dispose(); }); } // (its own geometry: a new field is built every sortie; the materials are cached)
 }
 
 // A ground launcher: a TEL or rocket artillery vehicle. The vehicle and its motion are someone else's (a mobile-
@@ -1033,7 +1033,8 @@ export class StrikeManager {
             if (this.cam) { this.cam = null; return true; }
             const own = this.game.weapons.missiles.some(m => m.owner === this.game.player);
             if (!mine.length || own) return false;
-            this.cam = { missile: mine[mine.length - 1], mode: 'chase', hold: 0, t: 0 };
+            const m0 = mine[mine.length - 1];
+            this.cam = { missile: m0, strike: m0.strike, mode: 'chase', hold: 0, t: 0 };
             return true;
         }
         if (a === 'camera' && this.cam) { this.cam.mode = CAM_MODES[(CAM_MODES.indexOf(this.cam.mode) + 1) % CAM_MODES.length]; this.cam.t = 0; return true; }
@@ -1051,7 +1052,8 @@ export class StrikeManager {
         if (m && !m.alive) m = c.missile = null;
         if (!m && c.hold <= 0) {
             // on to the next missile of the same strike, if any
-            const next = this.missiles.find(x => x.team === g.war.side);
+            // (only that strike's: in a war there's always another missile of ours somewhere, and the camera never came back)
+            const next = this.missiles.find(x => x.team === g.war.side && (!c.strike || x.strike === c.strike));
             if (next && c.chain !== false) { c.missile = m = next; c.t = 0; }
             else { this.cam = null; return false; }
         }
@@ -1073,6 +1075,28 @@ export class StrikeManager {
         const dir = _v.copy(m.vel).normalize();
         const T = m.targetPos;
         let fov = 55;
+        // a vertical launch (a VLS cell, a TEL, a submarine's capsule): "behind" the rising missile is inside the ship or
+        // under the ground, so the chase and follow views watch it go from beside the launcher until it pitches over
+        const rising = (c.mode === 'chase' || c.mode === 'follow') && (m.phase === 'launch' || (dir.y > 0.6 && m.pos.distanceTo(c.launchFor === m ? c.launchAt : m.pos) < 1500));
+        if (rising) {
+            if (c.launchFor !== m) {
+                const back = _v2.subVectors(m.pos, T).setY(0);
+                if (back.lengthSq() < 1) back.set(0, 0, 1);
+                back.normalize();
+                const side = _v3.crossVectors(back, UP).normalize();
+                c.launchAt = m.pos.clone();
+                c.launchCam = m.pos.clone().addScaledVector(side, 42).addScaledVector(back, 24);
+                c.launchCam.y = Math.max(m.pos.y, 0) + 10;
+                c.launchFor = m;
+            }
+            cam.position.copy(c.launchCam);
+            const gh0 = Math.max(terrainHeight(cam.position.x, cam.position.z), 0) + 3;
+            if (cam.position.y < gh0) cam.position.y = gh0;
+            cam.lookAt(m.pos);
+            cam.fov = damp(cam.fov, 60, 4, dt);
+            cam.updateProjectionMatrix();
+            return true;
+        }
         switch (c.mode) {
             case 'chase':
                 cam.position.copy(m.pos).addScaledVector(dir, -22).add(_v2.set(0, 4, 0));
@@ -1163,7 +1187,7 @@ export class StrikeManager {
         for (const d of marks) out.push({ path: ['DESIGNATION'], label: 'CLEAR MARK ' + d.id + ' — ' + d.label, run: () => war.undesignate(d) });
         out.push({ path: ['DESIGNATION'], label: 'CLEAR ALL MARKS', enabled: marks.length > 0, run: () => { marks.length = 0; } });
         const flying = this.missiles.filter(m => m.team === team).length;
-        out.push({ path: ['MISSILE CAMERA'], label: 'WATCH MY MISSILES (K)', hint: flying + ' IN FLIGHT', enabled: flying > 0, run: () => { this.cam = { missile: this.missiles.filter(m => m.team === team).pop(), mode: 'chase', hold: 0, t: 0 }; } });
+        out.push({ path: ['MISSILE CAMERA'], label: 'WATCH MY MISSILES (K)', hint: flying + ' IN FLIGHT', enabled: flying > 0, run: () => { const m0 = this.missiles.filter(m => m.team === team).pop(); this.cam = { missile: m0, strike: m0 && m0.strike, mode: 'chase', hold: 0, t: 0 }; } });
         return out;
     }
 
@@ -1193,7 +1217,7 @@ export class StrikeManager {
         }
         // strike status (upper left, under the score panel)
         const live = this.strikes.filter(s => !s.done && s.team === war.side);
-        let y = hud.compact ? 150 : 190;
+        let y = g.indoors && g.indoors.kind === 'room' ? hud.roomTop || 250 : hud.compact ? 150 : 190; // (in a room: under its station list)
         ctx.textAlign = 'left';
         for (const st of live.slice(-4)) {
             const flying = st.missiles.filter(m => m.alive);

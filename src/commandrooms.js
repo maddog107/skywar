@@ -24,7 +24,7 @@ import { WORLD_BUILDINGS } from './buildings.js';
 import { Aircraft } from './aircraft.js';
 import { Pilot } from './ai.js';
 import { KT } from './boats.js';
-import { clamp, damp, rand } from './util.js';
+import { clamp, damp, rand, updateWorldChain } from './util.js';
 import * as V from './vehicles.js';
 import { dress } from './dressing.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -55,7 +55,7 @@ export class CarrierOps {
         this.clear();
         if (mode === 'rings') return;
         this.deckStatus = 2;
-        const door = (name, out) => { const c = this.cv(); const d = c && c.rig.doors[name]; if (!d) return null; d.node.updateWorldMatrix(true, false); out.setFromMatrixPosition(d.node.matrixWorld); const l = c.toLocal(out.x, out.z); const w = c.toWorld(l.lx - 1.0, c.def.deckY, l.lz, out); w.y = c.deckHeight(w.x, w.z); return w; };
+        const door = (name, out) => { const c = this.cv(); const d = c && c.rig.doors[name]; if (!d) return null; updateWorldChain(d.node); out.setFromMatrixPosition(d.node.matrixWorld); const l = c.toLocal(out.x, out.z); const w = c.toWorld(l.lx - 1.0, c.def.deckY, l.lz, out); w.y = c.deckHeight(w.x, w.z); return w; };
         sys.addSite({ id: 'cv:cic', label: 'ENTER THE ISLAND — COMBAT DIRECTION CENTER (CIC)', radius: 2.2, dy: 2.5, at: (o) => door('island_1', o), enter: () => this.enter(this.cic) });
         sys.addSite({ id: 'cv:prifly', label: 'ENTER THE ISLAND — PRI-FLY (PRIMARY FLIGHT CONTROL)', radius: 2.2, dy: 2.5, at: (o) => door('island_2', o), enter: () => this.enter(this.prifly) });
         sys.addSite({
@@ -66,7 +66,7 @@ export class CarrierOps {
         // a boat alongside the ladder's bottom platform can put you aboard
         this.harbor.docks.push(this.dock = {
             id: 'cv', get host() { return this.ops.cv(); }, ops: this, label: 'CLIMB THE ACCOMMODATION LADDER', text: 'CVN-73 · FLIGHT DECK',
-            at: (out) => { const c = this.cv(); if (!c) return null; const p = c.rig.points.hatch_entry; if (!p) return null; p.updateWorldMatrix(true, false); return out.setFromMatrixPosition(p.matrixWorld); },
+            at: (out) => { const c = this.cv(); if (!c) return null; const p = c.rig.points.hatch_entry; if (!p) return null; updateWorldChain(p); return out.setFromMatrixPosition(p.matrixWorld); },
             step: (out) => { const c = this.cv(); const w = c.toWorld(LADDER_TOP.x - 1.5, c.def.deckY, LADDER_TOP.z - 2, out); w.y = c.deckHeight(w.x, w.z); return w; },
             yaw: () => this.cv().heading + Math.PI / 2,
             ok: () => (this.cv() ? true : 'NO CARRIER'),
@@ -90,7 +90,7 @@ export class CarrierOps {
     // where you stand on the flight deck by the island (travel, and leaving the island)
     deckSpot(door = 'island_1', out = false) {
         const c = this.cv(), d = c.rig.doors[door];
-        d.node.updateWorldMatrix(true, false);
+        updateWorldChain(d.node);
         const p = new THREE.Vector3().setFromMatrixPosition(d.node.matrixWorld);
         const l = c.toLocal(p.x, p.z);
         const w = c.toWorld(l.lx - 2.2, c.def.deckY, l.lz, new THREE.Vector3());
@@ -102,7 +102,7 @@ export class CarrierOps {
         const c = this.cv(), h = this.harbor;
         if (!c) return;
         const p = c.rig.points.hatch_entry;
-        p.updateWorldMatrix(true, false);
+        updateWorldChain(p);
         const at = _v.setFromMatrixPosition(p.matrixWorld), l = c.toLocal(at.x, at.z);
         const b = h.boatAlongside(c, l.lx + 1.6 + 1.2, l.lz, 'rhib');
         say(this.game, 'CVN-73', 'AWAY THE DUTY BOAT — STARBOARD ACCOMMODATION LADDER', { color: '#9fd4ff', say: false });
@@ -417,7 +417,7 @@ export class JocOps {
             root.traverse(o => { o.matrixAutoUpdate = false; });       // (it never moves)
             this.ext = root;
             const ent = root.getObjectByName('entry');
-            if (ent) { ent.updateWorldMatrix(true, false); this.entry = new THREE.Vector3().setFromMatrixPosition(ent.matrixWorld); this.entry.y = y; }
+            if (ent) { updateWorldChain(ent); this.entry = new THREE.Vector3().setFromMatrixPosition(ent.matrixWorld); this.entry.y = y; }
             // solid and destructible: the building's walls, and the blast walls, HESCO, generators and fuel tank
             // round it (the model's footprint and 'solids'), one record
             const fp = meta && meta.footprint ? meta.footprint : [-13, 13, -9, 9], ht = meta && meta.height ? meta.height : 5.5;
@@ -572,7 +572,7 @@ export class TelOps {
             // the missile leaves from its place on the erected rail, straight up the way it stands
             this.src.launchFrame = (out, dir) => {
                 const r = u.rig;
-                if (r && r.missile) { r.missile.updateWorldMatrix(true, false); out.setFromMatrixPosition(r.missile.matrixWorld); dir.set(0, 0, -1).transformDirection(r.missile.matrixWorld); out.addScaledVector(dir, 5.5); }
+                if (r && r.missile) { updateWorldChain(r.missile); out.setFromMatrixPosition(r.missile.matrixWorld); dir.set(0, 0, -1).transformDirection(r.missile.matrixWorld); out.addScaledVector(dir, 5.5); }
                 else { out.copy(u.pos).y += 8; dir.set(0, 1, 0); }
             };
             this.src.prepTime = () => 2.5;
@@ -588,7 +588,7 @@ export class TelOps {
     // a point beside the truck (vehicle-local x, z) on the ground
     sidePoint(out, lx, lz) {
         const u = this.tel;
-        u.mesh.updateWorldMatrix(true, false);
+        updateWorldChain(u.mesh);
         out.set(lx + Math.sign(lx) * 0.9, 0, lz).applyMatrix4(u.mesh.matrixWorld);
         out.y = this.game.surfaceAt(out.x, out.z, 1e3).h;
         return out;

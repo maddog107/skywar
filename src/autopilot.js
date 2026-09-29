@@ -120,8 +120,16 @@ export class Autopilot {
         const t = this.target;
         if (t.kind === 'carrier') {
             const s = t.ship;
-            t.fwd = _v3.set(-Math.sin(s.heading), 0, -Math.cos(s.heading)).clone();
-            t.touch = s.toWorld(-4, s.deckY, s.def.L * 0.4);
+            // the angled deck and the 3-wire's touchdown point when the naval plug-in runs this deck (deckops.js),
+            // else the ship's axis
+            const deck = this.game.navalops && this.game.navalops.deckOf && this.game.navalops.deckOf(s);
+            if (deck && deck.ok) {
+                t.fwd = deck.landingDir(t.fwd || new THREE.Vector3());
+                t.touch = deck.touchPoint(t.touch || new THREE.Vector3());
+            } else {
+                t.fwd = (t.fwd || new THREE.Vector3()).set(-Math.sin(s.heading), 0, -Math.cos(s.heading));
+                t.touch = s.toWorld(-4, s.deckY, s.def.L * 0.4, t.touch || new THREE.Vector3());
+            }
         }
         return t;
     }
@@ -268,7 +276,10 @@ export class Autopilot {
             c.throttle = clamp(0.6 + (app * 1.7 - p.speed) * 0.03 - (steep ? 0.3 : 0), 0.05, p.hasAB ? 0.9 : 1);
             p.airbrake = steep && p.speed > app * 2;
             if (d < 7000 && !p.gear) p.gear = true;
-            if (avoidTerrain(p, c, 120)) { this.terrainT = g.time; this.status = 'TERRAIN — CLIMBING'; return; }
+            // (low after a go-around or a bolter: ask only for the height we have, in steps, so it climbs away at the
+            // leg's own gradient instead of zooming for 120 m and hanging on the stall)
+            const aglNow = p.pos.y - Math.max(terrainHeight(p.pos.x, p.pos.z), 0);
+            if (avoidTerrain(p, c, clamp(Math.floor(aglNow / 20) * 20, 40, 120))) { this.terrainT = g.time; this.status = 'TERRAIN — CLIMBING'; return; }
             this.status = (outer ? 'TO OUTER FIX ' : 'TO APPROACH FIX ') + (d / 1000).toFixed(1) + ' KM';
             const makeable = p.pos.y - (touch.y + along * Math.tan(GLIDE)) < along * MAX_FINAL_DESCENT + 100; // not too high for final
             const aligned = along > 600 && along < D + 2000 && Math.abs(lateral) < 700 && _v.copy(p.vel).normalize().dot(fwd) > 0.8 && makeable;
@@ -295,7 +306,9 @@ export class Autopilot {
         // aim at a point ahead on the centreline at the glide-slope height (lead a moving deck)
         const look = Math.max(700, Math.min(1600, along * 0.5));
         const aim = _v2.copy(touch).addScaledVector(fwd, -(along - look)).addScaledVector(shipVel, look / Math.max(p.speed, 50));
-        aim.y = touch.y + Math.max(along - look, 0) * Math.tan(GLIDE) + p.gearOffset;
+        // (a deck landing has no flare: the glide slope runs on into the deck, so inside the last `look` metres
+        // the aim point is below it — levelling at deck height floated the jet over the wires and off the bow)
+        aim.y = touch.y + (t.kind === 'carrier' ? along - look : Math.max(along - look, 0)) * Math.tan(GLIDE) + p.gearOffset;
         // pull back onto the glide slope when low or high
         aim.y += clamp((glideAlt + p.gearOffset - p.pos.y) * 5, -Math.max(150, (p.pos.y - glideAlt) * 1.2), 200);
         // never let the glide-slope chase take us into a hill short of the field (the margin shrinks toward the

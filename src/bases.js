@@ -995,7 +995,7 @@ export class Bases {
     // ═════════════ HUD ═════════════
     drawHud(ctx, hud) {
         const g = this.game;
-        if (!this.active || g.photo || g.hideHud || !g.player) return;
+        if (!this.active || g.photo || g.hideHud || !g.player || (g.indoors && g.indoors.kind === 'room')) return; // (not in a room: its own display has the corner)
         const P = g.pilotMode ? g.pilotMode.pos : g.player.pos;
         let F = null, bd = 22000;
         for (const f of this.fields) { const d = Math.hypot(P.x - f.base.x, P.z - f.base.z); if (d < bd && (f.team === g.war.side || this.enabled)) { bd = d; F = f; } }
@@ -1004,7 +1004,7 @@ export class Bases {
         if (!friendly && this.time - F.seenT > 30 && bd > 12000) return;
         const lines = [];
         const st = F.stateName;
-        lines.push({ t: (friendly ? '' : 'ENEMY ') + F.name + ' · ' + (st === 'ATTACK' ? 'ALARM RED' : st === 'ALERT' ? 'ALARM YELLOW' : st), c: COL[st] });
+        lines.push({ t: (friendly || /^ENEMY /.test(F.name) ? '' : 'ENEMY ') + F.name + ' · ' + (st === 'ATTACK' ? 'ALARM RED' : st === 'ALERT' ? 'ALARM YELLOW' : st), c: COL[st] });
         F.base.runways.forEach((rw, i) => {
             const s = F.craters.runwayStatus(i);
             if (!s.craters && !F.closed[i]) return;

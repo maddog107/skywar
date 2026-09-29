@@ -675,7 +675,10 @@ export class DeckOps {
 
     spawnJet(r) {
         const g = this.game;
-        const ac = new Aircraft(g, r.type, { team: this.team, name: r.name || null });
+        // (a jet nobody named gets a squadron callsign and side number: the marshal and the LSO called it "F/A-18E Super Hornet")
+        this.modex = (this.modex || 0) + 1;
+        const name = r.name || (this.team === 'blue' ? 'SUNDOWNER ' : 'BERKUT ') + (200 + this.modex);
+        const ac = new Aircraft(g, r.type, { team: this.team, name });
         ac.flares = ac.spec.flares;
         g.aircraft.push(ac);
         return ac;
@@ -914,8 +917,11 @@ export class DeckOps {
             }
         } else if (st.player && (p.onGround || along > 2500)) {
             if (p.onGround && p.deck === this.ship && !st.player.done) {
-                st.player.done = true;
-                if (!p.trap && p.relSpeed > 30) this.say('PADDLES', 'BOLTER, BOLTER, BOLTER', { say: 'Bolter, bolter, bolter.' });
+                // (down short of the wires the hook can still take one rolling through them: call the bolter only once
+                // it's past them without one — it used to call "BOLTER" and then "TRAP! (LATE WIRE)")
+                const past = !this.ship.inWireZone(p.pos.x, p.pos.z) && this.localOf(p.pos).lz < this.geo.touch[1];
+                if (p.trap) st.player.done = true;
+                else if (p.relSpeed > 30 && past) { st.player.done = true; this.say('PADDLES', 'BOLTER, BOLTER, BOLTER', { say: 'Bolter, bolter, bolter.' }); }
             }
             if (!p.onGround || p.relSpeed < 2) st.player = null;
         }
@@ -929,7 +935,9 @@ export class DeckOps {
         if (this.ops && this.ops.say) this.ops.say(from, text, { color: '#9fd4ff', say: o.say ?? false, voice: o.voice, ttl: 12 });
     }
     radio(dp, what) {
-        const ac = dp && dp.ac, cs = ac ? (ac.callsign || 'HORNET') : '';
+        const ac = dp && dp.ac;
+        if (ac && !ac.name) { this.modex = (this.modex || 0) + 1; ac.name = ac.callsign = (this.team === 'blue' ? 'SUNDOWNER ' : 'BERKUT ') + (200 + this.modex); } // (not the type name)
+        const cs = ac ? (ac.callsign || 'HORNET') : '';
         if (this.team !== (this.game.war ? this.game.war.side : 'blue')) return;
         const fuel = (rand(4.2, 6.8)).toFixed(1);
         switch (what) {
@@ -1052,7 +1060,8 @@ export class DeckOps {
 
     dispose() {
         if (this.crew) this.crew.dispose();
-        for (const im of this.parked) { im.removeFromParent(); const i = this.ship.details.indexOf(im); if (i >= 0) this.ship.details.splice(i, 1); }
+        // (each deck merged its own parked jets: their geometry stayed on the GPU after every sortie)
+        for (const im of this.parked) { im.removeFromParent(); im.geometry.dispose(); im.dispose(); const i = this.ship.details.indexOf(im); if (i >= 0) this.ship.details.splice(i, 1); }
         this.parked.length = 0;
         for (const dp of this.jets) if (dp.ac.alive && dp.combat) dp.ac.pilot = dp.combat;
         this.jets.length = 0;

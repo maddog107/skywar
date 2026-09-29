@@ -905,6 +905,10 @@ the blue HIMARS / M270 batteries are placed wherever strikes run, everything els
 - **Deck and rig:** `ship.catSpot(i, out)` (default cat 2, `ship.playerCat`), `ship.inIsland(p, margin)`,
   `naval.clearOfIslands(cam, target)`, `pointFrame(ship, name, pos, dir)` (any rig point: `harpoon_1..8`,
   `muzzle_<n>`) and `parkedModel(kind)`.
+  - A ship's parts are frozen (`freezeLocal`): read a rig node's world position through util.js
+    `updateWorldChain(node)`, not `node.updateWorldMatrix(true, false)`, which leaves it where the ship was the last
+    time the world was drawn (from inside a sealed room, or headless, that's anywhere astern).
+  - `navalops.samReachOf(ship)`: the longest SAM range left in its magazine (support aircraft keep out of it).
 - **Level of detail**, `ship.updateLod()`:
   - hidden below about 1 px on screen, or deeper than 22 m;
   - no mounts, radars, doors or deck crew below 70 px;

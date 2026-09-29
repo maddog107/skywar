@@ -17,7 +17,8 @@ import { clamp } from './util.js';
 
 const SPAN = 128000, BASE_RES = 1024; // background: 128 km square at 125 m a pixel
 const BLUE = '#6fb4ff', RED = '#ff5a4a', UNK = '#ffd24a';
-export const BLUE_TOWNS = ['Harrow', 'Kestrel Bay', 'Ashby', 'Millbrook', 'Coldwater', 'Fairhaven', 'Linton', 'Oakridge', 'Pinecrest', 'Redstone', 'Sheffield Cove', 'Thornton', 'Westmere', 'Brightwater', 'Easton', 'Hollow Creek', 'Marlow', 'Stanford Point', 'Wells', 'Arden'];
+export const BLUE_TOWNS = ['Harrow', 'Kestrel Bay', 'Ashby', 'Millbrook', 'Coldwater', 'Fairhaven', 'Linton', 'Oakridge', 'Pinecrest', 'Redstone', 'Sheffield Cove', 'Thornton', 'Westmere', 'Brightwater', 'Easton', 'Hollow Creek', 'Marlow', 'Stanford Point', 'Wells', 'Arden',
+    'Glenmoor', 'Ravensford', 'Silverton', 'Bramwell', 'Cedar Falls', 'Dunmore', 'Elmhurst', 'Foxley', 'Grantham', 'Halden', 'Ironbridge', 'Juniper Hill', 'Kingsport', 'Larkhill', 'Moorfield', 'Northwick', 'Portree', 'Queensbury', 'Rosewood', 'Stillwater']; // (enough that no two towns share a name: 30-odd are on our side)
 export const RED_TOWNS = ['Vorsk', 'Kalinovka', 'Zarechye', 'Dubrava', 'Ostrog', 'Belaya Gora', 'Tikhoye', 'Krasnodol', 'Sosnovka', 'Yarovo', 'Gorodok', 'Lesnoy', 'Mirny', 'Novoselye', 'Pechory', 'Rudnya', 'Stary Bor', 'Tula-7', 'Volkovo', 'Zlatoust'];
 
 export class TacticalMap {

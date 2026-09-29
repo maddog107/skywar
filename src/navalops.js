@@ -25,7 +25,7 @@ import { DeckOps, loadDeckCrew } from './deckops.js';
 import { INTEL } from './war.js';
 import { terrainHeight } from './world.js';
 import { waterHeight } from './water.js';
-import { clamp, lerp, rand, interceptTime, G } from './util.js';
+import { clamp, lerp, rand, interceptTime, G, updateWorldChain } from './util.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _q = new THREE.Quaternion();
 const UP = new THREE.Vector3(0, 1, 0), FWD = new THREE.Vector3(0, 0, -1);
@@ -667,6 +667,9 @@ export class NavalOps {
 
     join(grp, s, role) {
         const p = s.mesh.position;
+        // a ship naval.js made with only its class for a name (the enemy's escorts) gets a real one, so the registry
+        // doesn't call it "DESTROYER DESTROYER"
+        if (!s.fullName && (s.name === RED_HUD[s.type] || s.name === s.def.name)) s.fullName = this.pickName(grp.side, s.type) || undefined;
         const m = this.enlist(grp, s, role, 0, 0, { x: p.x, z: p.z });
         m.slotted = false;
         return m;
@@ -738,6 +741,17 @@ export class NavalOps {
     groupOf(ship) { return ship && ship.group && this.groups.includes(ship.group) ? ship.group : null; }
     deckOf(carrier) { return this.decks.find(d => d.ship === carrier) || null; }
     magazineOf(ship) { return ship && ship.launcher ? ship.launcher.mag : null; }
+    // how far a ship's longest-range SAM reaches (0: none left), re-read every 10 s
+    samReachOf(ship) {
+        if (!ship || !ship.alive || !ship.launcher) return 0;
+        const t = this.game.time;
+        if (ship._samR == null || t > (ship._samRT || 0)) {
+            let R = 0;
+            for (const k of ship.launcher.mag.keys()) if (SAMS[k] && ship.launcher.count(k) > 0) R = Math.max(R, SAMS[k].range);
+            ship._samR = R; ship._samRT = t + 10;
+        }
+        return ship._samR;
+    }
 
     addDeck(carrier, opts) {
         let d = this.deckOf(carrier);
@@ -799,14 +813,14 @@ export class NavalOps {
         const r = s.rig && s.rig.nodes[tube.ref];
         let node = r ? r.node : null;
         if (!node) { const mm = /^mount_(\w+)_(\d+)$/.exec(tube.ref); if (mm) node = (s.mounts.filter(m => m.type === mm[1])[+mm[2]] || {}).turret || null; }
-        if (node) { node.updateWorldMatrix(true, false); p.setFromMatrixPosition(node.matrixWorld); p.y += 2; } else p.copy(s.pos);
+        if (node) { updateWorldChain(node); p.setFromMatrixPosition(node.matrixWorld); p.y += 2; } else p.copy(s.pos);
         const T = seq && seq.target;
         if (T && T.pos) { d.subVectors(T.pos, p); const h = Math.hypot(d.x, d.z) || 1; const el = clamp(Math.atan2(d.y, h) + 0.2, 0.26, 1.05); d.set(d.x / h * Math.cos(el), Math.sin(el), d.z / h * Math.cos(el)); }
         else d.set(0, 1, 0);
         return true;
     }
     exhaustAt(s, tube, out) {
-        if (tube.kind === 'cell' && tube.uptake) { const n = s.rig.nodes[tube.uptake]; if (n) { n.node.updateWorldMatrix(true, false); out.setFromMatrixPosition(n.node.matrixWorld); out.y += 0.4; return true; } }
+        if (tube.kind === 'cell' && tube.uptake) { const n = s.rig.nodes[tube.uptake]; if (n) { updateWorldChain(n.node); out.setFromMatrixPosition(n.node.matrixWorld); out.y += 0.4; return true; } }
         if (tube.mode === 'container' || tube.mode === 'canister') {
             // (a container or canister vents at its back)
             if (this.tubeFrame(s, tube, out, _v3)) { out.addScaledVector(_v3, -tube.depth); return true; }
@@ -1001,6 +1015,8 @@ export class NavalOps {
     surfaceAction(grp) {
         const g = this.game, war = g.war;
         if (!grp.alive) return;
+        // (only where there's a war at sea: in Free Flight the destroyers sank the unarmed target ships themselves)
+        if (!['naval', 'war', 'sandbox'].includes(this.mode)) return;
         const ours = grp.side === war.side;
         // who it can see: our side through the war's intel; the enemy's reconnaissance knows roughly where we are
         const enemies = [];
