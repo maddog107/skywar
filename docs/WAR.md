@@ -469,3 +469,201 @@ parts are pulled out first and every instance gets its own copy, hung on the sec
 - The Living War starts wingmen on COVER ME with rockets. Badly hit (25%) they RTB by themselves; one that
   lands, or is shot down, is replaced by a fresh jet after 75 / 150 s in the war modes.
 - Other plug-ins can give any AI pilot a brain the same way (director.js does for enemy CAS).
+
+## Naval operations (`game.navalops`: src/navalops.js, src/launchseq.js, src/deckops.js)
+
+### For the player
+- **Naval Strike** and the **Living War** start with a carrier strike group round the home carrier and a red
+  surface action group round the enemy carrier.
+  - Ours: the carrier, a Ticonderoga cruiser, two Arleigh Burkes (USS Mason among them), a supply ship and an
+    attack submarine, plus an Ohio SSGN on its own patrol box 11–19 km away.
+  - Theirs: a Slava, two destroyers, a supply ship and a submarine.
+  - The groups manoeuvre, defend themselves in layers and trade missile salvos every few minutes.
+- **The deck:** the player starts (and respawns, in the war too) on catapult 2, the port bow one, with the
+  deck alive round him: the JBD comes up behind the jet, the shooter and the green shirts, the steam. The
+  chase camera is kept out of the island (`Naval.clearOfIslands`).
+- **COMMAND › NAVAL** (backslash or F3):
+  - LAUNCH ALERT FIGHTERS: two F/A-18s up the elevator and off the catapults.
+  - RECOVER AIRCRAFT: the CAP comes home (Case I pattern, a wire or a bolter, struck below).
+  - GROUP: FLANK / CRUISE SPEED, GROUP: TURN INTO THE WIND (two minutes of flight ops), GROUP: ZIG-ZAG ON / OFF.
+  - SHIP LAUNCH and SUBMARINE LAUNCH: "n× TLAM (or HARPOON) FROM <ship>" at the newest mark (comma marks).
+- **COMMAND › SANDBOX › NAVAL** (sandbox, free flight and the war): SPAWN RED SURFACE GROUP and SPAWN BLUE
+  CARRIER GROUP, 15 km ahead.
+- **Tactical map:**
+  - Our group's SAM umbrella, its screen and its course (ZIG-ZAG, FLIGHT OPS), SAMs in flight, and the SAM
+    envelopes of identified enemy ships.
+  - Click the sea: SEND <carrier> GROUP HERE. Select an enemy ship: HARPOON / TLAM FROM <ship>.
+  - A selected ship of ours shows course, speed, depth, magazine and empty cells; the carrier its deck (jets
+    up, on deck, in the pattern).
+- **HUD:** "CSG … · n VAMPIRES INBOUND · n SAMS IN FLIGHT", while it matters.
+- **Radio:**
+  - Air defence: "VAMPIRE, VAMPIRE — BEARING 040, 23 KM, ON <ship>", "BIRDS AWAY — 2× SM-2, TRACK 4012",
+    "SPLASH ONE VAMPIRE", "MISS, REENGAGING", "LEAKER, LEAKER — CIWS ENGAGING", "CIWS ENGAGING — MOUNT 21".
+  - Surface action: "BRUISER, BRUISER" (Harpoons away), "SHOT — 2× TLAM ON …".
+  - The deck: marshal, "ROGER BALL", the wire, "BOLTER, BOLTER, BOLTER". The LSO talks to the player too:
+    ROGER BALL, YOU'RE HIGH, POWER — YOU'RE LOW, HOOK DOWN!
+  - In a war it all goes through `director.say` (its pacing and priorities); elsewhere through navalops' own
+    queue (a call every 2.5 s).
+- **Tasks** (the Living War, tasks.js): THE CARRIER IS UNDER MISSILE ATTACK (urgent: sink the ship that fired)
+  and ENEMY SURFACE GROUP (within 70 km of our carrier).
+
+### Groups
+- **`navalops.spawnGroup(side, center, opts)`** returns a `Group`, or null without open water near `center`.
+  Emits `navalGroup`. opts:
+  - `composition`: `[[type, role, across, along]]`, metres in the formation's frame, starboard and aft
+    positive. Default `CSG` for blue, `SAG` for red (both exported).
+  - `name`, `course` (rad; default into the wind), `speed` ('cruise' | 'ops' | 'flank'), `deck` (flight ops
+    on its carrier, default true), `areaR` (the patrol box radius, default 6 km).
+- **A group:**
+  - `members`: `{ ship, role, ox, oz }`. Roles are `hvu`, `aaw`, `screen`, `logistics` and `sub`.
+  - `guide`: the carrier, or the first ship. If it's sunk, the next one takes over.
+  - `side`, `name`.
+  - `course` (the base course) and `axis` (the formation's, which follows the course only as fast as the screen
+    can get round).
+  - `order`: 'cruise' (16 kt), 'ops' (24 kt), 'flank' (28 kt) or 'stop'.
+  - `dest` (a fleet move), `area` (the patrol box), `threat` (0..1), `zig` (`{ on }`), `tracks` (the radar
+    picture).
+  - `flightOps`: seconds of steady course into the wind. It's set while the deck has jets moving.
+- **Behaviour:**
+  - The guide patrols legs round its area, steams for `dest`, or turns into the wind for flight ops. Its course
+    is always clear of land 4.5 km ahead (`openCourse`).
+  - Threatened (missiles or aircraft in the picture), the group goes to flank speed and zig-zags ±25° on legs
+    of 45–80 s.
+  - Escorts keep their stations with `stationSteer`: the guide's velocity plus a correction. They never back
+    down, and never run across the formation faster than 70% of their best speed.
+  - An escort pulls in toward the guide where its station is over shallow water. It turns away from ships
+    within 450 m, and checks 1.5 km ahead for land.
+- **Calls:**
+  - `navalops.groupOf(ship)`.
+  - `navalops.moveGroupOf(ship, pos)` returns true if the ship is in a group. director.js sends its fleet moves
+    here.
+  - `navalops.steerGroup(group, heading, speed)`: heading in rad (null keeps it), speed as `order`.
+- **Every ship is enlisted:**
+  - On the helm: `ship.steer(heading, speed)` (naval.js).
+  - `adManaged`: naval.js leaves its missiles to navalops. The CIWS stays in naval.js.
+  - In the war registry: `cls` carrier / ship / sub, full names, and the contact names LARGE SURFACE /
+    SURFACE / SUBSURFACE CONTACT.
+  - `radarRange`, for director.js's air picture.
+  - Its magazine and launch controller (`ship.launcher`), and a strike source for its TLAM / Harpoon /
+    Kalibr / P-1000 (`ship.strikeSource`).
+  - An enemy ship's HUD name is its class (DESTROYER, SLAVA CRUISER). Its registry name is the real one, once
+    identified.
+- **Submarines** stay deep (38–40 m): off `ground.targets`, `conceal` 0.97. They come up to periscope depth to
+  launch, and for the broadcast every few minutes, with their masts raised there (naval.js `raiseMast`).
+
+### Air defence
+- **Twice a second per group:**
+  - The radar picture (`trackPicture`): enemy aircraft, strategic missiles and missiles fired at its ships.
+    Each must be within a radar's range and its radar horizon, and in terrain line of sight. The horizon is
+    `radarHorizon(h1, h2)` = `HORIZON · (√h1 + √h2)`, with HORIZON = 1900 m (game scale).
+  - Then threat evaluation and weapon assignment, `planEngagements` (exported, pure; see below).
+- **`planEngagements(threats, shooters, { mediumReach })`** returns `[{ threat, shooter, key, n }]`.
+  - threats: `{ id, kind: 'missile' | 'aircraft', pos, vel, defend (Vector3), inFlight }`.
+  - shooters: `{ ship, pos, channels, weapons: [{ key, count, ready }] }`.
+  - Missiles come before aircraft, ordered by time to reach what they're after.
+  - The outer layer (SM-2, SM-6, S-300F) fires first. The medium layer (ESSM, RAM, Sea Sparrow, Osa-M, Shtil)
+    fires once a threat is inside its reach.
+  - Two at a missile (shoot-shoot-look), one at an aircraft (shoot-look-shoot).
+  - Nothing inside a weapon's minimum range, and no more than each ship's fire channels.
+- **Aircraft** are engaged inside 21 km if they're closing, or inside 9 km. Red fires one SAM at the player at
+  a time, every 16 s (rookie) to 8 s (ace).
+- **`SAMS`** (exported): range, minimum range, speed, burn, turn, proximity fuse, warhead, Pk against missiles,
+  tip-over time, IR or radar.
+- **Interceptors:**
+  - Fly lead pursuit after the tip-over, and burst at the closest approach within the fuse.
+  - Roll Pk against a missile; an aircraft takes `damage`.
+  - Can be decoyed by flares and chaff. Self-destruct when the target's gone. The SM-6 drops its booster.
+  - Each emits `missileLaunch` when fired at an aircraft (the player's missile warning).
+- **The CIWS** (naval.js) now also engages strategic missiles closing within 1.6 km (`strikes.missiles`,
+  `intercepted`).
+
+### Launches from ships and submarines
+- **`navalops.launchFrom(ship, key, target, n = 1, { quiet })`:**
+  - A SAM key (`SAMS`) engages `target` with interceptors.
+  - Any `MISSILES` key flies a real strike through strikes.js (BDA, the missile camera).
+  - `target` is a unit, a designation or `{ x, z }`.
+  - Returns the strike, the launch sequences, or null.
+- `navalops.magazineOf(ship)` returns the ship's `Magazine`.
+- **`strikes.fireFrom(src, specKey, n, target, { quiet, label, type, spacing })`** (strikes.js): a strike from
+  one given source, with no nearest-shooter search.
+- **`MISSILES.p1000`** (P-1000 Vulkan): the Slava's ship killer, 520 m/s, high over the sea.
+- **Surface action:**
+  - Every few minutes a group fires at the nearest known enemy surface ships within 48 km. Their carrier or
+    Slava comes first (65% of the time).
+  - Blue: cruisers fire Harpoons, destroyers TLAMs. Red: the Slava fires P-1000s, destroyers and submarines
+    Kalibrs.
+  - In Naval Strike the enemy carrier is left to the player.
+
+### Launch sequences (src/launchseq.js)
+- **`LaunchControl`** is on each armed ship (`ship.launcher`). `fire(key, spawn, { target, data })`:
+  1. takes a round from the magazine and opens its hatch (`poseRig`);
+  2. lights the motor when the hatch is open and calls `spawn(phase, pos, dir, seq)`, so the missile starts in
+     a `LaunchPhase`;
+  3. vents the module's uptake while the missile climbs out;
+  4. closes the hatch after it.
+
+  One launch at a time per door (a revolver, a sub's tube hatch). Also: `emptyCells()`, `count(key)`,
+  `has(key)`, `seqs` (the sequences running) and `ready()` (a submarine fires only at periscope depth).
+- **`LaunchPhase`** moves the missile until it's clear of its launcher:
+  - a hot launch out of a cell on its booster: a Tomahawk slowly, in a cloud of exhaust; a Standard out in a
+    fraction of a second;
+  - a cold ejection, with the motor lit in the air (S-300F, Shtil);
+  - an inclined container or canister, or a rail;
+  - a capsule from a submarine: it rises from the tube, broaches in spray and foam, and lights its booster
+    above the water.
+
+  Callbacks: `onClear`, `onIgnite`, `onBroach`, `onExhaust`. strikes.js's `StrategicMissile` takes one as its
+  last argument (phase 'launch'). A source whose host has a launcher launches on the rig
+  (`LaunchSource.launchOnRig`).
+- **`TIMING`:**
+  - Mk 41: the hatch opens in 1.0 s, ignition follows 0.15 s later, the uptake vents 1.2 s, and the hatch
+    closes over 1.6 s, starting 4 s after the missile's out.
+  - Also: container, revolver, canister, rail, popup and subtube.
+- **`LAUNCH`**, per missile: mode, accel, eject, ignite.
+- **`vlsTimeline(key, depth, timing)`** gives, in seconds: the hatch open, ignition, clear, closing and closed.
+- **`LOADOUTS[type][side]`** and **`buildMagazine(ship, load)`** return a `Magazine`:
+  - its tubes are `{ key, kind: 'cell' | 'point' | 'mount', ref, left, door, timing }`;
+  - quad-packed ESSM cells hold four;
+  - rounds are spread through the modules.
+
+### Carrier operations (src/deckops.js)
+- **`navalops.deckOf(carrier)`** returns its `DeckOps`. Only carriers whose model has the deck layout (catSpots,
+  JBDs, shuttles) get one.
+- **`deck.requestLaunch({ type, skill, onAirborne })`:**
+  - Blue jets come up the port-aft elevator; red ones appear by a bow catapult.
+  - Either taxis behind a yellow shirt to a catapult and runs a `CatCycle`: taxi → hookup → tension → salute →
+    stroke → clear → idle. The JBD rises and falls, the shuttle runs, and there's steam (`CAT_TIMING`).
+  - The launch is the aircraft's own `startCatapult`. Airborne, the jet is handed to a Pilot and flies CAP for
+    4–7 minutes before it comes back.
+- **`navalops.catapultLaunch(carrier, ac)`** sends an existing aircraft, with its AI pilot, out by catapult
+  (game.js's enemy carrier launches in Naval Strike). False if no catapult is free.
+- **`navalops.recover(ac, carrier)`** (or `deck.recover(ac)`) flies a Case I recovery:
+  - the initial at 300 m, the break, downwind, the 90, and a 2.6 km groove on a 3.5° glide slope;
+  - the trap is aircraft.js's own wires; a bolter or wave-off goes round again (rookies bolter more often);
+  - then out of the landing area to the elevator, and struck below.
+  - One jet in the pattern at a time; none while the player is on final or the landing area is fouled.
+- **Deck crews:** `deckcrew.glb` (tools/ships/deckcrew_model.py), four instanced meshes per carrier in the
+  jersey colours (`SHIRTS`), about 34 people at their posts. They're drawn and animated only when the carrier is
+  near the camera.
+- **Parked aircraft** stand on their gear (naval.js `parkedModel`), instanced. The elevator is naval.js
+  `setElevator`.
+
+### naval.js additions
+- **Group steaming:** `Ship.steer(heading, speed)`, with `HELM` per type (max speed, acceleration, turn rate,
+  rudder lag) and `ship.nav`. Without it the ship keeps its circle.
+- **Deck and rig:** `ship.catSpot(i, out)` (default cat 2, `ship.playerCat`), `ship.inIsland(p, margin)`,
+  `naval.clearOfIslands(cam, target)`, `pointFrame(ship, name, pos, dir)` (any rig point: `harpoon_1..8`,
+  `muzzle_<n>`) and `parkedModel(kind)`.
+- **Level of detail**, `ship.updateLod()`:
+  - hidden below about 1 px on screen, or deeper than 22 m;
+  - no mounts, radars, doors or deck crew below 70 px;
+  - below 120 px, a merged far model (`ship.far`: the whole ship at rest, one mesh per material) instead of the
+    full one.
+- **Rig additions** (tools/ships/RIG.md): the carrier's `jbd_1..4` (doors) and `shuttle_1..4` (slides), and its
+  layout's `catSpots`, `jbds` and `lso`; the cruiser's `harpoon_1..8` points.
+
+### Events
+- `navalGroup` (group).
+- `vampire` (group, { missiles }).
+- `missileLaunch` (ship, { missile, target }): a SAM fired at an aircraft.
+- strikes.js's own events for the surface-to-surface missiles.
