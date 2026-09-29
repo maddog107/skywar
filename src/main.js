@@ -158,15 +158,22 @@ career.unlockAll = !!settings.unlockAll;
 let game;
 
 // ── Loading ──
+// (performance marks at each stage of the boot: tools/perf/bench.mjs reports them)
+const mark = (name) => { try { performance.mark('boot:' + name); } catch (e) { /* no User Timing */ } };
 async function boot() {
+    mark('start');
     $('loadText').textContent = 'GENERATING TERRAIN…';
     await new Promise(r => setTimeout(r, 30));
+    // the models start downloading (and their textures decoding, off the main thread) while the terrain is generated
+    const assets = Promise.all([preloadModels((f) => { $('loadFill').style.width = (10 + f * 60) + '%'; }), preloadProps(), preloadCharacter(), preloadShips(), preloadWeapons()]);
     world = new World(scene, renderer);
     world.setWeather(settings.weather || 'clear'); // [weather] the sky model (weather.js)
     world.setTime(settings.time);
     world.updateTerrain(new THREE.Vector3(0, 0, 0), true);
+    mark('terrain');
     $('loadText').textContent = 'LOADING AIRFRAMES…';
-    await Promise.all([preloadModels((f) => { $('loadFill').style.width = (10 + f * 60) + '%'; }), preloadProps(), preloadCharacter(), preloadShips(), preloadWeapons()]);
+    await assets;
+    mark('models');
     vehicles.preloadVehicles({ background: true }); // after the airframes; parsed once the page is idle (vehiclesReady())
     preloadAirbaseModels({ background: true });     // shelters, igloos, repair vehicles… (airbasemodels.js)
     $('loadText').textContent = 'BUILDING TOWNS & ROADS…';
@@ -179,7 +186,9 @@ async function boot() {
     world.towns.setNight(night0);
     world.airbases.setNight(night0);
     world.airTraffic.setNight(night0);
+    mark('towns');
     world.updateTerrain(new THREE.Vector3(0, 0, 0), true);
+    mark('terrain2');
     $('loadFill').style.width = '95%';
     game = new Game({ scene, camera, world, effects, audio, input, hud, cockpit, settings });
     game.scenePass = renderPass; // (interiors.js: a closed room is drawn instead of the world while you're in it)
@@ -202,16 +211,22 @@ async function boot() {
     audio.setVolume(settings.volume);
     audio.callouts = settings.callouts;
     buildMenu();
+    mark('game');
     $('loadFill').style.width = '100%';
-    // compile shaders and upload the world before showing the menu (avoids first-frame hitches)
+    // compile the shaders before showing the menu; the world's buffers and textures upload a slice a frame while the
+    // menu is up (warmUploadStep; LAUNCH finishes whatever is left), so no part of the world uploads on first sight
     renderer.compile(scene, camera);
-    try { warmUpload(); } catch (e) { /* non-fatal */ }
-    setTimeout(() => {
+    mark('compile');
+    warmQueue = null;
+    warmPending = true;
+    // the menu comes up once the first frame behind the loading screen has been drawn (it used to wait a fixed 200 ms)
+    requestAnimationFrame(loop);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+        mark('menu');
         $('loading').classList.remove('show');
         showMenu();
         precutSurfaces(); // flaps and speed brakes for every type, while the menu is up
-    }, 200);
-    requestAnimationFrame(loop);
+    }));
 }
 
 // ═════════════ Menu ═════════════
@@ -556,7 +571,54 @@ function launch() {
 // visible / frustumCulled flag back as it was. At boot (behind the loading screen) that's the whole world; at
 // launch only the sortie's new ships, jets and targets still need uploading.
 let warmTarget = null;
+// the menu's share of the warm-up: a few milliseconds a frame of the world drawn into the 1x1 target, a slice of its
+// objects at a time (they go on layer 31 for the draw, with the lights; shadows off, so the shadow maps the real frame
+// uses aren't touched); hidden or culled objects are drawn too, as in warmUpload
+let warmQueue = null, warmPending = false, warmCam = null;
+const WARM_LAYER = 31;
+function warmUploadStep(budgetMs = 6) {
+    if (!warmPending) return;
+    if (!warmQueue) {
+        warmQueue = [];
+        scene.traverse(o => { if (o.isMesh || o.isLine || o.isPoints || o.isSprite) warmQueue.push(o); });
+        warmCam = new THREE.PerspectiveCamera();
+        warmCam.layers.set(WARM_LAYER);
+    }
+    const t0 = performance.now(), lights = [];
+    scene.traverse(o => { if (o.isLight) { lights.push(o); o.layers.enable(WARM_LAYER); } });
+    warmTarget = warmTarget || new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType });
+    const se = renderer.shadowMap.enabled;
+    try {
+        while (warmQueue.length && performance.now() - t0 < budgetMs) {
+            const chunk = warmQueue.splice(0, 24).filter(o => { for (let q = o; q; q = q.parent) if (q === scene) return true; return false; });
+            if (!chunk.length) continue;
+            const hidden = [], culled = [];
+            for (const o of chunk) {
+                o.layers.enable(WARM_LAYER);
+                for (let q = o; q && q !== scene; q = q.parent) if (!q.visible) { hidden.push(q); q.visible = true; }
+                if (o.frustumCulled) { culled.push(o); o.frustumCulled = false; }
+            }
+            warmCam.copy(camera, false); warmCam.layers.set(WARM_LAYER);
+            const prev = renderer.getRenderTarget();
+            try {
+                renderer.shadowMap.enabled = false;
+                renderer.setRenderTarget(warmTarget);
+                renderer.render(scene, warmCam);
+            } finally {
+                renderer.setRenderTarget(prev);
+                renderer.shadowMap.enabled = se;
+                for (const o of chunk) o.layers.disable(WARM_LAYER);
+                for (const q of hidden) q.visible = false;
+                for (const o of culled) o.frustumCulled = true;
+            }
+        }
+    } finally {
+        for (const l of lights) l.layers.disable(WARM_LAYER);
+    }
+    if (!warmQueue.length) { warmPending = false; warmQueue = null; }
+}
 function warmUpload() {
+    warmPending = false; warmQueue = null; // (everything, now)
     const hidden = [], culled = [];
     scene.traverse(o => {
         if (!o.visible) { hidden.push(o); o.visible = true; }
@@ -706,7 +768,7 @@ function loop() {
 // debug/test hook: advance the simulation manually (works in background tabs)
 window.skywarStep = (n = 60, dt = 1 / 60) => { for (let i = 0; i < n; i++) frame(dt); };
 function frame(dt) {
-    if (game.state === 'menu') updateMenuScene(dt);
+    if (game.state === 'menu') { updateMenuScene(dt); warmUploadStep(); }
     else game.update(dt);
     if (game.state === 'menu' || game.state === 'paused' || game.state === 'over') {
         audio.update(dt, null, { playing: false });

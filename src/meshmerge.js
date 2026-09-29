@@ -26,16 +26,18 @@ export function weldGeometry(geo) {
     const attrs = names.map(n => geo.attributes[n]);
     if (attrs.some(a => a.isInterleavedBufferAttribute || a.isInstancedBufferAttribute || a.count !== pos.count)) return geo;
     const n = pos.count, bits = attrs.map(a => bitsOf(a.array)), sizes = attrs.map(a => a.itemSize);
+    const pk = names.indexOf('position'), P = bits[pk];
     let size = 1; while (size < n * 2) size <<= 1;
     const table = new Int32Array(size).fill(-1), mask = size - 1;
     const remap = new Uint32Array(n), rep = new Uint32Array(n);
     let unique = 0;
     for (let i = 0; i < n; i++) {
-        let h = 0x811c9dc5 | 0;
-        for (let k = 0; k < bits.length; k++) {
-            const b = bits[k], s = sizes[k], o = i * s;
-            for (let c = 0; c < s; c++) { h = Math.imul(h ^ (b[o + c] | 0), 0x01000193); h ^= h >>> 15; }
-        }
+        // (hashed on the position alone: vertices that share one and differ elsewhere, a hard edge, just probe on)
+        const o = i * sizes[pk];
+        let h = Math.imul((P[o] | 0) ^ 0x811c9dc5, 0x01000193);
+        h = Math.imul(h ^ (P[o + 1] | 0), 0x01000193);
+        h = Math.imul(h ^ (P[o + 2] | 0), 0x01000193);
+        h ^= h >>> 15; h = Math.imul(h, 0x2c1b3c6d); h ^= h >>> 12;
         let slot = h & mask;
         for (;;) {
             const u = table[slot];
