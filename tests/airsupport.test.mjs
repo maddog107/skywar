@@ -378,6 +378,32 @@ describe('air refuelling, flown', () => {
         assert.ok(g.war.radioLog.some(m => /DISCONNECT — OUTER LIMIT/.test(m.text)));
     });
 
+    test('a tanker leaves an enemy warship\'s SAM umbrella (the S-300F shot the player down on the hose) and comes back when it\'s clear', () => {
+        const g = airGame({ mode: 'war' }), air = airSystem(g);
+        const tk = air.spawnTanker('blue', { x: 0, z: 20000 });
+        const ship = { alive: true, team: 'red', name: 'SLAVA CRUISER', pos: tk.ac.pos.clone().setY(0).add(new THREE.Vector3(20000, 0, 0)), vel: new THREE.Vector3() };
+        g.naval.ships.push(ship);
+        g.navalops = { samReachOf: (s) => (s.alive ? 24000 : 0) };
+        const said = [];
+        air.say = (from, text) => said.push(from + ': ' + text);
+        air.threatCheck(tk, 1.1);
+        assert.ok(tk.threat === ship && tk.task && tk.task.kind === 'retro', 'retrograding from the ship (' + (tk.task && tk.task.kind) + ')');
+        assert.ok(said.some(s => /SAM THREAT/.test(s)), said.join(' | '));
+        // its racetrack moved out of the ship's reach (+6 km), so it isn't back in it on the next lap
+        const T = tk.saved.T, L = RF.trackLength(T), P = { x: 0, z: 0 }, D = { x: 0, z: 0 };
+        let dmin = Infinity;
+        for (let i = 0; i < 200; i++) { RF.trackPoint(T, L * i / 200, P, D); dmin = Math.min(dmin, Math.hypot(P.x - ship.pos.x, P.z - ship.pos.z)); }
+        assert.ok(dmin > 29000, 'the new track keeps ' + (dmin / 1000).toFixed(1) + ' km off');
+        ship.alive = false;
+        for (let i = 0; i < 12; i++) air.threatCheck(tk, 1.1);
+        assert.ok(!tk.threat, 'back on station once the ship is gone');
+        // out of reach: no threat
+        const far = { ...ship, alive: true, pos: tk.ac.pos.clone().setY(0).add(new THREE.Vector3(40000, 0, 0)) };
+        g.naval.ships = [far];
+        air.threatCheck(tk, 1.1);
+        assert.ok(!tk.threat, 'a ship 40 km off is no threat');
+    });
+
     test('fuel transfer: the receiver gains what the tanker gives; full, it\'s sent to the right wing', () => {
         const g = airGame({ mode: 'freeflight' }), air = airSystem(g);
         const tk = air.spawnTanker('blue', { x: 0, z: 20000 });

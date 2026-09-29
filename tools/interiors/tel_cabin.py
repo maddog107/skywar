@@ -198,7 +198,7 @@ for sx in (-1, 1):
     # the ceiling over the compartment, the trough's sloping side
     xa, xb = sorted((sx * XI, sx * TX1))
     quad('WallCab', [(xa, HC, ZF), (xb, HC, ZF), (xb, HC, ZB), (xa, HC, ZB)], (0, -1, 0))
-    quad('WallCab', [(sx * TX1, HC, ZF), (sx * TX1, HC, ZB), (sx * TX0, TY, ZB), (sx * TX0, TY, ZF)], (-sx * 0.94, -0.35, 0))
+    quad('WallCab', [(sx * TX1, HC, ZF), (sx * TX1, HC, ZB), (sx * TX0, TY, ZB), (sx * TX0, TY, ZF)], (sx * 0.94, -0.35, 0))  # (faces the compartment below it: it pointed into the trough, and from the seat you saw through the roof)
 quad('Rubber', [(-HX0, HH, ZF), (-HX0, HH, ZB), (HX0, HH, ZB), (HX0, HH, ZF)], (0, 1, 0))
 quad('WallCab', [(-TX0, TY, ZF), (TX0, TY, ZF), (TX0, TY, ZB), (-TX0, TY, ZB)], (0, -1, 0))
 # ribs across the ceiling (the roof's stiffeners), rivet strips on the walls

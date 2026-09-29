@@ -399,6 +399,7 @@ export class Game {
         this.aimDir.copy(p.vel.lengthSq() > 1 && !p.onGround ? p.vel : _v.set(0, 0, -1).applyQuaternion(p.quat)).normalize();
         this.camQuat.copy(p.quat);
         this.camPos.copy(p.pos).add(_v.set(0, 6, 30).applyQuaternion(p.quat));
+        this.deckCamLift = p.deck ? 5 : 0;
         this.rotateSpeed = refSpeeds(p.spec).takeoff;
         this.lockTarget = null; this.lockProgress = 0;
         this._lowHpCall = false;
@@ -508,8 +509,10 @@ export class Game {
             const app = refSpeeds(p.spec).approach;
             let fwd, touch, shipVel = new THREE.Vector3(), dist;
             if (kind === 'cv_approach') {
-                fwd = new THREE.Vector3(-Math.sin(cv.heading), 0, -Math.cos(cv.heading));
-                touch = cv.toWorld(-4, cv.deckY, cv.def.L * 0.3);
+                // on the angled deck's centreline at the 3-wire (deckops.js), where the autopilot and the LSO expect you
+                const deck = this.navalops && this.navalops.deckOf && this.navalops.deckOf(cv);
+                if (deck && deck.ok) { fwd = deck.landingDir(new THREE.Vector3()); touch = deck.touchPoint(new THREE.Vector3()); }
+                else { fwd = new THREE.Vector3(-Math.sin(cv.heading), 0, -Math.cos(cv.heading)); touch = cv.toWorld(-4, cv.deckY, cv.def.L * 0.3); }
                 shipVel.copy(cv.vel);
                 dist = distance || 3000;
             } else {
@@ -894,9 +897,10 @@ export class Game {
             else if (this.player && ac.lastHitBy === this.player) this.addFeed('WING SHOT OFF', '#ffc23f');
         });
         ev.on('flares', (ac) => { if (ac.isPlayer) this.audio.flares(); });
-        ev.on('touchdown', (ac, { vs, onRunway, onDeck, trap, late, onWater }) => {
+        ev.on('touchdown', (ac, { vs, onRunway, onDeck, trap, late, onWater, hard }) => {
             if (!ac.isPlayer) return;
             const fpm = Math.round(-vs * 196.85);
+            if (hard >= 1) { this.shake = Math.max(this.shake, 0.6 + hard / 40); this.addFeed('HARD LANDING — HULL −' + Math.round(hard) + '%', '#ff9f5a'); }
             if (onWater) { this.addFeed('ON THE WATER ' + fpm + ' FPM', fpm < 400 ? '#5dffa0' : '#ffc23f'); return; } // a seaplane (seaplane.js)
             if (onDeck) {
                 this.addFeed(late ? 'TRAP! (LATE WIRE)' : (trap ? 'TRAP! ' : 'DECK LANDING — NO WIRE ') + fpm + ' FPM', trap ? '#5dffa0' : '#ffc23f');
@@ -1627,7 +1631,7 @@ export class Game {
             }
         } else if (this.mode === 'naval') {
             const c = this.naval.enemyCarrier;
-            const escorts = this.naval.ships.filter(x => x.team === 'red' && x.type === 'destroyer' && x.alive).length;
+            const escorts = this.naval.ships.filter(x => x.team === 'red' && ['destroyer', 'cruiser', 'slava'].includes(x.type) && x.alive).length; // (the Slava too: it's the group's main SAM ship)
             this.objective = c && c.alive ? 'SINK THE CARRIER — HULL ' + Math.round(c.health / c.maxHealth * 100) + '% · ESCORTS ' + escorts : 'CARRIER SUNK';
             this.navalLaunchT -= dt;
             if (c && c.alive && this.navalLaunchT <= 0 && enemiesAlive < 4) {
@@ -1876,7 +1880,10 @@ export class Game {
             }
             const far = mode === 'far';
             const back = far ? L * 4.2 + 30 : L * 1.55 + 14;
-            const height = far ? L * 1.1 + 10 : L * 0.3 + 3.5;
+            // (on a carrier's deck a little higher: from the usual height the raised blast deflector behind the
+            // catapult hid the jet's lower half; eased back once it's off the deck)
+            this.deckCamLift = damp(this.deckCamLift || 0, p.onGround && p.deck ? 5 : 0, 1.5, dt);
+            const height = (far ? L * 1.1 + 10 : L * 0.3 + 3.5) + this.deckCamLift;
             let targetQ;
             if (this.settings.controlMode === 'mouseaim' && !holdLook) {
                 // camera looks along the aim direction (horizon stays level)

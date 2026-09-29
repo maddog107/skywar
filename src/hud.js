@@ -96,7 +96,7 @@ export class HUD {
         if (game.hideHud) return;
         // in a room, at a boat's helm or in a vehicle's cab (interiors.js draws its own display): radio and systems
         if (game.indoors) { ctx.textBaseline = 'middle'; ctx.lineWidth = 1.6; this.drawSystems(game); this.drawMessages(game); return; }
-        if (game.pilotMode) { this.drawPilotMode(game); this.drawSystems(game); return; }
+        if (game.pilotMode) { if (!(game.strikes && game.strikes.cam)) this.drawPilotMode(game); else this.drawMessages(game); this.drawSystems(game); return; } // (watching a missile: its display, not the man's)
         if (game.groundStart) { this.drawGroundStart(game); this.drawSystems(game); return; }
         const cockpit = game.cameraMode === 'cockpit';
         ctx.lineWidth = 1.6;
@@ -663,7 +663,7 @@ export class HUD {
         mono('600', C ? 11 : 12);
         ctx.fillStyle = GREEN_DIM;
         const maxW = C ? W * 0.55 : W * 0.5;
-        if (game.objective) ctx.fillText(game.objective, M, C ? 22 : 34, maxW);
+        if (game.objective && !game.spectating) ctx.fillText(game.objective, M, C ? 22 : 34, maxW); // (watching, the spectator's box has the top: it ran under it)
         ctx.fillText('T+' + game.clockText() + (game.lives !== Infinity && game.lives != null ? '   SPARE JETS ' + game.lives : ''), M, C ? 40 : 52);
         if (game.collateral) {
             ctx.fillStyle = '#ff9f5a';
@@ -764,6 +764,7 @@ export class HUD {
         const b0 = game.banner, t0 = game.tip;
         if (b0 && game.time - b0.t < b0.dur) y = Math.max(y, (C ? this.h * 0.24 : this.h * 0.1) + (b0.sub ? (C ? 56 : 78) : (C ? 20 : 26)));
         if (!C && t0 && game.time - t0.t < t0.dur && !game.pilotMode && !game.groundStart) y = Math.max(y, this.h * 0.1 + 76);
+        if (game.spectating) y = Math.max(y, C ? 150 : 142); // (under the spectator's box: long calls ran into it)
         for (const m of game.feed) {
             const age = game.time - m.t;
             const a = clamp(1 - (age - 4) / 1, 0, 1);
@@ -868,13 +869,20 @@ export class HUD {
         if (p.flameout && blink) warn('FLAMEOUT — GLIDE TO BASE', RED);
         else if (p.fuel < 0.2 && game.settings.fuel !== false && game.mode !== 'sandbox' && blink) warn(p.fuel < 0.1 ? 'FUEL LOW' : 'BINGO FUEL', AMBER);
         if (!p.onGround && p.gearAnim > 0.5 && p.speed > 170 && blink) warn('GEAR OVERSPEED', AMBER);
+        // low, slow and coming down with the gear up: the classic belly landing (not for fixed gear or a seaplane on water)
+        if (!p.onGround && !p.fixedGear && p.gearAnim < 0.5 && p.speed < 110 && p.vel.y < -1 && blink && p.pos.y - Math.max(terrainHeight(p.pos.x, p.pos.z), 0) < 150 && !(p.spec.seaplane && terrainHeight(p.pos.x, p.pos.z) < 0)) warn('GEAR UP — G', RED);
         if (game.outOfBounds && blink) warn('RETURN TO COMBAT AREA', AMBER);
         if (p.onGround && p.speed < 4) {
             ctx.font = '600 13px "Share Tech Mono", ui-monospace, monospace';
             ctx.fillStyle = GREEN;
-            const msg = p.bellied ? 'CRASH LANDED — E: CLIMB OUT · ENTER: ' + (game.lives > 0 ? 'NEW JET' : game.mission ? 'END (NO JETS LEFT)' : 'END THE SORTIE') : p.speed < 0.8 && p.controls.throttle < 0.06 && !p.deck ? 'E: CLIMB OUT AND WALK · Z / 1–0: THROTTLE · U: AUTO-TAKEOFF' : p.deck ? 'FULL POWER (9 or 0) TO FIRE THE CATAPULT · U: AUTO-TAKEOFF' : 'Z / 1–0: THROTTLE · ←/→: STEER · S: ROTATE AT ' + Math.round(game.rotateSpeed * MS_TO_KTS) + ' KTS · U: AUTO-TAKEOFF';
+            const msg = p.bellied ? 'CRASH LANDED — E: CLIMB OUT · ENTER: ' + (game.lives > 0 ? 'NEW JET' : game.mission ? 'END (NO JETS LEFT)' : 'END THE SORTIE') : p.speed < 0.8 && p.controls.throttle < 0.06 && !p.deck ? 'E: CLIMB OUT AND WALK · Z / 1–0: THROTTLE · U: AUTO-TAKEOFF' : p.deck ? 'FULL POWER (9 OR 0): CATAPULT · E: CLIMB OUT · U: AUTO-TAKEOFF' : 'Z / 1–0: THROTTLE · ←/→: STEER · S: ROTATE AT ' + Math.round(game.rotateSpeed * MS_TO_KTS) + ' KTS · U: AUTO-TAKEOFF';
+            const pad = game.atFriendlyPad(p) && !p.bellied ? 'STOPPED ON A FRIENDLY PAD: REPAIR · REFUEL · REARM  (L: CHANGE LOADOUT)' : '';
+            // (on a dark backing: at 720 p these lines cross the speed / fuel block and the pitch ladder)
+            const bw = Math.min(this.w - 30, Math.max(ctx.measureText(msg).width, pad ? ctx.measureText(pad).width : 0) + 20);
+            ctx.fillStyle = 'rgba(0,8,6,0.5)'; ctx.fillRect(this.w / 2 - bw / 2, this.h * 0.8 - 10, bw, pad ? 40 : 20);
+            ctx.fillStyle = GREEN;
             ctx.fillText(msg, this.w / 2, this.h * 0.8, this.w - 30);
-            if (game.atFriendlyPad(p) && !p.bellied) ctx.fillText('STOPPED ON A FRIENDLY PAD: REPAIR · REFUEL · REARM  (L: CHANGE LOADOUT)', this.w / 2, this.h * 0.8 + 20, this.w - 30);
+            if (pad) ctx.fillText(pad, this.w / 2, this.h * 0.8 + 20, this.w - 30);
         }
     }
 

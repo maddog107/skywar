@@ -270,7 +270,7 @@ export class FieldLife {
     clear() {
         for (const v of this.movers) v.m.remove();
         this.movers.length = 0;
-        for (const c of this.crewVis.values()) { c.loader.remove(); c.truck.remove(); }
+        for (const c of this.crewVis.values()) { c.loader.remove(); c.truck.remove(); if (c.mL) c.mL.remove(); if (c.mT) c.mT.remove(); } // (and their models: a loader and a dump truck per team stayed in the scene after every sortie)
         this.crewVis.clear();
         for (const j of this.taxiing) this.scene.remove(j.mesh);
         this.taxiing.length = 0;

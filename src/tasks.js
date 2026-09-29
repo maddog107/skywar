@@ -719,7 +719,7 @@ export class TaskManager {
         }
         // the task list (top left), with buttons
         const x = 16, W = 380;
-        let y = 16;
+        let y = map.toolsBottom || 16; // (under the map kit's tool strip and legend: it covered them)
         const rows = [];
         const act = this.active;
         if (act) rows.push({ text: '▶ ' + act.title, sub: (act.progress ? act.progress(act) + ' · ' : '') + (this.where(act) ? km(this.where(act).distanceTo(F)) : ''), col: GREEN, btn: 'HOLD', run: () => this.abandon(act) });
@@ -756,7 +756,10 @@ export class TaskManager {
         const t = this.active, war = g.war;
         ctx.save();
         ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
-        let y = C ? 84 : 72;
+        // (in a room its title and station list have the top left: the task lines go above its key line at the bottom)
+        const room = g.indoors && g.indoors.kind === 'room';
+        const lines = (t ? 1 : 0) + (t && war.time - t.tAccept < 14 && t.brief ? 1 : 0) + (this.offered.length ? 1 : 0);
+        let y = room ? (hud.roomBottom || hud.h - 58) - (C ? 16 : 18) * Math.max(0, lines - 1) : C ? 84 : 72;
         if (t) {
             const p = this.where(t);
             const d = p ? p.distanceTo(this.focus()) : null;

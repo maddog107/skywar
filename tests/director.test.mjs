@@ -70,6 +70,13 @@ world = await src('world.js');
 config = await src('config.js');
 
 describe('the front line', () => {
+    test('every town gets its own name (40 towns, 30 of them on our side: the names used to wrap round and repeat)', () => {
+        const towns = [];
+        for (let i = 0; i < 40; i++) towns.push({ x: i * 1000, z: i < 30 ? 5000 : -5000 });
+        F.nameTowns(towns, { sideAt: (x, z) => (z < 0 ? 'red' : 'blue') });
+        const names = towns.map(t => t.mapName);
+        assert.equal(new Set(names).size, names.length, 'duplicates: ' + names.filter((n, i) => names.indexOf(n) !== i).join(', '));
+    });
     const frontGame = () => {
         const g = warGame();
         g.front = new F.FrontLine(g);

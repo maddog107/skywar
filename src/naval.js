@@ -17,7 +17,7 @@ import { ShipFX, deckHeightAt, foamTexture } from './shipfx.js';
 import { waterHeightLong } from './water.js';
 import { terrainHeight } from './world.js';
 import { loft, createAircraftModel } from './models.js';
-import { rand, clamp, lerp, interceptTime, freezeLocal, skipWorldWhileHidden } from './util.js';
+import { rand, clamp, lerp, interceptTime, freezeLocal, updateWorldChain, skipWorldWhileHidden } from './util.js';
 import { WEAPONS, AIRCRAFT } from './config.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _mp = new THREE.Vector3();
@@ -397,7 +397,7 @@ export function setDepth(ship, d) { ship.depth = Math.max(0, d); return ship.dep
 export function cellFrame(ship, i, pos, dir) {
     const c = ship && ship.rig && ship.rig.cells[i];
     if (!c) return false;
-    c.node.updateWorldMatrix(true, false);
+    updateWorldChain(c.node);
     if (pos) pos.setFromMatrixPosition(c.node.matrixWorld);
     if (dir) dir.set(0, 1, 0).transformDirection(c.node.matrixWorld);
     return true;
@@ -408,7 +408,7 @@ export function pointFrame(ship, name, pos, dir) {
     const r = ship && ship.rig;
     const o = r && (r.points[name] || (r.nodes[name] && r.nodes[name].node));
     if (!o) return false;
-    o.updateWorldMatrix(true, false);
+    updateWorldChain(o);
     if (pos) pos.setFromMatrixPosition(o.matrixWorld);
     if (dir) dir.set(0, 1, 0).transformDirection(o.matrixWorld);
     return true;
@@ -1100,7 +1100,15 @@ export class Naval {
     }
 
     spawnEnemyGroup(passive = false) {
-        const spot = (passive ? findOcean(0, 0, 7000, 16000, 2600) : null) || findOcean(0, 0, 20000, 32000, 3000) || findOcean(0, 0, 12000, 40000, 2200) || { x: 22000, z: 10000 };
+        // (an armed group on the enemy's side of the front and out of SAM reach of our field, the air start and our carrier:
+        // anywhere 20–32 km out, its Slava's S-300F — 24 km — fired at the player within three seconds of a Living War)
+        let spot = passive ? findOcean(0, 0, 7000, 16000, 2600) : null;
+        if (!passive) {
+            const war = this.game.war, cv = this.homeCarrier;
+            const clear = (s) => Math.hypot(s.x, s.z) > 34000 && Math.hypot(s.x, s.z - 2500) > 34000 && (!cv || Math.hypot(s.x - cv.pos.x, s.z - cv.pos.z) > 34000) && (!war || !war.sideAt || war.sideAt(s.x, s.z) !== 'blue');
+            for (let i = 0; i < 40 && !spot; i++) { const s = findOcean(0, 0, 30000, 50000, 3000); if (s && clear(s)) spot = s; }
+        }
+        spot = spot || findOcean(0, 0, 20000, 32000, 3000) || findOcean(0, 0, 12000, 40000, 2200) || { x: 22000, z: 10000 };
         const a0 = Math.random() * Math.PI * 2;
         const carrier = new Ship(this, 'carrier', 'red', spot, 3000, a0, -1, 'ENEMY CARRIER');
         const d1 = new Ship(this, 'destroyer', 'red', spot, 3350, a0 + 0.09, -1, 'DESTROYER');
