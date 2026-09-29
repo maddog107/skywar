@@ -771,7 +771,10 @@ export class AirSupport {
             const d = a.pos.distanceTo(f.ac.pos);
             if (d > R) continue;
             const after = a.pilot && a.pilot.target === f.ac;
-            const hot = !tanking && BR.aspectAngle(f.ac.pos, a.pos, a.vel) < 45 && d < R * 0.6;
+            // (a recon drone only minds a bandit pointing at it once it's close, and not for a minute after a scare:
+            // near the front there's always a fighter somewhere, and it'd never get to work)
+            const hotR = f.role === 'recon' ? (g.time < (f.calmUntil || 0) ? 0 : 6000) : R * 0.6;
+            const hot = !tanking && d < hotR && BR.aspectAngle(f.ac.pos, a.pos, a.vel) < 45;
             if ((after || hot) && d < bd) { bd = d; best = a; }
         }
         if (best && !f.threat) {
@@ -792,6 +795,7 @@ export class AirSupport {
             if (f.clearT > 10 || !f.threat.alive || (f.role === 'recon' && f.retroT > 90 && !best)) {
                 f.retroT = 0;
                 f.threat = null;
+                if (f.role === 'recon') f.calmUntil = g.time + 60;
                 f.task = f.saved && f.saved.kind === 'track' ? null : f.saved;
                 if (f.saved && f.saved.kind === 'track') f.setTrack(f.saved.T);
                 if (!f.task) this.defaultTask(f);
