@@ -469,3 +469,153 @@ parts are pulled out first and every instance gets its own copy, hung on the sec
 - The Living War starts wingmen on COVER ME with rockets. Badly hit (25%) they RTB by themselves; one that
   lands, or is shot down, is replaced by a fresh jet after 75 / 150 s in the war modes.
 - Other plug-ins can give any AI pilot a brain the same way (director.js does for enemy CAS).
+- A brain with `fly(pilot, dt)` that returns true flies the jet itself that frame (the hook in ai.js
+  `Pilot.update`); the air-support plug-in flies its support aircraft and refuelling receivers that way.
+
+## Air support and electronic warfare (`game.air`, src/airsupport.js)
+
+### What flies
+- **Support flights** (`air.flights`, `SupportFlight`): real `Aircraft`, flown by a brain. Tasks: a racetrack, an
+  orbit, a goto, a photo run, an escort, retrograde, RTB. Far from the camera (> 24 km, real again < 18 km) and
+  with no fight near it, a flight is **coarse**: its jet leaves the scene and moves along its path without the
+  flight model. A real one more than ~3 km away is drawn with its **far version** (src/farmodel.js: the model
+  vertex-clustered into one vertex-coloured mesh, 5–7k triangles, one draw call; built once per type). Each
+  support aircraft carries `ac.support` (its flight).
+- **Where**: `ORBITS` — racetracks well behind each side's lines: AWACS at 9–9.4 km, tankers at 6.1–6.5 km, the
+  RC-135 at 10 km, the B-52 at 10.5 km. Our E-3 and KC-135 fly in every combat mode and Free Flight. The enemy's
+  A-50U and Il-78M fly in strike, naval, war and sandbox. The RC-135 flies in strike, war and sandbox, the B-52 in
+  war and sandbox. `start(mode, { airSupport: false })` turns it all off.
+- **Threats**: a bandit targeting a support aircraft, or close and pointing at it, sends it home at full speed
+  ("DEFENSIVE, RETROGRADING"); it comes back on station when clear. The task board offers "PROTECT <callsign>", and
+  a lost drone gives "FINISH <callsign>'S SEARCH". Losing the AWACS: "MAGIC IS DOWN"; the picture goes. In war and
+  sandbox a replacement AWACS comes on station after 6 minutes, and a replacement tanker after 5.
+
+### AWACS (src/awacs.js, src/brevity.js)
+- The E-3G ("MAGIC") and the A-50U have `radarRange` (250 / 220 km), so `war.coverage` counts them. That count
+  includes the radar horizon from their altitude, terrain masking (`war.radarLOS`, sampled finer near the target)
+  and jamming (`war.jamFactor`).
+- Our AWACS sweeps with the rotodome (6 rpm). A target is held when all of these are true:
+  - it is inside the reach for its size (stealth: F-22 ×0.12, Su-57 / J-20 ×0.3);
+  - it is above the horizon and not masked;
+  - it is not jammed below burn-through;
+  - it is not in the Doppler notch (low and beaming).
+
+  A held target gets `war.reveal(u, CONTACT, 'awacs')`. Enemy cruise missiles get `detected`: the map shows them,
+  and the player can lock them.
+- **Calls**, in brevity (through `director.say` while a war runs):
+  - POPUP, NEW GROUP (bullseye), THREAT and MERGED (armed groups only), FADED, and a PICTURE now and then;
+  - cruise missiles inbound, and the director's new flights (`director.announce` asks `air.announceFlight(f)`
+    first).
+
+  BRAA is bearing / range in NM / altitude / aspect (HOT, FLANK, BEAM <dir>, DRAG), e.g. "GROUP BRAA 040/35, 20
+  THOUSAND, HOT". "ANGELS" is only used for friendlies. Groups are contacts within 3 NM of each other, with fill-ins
+  (HEAVY, N CONTACTS, type, FAST). BULLSEYE is (0, −12 km); it is drawn on the map, and the HUD shows the player's
+  position from it.
+- **Requests** (COMMAND › SUPPORT): BOGEY DOPE; PICTURE; DECLARE on the locked target, answered with HOSTILE,
+  BOGEY, FRIENDLY, NEUTRAL, FURBALL or CLEAN.
+
+### Tankers and refuelling (src/refuel.js)
+- **The tankers:**
+  - KC-135R "TEXACO": the flying boom and the MPRS wing hoses. The boom's envelope comes from the rig's userData:
+    20–40° down, ±15° across, telescope 6–18 ft (12 ideal).
+  - Il-78M: three UPAZ hoses.
+  - Rates: boom 6,500 lb/min, MPRS 2,680 lb/min, UPAZ 2,300 l/min. `FUEL_KG` gives each type's internal fuel.
+  - The tanker holds 280 KIAS and its leg while it has receivers.
+- **The procedure** (`RefuelSession`):
+  - rendezvous, 1,000 ft below and behind where the tanker will be;
+  - join: "cleared to join, observation left wing";
+  - pre-contact or astern: "cleared pre-contact" / "cleared astern, left hose";
+  - contact: "cleared contact". The boom operator plugs in when the receptacle holds still inside the envelope.
+    A probe must go into the basket at 2–5 kt and push the hose into its 1–6 m range; the signal lights go red,
+    amber, green, then flashing amber at the inner limit.
+  - Out of limits: "DISCONNECT — <limit>", back to pre-contact. Too fast or too close: "BREAKAWAY". Hitting the
+    tanker: a mid-air.
+  - Full: "YOU'RE FULL — n POUNDS", then the right wing and "CLEARED TO DEPART".
+- **The player:** COMMAND › SUPPORT › TANKER › REQUEST AIR REFUELING. The HUD shows:
+  - the tanker's cue, the RV and the step;
+  - fuel, onload, rate and time to full;
+  - the contact target and its error;
+  - the boom's pilot director lights (UP / DN, FWD / AFT) or the hose's lights.
+
+  **Y** (or the menu) toggles the AR autopilot, which flies the whole procedure; stick input takes control back.
+  Wingmen on COVER ME come along and take their turn (their brain is swapped for the session's and put back
+  afterwards). SEND WINGMEN TO THE TANKER sends them on their own.
+- **Events:** `tankerRequested (rx, { session, tanker })`, `refuelContact`, `refuelDone`, `refuelEnd`,
+  `refuelCollision`.
+
+### Reconnaissance (src/recon.js)
+- **The aircraft:**
+  - MQ-9A "REAPER" (becomes SHADOW when the player is REAPER): EO/IR ball out to 9.5 km, which moves a unit from
+    contact to identified to confirmed with dwell. It carries 4 Hellfires.
+  - RQ-4B "FORTE": radar out to 26 km, through cloud; it identifies only the big things.
+  - U-2S "DRAGON": a photo run at ~67,000 ft that images a 28 km swath.
+  - RC-135W "JAKE": SIGINT (see below).
+- **Tasking:** COMMAND › SUPPORT › RECON sends them to the newest open search area, else the newest mark, else the
+  steerpoint. The map panel's SEND RECON HERE works on any point, unit, mark or search area.
+- **What they do:**
+  - report on the radio ("EYES ON — …");
+  - reveal what they see (`war.reveal(u, level, 'recon')`);
+  - watch struck targets for BDA (`strikes.watchers`);
+  - take pictures: `reconImage()` makes a FLIR, SAR or photo image of the terrain and units (no second render
+    pass) and puts it in `sensors.imagery`. They do this on arrival and on a BDA result. `air.takeImage(flight,
+    pos, bda)` is the hook for other plug-ins.
+- **Hellfires:** the MQ-9's Hellfires answer the strike system's AIR STRIKE (through `strikes.airProviders`) when
+  it is within 12 km of the marked unit. Otherwise HAMMER goes, as before.
+
+### Electronic warfare (src/ew.js)
+- **The model:** noise jamming with `J/N = (K / d)² · gj · gr`, where K is the jammer's power, gj its pod sector and
+  gr the radar's main lobe (side lobes −30 dB). A radar keeps `(1 + ΣJ/N)^(−1/4)` of its range, so a close target
+  burns through (a self-screening jet at ~R0²/K).
+  - `war.jamFactor(team, from, to)` gives that factor; `war.jam` is set by this plug-in.
+  - It cuts war.coverage, the player's radar and ground.js SAM engagement ranges.
+  - Other radar owners should call it too.
+- **Jammers:**
+  - `air.jam(ac, on, { brg | at, half })` turns one on or off.
+  - EA-18G ALQ-99: K 2,500 km, ±45° sectors.
+  - Self-protection: the Su-35 and Su-57 Khibiny and the Tu-95's set, on when one of ours is within ~40 km.
+  - Enemy jammers put strobes on the player's scope; close in, they show BURN-THROUGH. The map draws friendly
+    jamming sectors.
+- **The Growler "ZAPPER 1":**
+  - It escorts strikes (air strikes, B-52 strikes and the director's HAMMER packages) or stands off a point.
+  - It jams the most threatening emitter ("MUSIC ON") and fires HARMs at SAM fire-control radars ("MAGNUM").
+  - From COMMAND › SUPPORT › ELECTRONIC WARFARE: GROWLER: ESCORT ME / JAM THE NEWEST MARK. From the map:
+    GROWLER: STAND-OFF JAMMING HERE.
+- **Flying a Growler:**
+  - **F4** opens the EW page (ALQ-218: emitters with bearing, range, JAMMED / BURN).
+  - **[ ]** select an emitter.
+  - **;** jammer on / off.
+  - **'** points the pods at the selected emitter (press again for along the nose).
+  - **M** (with the page up) fires a HARM at it: `WEAPONS.arm`, 32 km, radar-homing, flown by weapons.js.
+- **Emitters** (`emitterOf(u, rec)`): search radars, SAM trackers, gun-dish AAA, naval radars and AWACS. A unit
+  with `emitting = false` is silent, and `u.sigint` overrides the signature. The RC-135 first fixes an emitter
+  (CONTACT, with the position error shrinking with dwell), then identifies it; events `sigintReport`.
+
+### Bombers (src/bombers.js)
+- **Launch sources and missiles:**
+  - `AirLaunchSource` is a strikes.js `LaunchSource` carried by an aircraft or by a director flight.
+  - `AirMissile` extends `StrategicMissile`: it drops clear, descends to cruise, then follows the terrain. The
+    Hellfire flies a direct top attack instead.
+  - `spec.Missile` picks the class in strikes.js.
+  - Missiles: `kh101`, `jassm`, `hellfire`.
+  - Strike types: `standoff` (the bombers' cruise missiles) and `carpet` (a B-52 run laying Mk-82s across the
+    mark). Both are in COMMAND › TACTICAL SUPPORT (B-52 STAND-OFF STRIKE, B-52 CARPET BOMBING) and in SUPPORT ›
+    BOMBERS.
+- **Red raids:** the director's cruise-missile raids (Tu-95MS) call `air.standoffRaid(f)` in `launchRaid`. The
+  bombers start ~75 km out at 9 km altitude and launch ~34 km from the target through
+  `strikes.request('standoff', …, 'red')`, then turn away. MAGIC calls the launch. The bombers can be intercepted,
+  and so can the Kh-101s (lockable once the AWACS holds them). Missiles shot down emit `strategicIntercepted`.
+
+### API (`game.air`)
+- `air.spawnAWACS(side, orbit)` and `air.spawnTanker(side, orbit)` put a flight on a racetrack. The orbit is
+  `{ x, z, heading (deg, first leg), leg, R, alt, speed }`; missing fields come from `ORBITS`.
+- `air.requestTanker(receiver, { auto, tanker, quiet })` returns a `RefuelSession`, or null. The receiver is the
+  player's jet or any AI aircraft with a refuelling point (rigparts.js REFUEL).
+- `air.sendRecon(kind, area)`: kind `'mq9' | 'rq4' | 'u2' | 'rc135'`; the area is `{ x, z, r }`, a unit, a mark or
+  an intel report.
+- `air.bomberRaid(side, targets)`:
+  - red: two Tu-95MS (escorted from veteran up) through the director, or on their own without one;
+  - blue: the B-52's JASSMs on the targets.
+- Others: `air.jam(ac, on, sector)`, `air.sendGrowler(escortee | point)`, `air.awacs(side)`,
+  `air.tankers(side)`, `air.announceFlight(f)`.
+- Events: `supportThreatened`, `reconReport`, `sigintReport`, `raidLaunch`, `bdaImagery`, and the refuelling
+  events above.
