@@ -40,17 +40,22 @@ const OFF = [0, 0, 0], STROBE = [6, 6, 6.5], SODIUM = [2.4, 1.3, 0.45], XLIGHT =
 const GS = 3 * Math.PI / 180; // the glide path the PAPI is set for
 
 // ═════════════ Layout (pure: counts and positions are tested) ═════════════
-// The approach end of runway frame F for this layout: dir = +1 lands toward −v (threshold at v = +half), −1 toward +v
-function approachDir(b, F) {
-    if (b.layout === 'standard') return 1;
-    // as air traffic picks it (airtraffic.js): the end whose approach is clear of the hills
-    const R = runwayInfo(b, F.rw);
+// The approach end of runway frame F: dir = +1 lands toward −v (threshold at v = +half), −1 toward +v. The same
+// choice the autopilot makes (autopilot.js runwayApproach: the end whose glide slope stays clear of the hills), so
+// the lights are on the end the player is brought in to (and where the air traffic lands too)
+export function approachDir(b, F) {
+    const R = runwayInfo(b, F.rw), GL = Math.tan(3.5 * Math.PI / 180);
     let best = null;
     for (const dir of [1, -1]) {
         const fx = R.dirX * dir, fz = R.dirZ * dir, thrX = R.x - fx * R.half, thrZ = R.z - fz * R.half;
-        let worst = -Infinity;
-        for (let d = 200; d <= 14000; d += 400) worst = Math.max(worst, terrainHeight(thrX - fx * d, thrZ - fz * d) - (b.h + d * Math.tan(GS)));
-        if (!best || worst < best.worst) best = { dir, worst };
+        let worst = -Infinity, clearDist = 9000;
+        for (let d = 100; d <= 9000; d += 100) {
+            const glideH = d * GL, over = terrainHeight(thrX - fx * d, thrZ - fz * d) - (b.h + glideH);
+            if (over > -Math.min(35, glideH * 0.5) && clearDist === 9000) clearDist = d - 100;
+            worst = Math.max(worst, over * (d <= 6000 ? 1 : 0.3));
+        }
+        const score = worst - clearDist * 0.01;
+        if (!best || score < best.score) best = { dir, score };
     }
     return best.dir;
 }
@@ -221,7 +226,7 @@ const VERT = /* glsl */`
     uniform float uPower[32];
     uniform float uTime, uPx;
     varying vec3 vCol;
-    varying float vA;
+    varying float vA, vSize;
     #include <fog_pars_vertex>
     void main() {
         vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
@@ -262,21 +267,24 @@ const VERT = /* glsl */`
             k *= step(0.5, fract(uTime + aFx.z));
         }
         float px = aDir.w * uPx / dist;
-        gl_PointSize = clamp(px, 1.6, 42.0);
-        vA = k * clamp(sqrt(px / 1.6), 0.05, 1.0);
+        gl_PointSize = clamp(px, 2.0, 42.0);
+        vSize = gl_PointSize;
+        vA = k * clamp(sqrt(px / 2.0), 0.12, 1.0);
         vCol = col;
         if (k <= 0.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0); // (off: out of the clip volume)
         #include <fog_vertex>
     }`;
 const FRAG = /* glsl */`
     varying vec3 vCol;
-    varying float vA;
+    varying float vA, vSize;
     #include <fog_pars_fragment>
     void main() {
         vec2 q = gl_PointCoord * 2.0 - 1.0;
         float r2 = dot(q, q);
         if (r2 > 1.0) discard;
-        float a = exp(-r2 * 7.0) + 0.9 * exp(-r2 * 60.0);
+        // a small point (far away) is one or two pixels: nearly flat; a big one has a hot core and a halo
+        float t = smoothstep(2.5, 14.0, vSize);
+        float a = mix(1.0 - r2 * 0.5, exp(-r2 * 7.0) + 0.9 * exp(-r2 * 60.0), t);
         gl_FragColor = vec4(vCol * a * vA, 1.0);
         #ifdef USE_FOG
             vec3 fogRay = ( vec4( vFogPos, 0.0 ) * viewMatrix ).xyz;
@@ -306,7 +314,7 @@ function poolTexture() {
     const S = 128, c = document.createElement('canvas'); c.width = c.height = S;
     const ctx = c.getContext('2d');
     const g = ctx.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
-    g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.35, 'rgba(255,255,255,0.55)'); g.addColorStop(0.7, 'rgba(255,255,255,0.15)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+    g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.2, 'rgba(255,255,255,0.7)'); g.addColorStop(0.5, 'rgba(255,255,255,0.25)'); g.addColorStop(0.8, 'rgba(255,255,255,0.06)'); g.addColorStop(1, 'rgba(255,255,255,0)');
     ctx.fillStyle = g; ctx.fillRect(0, 0, S, S);
     poolTex = new THREE.CanvasTexture(c);
     return poolTex;
@@ -333,8 +341,8 @@ const BEAM_FRAG = /* glsl */`
     #include <fog_pars_fragment>
     void main() {
         vec3 V = normalize(cameraPosition - vW);
-        float edge = pow(abs(dot(normalize(vN), V)), 1.6);          // brightest through the middle of the cone
-        float along = pow(1.0 - vY, 1.7) * smoothstep(0.0, 0.015, vY); // fading out along the beam
+        float edge = pow(abs(dot(normalize(vN), V)), 2.6);          // brightest through the middle of the cone, soft edges
+        float along = pow(1.0 - vY, 2.2) * smoothstep(0.0, 0.015, vY); // fading out along the beam
         float a = edge * along * uI;
         gl_FragColor = vec4(vec3(0.85, 0.9, 1.0) * a, 1.0);
         #ifdef USE_FOG
@@ -401,7 +409,7 @@ export class AirfieldLights {
         const L = F.layout, fl = (L && L.floods) || [];
         if (!fl.length) return;
         const geo = new THREE.PlaneGeometry(1, 1); geo.rotateX(-Math.PI / 2);
-        const mat = new THREE.MeshBasicMaterial({ map: poolTexture(), color: new THREE.Color(0.55, 0.32, 0.12), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: true, polygonOffset: true, polygonOffsetFactor: -4 });
+        const mat = new THREE.MeshBasicMaterial({ map: poolTexture(), color: new THREE.Color(0.3, 0.17, 0.065), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: true, polygonOffset: true, polygonOffsetFactor: -4 });
         const im = new THREE.InstancedMesh(geo, mat, fl.length);
         const b = F.base;
         fl.forEach((f, i) => {
