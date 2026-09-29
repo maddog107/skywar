@@ -1015,7 +1015,7 @@ class LaunchView {
         this.t += dt;
         const m = this.missile();
         // once the missile's up and away, the strikes' missile camera takes it from here
-        if (m && (m.age > 7 || this.t > 14)) { this.game.strikes.cam = { missile: m, mode: 'chase', hold: 0, t: 0 }; rc.setView(null); return; }
+        if (m && (m.age > 7 || this.t > 14)) { this.game.strikes.cam = { missile: m, strike: m.strike, mode: 'chase', hold: 0, t: 0 }; rc.setView(null); return; }
         if (this.t > 25) rc.setView(null);
         void mouse;
     }

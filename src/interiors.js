@@ -776,7 +776,10 @@ export class RoomController {
                 ctx.fillText((i + 1) + '  ' + s.label + (on ? '  ◂' : ''), M, y);
                 y += C ? 15 : 18;
             });
-        }
+            hud.roomTop = y + (C ? 6 : 10);
+        } else hud.roomTop = C ? 62 : 84;
+        // (what the room's own lines leave free, for the war's HUD lines: strikes.js, tasks.js)
+        hud.roomBottom = H - (r.def.keys && r.def.keys.some(k => k.label) ? (C ? 36 : 50) : (C ? 20 : 30)) - (C ? 16 : 20);
         ctx.font = '600 ' + (C ? 10 : 12) + 'px ' + FONT; ctx.fillStyle = 'rgba(255,255,255,0.68)';
         const keys = r.def.drive ? 'W/S: DRIVE · A/D: STEER · MOUSE: CURSOR · LMB: PRESS · E: LEAVE' : this.station ? 'MOUSE: CURSOR · LMB: PRESS · WHEEL: TURN · 1–9: STATIONS · RMB / ESC / WASD: STAND UP · E: LEAVE'
             : this.cursor ? 'MOUSE: CURSOR · LMB: PRESS · WHEEL: TURN · TAB: MOUSE LOOK · E: LEAVE'

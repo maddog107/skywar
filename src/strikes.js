@@ -1033,7 +1033,8 @@ export class StrikeManager {
             if (this.cam) { this.cam = null; return true; }
             const own = this.game.weapons.missiles.some(m => m.owner === this.game.player);
             if (!mine.length || own) return false;
-            this.cam = { missile: mine[mine.length - 1], mode: 'chase', hold: 0, t: 0 };
+            const m0 = mine[mine.length - 1];
+            this.cam = { missile: m0, strike: m0.strike, mode: 'chase', hold: 0, t: 0 };
             return true;
         }
         if (a === 'camera' && this.cam) { this.cam.mode = CAM_MODES[(CAM_MODES.indexOf(this.cam.mode) + 1) % CAM_MODES.length]; this.cam.t = 0; return true; }
@@ -1051,7 +1052,8 @@ export class StrikeManager {
         if (m && !m.alive) m = c.missile = null;
         if (!m && c.hold <= 0) {
             // on to the next missile of the same strike, if any
-            const next = this.missiles.find(x => x.team === g.war.side);
+            // (only that strike's: in a war there's always another missile of ours somewhere, and the camera never came back)
+            const next = this.missiles.find(x => x.team === g.war.side && (!c.strike || x.strike === c.strike));
             if (next && c.chain !== false) { c.missile = m = next; c.t = 0; }
             else { this.cam = null; return false; }
         }
@@ -1185,7 +1187,7 @@ export class StrikeManager {
         for (const d of marks) out.push({ path: ['DESIGNATION'], label: 'CLEAR MARK ' + d.id + ' — ' + d.label, run: () => war.undesignate(d) });
         out.push({ path: ['DESIGNATION'], label: 'CLEAR ALL MARKS', enabled: marks.length > 0, run: () => { marks.length = 0; } });
         const flying = this.missiles.filter(m => m.team === team).length;
-        out.push({ path: ['MISSILE CAMERA'], label: 'WATCH MY MISSILES (K)', hint: flying + ' IN FLIGHT', enabled: flying > 0, run: () => { this.cam = { missile: this.missiles.filter(m => m.team === team).pop(), mode: 'chase', hold: 0, t: 0 }; } });
+        out.push({ path: ['MISSILE CAMERA'], label: 'WATCH MY MISSILES (K)', hint: flying + ' IN FLIGHT', enabled: flying > 0, run: () => { const m0 = this.missiles.filter(m => m.team === team).pop(); this.cam = { missile: m0, strike: m0 && m0.strike, mode: 'chase', hold: 0, t: 0 }; } });
         return out;
     }
 
@@ -1215,7 +1217,7 @@ export class StrikeManager {
         }
         // strike status (upper left, under the score panel)
         const live = this.strikes.filter(s => !s.done && s.team === war.side);
-        let y = hud.compact ? 150 : 190;
+        let y = g.indoors && g.indoors.kind === 'room' ? hud.roomTop || 250 : hud.compact ? 150 : 190; // (in a room: under its station list)
         ctx.textAlign = 'left';
         for (const st of live.slice(-4)) {
             const flying = st.missiles.filter(m => m.alive);

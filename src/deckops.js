@@ -675,7 +675,10 @@ export class DeckOps {
 
     spawnJet(r) {
         const g = this.game;
-        const ac = new Aircraft(g, r.type, { team: this.team, name: r.name || null });
+        // (a jet nobody named gets a squadron callsign and side number: the marshal and the LSO called it "F/A-18E Super Hornet")
+        this.modex = (this.modex || 0) + 1;
+        const name = r.name || (this.team === 'blue' ? 'SUNDOWNER ' : 'BERKUT ') + (200 + this.modex);
+        const ac = new Aircraft(g, r.type, { team: this.team, name });
         ac.flares = ac.spec.flares;
         g.aircraft.push(ac);
         return ac;
@@ -929,7 +932,9 @@ export class DeckOps {
         if (this.ops && this.ops.say) this.ops.say(from, text, { color: '#9fd4ff', say: o.say ?? false, voice: o.voice, ttl: 12 });
     }
     radio(dp, what) {
-        const ac = dp && dp.ac, cs = ac ? (ac.callsign || 'HORNET') : '';
+        const ac = dp && dp.ac;
+        if (ac && !ac.name) { this.modex = (this.modex || 0) + 1; ac.name = ac.callsign = (this.team === 'blue' ? 'SUNDOWNER ' : 'BERKUT ') + (200 + this.modex); } // (not the type name)
+        const cs = ac ? (ac.callsign || 'HORNET') : '';
         if (this.team !== (this.game.war ? this.game.war.side : 'blue')) return;
         const fuel = (rand(4.2, 6.8)).toFixed(1);
         switch (what) {

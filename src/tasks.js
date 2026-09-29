@@ -758,7 +758,8 @@ export class TaskManager {
         ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
         // (in a room its title and station list have the top left: the task lines go above its key line at the bottom)
         const room = g.indoors && g.indoors.kind === 'room';
-        let y = room ? hud.h - (t ? 76 : 58) : C ? 84 : 72;
+        const lines = (t ? 1 : 0) + (t && war.time - t.tAccept < 14 && t.brief ? 1 : 0) + (this.offered.length ? 1 : 0);
+        let y = room ? (hud.roomBottom || hud.h - 58) - (C ? 16 : 18) * Math.max(0, lines - 1) : C ? 84 : 72;
         if (t) {
             const p = this.where(t);
             const d = p ? p.distanceTo(this.focus()) : null;
