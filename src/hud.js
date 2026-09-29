@@ -868,6 +868,8 @@ export class HUD {
         if (p.flameout && blink) warn('FLAMEOUT — GLIDE TO BASE', RED);
         else if (p.fuel < 0.2 && game.settings.fuel !== false && game.mode !== 'sandbox' && blink) warn(p.fuel < 0.1 ? 'FUEL LOW' : 'BINGO FUEL', AMBER);
         if (!p.onGround && p.gearAnim > 0.5 && p.speed > 170 && blink) warn('GEAR OVERSPEED', AMBER);
+        // low, slow and coming down with the gear up: the classic belly landing (not for fixed gear or a seaplane on water)
+        if (!p.onGround && !p.fixedGear && p.gearAnim < 0.5 && p.speed < 110 && p.vel.y < -1 && blink && p.pos.y - Math.max(terrainHeight(p.pos.x, p.pos.z), 0) < 150 && !(p.spec.seaplane && terrainHeight(p.pos.x, p.pos.z) < 0)) warn('GEAR UP — G', RED);
         if (game.outOfBounds && blink) warn('RETURN TO COMBAT AREA', AMBER);
         if (p.onGround && p.speed < 4) {
             ctx.font = '600 13px "Share Tech Mono", ui-monospace, monospace';

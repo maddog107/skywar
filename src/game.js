@@ -894,9 +894,10 @@ export class Game {
             else if (this.player && ac.lastHitBy === this.player) this.addFeed('WING SHOT OFF', '#ffc23f');
         });
         ev.on('flares', (ac) => { if (ac.isPlayer) this.audio.flares(); });
-        ev.on('touchdown', (ac, { vs, onRunway, onDeck, trap, late, onWater }) => {
+        ev.on('touchdown', (ac, { vs, onRunway, onDeck, trap, late, onWater, hard }) => {
             if (!ac.isPlayer) return;
             const fpm = Math.round(-vs * 196.85);
+            if (hard >= 1) { this.shake = Math.max(this.shake, 0.6 + hard / 40); this.addFeed('HARD LANDING — HULL −' + Math.round(hard) + '%', '#ff9f5a'); }
             if (onWater) { this.addFeed('ON THE WATER ' + fpm + ' FPM', fpm < 400 ? '#5dffa0' : '#ffc23f'); return; } // a seaplane (seaplane.js)
             if (onDeck) {
                 this.addFeed(late ? 'TRAP! (LATE WIRE)' : (trap ? 'TRAP! ' : 'DECK LANDING — NO WIRE ') + fpm + ' FPM', trap ? '#5dffa0' : '#ffc23f');
