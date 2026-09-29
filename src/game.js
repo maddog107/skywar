@@ -235,7 +235,7 @@ export class Game {
         } else if (this.mode === 'practice') {
             this.showBanner('TARGET PRACTICE', 'Destroy every target board and drone as fast as you can.', 5);
         } else if (this.mode === 'sandbox') {
-            this.showBanner('SANDBOX', 'Unlimited everything. N spawns bandits. Bombs away!', 5);
+            this.showBanner('SANDBOX', 'Unlimited everything. ` opens the map: spawn anything, give orders, watch it (⌫). N spawns a bandit.', 6);
             this.slot = 3;
         } else if (this.mode === 'mission') {
             // custom missions set themselves up below
@@ -1665,7 +1665,7 @@ export class Game {
         } else if (this.mode === 'freeflight') {
             this.objective = 'FREE FLIGHT — EXPLORE'; // (the Ready Room swaps in its own while you drive)
         } else if (this.mode === 'sandbox') {
-            this.objective = 'SANDBOX — N: SPAWN BANDIT · X: WEAPONS · BOMBS AWAY';
+            this.objective = 'SANDBOX — ` MAP: SPAWN · ORDERS · SCENARIOS — ⌫ WATCH — N: BANDIT';
         } else if (this.mode === 'rings' && this.rings && this.player.alive && !this.pilotMode) {
             const rc = this.rings;
             rc.update(dt);

@@ -16,6 +16,7 @@ import { INTEL } from './war.js';
 import { CSG, SAG } from './navalops.js';
 import { makeHelicopter } from './airbase.js';
 import { registerAirTarget, unregisterAirTarget, Downed, AIR } from './softtargets.js';
+import { emitterOf, harmShot } from './ew.js';
 import { clamp, rand, pick } from './util.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
@@ -142,7 +143,7 @@ const FLIGHT = {
         }
         return true;
     },
-    update(sb, rec) {
+    update(sb, rec, dt) {
         const f = rec.handle, m = rec.mission;
         if (!f || f.done || !m) return;
         // a patrol's CAP point walks along the route
@@ -159,6 +160,12 @@ const FLIGHT = {
         if (f.role === 'cas' && f.target && f.state !== 'rtb') {
             const here = f.members && f.lead() ? f.lead().pos : f.pos;
             if (flat(here, f.target.pos) > 3500) f.t = Math.min(f.t, 20);
+        }
+        // SEAD: each jet carries two HARMs, fired at the radars that radiate in reach (the jets then go in with guns and
+        // rockets on what's left); weapons.js flies them, the Growler's own way (airsupport.js)
+        if (m.type === 'sead' && f.members) {
+            rec.harmT = (rec.harmT || 0) - dt;
+            if (rec.harmT <= 0) { rec.harmT = 1.5; seadHarms(sb, rec, f); }
         }
         // recon: what the flight flies over is seen by its side
         if (m.type === 'recon' && rec.team === sb.game.war.side) revealAround(sb.game, f.members && f.lead() ? f.lead().pos : f.pos, 6000, INTEL.IDENTIFIED);
@@ -188,6 +195,29 @@ function seadPick(g, f, at, p) {
         if (d < bd) { bd = d; best = t; }
     }
     return best || undefined;
+}
+
+function seadHarms(sb, rec, f) {
+    const g = sb.game, war = g.war;
+    for (const a of f.members) {
+        if (!a.alive || !a.pilot) continue;
+        if (a.harms === undefined) a.harms = 2;
+        if (a.harms <= 0 || g.time - (a.harmT ?? -1e9) < 10) continue;
+        const fwd = a.getForward(_v2);
+        let best = null, bd = Infinity;
+        for (const t of g.ground.targets) {
+            if (!t.alive || t.removed || t.isShip || t.team === a.team || t.team === 'neutral') continue;
+            const em = emitterOf(t, war.rec(t));
+            if (!em) continue;
+            const shot = harmShot(a.pos, fwd, t.pos, em);
+            if (shot.ok && shot.d < bd && !(t.incoming || []).some(m => m.kind === 'arm')) { bd = shot.d; best = t; }
+        }
+        if (!best) continue;
+        g.weapons.fireMissile(a, best, 'arm');
+        a.harms--; a.harmT = g.time;
+        const d = g.director;
+        if (d && d.say && rec.team === war.side) d.say((rec.call || 'SEAD') + ' ' + ((a.slot | 0) + 1), 'MAGNUM, ' + nameOf(g, best), { color: '#9fd4ff', say: false, ttl: 8 });
+    }
 }
 
 function revealAround(g, pos, R, level) {

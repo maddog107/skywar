@@ -69,6 +69,8 @@ export class SandboxTools {
         if (!this.enabled) return;
         this.pal.team = this.war.side;
         this.store = readStore(this.storage);
+        // a battle you set up is fought by real jets near the camera: a bigger budget than the war's own (~0.2 ms each)
+        if (this.game.director) { this.game.director.liveMax = 12; this.game.director.fighterMax = 8; }
     }
 
     clear() {
@@ -80,7 +82,7 @@ export class SandboxTools {
         const g = this.game;
         g.simSpeed = 1;
         g.viewFocus = null;
-        if (g.director) g.director.auto = true;
+        if (g.director) { g.director.auto = true; g.director.liveMax = undefined; g.director.fighterMax = undefined; }
         if (g.forces && g.forces.auto) for (const k of Object.keys(g.forces.auto)) g.forces.auto[k] = true;
         this.enabled = false;
     }
@@ -887,7 +889,7 @@ export class SandboxTools {
         if (I.domain === 'air') {
             const A = pal.item === 'heli' ? ALTS.heli : ALTS.air;
             this.heading(ctx, x, y, pal.item === 'heli' ? 'HEIGHT ABOVE GROUND' : 'ALTITUDE'); y += 14;
-            this.row(ctx, map, x, y, W, A.map(a => ({ label: Math.round(a * 3.281 / (a < 1000 ? 1 : 1000)) + (a < 1000 ? ' FT' : 'K FT'), on: pal.alt === a, run: () => { pal.alt = a; this.arm(); } })));
+            this.row(ctx, map, x, y, W, A.map(a => ({ label: a < 1000 ? Math.round(a * 3.281 / 100) * 100 + ' FT' : Math.round(a * 3.281 / 1000) + 'K FT', on: pal.alt === a, run: () => { pal.alt = a; this.arm(); } })));
             y += 28;
         }
         const armed = this.tool && this.tool.kind !== 'mission';

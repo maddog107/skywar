@@ -351,7 +351,7 @@ parts are pulled out first and every instance gets its own copy, hung on the sec
   the enemy carrier group, and everything below runs. No soft boundary.
 - The HUD objective line shows the war: how far the front has moved (km, mean), the balance, tasks done.
   COMMAND › SORTIE › END SORTIE banks the score (full career XP) once you're stopped on a friendly pad.
-- **Sandbox** runs the same war (the later sandbox tools shape it). **Free Flight** stays peaceful (marks and
+- **Sandbox** runs the same war, shaped by the sandbox toolkit (below: `game.sandbox`). **Free Flight** stays peaceful (marks and
   strikes only). The other modes don't run any of it; wingmen take orders wherever there are wingmen.
 - Damage persists for the whole session: nothing destroyed is rebuilt (radars stay down, SAM sites stay
   dead, bridges stay down and keep cutting supply), and destroyed fuel and ammunition keep burning.
@@ -1191,3 +1191,85 @@ battery on ours (two quad launchers, command post, Sentinel) — `strikes` launc
 when they are the shooter the manager would pick; two salvos, then reloads. The home field also has a hardened
 HIMARS pad (a `GroundLauncher` 'SKYWAR PAD HIMARS', ATACMS × 2 + a penetrator) and the enemy field an S-300 battery
 and its Flap Lid on pads.
+
+## Sandbox toolkit (`game.sandbox`: src/sandbox.js, sandboxdefs.js, sandboxunits.js, spectator.js)
+
+SANDBOX mode only. Everything goes through the plug-ins' own APIs above: nothing here flies, drives or fights by
+itself except an armour platoon's gunnery and a helicopter's circuit (no plug-in has those).
+
+### For the player
+- **The panel** (tactical map, left; `◂` folds it): SPAWN · UNITS · WAR · WATCH · FILE.
+  - SPAWN: a category (AIR, NAVAL, GROUND, SITES), the item, the side (BLUE / RED / CIVIL where it makes sense:
+    helicopters), the type, how many, the altitude (aircraft: 5K / 16K / 30K FT; helicopters 400 / 1000 / 2000 FT
+    above the ground). Then every click on the map places one; the cursor shows a green ring where it fits and a red
+    cross with the reason where it doesn't (SHIPS NEED WATER, NOT ENOUGH OPEN WATER, GROUND UNITS NEED LAND, TOO STEEP,
+    ON THE SHORELINE, ON A RUNWAY, IN A TOWN, MORE THAN 3.5 KM FROM THE SEA). A convoy takes two clicks: start, then
+    destination. Right-click or STOP PLACING disarms.
+  - Items: fighters, attack jets, bombers, AWACS, tanker, EW jammer (EA-18G), drone (MQ-9 / RQ-4), helicopter; carrier
+    group, surface group, destroyer pair, submarine; missile launchers (red Scud TEL / blue HIMARS-M270 ATACMS), SAM
+    site (S-300, Buk, Osa / Patriot), rocket artillery (Grad, Smerch / GMLRS, HIMARS, M270), convoy, armour platoon,
+    infantry squad; coastal battery, radar, forward position (command post, radar, two SPAAGs, three tanks, two
+    squads, an Osa or a Patriot).
+  - UNITS: everything placed with what it's doing; a click selects it (and centres the map). A selected unit (or a
+    click on its ring or any of its units on the map) gets its actions in the map's panel: FOLLOW WITH THE CAMERA, its
+    missions, DELETE (also the Delete key).
+  - WAR: fly for BLUE or RED; BACKGROUND WAR on / off (the director's CAPs, raids, GCI, convoys and missile strikes, the
+    forces' own orders, the task board, automatic fronts); SHOW ALL PLACED (the map rings the other side's units too,
+    found or not: intel is untouched); the weather (at once or over two minutes, a storm or clearing front) and the
+    time of day and the sky clock.
+  - WATCH: the spectator, its view, the sim clock (PAUSE, ×1, ×2, ×4), and whether your jet is held while you watch.
+  - FILE: the five scenarios, three save slots (SAVE / LOAD / CLEAR).
+- **Missions** (map panel, per unit; what each item takes is `ITEMS[item].missions`): PATROL ROUTE (click waypoints,
+  right-click / Enter to finish, Backspace to undo), CAP ORBIT (a point), STRIKE TARGET (a unit or a point), ESCORT (a
+  unit), RECON AREA, SEAD, MOVE TO, RETURN TO BASE. Each is drawn on the map (route, orbit, strike line with its X,
+  escort line). Esc cancels a tool without closing the map.
+- **Spectator** (Backspace, the map's FOLLOW, WATCH): TAB / T next, X previous (placed units first, then every
+  aircraft, ship and ground unit), V cycles CHASE / ORBIT / TOP / FREE, F free camera (W/S/A/D, Q/E, Shift ×5, mouse
+  look, wheel speed), wheel zooms, 1–4 set the clock; the HUD box says what the followed unit is doing (orders, state,
+  its pilot's target and range, speed, height, condition, intel, missiles inbound). PAGE UP / PAGE DOWN and HOME work
+  any time. The strikes' missile camera (K) still takes over while it's on.
+- **Scenarios**: CARRIER GROUP VS COASTAL DEFENCE, SEAD PACKAGE VS S-300 AND BUK, SCUD HUNT AT NIGHT, AIR BATTLE: 4V4
+  WITH AWACS, CONVOY AMBUSH (`PRESETS` in sandboxdefs.js: each builds its setup from the terrain with `findSpot`).
+- **Designating and striking**: the map's MARK / STRIKE ▸ as everywhere (our side's shooters); a unit or point of any
+  side also gets `<OTHER SIDE> STRIKE HERE: BALLISTIC / CRUISE / ROCKETS` (`strikes.request(type, [mark], enemyTeam)`).
+
+### API
+- `sandbox.place(item, team, x, z, { variant, n, alt, to, from, quiet })` → a record `{ id, item, kind, team, variant,
+  type, n, alt, at, handle, mission, label }` or null (`sandbox.why`). `remove(rec)`, `removeAll()`.
+- `sandbox.assign(rec, { type, route: [{ x, z }], at: { x, z }, target: { rec } | { unit } })` → true or a reason.
+- `unitsOf(rec)`, `leadOf(rec)`, `posOf(rec, out)`, `aliveOf(rec)`, `stateOf(rec)`, `recOfUnit(u)`.
+- `setFaction('blue' | 'red')`, `setBackground(on)`, `setSimSpeed(0 | 1 | 2 | 4)`, `spectate({ rec } | { unit })`,
+  `snapshot(name)` → setup, `apply(setup)`, `loadPreset(id)`, `saveSlot(i)`, `loadSlot(i)`.
+- Rules (sandboxdefs.js, pure): `ITEMS`, `MISSIONS`, `validatePlacement(item, x, z, env, { alt })` → `{ ok, why, y }`,
+  `findSpot(item, anchor, env, { rMin, rMax, side, away, minFrom })`, `normalizeSetup(s)`, `readStore(storage)` /
+  `writeStore(storage, store)` (only `localStorage['skywar.sandbox']`: `{ v: 1, slots: [setup | null ×3] }`).
+- A setup: `{ v: 1, name, faction, background, weather, hour, clock, player?: { x, z, alt, heading }, view?: { follow },
+  units: [{ item, team, variant, n, alt, x, z, to?, from?, near?: { ref, along, side }, mission?: { type, route, at,
+  target: { ref } | { x, z } } }] }`.
+- Drivers (sandboxunits.js `DRIVERS`, one per kind): flights → `director.spawnFlight` (roles `cap`, `orbit`, `cas`,
+  `strike` / `raid`, `escort`, `recon`; a patrol walks the CAP point along the route, or flies it round with `f.loop`;
+  SEAD is `cas` with `f.pick` choosing air defences first, and two HARMs a jet fired at radiating radars); support →
+  `air.spawnAWACS / spawnTanker / sendGrowler / sendRecon / taskRecon`; ship groups → `navalops.spawnGroup /
+  moveGroupOf / launchFrom`; TELs, SAMs, artillery, convoys, coastal batteries → `forces.spawn… / fireMission /
+  relocate` (an order a busy launcher can't take is asked again every 6 s; a convoy's next leg is planned per vehicle
+  over the road graph); armour, radars and forward positions are `ground` targets in the war registry; infantry are
+  `infantry.spawnSquad` squads.
+
+### Hooks it added to shared code
+- game.js: `simStep(dt, mouse)` is one step of the world; `update` runs `game.simSpeed ?? 1` of them a frame (0 holds
+  the world, the camera, HUD and map go on); `game.subStep` marks the extra ones (the map draws once). A jet with
+  `held` isn't flown (the spectator parks yours). `game.side` is `war.side`; the player's jet, hostile candidates,
+  friendly pads, kill credit and messages follow it. System `updateCamera(cam, dt, mouse)` gets the mouse.
+- war.js: `setSide(side)` (the new side's units confirmed, the old side's back to pre-war intel, marks cleared, event
+  `warSide`); `clear()` resets the side to blue; no intel from the spectator's camera (`game.spectating`).
+- tacmap.js: `mapClick(x, y, map)` → true to take a click before selection; the map's panel buttons carry `label`.
+- director.js: `focus()` is `game.viewFocus` while spectating; `f.loop`, `f.pick`; `auto = false` stops its own
+  activity (its flights still fly); `liveMax` / `fighterMax` raise the real-jet budget (the sandbox: 12 / 8).
+- hud.js / cockpit.js / ai.js / wingmen.js: friend or foe by `war.side`; no jet symbology or warnings while spectating.
+
+### What doesn't swap sides (flying for red)
+The background war is blue against red with the player on blue (the director's GCI "their radars have you", raids on
+our fields, the task board, MAGIC's calls, the RC-135 and B-52): it's switched off while you fly for red. Base and place
+names stay as they are ("ENEMY AIR BASE" is the red field's name). The support aircraft the air plug-in launches for the
+player's side (Growler, MQ-9, RC-135) and the blue strike sources keep their American types. On foot (after ejecting)
+the pilot keeps the blue side's rules. The carrier start is the blue carrier's; red starts on its airfield.

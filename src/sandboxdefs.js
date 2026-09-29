@@ -243,15 +243,17 @@ export const PRESETS = [
             const buk = need(findSpot('sam', { x: 5000, z: -23000 }, env, { rMax: 9000, side: 'red', away: s300, minFrom: 5000 }), 'the Buk');
             const radar = need(findSpot('radar', { x: s300.x + 2500, z: s300.z - 1500 }, env, { rMax: 6000, side: 'red' }), 'the radar');
             const fob = findSpot('fob', { x: s300.x - 3000, z: s300.z + 2000 }, env, { rMax: 6000, side: 'red' });
-            const start = { x: 0, z: -4000 };
+            // (the package forms up south of the home field, out of the S-300's reach: the SEAD pair leads, low; the
+            // strike follows 8 km behind with its escort; the Growler stands off)
+            const start = { x: 0, z: 6000 };
             const units = [
                 { item: 'sam', team: 'red', variant: 0, x: s300.x, z: s300.z },
                 { item: 'sam', team: 'red', variant: 1, x: buk.x, z: buk.z },
                 { item: 'radar', team: 'red', x: radar.x, z: radar.z },
-                { item: 'fighter', team: 'blue', variant: 1, n: 2, alt: 5000, x: start.x - 1500, z: start.z, mission: { type: 'sead', at: { x: buk.x, z: buk.z } } },
-                { item: 'attack', team: 'blue', variant: 1, n: 2, alt: 6000, x: start.x, z: start.z + 1500, mission: { type: 'strike', target: { ref: 0 } } },
-                { item: 'fighter', team: 'blue', variant: 3, n: 2, alt: 8000, x: start.x + 1500, z: start.z + 2500, mission: { type: 'escort', target: { ref: 4 } } },
-                { item: 'growler', team: 'blue', x: start.x, z: start.z + 4000, mission: { type: 'sead', at: { x: s300.x, z: s300.z } } },
+                { item: 'fighter', team: 'blue', variant: 1, n: 2, alt: 1500, x: start.x - 1500, z: start.z, mission: { type: 'sead', at: { x: buk.x, z: buk.z } } },
+                { item: 'attack', team: 'blue', variant: 1, n: 2, alt: 6000, x: start.x, z: start.z + 8000, mission: { type: 'strike', target: { ref: 0 } } },
+                { item: 'fighter', team: 'blue', variant: 3, n: 2, alt: 8000, x: start.x + 1500, z: start.z + 9000, mission: { type: 'escort', target: { ref: 4 } } },
+                { item: 'growler', team: 'blue', x: start.x, z: start.z + 2000, mission: { type: 'sead', at: { x: s300.x, z: s300.z } } },
                 { item: 'fighter', team: 'red', variant: 0, n: 2, alt: 7000, x: s300.x, z: s300.z - 4000, mission: { type: 'cap', at: { x: Math.round((s300.x + buk.x) / 2), z: Math.round((s300.z + buk.z) / 2) } } },
             ];
             if (fob) units.push({ item: 'fob', team: 'red', x: fob.x, z: fob.z });

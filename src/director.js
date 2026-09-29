@@ -422,7 +422,8 @@ export class Director {
         const g = this.game, P = this.focus(), war = g.war;
         const k = this.intensity();
         // (each real jet costs ~0.2 ms a frame: rookie 5 / veteran 6 / ace 8, and 2 / 3 / 4 enemy fighters)
-        const budget = Math.round(k * 6), fighterCap = Math.round(k * 3);
+        // (the sandbox raises both while you watch a battle you set up: liveMax, fighterMax)
+        const budget = this.liveMax ?? Math.round(k * 6), fighterCap = this.fighterMax ?? Math.round(k * 3);
         let live = 0, redFighters = 0;
         for (const f of this.flights) if (f.members) { live += f.n; if (f.team !== war.side && f.fighters) redFighters += f.n; }
         // nearest first
