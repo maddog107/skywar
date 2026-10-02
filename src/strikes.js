@@ -617,7 +617,7 @@ export class StrikeManager {
         for (const s of this.sources) if (s.remove) s.remove();
         for (const d of this.debris) this.game.scene.remove(d.mesh);
         this.missiles.length = 0; this.sources.length = 0; this.strikes.length = 0; this.debris.length = 0; this.bda.length = 0;
-        this.cam = null;
+        this.cam = null; this.watch = null;
         this.silo = null;
     }
 
@@ -673,6 +673,7 @@ export class StrikeManager {
             else aims.push({ pos, unit, label: unit ? war.label(unit) : 'MARK ' + d.id, mark: d });
         }
         const strike = { id: this.nextStrikeId++, type, label: T.label, team, spec: MISSILES[specKey], aims, launched: 0, planned: 0, impacts: 0, lost: 0, missiles: [], t: g.time, sources: new Set(), done: false };
+        strike.player = !quiet && team === war.side; // (ordered by the player: offered to the missile camera)
         for (const aim of aims) {
             let need = T.per;
             // nearest sources first, several if one runs short
@@ -740,6 +741,7 @@ export class StrikeManager {
         if (!aims.length) return null;
         const type = { cruise: 'cruise', antiship: 'antiship', ballistic: spec.dive ? 'hardened' : 'ballistic', rocket: 'rocket' }[spec.kind] || 'cruise';
         const strike = { id: this.nextStrikeId++, type, label: STRIKE_TYPES[type].label, team, spec, aims, launched: 0, planned: 0, impacts: 0, lost: 0, missiles: [], t: g.time, sources: new Set([src]), done: false };
+        strike.player = !quiet && team === war.side; // (a console launch: offered to the missile camera)
         for (const aim of aims) {
             const k = src.fire(specKey, n, aim, strike);
             strike.planned += spec.kind === 'rocket' ? spec.count * k : k;
@@ -809,6 +811,11 @@ export class StrikeManager {
         this.missiles.push(m);
         if (strike) { strike.launched++; strike.missiles.push(m); }
         this.game.events.emit('strategicLaunch', m);
+        // the first round of a strike the player ordered: offer to watch it (K), and say so
+        if (strike && strike.player && strike.launched === 1) {
+            this.watch = { strike, t: this.game.time };
+            this.game.addFeed('K: WATCH YOUR ' + spec.short + ' FLY · V: CHANGE VIEW', '#e8f4ff');
+        }
         // the first launch of a strike: a call from the shooter, and the enemy sees it
         if (strike && strike.launched === 1 && team === this.game.war.side) {
             this.game.war.radio(source.name.split(' (')[0], (spec.kind === 'rocket' ? 'ROCKETS AWAY' : spec.kind === 'ballistic' ? 'MISSILE AWAY' : 'SHOT, ' + spec.short) + ' — ' + strike.aims[0].label, { color: '#9fd4ff', say: spec.kind === 'rocket' ? 'Rockets away.' : 'Missile away.' });
@@ -866,7 +873,7 @@ export class StrikeManager {
         const st = m.strike;
         m.remove();
         this.missiles.splice(this.missiles.indexOf(m), 1);
-        if (this.cam && this.cam.missile === m) { this.cam.missile = null; this.cam.impactAt = at; this.cam.hold = 5; }
+        if (this.cam && this.cam.missile === m) { this.cam.missile = null; this.cam.impactAt = at; this.cam.hold = 5; this.cam.lost = false; }
         if (st) {
             st.impacts++;
             if (!st.firstImpact) { st.firstImpact = true; if (st.team === war.side && s.kind !== 'rocket') war.radio('COMMAND', 'MISSILE IMPACT — ' + m.aim.label, { color: '#9fd4ff', say: false }); }
@@ -878,6 +885,8 @@ export class StrikeManager {
         const g = this.game;
         g.effects.explosion(m.pos, 0.7, m.vel);
         const st = m.strike;
+        // watching it: stay on the burst a moment (the camera then moves on to the strike's next round, or comes home)
+        if (this.cam && this.cam.missile === m) { this.cam.missile = null; this.cam.impactAt = m.pos.clone(); this.cam.hold = 4; this.cam.lost = true; }
         m.remove();
         this.missiles.splice(this.missiles.indexOf(m), 1);
         if (st) { st.lost++; this.checkStrikeDone(st); if (st.team === g.war.side) g.war.radio('COMMAND', st.spec.short + ' INTERCEPTED', { color: '#ff9f5a', say: false }); }
@@ -1027,6 +1036,13 @@ export class StrikeManager {
         return null;
     }
 
+    // the player's latest strike while any of its rounds is still flying (what K watches first)
+    watchable() {
+        const w = this.watch;
+        if (!w || this.game.time - w.t > 300) return null;
+        return w.strike.missiles.some(m => m.alive) ? w.strike : null;
+    }
+
     // ═════════════ Input ═════════════
     onAction(a) {
         if (!this.enabled || this.game.state !== 'playing') return false;
@@ -1035,9 +1051,11 @@ export class StrikeManager {
             // own air-to-air missiles keep the old camera; strategic missiles and rockets get this one
             const mine = this.missiles.filter(m => m.team === this.game.war.side);
             if (this.cam) { this.cam = null; return true; }
+            // the strike the player just ordered (from the jet, the map, a console in the CIC, the JOC or a cab) first
+            const w = this.watchable();
             const own = this.game.weapons.missiles.some(m => m.owner === this.game.player);
-            if (!mine.length || own) return false;
-            const m0 = mine[mine.length - 1];
+            if (!w && (!mine.length || own)) return false;
+            const m0 = w ? w.missiles.find(m => m.alive) : mine[mine.length - 1];
             this.cam = { missile: m0, strike: m0.strike, mode: 'chase', hold: 0, t: 0 };
             return true;
         }
@@ -1058,7 +1076,7 @@ export class StrikeManager {
             // on to the next missile of the same strike, if any
             // (only that strike's: in a war there's always another missile of ours somewhere, and the camera never came back)
             const next = this.missiles.find(x => x.team === g.war.side && (!c.strike || x.strike === c.strike));
-            if (next && c.chain !== false) { c.missile = m = next; c.t = 0; }
+            if (next && c.chain !== false) { c.missile = m = next; c.t = 0; c.lost = false; }
             else { this.cam = null; return false; }
         }
         if (g.player) g.player.root.visible = !g.player.exploded;
@@ -1231,6 +1249,16 @@ export class StrikeManager {
             ctx.fillStyle = '#9fd4ff'; ctx.fillText(txt, 20, y);
             y += 20;
         }
+        // a strike of ours just went: the prompt to watch it (blinking, for its first 12 s)
+        const ws = !this.cam && this.watch && g.time - this.watch.t < 12 ? this.watchable() : null;
+        if (ws && Math.floor(g.time * 2.5) % 2 === 0) {
+            const txt = '▶ K — WATCH YOUR ' + ws.spec.short + (ws.planned > 1 ? 'S' : '') + ' HIT ' + ws.aims[0].label;
+            ctx.textAlign = 'center';
+            ctx.font = '700 15px "Share Tech Mono", ui-monospace, monospace';
+            const tw = ctx.measureText(txt).width;
+            ctx.fillStyle = 'rgba(8,14,20,0.55)'; ctx.fillRect(hud.w / 2 - tw / 2 - 12, hud.h * 0.3 - 14, tw + 24, 28);
+            ctx.fillStyle = '#e8f4ff'; ctx.fillText(txt, hud.w / 2, hud.h * 0.3);
+        }
         // missile camera overlay
         const c = this.cam;
         if (c) {
@@ -1238,7 +1266,7 @@ export class StrikeManager {
             ctx.textAlign = 'center';
             ctx.font = '700 15px "Share Tech Mono", ui-monospace, monospace';
             ctx.fillStyle = '#e8f4ff';
-            const line1 = m ? m.spec.name + ' · ' + CAM_LABEL[c.mode] : 'IMPACT';
+            const line1 = m ? m.spec.name + ' · ' + CAM_LABEL[c.mode] : c.lost ? 'SHOT DOWN BY THE ENEMY\'S DEFENCES' : 'IMPACT';
             ctx.fillText(line1, hud.w / 2, hud.h - 64);
             ctx.font = '600 12px "Share Tech Mono", ui-monospace, monospace';
             if (m) {
