@@ -17,6 +17,7 @@
 import { terrainHeight } from './terraincore.js';
 
 export const COARSE = { size: 256, texel: 64 };
+const SWASH_REACH = 3; // m above the sea: beach the swash can reach (water.js SWASH_H)
 export const FINE = { size: 256, texel: 8 };
 const R_SWELL = 5200, R_WIND = 2600, R_CHOP = 700;
 const smooth = (e0, e1, x) => { const t = Math.min(Math.max((x - e0) / (e1 - e0), 0), 1); return t * t * (3 - 2 * t); };
@@ -98,7 +99,9 @@ export function* fineJob(cx, cz, coarse) {
             const x = x0 + (i + 0.5) * T, z = z0 + (j + 0.5) * T, k = (j * S + i) * 4;
             const d = -terrainHeight(x, z);
             data[k + 3] = d;
-            if (d <= 0) { data[k] = data[k + 1] = data[k + 2] = 0; continue; }
+            // (the beach just above the waterline keeps the exposure of the water beside it: the swash runs up
+            // there, water.js; the waves themselves still see land, depth ≤ 0)
+            if (d <= -SWASH_REACH) { data[k] = data[k + 1] = data[k + 2] = 0; continue; }
             let s0 = 1, s1 = 1, s2 = 1;
             if (c) {
                 const fx = (x - c.x0) / c.texel - 0.5, fz = (z - c.z0) / c.texel - 0.5;

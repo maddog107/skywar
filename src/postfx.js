@@ -315,6 +315,30 @@ const SSR_FRAG = /* glsl */`
         gl_FragColor = vec4(c, weight * conf);
     }`;
 
+// The waves too small to show in the reflected ray's normal still break a reflection up and stretch it up and down
+// the frame (the familiar streaks of a mirror image on water), the more the further off: a vertical, weight-aware
+// blur of the half-res reflections, its reach growing with distance.
+const SSR_BLUR_FRAG = /* glsl */`
+    ${DEPTH_GLSL}
+    uniform sampler2D tSSR;
+    uniform float blurPx;
+    varying vec2 vUv;
+    void main() {
+        ivec2 p = ivec2(gl_FragCoord.xy), hs = textureSize(tSSR, 0) - 1;
+        vec4 c0 = texelFetch(tSSR, p, 0);
+        float d = texelFetch(tDepth, min(p * 2, textureSize(tDepth, 0) - 1), 0).x;
+        float z = isSky(d) ? 1e5 : linDepth(d);
+        float r = blurPx * (0.12 + 0.88 * smoothstep(40.0, 2500.0, z));
+        vec3 sum = c0.rgb * c0.a; float wa = c0.a, ws = 1.0;
+        for (int k = 1; k <= 3; k++) {
+            float w = 1.0 - float(k) * 0.22, o = r * float(k) / 3.0;
+            vec4 a = texelFetch(tSSR, clamp(p + ivec2(0, int(o + 0.5)), ivec2(0), hs), 0);
+            vec4 b = texelFetch(tSSR, clamp(p - ivec2(0, int(o + 0.5)), ivec2(0), hs), 0);
+            sum += (a.rgb * a.a + b.rgb * b.a) * w; wa += (a.a + b.a) * w; ws += 2.0 * w;
+        }
+        gl_FragColor = vec4(wa > 1e-4 ? sum / wa : c0.rgb, wa / ws);
+    }`;
+
 // ═════════════ Sun visibility (1×1) ═════════════
 // How much of the sun disc is actually on screen and unoccluded (terrain, jets and clouds all count:
 // it tests the HDR colour, not depth). Smoothed over a few frames.
@@ -555,6 +579,7 @@ export class SceneFXPass extends Pass {
         this.aoRT = halfFloatTarget(1, 1, THREE.RGFormat, THREE.NearestFilter);
         this.aoBlurRT = halfFloatTarget(1, 1, THREE.RGFormat, THREE.NearestFilter);
         this.ssrRT = halfFloatTarget(1, 1, THREE.RGBAFormat, THREE.NearestFilter);
+        this.ssrBlurRT = halfFloatTarget(1, 1, THREE.RGBAFormat, THREE.NearestFilter);
         this.visRT = [0, 1].map(() => halfFloatTarget(1, 1, THREE.RGBAFormat, THREE.NearestFilter));
         this.visIdx = 0;
         this.aoMat = fxMaterial(AO_FRAG, {
@@ -567,12 +592,13 @@ export class SceneFXPass extends Pass {
             camPos: { value: new THREE.Vector3() }, proj: { value: new THREE.Vector2() }, time: { value: 0 }, fogDensity: { value: 0 },
             strength: { value: 1 }, maxDist: { value: 4000 }, sunDirW: { value: new THREE.Vector3(0, 1, 0) }, skyOn: { value: 1 },
         }, { STEPS: 24, REFINE: 5 });
+        this.ssrBlurMat = fxMaterial(SSR_BLUR_FRAG, { ...depthUniforms(), tSSR: { value: this.ssrRT.texture }, blurPx: { value: 6 } });
         this.visMat = fxMaterial(SUNVIS_FRAG, {
             tColor: { value: null }, tPrev: { value: null }, sunUv: { value: new THREE.Vector2() }, sunRadius: { value: new THREE.Vector2() },
             threshold: { value: 5 }, blend: { value: 0.3 },
         });
         this.compMat = fxMaterial(COMPOSITE_FRAG, {
-            ...depthUniforms(), tColor: { value: null }, tAO: { value: this.aoBlurRT.texture }, tSSR: { value: this.ssrRT.texture },
+            ...depthUniforms(), tColor: { value: null }, tAO: { value: this.aoBlurRT.texture }, tSSR: { value: this.ssrBlurRT.texture },
             tSunVis: { value: this.visRT[0].texture }, aoStrength: { value: 0.75 }, aoOn: { value: 0 }, ssrOn: { value: 0 },
             camPos: { value: new THREE.Vector3() }, camRotY: { value: new THREE.Vector3() }, sunUv: { value: new THREE.Vector2() },
             flareColor: { value: new THREE.Color() }, aspect: { value: 1 }, flareOn: { value: 0 },
@@ -622,7 +648,7 @@ export class SceneFXPass extends Pass {
         this.width = w; this.height = h;
         const hw = Math.max(1, Math.ceil(w / 2)), hh = Math.max(1, Math.ceil(h / 2));
         if (this.ao) { this.aoRT.setSize(hw, hh); this.aoBlurRT.setSize(hw, hh); }
-        if (this.ssr) this.ssrRT.setSize(hw, hh);
+        if (this.ssr) { this.ssrRT.setSize(hw, hh); this.ssrBlurRT.setSize(hw, hh); }
     }
 
     renderQuad(renderer, mat, target) {
@@ -668,6 +694,10 @@ export class SceneFXPass extends Pass {
             su.maxDist.value = this.ssr >= 2 ? 5000 : 2500;
             su.sunDirW.value.copy(this.sunDirW);
             this.renderQuad(renderer, this.ssrMat, this.ssrRT);
+            const bu = this.ssrBlurMat.uniforms;
+            setDepthUniforms(bu, cam, depth, src.samples);
+            bu.blurPx.value = Math.max(2, this.height / 2 / 75); // (~6 half-res pixels at 900 lines)
+            this.renderQuad(renderer, this.ssrBlurMat, this.ssrBlurRT);
         }
 
         // sun flare: a 1×1 visibility pass, then analytic ghosts/glare in the composite
@@ -711,8 +741,8 @@ export class SceneFXPass extends Pass {
     }
 
     dispose() {
-        for (const rt of [this.aoRT, this.aoBlurRT, this.ssrRT, ...this.visRT]) rt.dispose();
-        for (const m of [this.aoMat, this.aoBlurMat, this.ssrMat, this.visMat, this.compMat]) m.dispose();
+        for (const rt of [this.aoRT, this.aoBlurRT, this.ssrRT, this.ssrBlurRT, ...this.visRT]) rt.dispose();
+        for (const m of [this.aoMat, this.aoBlurMat, this.ssrMat, this.ssrBlurMat, this.visMat, this.compMat]) m.dispose();
     }
 }
 

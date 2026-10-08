@@ -373,7 +373,8 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
         // ── the water body ──
         float wet = max(vSea.w, 0.0); // water depth under this pixel (m)
         // churned water: the surf zone stirs up sand (more with rougher seas), a storm clouds the shallows
-        float turb = (1.0 - smoothstep(0.6, 4.5, wet)) * (0.3 + 0.7 * whitecap) + whitecap * 0.35 * (1.0 - smoothstep(6.0, 40.0, wet));
+        // (and a gale fills the open sea with bubbles and spray: a paler, greyer green)
+        float turb = (1.0 - smoothstep(0.6, 4.5, wet)) * (0.3 + 0.7 * whitecap) + whitecap * 0.35 * (1.0 - smoothstep(6.0, 40.0, wet)) + whitecap * whitecap * 0.25;
         Optics o = waterOptics(clamp(turb, 0.0, 1.0), lake);
         vec3 deep = deepWater(deepColor, o) * (0.45 + 0.55 * csh);
         vec3 under = deep;
@@ -407,7 +408,7 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
             float path = min(length(B - vWorld), 300.0);
             float dBed = clamp(vWorld.y - B.y, 0.0, 300.0);
             wet = dBed;
-            turb = (1.0 - smoothstep(0.6, 4.5, wet)) * (0.3 + 0.7 * whitecap) + whitecap * 0.35 * (1.0 - smoothstep(6.0, 40.0, wet));
+            turb = (1.0 - smoothstep(0.6, 4.5, wet)) * (0.3 + 0.7 * whitecap) + whitecap * 0.35 * (1.0 - smoothstep(6.0, 40.0, wet)) + whitecap * whitecap * 0.25;
             o = waterOptics(clamp(turb, 0.0, 1.0), lake);
             deep = deepWater(deepColor, o) * (0.45 + 0.55 * csh);
             vec3 bot = texture(refrColor, buv).rgb;
@@ -420,9 +421,9 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
                 vec3 Lw = refract(-L, vec3(0.0, 1.0, 0.0), 0.75);
                 float rip = cos(ph) * (1.0 - smoothstep(0.05, 0.25, fpB)) * 0.22 + cos(dot(bw, sd) * 6.2832 / 2.3 + 1.7) * (1.0 - smoothstep(0.3, 1.2, fpB)) * 0.12;
                 bot *= 1.0 + rip * dot(sd, -Lw.xz) * 2.0 * csh * (1.0 - smoothstep(2.0, 30.0, dBed));
-                float pn = texture(detailMap, B.xz / 61.0).r * 0.65 + texture(detailMap, B.xz / 17.0 + 0.3).r * 0.35;
-                float weed = smoothstep(0.56, 0.68, pn) * smoothstep(1.2, 3.5, dBed) * (1.0 - lake * 0.5);
-                bot = mix(bot, bot * vec3(0.32, 0.42, 0.3), weed * 0.85);
+                float pn = texture(detailMap, B.xz / 97.0).r * 0.7 + texture(detailMap, B.xz / 23.0 + 0.3).r * 0.3;
+                float weed = smoothstep(0.58, 0.7, pn) * smoothstep(1.2, 3.5, dBed) * (1.0 - lake * 0.5);
+                bot = mix(bot, bot * vec3(0.4, 0.5, 0.36), weed * 0.7);
                 // caustics: the sun refracted through the ripples focuses on the bed. Where the sun's light reaching B
                 // entered the surface, the curvature ∇²h of the detail (oceanfft.js) bends the bundle of rays: the
                 // Jacobian of the map from the surface to a bed dBed below is 1 + dBed (1 − 1/n) ∇²h, the light on the
@@ -431,11 +432,13 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
                 float lod = log2(max(max(fpB, dBed * 0.012), 0.05) * fftInfo.x * float(textureSize(fftMap, 0).x)) + 0.5;
                 float lap = textureLod(fftMap, S * fftInfo.x, lod).w * fftInfo.z;
                 float J = 1.0 + dBed * 0.25 * lap * CAUSTIC_K;
-                float cau = clamp(1.0 / max(J, 0.25), 0.0, 3.5) - 1.0;
+                // bright where the bundle of rays folds over (|J| → 0: the network of caustic lines), a little darker
+                // between; past a few metres the folds overlap and the sun's disc blurs them out
+                float cau = min(1.0 / max(abs(J), 0.2), 4.0) - 1.3;
                 // (too small to see from far off: the bed's average light is unchanged)
-                cau *= csh * smoothstep(0.02, 0.25, L.y) * (1.0 - smoothstep(0.4, 1.0, turb)) * (1.0 - smoothstep(12.0, 40.0, dBed))
-                    * (1.0 - lake * 0.5) * (1.0 - smoothstep(0.12, 0.5, fpB));
-                bot *= 1.0 + cau * 0.6;
+                cau *= csh * smoothstep(0.02, 0.25, L.y) * (1.0 - smoothstep(0.4, 1.0, turb)) * (1.0 - smoothstep(4.0, 16.0, dBed))
+                    * (1.0 - lake * 0.5) * (1.0 - smoothstep(0.06, 0.3, fpB));
+                bot *= max(1.0 + cau * 0.5, 0.4);
             }
             // Beer-Lambert both ways: daylight down to the bed (Kd over its depth), the view back up (c over the path);
             // what the water itself scatters fills in toward the deep colour
@@ -484,32 +487,53 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
         float foamCover = 0.0;
         // ── foam ──
         {
+            vec2 wv = vec2(dot(p, windDir), dot(p, vec2(-windDir.y, windDir.x))); // along and across the wind
             // gusts: km-scale patches of rougher, whiter water drifting downwind
             float gust = texture(detailMap, p / 2600.0 - windDir * time * 0.0035).r;
             // a crest breaks in patches along its length (not all the way along), whitest where it breaks hardest
-            float patchy = smoothstep(0.3, 0.6, texture(foamMap, p / 110.0 + windDir * time * 0.012).g);
-            float wc = whitecap * smoothstep(0.0, 0.9, max(vFoam.x, vFoam.y)) * patchy * (0.8 + 0.4 * gust);
-            // spume streaks along the wind in a gale
-            vec2 wv = vec2(dot(p, windDir), dot(p, vec2(-windDir.y, windDir.x)));
-            float streak = texture(foamMap, vec2(wv.y / 6.0, wv.x / 70.0 - time * 0.01)).b * texture(foamMap, vec2(wv.y / 23.0, wv.x / 240.0)).g;
-            float streaks = whitecap * whitecap * smoothstep(0.3, 0.55, streak * (0.6 + 0.8 * gust)) * 0.65;
-            float shore = (1.0 - smoothstep(0.1, 1.6, wet)) * 0.85 * (0.6 + 0.4 * sin(time * 0.9 + dot(p, vec2(0.05, 0.037))));
-            float nf = texture(foamMap, p / 23.0 + vec2(time * 0.012, time * 0.008)).r * 0.6 + texture(foamMap, p / 7.1 - vec2(time * 0.02, -time * 0.015)).r * 0.4;
-            float amt = clamp(max(max(streaks, max(shore, vFoam.z)), wk.r), 0.0, 1.0);
+            float patchy = smoothstep(0.32, 0.62, texture(foamMap, p / 47.0 + windDir * time * 0.012).g * 0.7 + texture(foamMap, p / 130.0).g * 0.3);
             float near = 1.0 - smoothstep(3000.0, 9000.0, dist);
-            float foam = smoothstep(1.0 - amt, 1.25 - amt, nf) * near;
-            // whitecaps: billowy (the fbm more than the lace), with holes of dark water, never quite solid
+            // Whitecaps where the crests fold (the vertex Jacobian, now and a moment ago): a fresh one dense and
+            // billowy; the foam it leaves thins into lace drawn out along the wind as it ages. Beyond the reach of
+            // the fine grid, the sea's average whitecap cover for this wind (Monahan & O'Muircheartaigh 1980:
+            // W ≈ 3.8e-6 U^3.4, ~7 % in a gale) as small wind-streaked flecks, and far off a faint whitening
+            float gridK = 1.0 - smoothstep(250.0, 650.0, dist);
+            float fresh = smoothstep(0.0, 0.9, vFoam.x) * gridK;
+            float aged = clamp(smoothstep(0.0, 0.7, vFoam.y) - fresh * 0.6, 0.0, 1.0) * gridK;
+            float gk = patchy * (0.8 + 0.4 * gust) * whitecap;
+            float nf = texture(foamMap, p / 23.0 + vec2(time * 0.012, time * 0.008)).r * 0.6 + texture(foamMap, p / 7.1 - vec2(time * 0.02, -time * 0.015)).r * 0.4;
             float nw = texture(foamMap, p / 14.0 - windDir * time * 0.03).g * 0.65 + nf * 0.35;
-            float wcA = min(wc, 0.92);
-            foam = max(foam, smoothstep(1.0 - wcA, 1.3 - wcA, nw) * near);
-            amt = max(amt, wc);
-            foam = max(foam, amt * smoothstep(400.0, 3000.0, dist) * 0.6); // far away: the average coverage
+            // (never solid: the billows have holes of dark water, the edges are ragged)
+            float wcF = min(fresh * gk, 0.78);
+            float foam = smoothstep(1.0 - wcF, 1.4 - wcF, nw) * near;
+            float lace = texture(foamMap, vec2(wv.y / 6.0, wv.x / 17.0 - time * 0.02)).r * 0.7 + texture(foamMap, vec2(wv.y / 2.3, wv.x / 6.5)).r * 0.3;
+            float wcA = min(aged * gk, 0.85);
+            foam = max(foam, smoothstep(1.0 - wcA * 0.8, 1.15 - wcA * 0.8, lace) * near * 0.85);
+            float W = clamp(3.8e-6 * pow(windU, 3.4), 0.0, 0.12) * mix(1.0, 0.35, lake) * smoothstep(0.0, 0.15, whitecap);
+            float fl = texture(foamMap, vec2(wv.y / 11.0, wv.x / 31.0) + windDir * time * 0.006).g * 0.65 + texture(foamMap, vec2(wv.y / 4.1, wv.x / 12.0)).r * 0.35;
+            float flecks = smoothstep(1.0 - W * 2.6, 1.08 - W * 2.6, fl * (0.85 + 0.3 * gust)) * (1.0 - gridK) * (1.0 - smoothstep(1500.0, 5000.0, dist));
+            foam = max(foam, flecks * 0.9 * near);
+            foam = max(foam, W * 3.5 * smoothstep(1500.0, 5000.0, dist) * near); // far off: the average cover
+            // spume: in a gale the wind tears foam off the crests and lays it out in long thin streaks along the wind
+            // (the foam texture's streak channel is long along its x: ~30 m along the wind, ~1 m across it), in bands
+            float sl = texture(foamMap, vec2(wv.x / 120.0 - time * 0.004, wv.y / 64.0)).b * 0.7 + texture(foamMap, vec2(wv.x / 47.0, wv.y / 23.0)).b * 0.3;
+            float band = smoothstep(0.35, 0.65, texture(foamMap, vec2(wv.x / 900.0, wv.y / 160.0)).g + gust * 0.3);
+            float streaks = whitecap * whitecap * smoothstep(0.6, 0.72, sl) * band * 0.8 * (1.0 - smoothstep(600.0, 2500.0, dist));
+            // (the sea's edge; on the beach itself the swash brings its own foam, vFoam.z)
+            float shore = (1.0 - smoothstep(0.1, 1.6, wet)) * 0.85 * (0.6 + 0.4 * sin(time * 0.9 + dot(p, vec2(0.05, 0.037)))) * step(0.0, vSea.w);
+            float amt = clamp(max(max(streaks, shore), wk.r), 0.0, 1.0);
+            foam = max(foam, smoothstep(1.0 - amt, 1.25 - amt, nf) * near);
+            // the surf: a breaker's white water and the swash's leading edge, churned (billows, not lace)
+            float sA = min(vFoam.z, 0.9);
+            foam = max(foam, smoothstep(1.0 - sA, 1.3 - sA, nw * 0.7 + nf * 0.3) * near);
+            amt = max(amt, vFoam.z);
+            float bub = max(amt, (fresh + aged * 0.6) * gk); // the bubbles under the foam
             // foam is a rough white diffuser: lit through the wave's own slope (so a breaking face shows its shape)
             vec3 light = sunColor * (max(L.y, 0.0) * 0.9 * csh + 0.05) + mix(horizonColor, skyColor, 0.5) * 0.55;
             vec3 flight = sunColor * (max(dot(N, L), 0.0) * 0.9 * csh * step(0.0, L.y) + 0.05) + mix(horizonColor, skyColor, 0.5) * 0.8;
             col = mix(col, vec3(0.9, 0.93, 0.95) * flight * (0.82 + 0.3 * nw), foam * 0.93);
             // under foam and in a wake: a milky turquoise of bubbles just under the surface; shade by a hull
-            col = mix(col, vec3(0.35, 0.62, 0.66) * light, max(wk.g, amt * 0.35) * (1.0 - foam) * 0.6);
+            col = mix(col, vec3(0.35, 0.62, 0.66) * light, max(wk.g, bub * 0.35) * (1.0 - foam) * 0.6);
             col *= 1.0 - wk.b * 0.55;
             foamCover = max(foam, wk.g * 0.5);
             #if TIER < 2
@@ -875,7 +899,7 @@ export class Ocean {
     // the sun in it and how much of it the water scatters toward the camera
     underwaterPalette(dst, x, z) {
         const u = this.uniforms, f = seaFactors(x || 0, z || 0, _sf), lake = f[1] < 0 ? 1 : 0;
-        const turb = Math.min(1, (1 - smooth01(0.6, 4.5, f[3])) * (0.3 + 0.7 * WATER.whitecap) + WATER.whitecap * 0.35 * (1 - smooth01(6, 40, f[3])));
+        const wc = WATER.whitecap, turb = Math.min(1, (1 - smooth01(0.6, 4.5, f[3])) * (0.3 + 0.7 * wc) + wc * 0.35 * (1 - smooth01(6, 40, f[3])) + wc * wc * 0.25);
         const d = u.deepColor.value, sum = d.r + d.g + d.b;
         const opt = (k, i) => { const O = OPTICS; return (O.ocean[k][i] + (O.coast[k][i] - O.ocean[k][i]) * turb) * (1 - lake) + O.lake[k][i] * lake; };
         const alb = [0, 1, 2].map(i => opt('bb', i) / (opt('a', i) + opt('bb', i)));
