@@ -122,11 +122,11 @@ function applyQuality() {
     const q = settings.quality;
     postfx.setQuality(q, settings); // [postfx] pixel ratio (fixed or adaptive), MSAA, AO, SSR, blur, flare
     nightfx.setQuality(q);
-    renderer.shadowMap.enabled = q !== 'low';
+    renderer.shadowMap.enabled = true; // (low: one small cascade, world.js / shadows.js)
     bloom.enabled = q !== 'low';
     if (world) {
         world.VIEW_TILES = q === 'low' ? 6 : q === 'medium' ? 8 : 9;
-        world.setQuality(q); // shadow cascades, tree shadows, ground detail, fog edge
+        world.setQuality(q); // shadow cascades (1-4), tree shadows, ground detail, fog edge
     }
     scene.traverse(o => { if (o.material) o.material.needsUpdate = true; });
 }
@@ -609,13 +609,13 @@ function warmUploadStep(budgetMs = 6) {
             const maps = lights.every(l => !l.castShadow || l.shadow.map);
             try {
                 if (maps) { sm.autoUpdate = false; sm.needsUpdate = false; }
-                else if (world.sunFar) world.sunFar.shadow.needsUpdate = true;
+                else world.refreshShadows();
                 renderer.setRenderTarget(warmTarget);
                 renderer.render(scene, warmCam);
             } finally {
                 renderer.setRenderTarget(prev);
                 sm.autoUpdate = au; sm.needsUpdate = nu;
-                if (!maps && world.sunFar) world.sunFar.shadow.needsUpdate = true;
+                if (!maps) world.refreshShadows();
                 for (const o of chunk) o.layers.disable(WARM_LAYER);
                 for (const q of hidden) q.visible = false;
                 for (const o of culled) o.frustumCulled = true;
@@ -633,9 +633,8 @@ function warmUpload() {
         if (!o.visible) { hidden.push(o); o.visible = true; }
         if (o.frustumCulled && (o.isMesh || o.isLine || o.isPoints || o.isSprite)) { culled.push(o); o.frustumCulled = false; }
     });
-    const far = world.sunFar && world.sunFar.shadow;
     try {
-        if (far) far.needsUpdate = true;
+        world.refreshShadows();
         warmTarget = warmTarget || new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType });
         const prev = renderer.getRenderTarget();
         renderer.setRenderTarget(warmTarget);
@@ -644,7 +643,7 @@ function warmUpload() {
     } finally {
         for (const o of hidden) o.visible = false;
         for (const o of culled) o.frustumCulled = true;
-        if (far) far.needsUpdate = true; // redrawn properly next frame
+        world.refreshShadows(); // redrawn properly next frame
     }
 }
 

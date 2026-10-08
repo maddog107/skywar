@@ -123,18 +123,33 @@ export class ScenePass extends RenderPass {
     dispose() { this.releaseTarget(); }
 }
 
-// ═════════════ AO (half resolution) ═════════════
-// Scalable ambient obscurance (McGuire et al. 2012) on depth-reconstructed positions and normals.
-// 12 spiral taps rotated by a 4×4 Bayer pattern, then a 4×4 depth-aware blur removes the pattern.
-// Faded out by distance so terrain seen from altitude never darkens; the output also carries the
-// linear depth (G) for the bilateral upsample in the composite.
+// ═════════════ AO and contact shadows (half resolution) ═════════════
+// Ground-truth ambient occlusion (GTAO: Jimenez, Wu, Pesce, Jarabo, "Practical Realtime Strategies for Accurate
+// Indirect Occlusion", 2016) on depth-reconstructed positions and normals: per slice through the view vector, the
+// two horizons found by marching the depth buffer either way, weighted by the cosine of the projected normal
+// (the paper's analytic inner integral), a linear falloff to the radius so far-away surfaces (a jet in front of
+// the ground) never occlude (no halos), and the paper's multi-bounce fit. Slices are rotated by a 4×4 Bayer
+// pattern, which the 4×4 depth-aware blur removes.
+// In the same pass, screen-space contact shadows (after Bend Studio's for Days Gone, and Unreal's): a short ray
+// toward the sun marched through the depth buffer catches what the shadow maps are too coarse for, wheels on the
+// tarmac, crew and vehicles on a deck, a truck a kilometre away sitting on the road.
+// The composite applies occlusion to the ambient light only and contact shadows to the sunlight only: each opaque
+// pixel carries the sun's share of its light in its alpha (shadows.js).
+// Output: (AO, linear depth for the bilateral upsample, contact shadow, -).
+export const SHADING = {
+    low: { slices: 0, steps: 0, contact: 0 },
+    medium: { slices: 0, steps: 0, contact: 0 },
+    high: { slices: 2, steps: 5, contact: 8 },
+    ultra: { slices: 3, steps: 6, contact: 12 },
+};
 const AO_FRAG = /* glsl */`
     ${DEPTH_GLSL}
-    uniform float radiusPerM, radiusMin, radiusMax, intensity, projScale, fadeNear, fadeFar;
+    uniform float radiusPerM, radiusMin, radiusMax, projScale, fadeNear, fadeFar;
+    uniform vec3 sunDirV;            // toward the sun, view space
+    uniform float contactLen, contactFar, sunOn;
     varying vec2 vUv;
-    const int N = 12;
-    const float TURNS = 7.0;
     const float BAYER[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+    const float HALF_PI = 1.5707963;
     vec2 size;
     vec3 posAt(ivec2 p) {
         p = clamp(p, ivec2(0), ivec2(size) - 1);
@@ -146,7 +161,7 @@ const AO_FRAG = /* glsl */`
         ivec2 p = ivec2(gl_FragCoord.xy) * 2;
         float d = texelFetch(tDepth, p, 0).x;
         float z = linDepth(d);
-        if (isSky(d) || z > fadeFar) { gl_FragColor = vec4(1.0, z, 0.0, 1.0); return; }
+        if (isSky(d) || z > max(fadeFar, contactFar)) { gl_FragColor = vec4(1.0, z, 0.0, 1.0); return; }
         vec3 P = viewPos(pixelUv(p, size), z);
         // normal from depth: on each axis use the neighbour on the same surface (smaller step)
         vec3 l = posAt(p - ivec2(1, 0)), r = posAt(p + ivec2(1, 0));
@@ -154,28 +169,74 @@ const AO_FRAG = /* glsl */`
         vec3 dx = abs(l.z - P.z) < abs(r.z - P.z) ? P - l : r - P;
         vec3 dy = abs(b.z - P.z) < abs(t.z - P.z) ? P - b : t - P;
         vec3 n = normalize(cross(dx, dy));
-        // world radius grows with distance (contact shadows under hangars read at 300 m, not just 30 m)
-        float radius = clamp(z * radiusPerM, radiusMin, radiusMax);
-        float ssR = min(radius * projScale / z, 90.0);
-        if (ssR < 1.5) { gl_FragColor = vec4(1.0, z, 0.0, 1.0); return; }
         ivec2 q = ivec2(gl_FragCoord.xy) & 3;
-        float rot = BAYER[q.y * 4 + q.x] / 16.0 * 6.2831853;
-        float r2 = radius * radius, sum = 0.0;
-        float bias = 0.02 + z * 4e-4; // depth-reconstruction noise and terrain facets grow with distance
-        for (int i = 0; i < N; i++) {
-            float a = (float(i) + 0.5) / float(N);
-            float ang = a * TURNS * 6.2831853 + rot;
-            vec2 off = vec2(cos(ang), sin(ang)) * ssR * a;
-            vec3 Q = posAt(p + ivec2(off));
-            vec3 v = Q - P;
-            float vv = dot(v, v), vn = dot(v, n);
-            float f = max(r2 - vv, 0.0);
-            sum += f * f * f * max((vn - bias) / (0.01 * r2 + vv), 0.0);
+        float noise = BAYER[q.y * 4 + q.x] / 16.0;
+        float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+        float ao = 1.0;
+        #if SLICES > 0
+        // world radius grows with distance (hangars and ships read at 300 m, not just 30 m)
+        float radius = clamp(z * radiusPerM, radiusMin, radiusMax);
+        float ssR = min(radius * projScale / z, 80.0);
+        if (z < fadeFar && ssR > 2.0) {
+            vec3 V = normalize(-P);
+            float vis = 0.0;
+            for (int s = 0; s < SLICES; s++) {
+                float phi = (float(s) + noise) * 3.14159265 / float(SLICES);
+                vec2 dir = vec2(cos(phi), sin(phi));
+                vec3 dir3 = vec3(dir, 0.0);
+                vec3 ortho = normalize(dir3 - dot(dir3, V) * V);
+                vec3 axis = normalize(cross(ortho, V));
+                vec3 pn = n - axis * dot(n, axis);
+                float pl = length(pn);
+                float cn = clamp(dot(pn, V) / max(pl, 1e-4), -1.0, 1.0);
+                float na = (dot(pn, ortho) < 0.0 ? -1.0 : 1.0) * acos(cn);
+                // the horizon on each side, starting from the surface's own tangent plane
+                float hc0 = cos(na + HALF_PI), hc1 = cos(na - HALF_PI);
+                float low0 = hc0, low1 = hc1;
+                for (int j = 0; j < STEPS; j++) {
+                    float f = (float(j) + fract(ign + float(j) * 0.618034)) / float(STEPS);
+                    float px = max(pow(f, 1.25) * ssR, float(j) + 1.0); // a little denser near the pixel
+                    ivec2 o = ivec2(round(dir * px));
+                    vec3 w0 = posAt(p + o) - P, w1 = posAt(p - o) - P;
+                    float l0 = length(w0), l1 = length(w1);
+                    // linear falloff over the outer 40 % of the radius: nothing beyond it occludes
+                    float f0 = clamp((radius - l0) / (0.4 * radius), 0.0, 1.0), f1 = clamp((radius - l1) / (0.4 * radius), 0.0, 1.0);
+                    hc0 = max(hc0, mix(low0, dot(w0, V) / max(l0, 1e-4), f0));
+                    hc1 = max(hc1, mix(low1, dot(w1, V) / max(l1, 1e-4), f1));
+                }
+                float h0 = acos(clamp(hc0, -1.0, 1.0)), h1 = -acos(clamp(hc1, -1.0, 1.0));
+                h0 = na + min(h0 - na, HALF_PI); h1 = na + max(h1 - na, -HALF_PI);
+                float sn = sin(na);
+                vis += pl * 0.25 * ((cn + 2.0 * h0 * sn - cos(2.0 * h0 - na)) + (cn + 2.0 * h1 * sn - cos(2.0 * h1 - na)));
+            }
+            ao = clamp(vis / float(SLICES), 0.0, 1.0);
+            // multiple bounces off the occluders (Jimenez 2016's fit, albedo 0.3)
+            ao = max(ao, ((0.2797 * ao - 0.7968) * ao + 1.5169) * ao);
+            ao = mix(ao, 1.0, smoothstep(fadeNear, fadeFar, z));
         }
-        // (× radius: SAO's vn / vv term is in 1/metres, this keeps the strength independent of the radius)
-        float ao = max(0.0, 1.0 - sum * intensity * radius / (r2 * r2 * r2) * (5.0 / float(N)));
-        ao = mix(ao, 1.0, smoothstep(fadeNear, fadeFar, z));
-        gl_FragColor = vec4(ao, z, 0.0, 1.0);
+        #endif
+        float cs = 0.0;
+        #if CSTEPS > 0
+        float ndl = dot(n, sunDirV);
+        if (sunOn > 0.5 && ndl > 0.0 && z < contactFar) {
+            // a ray toward the sun, a few dozen pixels long (longer in metres with distance), from a hair off the surface
+            float len = clamp(z * 0.025, 0.2, contactLen);
+            vec3 R0 = P + n * (0.01 + z * 0.001);
+            float thick = max(0.3, len * 0.5), bias = 0.015 + z * 0.0012;
+            for (int i = 0; i < CSTEPS; i++) {
+                float f = (float(i) + ign) / float(CSTEPS);
+                vec3 R = R0 + sunDirV * (len * f);
+                if (-R.z < cameraNear) break;
+                vec2 ru = R.xy / (-R.z * invProj) * 0.5 + 0.5;
+                if (ru.x < 0.0 || ru.y < 0.0 || ru.x > 1.0 || ru.y > 1.0) break;
+                float sz = linDepth(texelFetch(tDepth, ivec2(ru * size), 0).x);
+                float dz = -R.z - sz; // > 0: something in front of the ray, nearer the camera
+                if (dz > bias && dz < thick) { cs = 1.0 - f * f; break; }
+            }
+            cs *= smoothstep(0.0, 0.12, ndl) * (1.0 - smoothstep(contactFar * 0.6, contactFar, z));
+        }
+        #endif
+        gl_FragColor = vec4(ao, z, cs, 1.0);
     }`;
 
 const AO_BLUR_FRAG = /* glsl */`
@@ -184,14 +245,15 @@ const AO_BLUR_FRAG = /* glsl */`
     void main() {
         ivec2 p = ivec2(gl_FragCoord.xy);
         ivec2 sz = textureSize(tAO, 0) - 1;
-        vec2 c = texelFetch(tAO, p, 0).xy;
-        float sum = 0.0, wsum = 0.0;
+        vec3 c = texelFetch(tAO, p, 0).xyz;
+        vec2 sum = vec2(0.0); float wsum = 0.0;
         for (int y = -2; y < 2; y++) for (int x = -2; x < 2; x++) {
-            vec2 s = texelFetch(tAO, clamp(p + ivec2(x, y), ivec2(0), sz), 0).xy;
+            vec3 s = texelFetch(tAO, clamp(p + ivec2(x, y), ivec2(0), sz), 0).xyz;
             float w = max(0.0, 1.0 - abs(s.y - c.y) / (c.y * 0.04 + 0.05));
-            sum += s.x * w; wsum += w;
+            sum += s.xz * w; wsum += w;
         }
-        gl_FragColor = vec4(wsum > 0.0 ? sum / wsum : c.x, c.y, 0.0, 1.0);
+        vec2 r = wsum > 0.0 ? sum / wsum : c.xz;
+        gl_FragColor = vec4(r.x, c.y, r.y, 1.0);
     }`;
 
 // ═════════════ Water reflections (half resolution) ═════════════
@@ -311,14 +373,14 @@ const SUNVIS_FRAG = /* glsl */`
 const COMPOSITE_FRAG = /* glsl */`
     ${DEPTH_GLSL}
     uniform sampler2D tColor, tAO, tSSR, tSunVis;
-    uniform float aoStrength, ssrOn, aoOn;
+    uniform float aoStrength, ssrOn, aoOn, contactStrength;
     uniform vec3 camPos, camRotY; // world y of a view-space position = camPos.y + dot(camRotY, P)
     uniform vec2 sunUv;
     uniform vec3 flareColor;
     uniform float aspect, flareOn;
     uniform mat4 reproj; // motion blur: previous projection × previous view × current camera world
     uniform float blurOn, blurScale, blurMaxPx, nearCut;
-    uniform float debugView; // 1: AO, 2: water mask (blue) + reflection weight (white)
+    uniform float debugView; // 1: AO, 2: water mask (blue) + reflection weight (white), 4: contact shadows (r), sun share (b)
     // under water (ocean.js / water.js): the camera at or below the surface
     uniform float underOn;
     uniform vec3 underColor, underExt;
@@ -396,17 +458,22 @@ const COMPOSITE_FRAG = /* glsl */`
             #ifdef USE_AO
             if (aoOn > 0.5) {
                 ivec2 hs = textureSize(tAO, 0) - 1;
-                float sum = 0.0, wsum = 0.0;
+                vec2 sum = vec2(0.0); float wsum = 0.0;
                 for (int k = 0; k < 4; k++) {
                     ivec2 o = ivec2(k & 1, k >> 1);
-                    vec2 s = texelFetch(tAO, min(h0 + o, hs), 0).xy;
+                    vec3 s = texelFetch(tAO, min(h0 + o, hs), 0).xyz;
                     float bw = (o.x == 1 ? f.x : 1.0 - f.x) * (o.y == 1 ? f.y : 1.0 - f.y) + 1e-3;
                     float w = bw / (1e-3 + abs(s.y - z) / z);
-                    sum += s.x * w; wsum += w;
+                    sum += s.xz * w; wsum += w;
                 }
-                float ao = sum / wsum;
-                c.rgb *= mix(1.0, ao, aoStrength);
-                if (debugView == 1.0) dbg = vec3(mix(1.0, ao, aoStrength));
+                vec2 oc = sum / wsum; // (AO, contact shadow)
+                // the sun's share of this pixel's light (shadows.js writes 1 + share / 2 into an opaque pixel's
+                // alpha): occlusion dims the rest (sky and bounce light), contact shadows the sun's part
+                float share = c.a >= 1.0 ? clamp((c.a - 1.0) * 2.0, 0.0, 1.0) : 0.0;
+                float ao = mix(1.0, oc.x, aoStrength);
+                c.rgb *= (1.0 - (1.0 - ao) * (1.0 - share)) * (1.0 - oc.y * share * contactStrength);
+                if (debugView == 1.0) dbg = vec3(ao);
+                if (debugView == 4.0) dbg = vec3(1.0 - oc.y * contactStrength, 1.0 - oc.y * share * contactStrength, share);
             }
             #endif
             #ifdef USE_SSR
@@ -478,15 +545,19 @@ export class SceneFXPass extends Pass {
         this.ao = false; this.ssr = 0; this.flare = false; this.blur = 0; // what the quality level allows
         this.aoActive = false; this.ssrActive = false; this.flareActive = false; this.blurActive = false; // this frame
         this.width = 1; this.height = 1;
-        this.aoRT = halfFloatTarget(1, 1, THREE.RGFormat, THREE.NearestFilter);
-        this.aoBlurRT = halfFloatTarget(1, 1, THREE.RGFormat, THREE.NearestFilter);
+        this.aoRT = halfFloatTarget(1, 1, THREE.RGBAFormat, THREE.NearestFilter);   // (AO, depth, contact shadow)
+        this.aoBlurRT = halfFloatTarget(1, 1, THREE.RGBAFormat, THREE.NearestFilter);
         this.ssrRT = halfFloatTarget(1, 1, THREE.RGBAFormat, THREE.NearestFilter);
         this.visRT = [0, 1].map(() => halfFloatTarget(1, 1, THREE.RGBAFormat, THREE.NearestFilter));
         this.visIdx = 0;
         this.aoMat = fxMaterial(AO_FRAG, {
-            ...depthUniforms(), radiusPerM: { value: 0.03 }, radiusMin: { value: 2.5 }, radiusMax: { value: 8 },
-            intensity: { value: 1.0 }, projScale: { value: 500 }, fadeNear: { value: 160 }, fadeFar: { value: 650 },
-        });
+            ...depthUniforms(), radiusPerM: { value: 0.05 }, radiusMin: { value: 2 }, radiusMax: { value: 10 },
+            projScale: { value: 500 }, fadeNear: { value: 160 }, fadeFar: { value: 650 },
+            sunDirV: { value: new THREE.Vector3(0, 1, 0) }, sunOn: { value: 0 }, contactLen: { value: 2.5 }, contactFar: { value: 900 },
+        }, { SLICES: 2, STEPS: 4, CSTEPS: 8 });
+        this.sunDirW = new THREE.Vector3(0, 1, 0); // toward the sun (world), set by PostFX; sunUp: it's lighting the world
+        this.sunUp = false;
+        this.shading = SHADING.high;
         this.aoBlurMat = fxMaterial(AO_BLUR_FRAG, { tAO: { value: this.aoRT.texture } });
         this.ssrMat = fxMaterial(SSR_FRAG, {
             ...depthUniforms(), tColor: { value: null }, viewRot: { value: new THREE.Matrix3() }, camRot: { value: new THREE.Matrix3() },
@@ -499,7 +570,7 @@ export class SceneFXPass extends Pass {
         });
         this.compMat = fxMaterial(COMPOSITE_FRAG, {
             ...depthUniforms(), tColor: { value: null }, tAO: { value: this.aoBlurRT.texture }, tSSR: { value: this.ssrRT.texture },
-            tSunVis: { value: this.visRT[0].texture }, aoStrength: { value: 0.75 }, aoOn: { value: 0 }, ssrOn: { value: 0 },
+            tSunVis: { value: this.visRT[0].texture }, aoStrength: { value: 0.85 }, aoOn: { value: 0 }, ssrOn: { value: 0 }, contactStrength: { value: 0.9 },
             camPos: { value: new THREE.Vector3() }, camRotY: { value: new THREE.Vector3() }, sunUv: { value: new THREE.Vector2() },
             flareColor: { value: new THREE.Color() }, aspect: { value: 1 }, flareOn: { value: 0 },
             reproj: { value: new THREE.Matrix4() }, blurOn: { value: 0 }, blurScale: { value: 0 }, blurMaxPx: { value: 20 }, nearCut: { value: 0 },
@@ -514,8 +585,16 @@ export class SceneFXPass extends Pass {
         this.groundDist = 1e9;
     }
 
-    configure({ ao, ssr, flare, blur }) {
-        this.ao = !!ao; this.ssr = ssr | 0; this.flare = !!flare; this.blur = blur | 0;
+    configure({ ao, ssr, flare, blur, level }) {
+        this.ssr = ssr | 0; this.flare = !!flare; this.blur = blur | 0;
+        // ambient occlusion and contact shadows: one pass (SHADING by quality; `ao` alone turns on the ultra set)
+        const sh = this.shading = SHADING[level] || (ao ? SHADING.ultra : SHADING.low);
+        this.ao = sh.slices > 0 || sh.contact > 0;
+        const ad = this.aoMat.defines;
+        if (ad.SLICES !== sh.slices || ad.STEPS !== Math.max(1, sh.steps) || ad.CSTEPS !== sh.contact) {
+            ad.SLICES = sh.slices; ad.STEPS = Math.max(1, sh.steps); ad.CSTEPS = sh.contact;
+            this.aoMat.needsUpdate = true;
+        }
         const defs = this.compMat.defines;
         const want = { USE_AO: this.ao, USE_SSR: this.ssr > 0, USE_FLARE: this.flare, USE_BLUR: this.blur > 0 };
         let changed = false;
@@ -534,7 +613,8 @@ export class SceneFXPass extends Pass {
     // the camera is under water (or its near plane is): PostFX sets this from the wave field
     get underActive() { return this.underwater > 0; }
     prepare(cam, blurOn) {
-        this.aoActive = this.ao && this.groundDist < this.aoMat.uniforms.fadeFar.value;
+        const au = this.aoMat.uniforms;
+        this.aoActive = this.ao && this.groundDist < Math.max(this.shading.slices ? au.fadeFar.value : 0, this.shading.contact && this.sunUp ? au.contactFar.value : 0);
         this.ssrActive = this.ssr > 0 && !this.noWater && cam.position.y > 0.3 && this.waterVisible(cam);
         this.flareActive = this.flare && this.sun.on > 0;
         this.blurActive = this.blur > 0 && blurOn;
@@ -572,6 +652,8 @@ export class SceneFXPass extends Pass {
             const aoU = this.aoMat.uniforms;
             setDepthUniforms(aoU, cam, depth, src.samples);
             aoU.projScale.value = cam.projectionMatrix.elements[5] * 0.5 * src.height;
+            aoU.sunDirV.value.copy(this.sunDirW).transformDirection(cam.matrixWorldInverse);
+            aoU.sunOn.value = this.sunUp ? 1 : 0;
             this.renderQuad(renderer, this.aoMat, this.aoRT);
             this.renderQuad(renderer, this.aoBlurMat, this.aoBlurRT);
         }
@@ -1311,10 +1393,10 @@ export class PostFX {
         // start where today's fixed setting would be
         let start = 0;
         while (start < levels.length - 1 && levels[start] > Math.min(dpr, q.pr) + 1e-6) start++;
-        this.sceneFX.configure({ ao: q.ao, ssr: q.ssr, flare: q.flare, blur: q.blur });
+        this.sceneFX.configure({ ao: q.ao, ssr: q.ssr, flare: q.flare, blur: q.blur, level: this.quality });
         this.dof.setTaps(Math.max(16, q.dof));
         this.scenePass.samples = q.msaa;
-        if (!q.msaa && !q.ao && !q.ssr && !q.flare && !q.blur && !q.dof) this.scenePass.releaseTarget();
+        if (!q.msaa && !this.sceneFX.ao && !q.ssr && !q.flare && !q.blur && !q.dof) this.scenePass.releaseTarget();
         // with 4× MSAA the geometry edges are clean: FXAA only softly mops up alpha-tested foliage
         this.outputAA.uniforms.subpixel.value = q.msaa ? 0.35 : 0.75;
         this.dyn.configure(levels, start, dynamic);
@@ -1354,6 +1436,9 @@ export class PostFX {
             fx.fogDensity = world.scene.fog ? world.scene.fog.density : 0;
             fx.groundDist = cam.position.y - Math.max(terrainHeight(cam.position.x, cam.position.z), 0);
             this.updateSun(world, cam);
+            // contact shadows follow the sun (or the moon) while it lights the world
+            if (world.sunDir) fx.sunDirW.copy(world.sunDir);
+            fx.sunUp = !!(world.sun && world.sun.intensity > 0.05);
         } else { fx.groundDist = 1e9; fx.sun.on = 0; }
 
         // the targeting pod's video, while it's up (the FLIR's hot spots bloom a little; the rest doesn't)
