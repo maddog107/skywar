@@ -107,9 +107,35 @@ export const CSM = {
     terrainTex: null,
     terrainInfo: new Float32Array([0, 0, 1, 0]),
 };
-const _emptyTerrain = new THREE.DataTexture(new Uint16Array(4), 1, 1, THREE.RGBAFormat, THREE.HalfFloatType);
-_emptyTerrain.needsUpdate = true;
-CSM.terrainTex = _emptyTerrain;
+// the terrain-shadow grid's texture (terrainshadow.js fills it): made here, before any material copies the uniform
+export const TERRAIN_SHADOW = { N: 512, cell: 100 };
+{
+    const N = TERRAIN_SHADOW.N, t = new THREE.DataTexture(new Uint16Array(N * N * 2), N, N, THREE.RGFormat, THREE.HalfFloatType);
+    t.minFilter = t.magFilter = THREE.LinearFilter;
+    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+    t.generateMipmaps = false;
+    t.needsUpdate = true;
+    CSM.terrainTex = t;
+}
+// The terrain's shadow at a world point (1 lit): below the shadow top, in shadow; the sun's disc (csmInfo.y: its
+// angular radius) softens it over the occluder's distance either side, never sharper than the grid allows (.w).
+// Also for custom shaders (the sea): declare nothing else, include after csmInfo is declared or use TERRAIN_SHADOW_GLSL.
+export const TERRAIN_SHADOW_FN = /* glsl */`
+    float terrainSunShadow( vec3 wp ) {
+        if ( csmTerrainInfo.w <= 0.0 ) return 1.0;
+        vec2 uv = ( wp.xz - csmTerrainInfo.xy ) * csmTerrainInfo.z;
+        if ( uv.x <= 0.0 || uv.y <= 0.0 || uv.x >= 1.0 || uv.y >= 1.0 ) return 1.0;
+        vec2 t = texture2D( csmTerrain, uv ).rg; // shadow top (m), distance to what casts it (m)
+        float pw = max( t.y * csmInfo.y, csmTerrainInfo.w );
+        float edge = smoothstep( 0.0, 0.03, min( min( uv.x, uv.y ), min( 1.0 - uv.x, 1.0 - uv.y ) ) );
+        return mix( 1.0, smoothstep( t.x - pw, t.x + pw, wp.y ), edge );
+    }`;
+// for a custom shader: the uniforms and the function (add CSM_UNIFORMS() to its uniforms)
+export const TERRAIN_SHADOW_GLSL = /* glsl */`
+    uniform highp sampler2D csmTerrain;
+    uniform vec4 csmTerrainInfo, csmInfo;
+    ${TERRAIN_SHADOW_FN}`;
+export const CSM_UNIFORMS = () => ({ csmInfo: { value: CSM.info }, csmData: { value: CSM.data }, csmTerrain: { value: CSM.terrainTex }, csmTerrainInfo: { value: CSM.terrainInfo } });
 
 // filter code per cascade, by the cascade count the program was compiled with
 function cascadeBlock(k) {
@@ -143,6 +169,9 @@ export const CSM_GLSL = /* glsl */`
     #define CSM_ON
     uniform vec4 csmInfo;
     uniform vec4 csmData[ ${CSM_MAX} ];
+    uniform highp sampler2D csmTerrain;
+    uniform vec4 csmTerrainInfo; // x0, z0 of the grid texture's edge, 1 / its span, narrowest penumbra (m; 0: off)
+    ${TERRAIN_SHADOW_FN}
     // toward the light, in shadow-map depth (the reversed buffer has the light at 1)
     #ifdef USE_REVERSED_DEPTH_BUFFER
         #define CSM_UP( z, dz ) ( ( z ) + ( dz ) )
@@ -257,6 +286,8 @@ export function installCascadeShader() {
                 float csmCascade;
                 float csmS = ( directLight.visible && receiveShadow ) ? csmShadow( dot( geometryNormal, directLight.direction ), csmCascade ) : 1.0;
                 directLight.color *= SHADOW_FADE( mix( 1.0, csmS, directionalLightShadow.shadowIntensity ) );
+                // the terrain's own shadow at any range (mountains at dawn and dusk), on everything
+                directLight.color *= mix( 1.0, terrainSunShadow( cameraPosition + ( vec4( geometryPosition, 0.0 ) * viewMatrix ).xyz ), directionalLightShadow.shadowIntensity );
                 if ( csmInfo.w > 0.5 ) directLight.color *= ${DEBUG_TINT.replace(/cascade/g, 'csmCascade')};
             } else {
                 ${own}
@@ -274,7 +305,7 @@ export function installCascadeShader() {
     C.lights_fragment_begin = '#ifndef SHADOW_FADE\n#define SHADOW_FADE( s ) ( s )\n#endif\n' + src.slice(0, start) + block + src.slice(end);
     C.shadowmap_pars_fragment += '\n' + CSM_GLSL;
     // the uniforms, for every built-in material with shadows (and custom ones that merge UniformsLib.lights)
-    const U = { csmInfo: { value: CSM.info }, csmData: { value: CSM.data } };
+    const U = CSM_UNIFORMS();
     for (const k in THREE.ShaderLib) {
         const L = THREE.ShaderLib[k];
         if (L.fragmentShader && L.fragmentShader.includes('<shadowmap_pars_fragment>')) Object.assign(L.uniforms, U);
@@ -287,7 +318,7 @@ export const CSM_INSTALLED = installCascadeShader();
 // ═══════════════════════════════════════════════════════════════
 // The cascades: lights, placement, update schedule, caster culling
 const _ox = new THREE.Vector3(), _oy = new THREE.Vector3(), _dir = new THREE.Vector3(), _p = new THREE.Vector3(), _snap = new THREE.Vector3();
-const _sph = new THREE.Sphere(), _lastSun = new THREE.Vector3();
+const _sph = new THREE.Sphere();
 
 export class SunShadows {
     // scene: the world scene; sun: its DirectionalLight (cascade 0, the one that carries the light);
@@ -301,6 +332,7 @@ export class SunShadows {
         this.frame = 0;
         this.quality = null;
         this.sunDir = new THREE.Vector3(0, 1, 0);
+        this.lastSun = new THREE.Vector3(); // the direction the light-space axes were made for
         this.ox = new THREE.Vector3(1, 0, 0); this.oy = new THREE.Vector3(0, 0, 1);
         this.intensity = 1;
         this.casters = [0, 0, 0, 0]; // shadow casters drawn per cascade last time it rendered (stats)
@@ -366,8 +398,8 @@ export class SunShadows {
         this.frame++;
         const s = sunDir;
         // a new sun direction re-renders everything (the clock running moves it in small steps)
-        const sunMoved = _lastSun.distanceToSquared(s) > 1e-10;
-        if (sunMoved) { _lastSun.copy(s); this.sunDir.copy(s); lightBasis(s, this.ox, this.oy); }
+        const sunMoved = this.lastSun.distanceToSquared(s) > 1e-10;
+        if (sunMoved) { this.lastSun.copy(s); this.sunDir.copy(s); lightBasis(s, this.ox, this.oy); }
         const ox = this.ox, oy = this.oy;
         camera.getWorldDirection(_dir);
         const cp = camera.position;

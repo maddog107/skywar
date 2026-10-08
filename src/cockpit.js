@@ -610,7 +610,7 @@ export class Cockpit {
         this.sun.position.copy(world.sunDir).multiplyScalar(4);
         this.sun.target.position.set(0, 0, 0);
         this.sun.color.copy(world.sun.color);
-        this.sun.intensity = world.sun.intensity * 0.9;
+        this.sun.intensity = world.sun.intensity * 0.9 * (world.sunVisibility ?? 1); // (in a mountain's shadow: none)
         this.hemi.color.copy(world.hemi.color);
         this.hemi.groundColor.copy(world.hemi.groundColor).multiplyScalar(0.6);
         this.hemi.intensity = world.hemi.intensity * 0.8;

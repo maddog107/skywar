@@ -12,6 +12,7 @@ import { Ocean } from './ocean.js';
 import { foamTexture } from './shipfx.js';
 import { fireLights } from './firelight.js'; // [night] fire light budget (quality, ambient level)
 import { SunShadows, CSM, SUN_TAN_RADIUS } from './shadows.js'; // camera-centred cascaded sun shadows
+import { TerrainShadow } from './terrainshadow.js'; // the mountains' shadows at any range (a worker sweeps them)
 import { Weather, WX_FOG, GROUND_FOG_GLSL, BANK_GLSL, KEY_HOURS, sunAt, MOON_DIR, paletteAt, applyWeatherToPalette, newPalette, nightOf, timeKeyFor, groundFogTau, FOG_W } from './weather.js'; // [weather] the sky model
 // the height function and the airbase list live in terraincore.js (no three.js: the terrain worker uses them too)
 export { BASES, terrainHeight };
@@ -546,6 +547,8 @@ export class World {
         this.scene.add(this.sun);
         this.scene.add(this.sun.target);
         this.csm = new SunShadows(this.scene, this.sun, groundHeight);
+        this.terrainShadow = new TerrainShadow(this.renderer);
+        this.sunVisibility = 1; // the terrain's shadow where the camera is (the cockpit's sun follows it)
         this.hemi = new THREE.HemisphereLight(0x9cc4ec, 0x4a5a3a, 1);
         this.scene.add(this.hemi);
     }
@@ -1753,8 +1756,11 @@ export class World {
         // trees sway with the wind, harder in a storm
         const ws = Math.hypot(wind.x, wind.z), storm = this.weather === 'storm' ? 1 : this.weather === 'rain' ? 0.5 : 0;
         this.uWind.value.set(ws > 0.1 ? wind.x / ws : 1, 0.35 + ws * 0.06 + storm * 0.9, ws > 0.1 ? wind.z / ws : 0);
-        // sun shadows: cascades round the camera, the finest on the focus (the player's jet) when it's close
+        // sun shadows: cascades round the camera, the finest on the focus (the player's jet) when it's close; the
+        // terrain's own shadow at any range
         this.csm.update(camera, focus, this.sunDir);
+        this.terrainShadow.update(cam, this.sunDir);
+        this.sunVisibility = this.terrainShadow.visibilityAt(cam.x, cam.y, cam.z);
         this.updateGrass(camera, dt);
         this.updateTerrain(focus);
         this.craters.update(dt);
