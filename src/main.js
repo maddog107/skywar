@@ -559,6 +559,7 @@ function launch() {
     // compile every material now so ships, targets and explosions don't hitch on first sight
     try {
         game.effects.explosion(new THREE.Vector3(0, -500, 0), 0.1);
+        game.effects.water.warm(); // (splash.js: its particle systems and textures, so the first splash doesn't hitch)
         renderer.compile(scene, camera);
         warmUpload();
         cockpit.viewModel.prewarm(SLOTS); // every weapon and the arms, so the first draw on foot doesn't hitch

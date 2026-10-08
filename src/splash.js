@@ -281,6 +281,13 @@ export class WaterFX {
         } else if (fx && fx.drops && fx.mist) { this.drops = fx.drops; this.mist = fx.mist; this.jets = fx.jets || fx.drops; } // (tests: stub systems)
         return this.drops ? this : null;
     }
+    // at launch (main.js): build the systems and their textures and upload the textures now (the shaders are compiled
+    // with the scene's), so the first splash of the sortie doesn't hitch
+    warm() {
+        if (!this.ready()) return;
+        const g = this.game, r = g && g.world && g.world.renderer;
+        if (r && r.initTexture) try { for (const t of [sprayAtlas(), jetAtlas(), mistAtlas()]) r.initTexture(t); } catch (e) { /* non-fatal */ }
+    }
     get game() { return this.fx && this.fx.game; }
     get field() { const g = this.game; return g && g.naval && g.naval.fx && g.naval.fx.flyby ? g.naval.fx.flyby.field : null; }
     camPos() { const g = this.game; return g && g.camera ? g.camera.position : null; }
