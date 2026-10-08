@@ -67,6 +67,8 @@ function patchGeometry(g) {
 const VERT = /* glsl */`
     attribute vec4 iPatch; // x0, z0, size, level
     uniform float gridN, lodR0, foamJ;
+    uniform sampler2D wakeMap;
+    uniform vec4 wakeInfo;   // x0, z0, 1/size, on
     varying vec3 vWorld;
     varying vec2 vRest;
     varying vec3 vNormal;
@@ -107,8 +109,18 @@ const VERT = /* glsl */`
         }
         float d = lodDist(p);
         vec4 sea = seaFactors(p);
+        vec3 gains = setGains(sea);
+        // a low flyby's downwash presses the short waves flat while it roughens them with ripples (waterwake.js)
+        if (wakeInfo.w > 0.5) {
+            vec2 wu = (p - wakeInfo.xy) * wakeInfo.z;
+            wu.y = 1.0 - wu.y;
+            if (wu.x > 0.0 && wu.y > 0.0 && wu.x < 1.0 && wu.y < 1.0) {
+                float ag = textureLod(wakeMap, wu, 0.0).a;
+                gains *= vec3(1.0, 1.0 - 0.3 * ag, 1.0 - 0.65 * ag);
+            }
+        }
         vec3 Tx, Tz; float jac; vec2 jp;
-        vec3 disp = waveField(p, d, setGains(sea), Tx, Tz, jac, jp);
+        vec3 disp = waveField(p, d, gains, Tx, Tz, jac, jp);
         // surf: the swell shoaling and breaking on a beach (height only)
         vec2 sg; float br, crest;
         float hs = shoreWave(p, sea, sg, br, crest);
@@ -244,6 +256,14 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
         float lake = vSea.y < 0.0 ? 1.0 : 0.0; // fresh water (watermap.js: no way out to the sea): its own colour, calmer
         float s2u = 0.00015;    // slope variance the normal at this pixel doesn't carry (grows below)
         float detLost;          // share of the small-scale detail faded out here
+        // the wake map (shipfx.js): foam, milky water, hull shade, agitation (a low flyby's ripples, waterwake.js)
+        vec4 wk = vec4(0.0);
+        if (wakeInfo.w > 0.5) {
+            vec2 wu = (p - wakeInfo.xy) * wakeInfo.z;
+            wu.y = 1.0 - wu.y; // drawn looking straight down with -z up the image (shipfx.js WakeMap)
+            if (wu.x > 0.0 && wu.y > 0.0 && wu.x < 1.0 && wu.y < 1.0) wk = texture(wakeMap, wu);
+        }
+        float agit = wk.a * (1.0 - smoothstep(4000.0, 12000.0, dist));
         // ── small-scale detail ──
         #if TIER >= 2
         {
@@ -257,6 +277,13 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
             float unres = max(f1.z - dot(f1.xy, f1.xy), 0.0) + 0.3 * max(f2.z - dot(f2.xy, f2.xy), 0.0);
             s2u += unres * det * det;
             detLost = 1.0 - det / max(fftInfo.z, 1e-3);
+            // catspaws: the blown water's ripples, the detail again at a third of its scale, turned
+            if (agit > 0.01) {
+                vec4 f3 = texture(fftMap, mat2(0.6, 0.8, -0.8, 0.6) * vRest * fftInfo.x * 3.1 + time * 0.07);
+                float ak = agit * (1.0 - smoothstep(fftInfo.w * 0.3, fftInfo.w, dist));
+                N = normalize(N - vec3(f3.x, 0.0, f3.y) * 1.3 * ak * N.y);
+                s2u += ak * max(f3.z - dot(f3.xy, f3.xy), 0.0) * 1.7;
+            }
         }
         #else
         {
@@ -265,6 +292,10 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
             float r3 = mix(0.5, texture2D(detailMap, p / 17.0 + vec2(-time * 0.02, time * 0.017)).r, 1.0 - smoothstep(0.6, 3.0, fp));
             float k = mix(0.1, 1.0, 1.0 - smoothstep(60.0, 900.0, dist));
             vec2 rip = (vec2(r1 - r3, r2 - r3)) * 0.3 * k;
+            if (agit > 0.01) {
+                float a1 = texture2D(detailMap, p / 5.3 + vec2(time * 0.05, -time * 0.04)).r, a2 = texture2D(detailMap, p / 3.7 - vec2(time * 0.04, time * 0.06)).r;
+                rip += vec2(a1 - 0.5, a2 - 0.5) * 0.5 * agit * (1.0 - smoothstep(300.0, 1500.0, dist));
+            }
             N = normalize(N - vec3(rip.x, 0.0, rip.y));
             detLost = 1.0 - k;
         }
@@ -278,7 +309,7 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
         vec2 cm = vec2(0.00316 * windU, 0.003 + 0.00192 * windU) * mix(1.0, 0.5, lake);
         float geomLost = max(flatK / 0.85, smoothstep(250.0, 5000.0, dist));
         vec2 s2w = vec2(s2u) + cm * 0.55 * detLost + vec2(geomS2 * 0.5) * geomLost;
-        s2w = min(s2w, cm + 0.004);
+        s2w = min(s2w, cm + 0.004) + agit * 0.03; // (blown water: rougher than the wind's own sea)
         float csh = cloudSunShadowAt(vWorld);
         vec3 col;
         float alpha = 1.0;
@@ -454,12 +485,6 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
             float streak = texture(foamMap, vec2(wv.y / 6.0, wv.x / 70.0 - time * 0.01)).b * texture(foamMap, vec2(wv.y / 23.0, wv.x / 240.0)).g;
             float streaks = whitecap * whitecap * smoothstep(0.3, 0.55, streak * (0.6 + 0.8 * gust)) * 0.65;
             float shore = (1.0 - smoothstep(0.1, 1.6, wet)) * 0.85 * (0.6 + 0.4 * sin(time * 0.9 + dot(p, vec2(0.05, 0.037))));
-            vec4 wk = vec4(0.0);
-            if (wakeInfo.w > 0.5) {
-                vec2 wu = (p - wakeInfo.xy) * wakeInfo.z;
-                wu.y = 1.0 - wu.y; // drawn looking straight down with -z up the image (shipfx.js WakeMap)
-                if (wu.x > 0.0 && wu.y > 0.0 && wu.x < 1.0 && wu.y < 1.0) wk = texture(wakeMap, wu);
-            }
             float nf = texture(foamMap, p / 23.0 + vec2(time * 0.012, time * 0.008)).r * 0.6 + texture(foamMap, p / 7.1 - vec2(time * 0.02, -time * 0.015)).r * 0.4;
             float amt = clamp(max(max(streaks, max(shore, vFoam.z)), wk.r), 0.0, 1.0);
             float near = 1.0 - smoothstep(3000.0, 9000.0, dist);

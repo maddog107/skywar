@@ -428,7 +428,7 @@ const TRAIL_FS = /* glsl */`
         float core = (1.0 - smoothstep(0.15, 1.0, x)) * exp(-vD.x / 40.0) * vD.z;
         float foam = clamp(core * (0.25 + 0.9 * n), 0.0, 0.8); // the ocean turns this into lace (its foam threshold)
         float milk = (1.0 - smoothstep(0.4, 1.0, x)) * exp(-vD.x / 220.0) * vD.z * 0.45;
-        gl_FragColor = vec4(foam, milk, 0.0, 1.0);
+        gl_FragColor = vec4(foam, milk, 0.0, 0.0); // (A: agitation, the flyby marks' channel: waterwake.js)
     }`;
 export class WakeTrail {
     constructor(shipfx, ac) {
