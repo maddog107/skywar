@@ -182,7 +182,9 @@ export function lowSources(game, out = []) {
         out.push({
             kind: 'jet', src: a, x: a.pos.x, y: a.pos.y, z: a.pos.z, vx: a.vel.x, vz: a.vel.z, speed: Math.hypot(a.vel.x, a.vel.z),
             pitch: Math.asin(clamp(_f.y, -1, 1)), fx: _f.x, fz: _f.z, thrust: a.alive && !a.flameout ? m * (acc || 0) : 0, mass: m, span: a.spec.span || 10,
-            k: a.onWater ? 0.45 : 1, // (a hull on the water: its own wake is shipfx's; the propwash adds a little)
+            // (a propeller's slipstream is a broad, slow jet: far weaker at the water than a jet's exhaust of the same
+            // thrust; a hull on the water: its own wake and spray are seaplane.js's, the propwash only ruffles it)
+            k: (a.spec.prop ? 0.3 : 1) * (a.onWater ? 0.45 : 1),
         });
     }
     for (const t of AIR_TARGETS) {
@@ -246,10 +248,10 @@ export function washOf(s, hits) {
     }
     // exhaust: lands x behind the nozzle along the flight path
     const h0 = s.y - (surf === surf ? surf : 0);
-    const ex = exhaustWash(Math.max(h0, 0), s.thrust * s.k, s.pitch);
-    if (ex.u > 1) {
+    const ex = exhaustWash(Math.max(h0, 0), s.thrust, s.pitch);
+    if (ex.u * s.k > 1) {
         const hx = s.x - s.fx * ex.x, hz = s.z - s.fz * ex.x;
-        if (water(hx, hz)) hits.push({ kind: 'exhaust', x: hx, z: hz, y: surf === surf ? surf : 0, w: clamp(Math.max(h0, 0) * 0.75 + 2.5, 2.5, 45), u: ex.u });
+        if (water(hx, hz)) hits.push({ kind: 'exhaust', x: hx, z: hz, y: surf === surf ? surf : 0, w: clamp(Math.max(h0, 0) * 0.75 + 2.5, 2.5, 45), u: ex.u * s.k });
     }
     if (s.kind === 'jet' && s.span && surf === surf) {
         const w = wingWash(Math.max(h0, 0), s.mass, s.speed, s.span) * s.k;
@@ -475,7 +477,8 @@ export class FlybyWakes {
         const sp = mk.spray;
         const ring = hit.kind === 'ring';
         // (a fast jet spreads its spray over more water: the rate goes with the path flown, ~1.3 particles a metre)
-        const rate = ring ? 150 : Math.max(hit.kind === 'wing' ? 100 : 160, s.speed * (hit.kind === 'wing' ? 0.6 : 1.3));
+        // (as many a metre of path at any speed: a slow aircraft doesn't build a wall of mist)
+        const rate = ring ? 150 : clamp(s.speed * (hit.kind === 'wing' ? 0.6 : 1.3), 25, 450);
         st.spray += rate * sp * dt * (s.kind === 'missile' ? 0.3 : 1);
         const V = _vv, P = _pp;
         const back = s.speed > 1 ? 1 / s.speed : 0;
@@ -504,7 +507,8 @@ export class FlybyWakes {
             const drag = 0.04 + 0.08 * r2;
             V.set(s.vx * drag + cx * (r1 - 0.5) * 12, up, s.vz * drag + cz * (r1 - 0.5) * 12);
             const mist = r3 < 0.45;
-            if (mist) sm.emit(P, V, 3 + 4 * r2, 4 + 3 * sp, 14 + 22 * sp, MIST0, MIST1, 0.14 + 0.24 * sp, 0, 2.6, 0.3, 0, 0.5, 0.3, 0);
+            // (the cloud of mist grows to about the size of the patch of water blown on)
+            if (mist) sm.emit(P, V, 3 + 4 * r2, 4 + 3 * sp, Math.min(14 + 22 * sp, 6 + hit.w * 2.5), MIST0, MIST1, 0.14 + 0.24 * sp, 0, 2.6, 0.3, 0, 0.5, 0.3, 0);
             else sm.emit(P, V, 1.2 + 1.3 * r2, 1.4 + 1.2 * sp, 3 + 4 * sp, DROP0, DROP1, 0.45 + 0.4 * sp, 0, 1.7, -9.5, 0, 0.5, 0.8, 0.06);
         }
     }
