@@ -283,30 +283,18 @@ const SSR_FRAG = /* glsl */`
         }
         if (hitUv.x < 0.0) {
             if (skyOn < 0.5) return;
-            // the sky's image is far away: what blurs it is the waves' slopes, spread mostly up and down the frame
-            // (the classic streaks of a mirror image on water). A gentler normal than the march's, and four taps
-            // across the slope spread in elevation, wider with distance (the unresolved ripples)
-            vec3 Ns = normalize(mix(N, vec3(0.0, 1.0, 0.0), 0.5));
-            vec3 Rs = reflect(V, Ns);
+            // the sky's image is far away: a gentler normal than the march's (the blur pass streaks it up and down
+            // the frame like the waves' slopes do)
+            vec3 Rs = reflect(V, normalize(mix(N, vec3(0.0, 1.0, 0.0), 0.5)));
             Rs.y = max(Rs.y, 0.01);
-            Rs = normalize(Rs);
-            vec3 up = normalize(vec3(0.0, 1.0, 0.0) - Rs * Rs.y);
-            float spread = 0.03 + 0.09 * smoothstep(30.0, 1500.0, z);
-            vec3 acc = vec3(0.0); float n = 0.0, wsum = 0.0;
-            for (int k = 0; k < 4; k++) {
-                vec3 Rk = normalize(Rs + up * (float(k) - 1.5) * spread);
-                vec3 Rkv = viewRot * Rk;
-                if (Rkv.z > -0.02) continue;
-                vec2 su = toUv(Rkv);
-                if (su.x < 0.0 || su.x > 1.0 || su.y < 0.0 || su.y > 1.0) continue;
-                if (!isSky(texelFetch(tDepth, ivec2(su * size), 0).x)) continue;
-                vec2 es = smoothstep(vec2(0.0), vec2(0.1), su) * smoothstep(vec2(0.0), vec2(0.1), 1.0 - su);
-                acc += textureLod(tColor, su, 0.0).rgb;
-                n += 1.0; wsum += es.x * es.y;
-            }
-            if (n < 0.5) return;
-            float sunK = 1.0 - smoothstep(0.972, 0.99, dot(Rs, normalize(sunDirW)));
-            gl_FragColor = vec4(acc / n, weight * (wsum / 4.0) * sunK);
+            vec3 Rsv = viewRot * normalize(Rs);
+            if (Rsv.z > -0.02) return;
+            vec2 su = toUv(Rsv);
+            if (su.x < 0.0 || su.x > 1.0 || su.y < 0.0 || su.y > 1.0) return;
+            if (!isSky(texelFetch(tDepth, ivec2(su * size), 0).x)) return;
+            vec2 es = smoothstep(vec2(0.0), vec2(0.1), su) * smoothstep(vec2(0.0), vec2(0.1), 1.0 - su);
+            float sunK = 1.0 - smoothstep(0.972, 0.99, dot(normalize(Rs), normalize(sunDirW)));
+            gl_FragColor = vec4(textureLod(tColor, su, 0.0).rgb, weight * es.x * es.y * sunK);
             return;
         }
         vec2 e = smoothstep(vec2(0.0), vec2(0.07), hitUv) * smoothstep(vec2(0.0), vec2(0.07), 1.0 - hitUv);

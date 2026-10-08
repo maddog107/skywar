@@ -170,7 +170,7 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
     return /* glsl */`
     #define DEEP_K ${DEEP_K.toFixed(3)}
     #define CAUSTIC_K 1.0
-    uniform float time, whitecap, windU, underwater, geomS2, waterDebug;
+    uniform float time, whitecap, windU, underwater, geomS2;
     uniform vec3 sunDir, sunColor, skyColor, horizonColor, deepColor, fogColor;
     // the sky dome's own palette (world.js skyMat, shared): the sky the water mirrors
     uniform vec3 skyGlow, skyBelt, skyGlowDir, skySun;
@@ -395,8 +395,7 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
             bool ok = buv.x > 0.0 && buv.y > 0.0 && buv.x < 1.0 && buv.y < 1.0;
             float d1 = ok ? texelFetch(refrDepth, clamp(pix, ivec2(0), ivec2(size) - 1), 0).r : 0.0;
             float zB = isSky(d1) ? 1e6 : linDepth(d1);
-            float fb = 0.0;
-            if (!ok || zB < zS + 0.05) { fb = 1.0;
+            if (!ok || zB < zS + 0.05) {
                 buv = suv;
                 float dd = texelFetch(refrDepth, ivec2(gl_FragCoord.xy), 0).r;
                 zB = isSky(dd) ? 1e6 : linDepth(dd);
@@ -445,11 +444,6 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
             float cosw = clamp(dBed / max(path, 1e-3), 0.0, 1.0);
             vec3 Tb = exp(-(o.c + o.kd * cosw) * path);
             under = mix(deep, bot, Tb);
-            if (waterDebug > 0.5) {
-                vec3 dbg = waterDebug < 1.5 ? vec3(dBed / 10.0, fract(dBed), fb) : waterDebug < 2.5 ? vec3(lake, turb, vSea.w / 20.0) : vec3(path / 30.0, cosw, B.y < -1.5 ? 1.0 : 0.0);
-                gl_FragColor = vec4(dbg, 0.5);
-                return;
-            }
         }
         #else
         // low / medium: the water blends over the drawn bed (alpha below), coloured by its own optics
@@ -486,48 +480,63 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
         #endif
         float foamCover = 0.0;
         // ── foam ──
+        // (each kind of foam is looked up only where it can show: a calm sea pays for none of it)
         {
             vec2 wv = vec2(dot(p, windDir), dot(p, vec2(-windDir.y, windDir.x))); // along and across the wind
-            // gusts: km-scale patches of rougher, whiter water drifting downwind
-            float gust = texture(detailMap, p / 2600.0 - windDir * time * 0.0035).r;
-            // a crest breaks in patches along its length (not all the way along), whitest where it breaks hardest
-            float patchy = smoothstep(0.32, 0.62, texture(foamMap, p / 47.0 + windDir * time * 0.012).g * 0.7 + texture(foamMap, p / 130.0).g * 0.3);
             float near = 1.0 - smoothstep(3000.0, 9000.0, dist);
-            // Whitecaps where the crests fold (the vertex Jacobian, now and a moment ago): a fresh one dense and
-            // billowy; the foam it leaves thins into lace drawn out along the wind as it ages. Beyond the reach of
-            // the fine grid, the sea's average whitecap cover for this wind (Monahan & O'Muircheartaigh 1980:
-            // W ≈ 3.8e-6 U^3.4, ~7 % in a gale) as small wind-streaked flecks, and far off a faint whitening
-            float gridK = 1.0 - smoothstep(250.0, 650.0, dist);
-            float fresh = smoothstep(0.0, 0.9, vFoam.x) * gridK;
-            float aged = clamp(smoothstep(0.0, 0.7, vFoam.y) - fresh * 0.6, 0.0, 1.0) * gridK;
-            float gk = patchy * (0.8 + 0.4 * gust) * whitecap;
-            float nf = texture(foamMap, p / 23.0 + vec2(time * 0.012, time * 0.008)).r * 0.6 + texture(foamMap, p / 7.1 - vec2(time * 0.02, -time * 0.015)).r * 0.4;
-            float nw = texture(foamMap, p / 14.0 - windDir * time * 0.03).g * 0.65 + nf * 0.35;
-            // (never solid: the billows have holes of dark water, the edges are ragged)
-            float wcF = min(fresh * gk, 0.78);
-            float foam = smoothstep(1.0 - wcF, 1.4 - wcF, nw) * near;
-            float lace = texture(foamMap, vec2(wv.y / 6.0, wv.x / 17.0 - time * 0.02)).r * 0.7 + texture(foamMap, vec2(wv.y / 2.3, wv.x / 6.5)).r * 0.3;
-            float wcA = min(aged * gk, 0.85);
-            foam = max(foam, smoothstep(1.0 - wcA * 0.8, 1.15 - wcA * 0.8, lace) * near * 0.85);
-            float W = clamp(3.8e-6 * pow(windU, 3.4), 0.0, 0.12) * mix(1.0, 0.35, lake) * smoothstep(0.0, 0.15, whitecap);
-            float fl = texture(foamMap, vec2(wv.y / 11.0, wv.x / 31.0) + windDir * time * 0.006).g * 0.65 + texture(foamMap, vec2(wv.y / 4.1, wv.x / 12.0)).r * 0.35;
-            float flecks = smoothstep(1.0 - W * 2.6, 1.08 - W * 2.6, fl * (0.85 + 0.3 * gust)) * (1.0 - gridK) * (1.0 - smoothstep(1500.0, 5000.0, dist));
-            foam = max(foam, flecks * 0.9 * near);
-            foam = max(foam, W * 3.5 * smoothstep(1500.0, 5000.0, dist) * near); // far off: the average cover
-            // spume: in a gale the wind tears foam off the crests and lays it out in long thin streaks along the wind
-            // (the foam texture's streak channel is long along its x: ~30 m along the wind, ~1 m across it), in bands
-            float sl = texture(foamMap, vec2(wv.x / 120.0 - time * 0.004, wv.y / 64.0)).b * 0.7 + texture(foamMap, vec2(wv.x / 47.0, wv.y / 23.0)).b * 0.3;
-            float band = smoothstep(0.35, 0.65, texture(foamMap, vec2(wv.x / 900.0, wv.y / 160.0)).g + gust * 0.3);
-            float streaks = whitecap * whitecap * smoothstep(0.6, 0.72, sl) * band * 0.8 * (1.0 - smoothstep(600.0, 2500.0, dist));
-            // (the sea's edge; on the beach itself the swash brings its own foam, vFoam.z)
+            float foam = 0.0, nw = 0.5, bub = 0.0;
+            // the sea's edge (on the beach itself the swash brings its own foam, vFoam.z), a ship's or a flyby's wake
             float shore = (1.0 - smoothstep(0.1, 1.6, wet)) * 0.85 * (0.6 + 0.4 * sin(time * 0.9 + dot(p, vec2(0.05, 0.037)))) * step(0.0, vSea.w);
-            float amt = clamp(max(max(streaks, shore), wk.r), 0.0, 1.0);
-            foam = max(foam, smoothstep(1.0 - amt, 1.25 - amt, nf) * near);
-            // the surf: a breaker's white water and the swash's leading edge, churned (billows, not lace)
-            float sA = min(vFoam.z, 0.9);
-            foam = max(foam, smoothstep(1.0 - sA, 1.3 - sA, nw * 0.7 + nf * 0.3) * near);
-            amt = max(amt, vFoam.z);
-            float bub = max(amt, (fresh + aged * 0.6) * gk); // the bubbles under the foam
+            float amt = max(shore, wk.r);
+            float gridK = 1.0 - smoothstep(250.0, 650.0, dist);
+            if (whitecap > 0.0 || amt > 0.004 || vFoam.z > 0.004) {
+                float nf = texture(foamMap, p / 23.0 + vec2(time * 0.012, time * 0.008)).r * 0.6 + texture(foamMap, p / 7.1 - vec2(time * 0.02, -time * 0.015)).r * 0.4;
+                nw = texture(foamMap, p / 14.0 - windDir * time * 0.03).g * 0.65 + nf * 0.35;
+                if (whitecap > 0.0) {
+                    // gusts: km-scale patches of rougher, whiter water drifting downwind
+                    float gust = texture(detailMap, p / 2600.0 - windDir * time * 0.0035).r;
+                    // a crest breaks in patches along its length (not all the way along), whitest where it breaks hardest
+                    float patchy = smoothstep(0.32, 0.62, texture(foamMap, p / 47.0 + windDir * time * 0.012).g * 0.7 + texture(foamMap, p / 130.0).g * 0.3);
+                    // Whitecaps where the crests fold (the vertex Jacobian, now and a moment ago): a fresh one dense and
+                    // billowy (never solid: holes of dark water, ragged edges); the foam it leaves thins into lace drawn
+                    // out along the wind as it ages. Beyond the reach of the fine grid, the sea's average whitecap cover
+                    // for this wind (Monahan & O'Muircheartaigh 1980: W = 3.8e-6 U^3.4, ~7 % in a gale) as small
+                    // wind-streaked flecks, and far off a faint whitening
+                    float fresh = smoothstep(0.0, 0.9, vFoam.x) * gridK;
+                    float aged = clamp(smoothstep(0.0, 0.7, vFoam.y) - fresh * 0.6, 0.0, 1.0) * gridK;
+                    float gk = patchy * (0.8 + 0.4 * gust) * whitecap;
+                    float wcF = min(fresh * gk, 0.78);
+                    foam = smoothstep(1.0 - wcF, 1.4 - wcF, nw) * near;
+                    float wcA = min(aged * gk, 0.85);
+                    if (wcA > 0.004) {
+                        float lace = texture(foamMap, vec2(wv.y / 6.0, wv.x / 17.0 - time * 0.02)).r * 0.7 + texture(foamMap, vec2(wv.y / 2.3, wv.x / 6.5)).r * 0.3;
+                        foam = max(foam, smoothstep(1.0 - wcA * 0.8, 1.15 - wcA * 0.8, lace) * near * 0.85);
+                    }
+                    float W = clamp(3.8e-6 * pow(windU, 3.4), 0.0, 0.12) * mix(1.0, 0.35, lake) * smoothstep(0.0, 0.15, whitecap);
+                    float fk = (1.0 - gridK) * (1.0 - smoothstep(1500.0, 5000.0, dist));
+                    if (fk > 0.0) {
+                        float fl = texture(foamMap, vec2(wv.y / 11.0, wv.x / 31.0) + windDir * time * 0.006).g * 0.65 + texture(foamMap, vec2(wv.y / 4.1, wv.x / 12.0)).r * 0.35;
+                        foam = max(foam, smoothstep(1.0 - W * 2.6, 1.08 - W * 2.6, fl * (0.85 + 0.3 * gust)) * fk * 0.9 * near);
+                    }
+                    foam = max(foam, W * 3.5 * smoothstep(1500.0, 5000.0, dist) * near); // far off: the average cover
+                    // spume: in a gale the wind tears foam off the crests and lays it out in long thin streaks along the
+                    // wind (the foam texture's streak channel: ~30 m along the wind, ~1 m across it), in bands
+                    float sk = whitecap * whitecap * (1.0 - smoothstep(600.0, 2500.0, dist));
+                    if (sk > 0.05) {
+                        float sl = texture(foamMap, vec2(wv.x / 120.0 - time * 0.004, wv.y / 64.0)).b * 0.7 + texture(foamMap, vec2(wv.x / 47.0, wv.y / 23.0)).b * 0.3;
+                        float band = smoothstep(0.35, 0.65, texture(foamMap, vec2(wv.x / 900.0, wv.y / 160.0)).g + gust * 0.3);
+                        amt = max(amt, sk * smoothstep(0.6, 0.72, sl) * band * 0.8);
+                    }
+                    bub = (fresh + aged * 0.6) * gk;
+                }
+                amt = clamp(amt, 0.0, 1.0);
+                foam = max(foam, smoothstep(1.0 - amt, 1.25 - amt, nf) * near);
+                // the surf: a breaker's white water and the swash's leading edge, churned (billows, not lace)
+                float sA = min(vFoam.z, 0.9);
+                foam = max(foam, smoothstep(1.0 - sA, 1.3 - sA, nw * 0.7 + nf * 0.3) * near);
+                amt = max(amt, vFoam.z);
+                bub = max(bub, amt); // the bubbles under the foam
+            }
             // foam is a rough white diffuser: lit through the wave's own slope (so a breaking face shows its shape)
             vec3 light = sunColor * (max(L.y, 0.0) * 0.9 * csh + 0.05) + mix(horizonColor, skyColor, 0.5) * 0.55;
             vec3 flight = sunColor * (max(dot(N, L), 0.0) * 0.9 * csh * step(0.0, L.y) + 0.05) + mix(horizonColor, skyColor, 0.5) * 0.8;
@@ -579,7 +588,7 @@ export class Ocean {
             ...SKY_FOG.uniforms(), // (the haze, the mist, and the ground fog and front: world.js FOG_GLSL)
             whitecap: { value: 0 }, foamJ: { value: 0.7 }, windU: { value: 5 }, underwater: { value: 0 }, windDir: { value: new THREE.Vector2(1, 0) },
             shoreInfo: { value: new THREE.Vector4() },
-            waterDebug: { value: 0 }, geomS2: { value: 0.01 }, swellDir: { value: new THREE.Vector2(1, 0) }, // the waves' own mean-square slope; the swell's heading
+            geomS2: { value: 0.01 }, swellDir: { value: new THREE.Vector2(1, 0) }, // the waves' own mean-square slope; the swell's heading
             // the sky dome's palette (world.js skyMat; its uniform objects are shared when given, so always current)
             skyGlow: { value: new THREE.Color(0, 0, 0) }, skyBelt: { value: new THREE.Color(0, 0, 0) }, skyGlowDir: { value: new THREE.Vector3(0, 1, 0) },
             skySun: { value: new THREE.Color(1, 1, 1) }, skyLowSun: { value: 0 }, skyOvercast: { value: 0 }, skyNight: { value: 0 },
