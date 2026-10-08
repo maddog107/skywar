@@ -140,7 +140,7 @@ export const SHADING = {
     low: { slices: 0, steps: 0, contact: 0 },
     medium: { slices: 0, steps: 0, contact: 0 },
     high: { slices: 2, steps: 5, contact: 8 },
-    ultra: { slices: 4, steps: 6, contact: 16 },
+    ultra: { slices: 3, steps: 6, contact: 12 },
 };
 const AO_FRAG = /* glsl */`
     ${DEPTH_GLSL}

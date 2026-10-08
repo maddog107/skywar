@@ -152,7 +152,23 @@ describe('stable cascades', () => {
         sh.update(cam, new THREE.Vector3(0, 3000, 0), sun);
         assert.equal(sh.cascades[0].ground, false);
         const jet = sh.ox.clone().multiplyScalar(sh.cascades[0].u).addScaledVector(sh.oy, sh.cascades[0].v).addScaledVector(sh.sunDir, sh.cascades[0].w);
+        assert.equal(sh.cascades[3].ground, true);
         assert.equal(sh.wantCaster(3, new THREE.Sphere(jet, 8)), true);
+        // ... though another cascade hung in the air needn't draw the jet again
+        assert.equal(sh.cascades[1].ground, false);
+        assert.equal(sh.wantCaster(1, new THREE.Sphere(jet, 8)), false);
+    });
+
+    test('low: its one cascade is drawn near the ground and switched off at altitude (nothing to pay for up there)', () => {
+        const { sh, cam, sun } = rig('low');
+        cam.position.set(0, 3000, 50); cam.lookAt(0, 3000, 0); cam.updateMatrixWorld();
+        sh.update(cam, new THREE.Vector3(0, 3000, 0), sun);
+        assert.equal(sh.lights[0].shadow.needsUpdate, false);
+        assert.ok(CSM.data[2] > 1e6, 'off in the shaders');
+        cam.position.set(0, 8, 37); cam.lookAt(0, 2, 0); cam.updateMatrixWorld();
+        sh.update(cam, new THREE.Vector3(0, 2, 0), sun);
+        assert.equal(sh.lights[0].shadow.needsUpdate, true);
+        assert.ok(CSM.data[2] > 0 && CSM.data[2] < 1);
     });
 
     test('quality changes add and remove cascade lights; the sun stays light 0', () => {

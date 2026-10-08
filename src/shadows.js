@@ -32,11 +32,13 @@ export const SUN_TAN_RADIUS = Math.tan(0.2665 * Math.PI / 180);
 // weight `lambda` on the logarithmic split; map size and update period (frames) per cascade; filter per cascade
 // (0: 3×3 tent, 1: 5×5 tent, 2: contact-hardening PCSS). The cascade count is also what tells the shaders which
 // filters to compile (a different NUM_DIR_LIGHT_SHADOWS is a different program), so it differs per level.
+// airborne: false — a cascade is drawn only while it reaches the ground (low: shadows on the runway and in low
+// flight, none to pay for at altitude, where low used to have none at all).
 export const CSM_QUALITY = {
-    low: { n: 1, near: 6, far: 140, lambda: 0.99, size: [1024], every: [1], filter: [0] },
+    low: { n: 1, near: 6, far: 140, lambda: 0.99, size: [1024], every: [1], filter: [0], airborne: false },
     medium: { n: 2, near: 6, far: 1100, lambda: 0.99, size: [2048, 1024], every: [1, 3], filter: [1, 0] },
     high: { n: 3, near: 6, far: 1100, lambda: 0.99, size: [2048, 2048, 2048], every: [1, 1, 2], filter: [1, 1, 0] },
-    ultra: { n: 4, near: 6, far: 2000, lambda: 0.99, size: [2048, 2048, 2048, 2048], every: [1, 1, 2, 2], filter: [2, 2, 2, 0] },
+    ultra: { n: 4, near: 6, far: 2000, lambda: 0.99, size: [2048, 2048, 2048, 2048], every: [1, 1, 2, 2], filter: [2, 2, 1, 0] },
 };
 export const CSM_FILTERS = { 1: CSM_QUALITY.low.filter, 2: CSM_QUALITY.medium.filter, 3: CSM_QUALITY.high.filter, 4: CSM_QUALITY.ultra.filter };
 const BAND = 0.12;      // blend band at a cascade's edge, as a fraction of its half-size
@@ -57,12 +59,13 @@ export function practicalSplits(near, far, n, lambda) {
 export function cascadeLayout(q) {
     const P = CSM_QUALITY[q] || CSM_QUALITY.high;
     const R = practicalSplits(P.near, P.far, P.n, P.lambda).slice(1);
+    const airborne = P.airborne !== false;
     let staggered = 0;
     return R.map((r, k) => {
         const size = P.size[k] || P.size[P.size.length - 1], every = P.every[k] || 1;
         // cascades on the same period take turns (the far two on ultra: one each frame)
         const phase = every > 1 ? staggered++ % every : 0;
-        return { R: r, size, texel: (2 * r) / size, every, phase, filter: P.filter[k] };
+        return { R: r, size, texel: (2 * r) / size, every, phase, filter: P.filter[k], airborne };
     });
 }
 
@@ -148,7 +151,7 @@ function cascadeBlock(k) {
         vec4 d = csmData[ ${k} ];
         float e = min( min( c.x, c.y ), min( 1.0 - c.x, 1.0 - c.y ) );
         float w = smoothstep( 0.0, d.z, e ) * smoothstep( 0.0, 0.01, c.z ) * smoothstep( 0.0, 0.01, 1.0 - c.z );
-        if ( w > 0.0 ) {
+        if ( w > 1e-4 ) {
             float s = csmFilter( directionalShadowMap[ ${k} ], directionalLightShadows[ ${k} ].shadowMapSize, c, g${k}, d, slope, csmF${k} );
             sum += left * w * s;
             left *= 1.0 - w;
@@ -440,8 +443,16 @@ export class SunShadows {
             const sy = Math.max(s.y, 0.05);
             const toGround = Math.max(0, C.y - g) / sy;
             c.back = 1.5 * c.R + CASTER_UP;
-            c.front = Math.min(Math.max(1.5 * c.R, k === n - 1 ? toGround + c.R : 0) + 150, 20000);
+            c.front = Math.min(Math.max(1.5 * c.R, k === n - 1 && c.airborne ? toGround + c.R : 0) + 150, 20000);
             c.ground = toGround + c.R < c.front; // the ground under the whole box is in its depth range
+            const o = k * 4;
+            if (!c.airborne && !c.ground) {
+                // (hung in the air with nothing to shade: not drawn, and switched off in the shaders until it's down)
+                c.valid = false; c.force = true; c.at.set(1e9, 0, 0);
+                sh.needsUpdate = false;
+                CSM.data[o + 2] = 1e9;
+                continue;
+            }
             L.target.position.copy(C);
             L.position.copy(C).addScaledVector(s, c.back);
             const cam = sh.camera, far = c.back + c.front;
@@ -451,15 +462,15 @@ export class SunShadows {
             c.valid = true;
             sh.needsUpdate = true;
             this.casters[k] = 0; this.skipped[k] = 0;
-            const o = k * 4;
             CSM.data[o] = c.texel; CSM.data[o + 1] = far - 0.5; CSM.data[o + 2] = BAND * 0.5;
             CSM.data[o + 3] = 0.02;
         }
     }
 
     // Caster culling for cascade k: three tests every caster against the shadow camera's frustum; this frustum also
-    // turns away casters smaller than a texel or so of this cascade, and (when the finer cascade reaches the ground)
-    // casters that lie wholly inside a finer cascade's box: their shadows land where that cascade is used
+    // turns away casters smaller than a texel or so of this cascade, and casters that lie wholly inside a finer
+    // cascade's box: their shadows land where that cascade is used (if it reaches the ground, or this one doesn't
+    // either: the player's jet isn't drawn again into every cascade hung in the air round it)
     cullBy(k) {
         const f = this.lights[k].shadow.getFrustum ? this.lights[k].shadow.getFrustum() : null;
         if (!f || f.csmOwner === this) return;
@@ -493,7 +504,9 @@ export class SunShadows {
         const pc = sph.center, u = pc.dot(this.ox), v = pc.dot(this.oy), w = pc.dot(this.sunDir);
         for (let j = 0; j < k; j++) {
             const f = this.cascades[j];
-            if (!f.valid || !f.ground) continue;
+            // (a finer cascade that stops short of the ground stands in only for another that does too: the caster's
+            // shadow on the ground below needs a cascade that reaches it)
+            if (!f.valid || !(f.ground || !c.ground)) continue;
             const inner = f.R * (1 - BAND - 0.1) - r;
             if (inner <= 0) continue;
             if (Math.abs(u - f.u) < inner && Math.abs(v - f.v) < inner && w + r < f.w + f.back && w - r > f.w - f.front) return false;
