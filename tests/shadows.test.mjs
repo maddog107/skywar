@@ -6,7 +6,7 @@ const THREE = await import('three');
 const { practicalSplits, cascadeLayout, lightBasis, snapToTexel, cascadeAhead, SunShadows, CSM_QUALITY, CSM_INSTALLED, CSM, SUN_TAN_RADIUS } = await src('shadows.js');
 const { sweepShadow, sampleHeights, shadowAt, terrainVisibility, toHalf, NO_SHADOW } = await src('terrainshadowcore.js');
 const { SHADING, QUALITY } = await src('postfx.js');
-const { sunTransmittance, airMass, lowSun } = await src('world.js');
+const { sunTransmittance, airMass, lowSun, lowSunExposure } = await src('world.js');
 const WX = await src('weather.js');
 
 const QUALITIES = ['low', 'medium', 'high', 'ultra'];
@@ -272,7 +272,7 @@ describe('the sun through the atmosphere (world.js)', () => {
 
     test('transmittance: blue goes first, everything dims monotonically toward the horizon', () => {
         let prev = sunTransmittance(90);
-        assert.ok(prev[0] > prev[1] && prev[1] > prev[2] && prev[2] > 0.6, 'overhead: warm white');
+        assert.ok(prev[0] > prev[1] && prev[1] > prev[2] && prev[2] > 0.5, 'overhead: warm white');
         for (let el = 80; el >= 0; el -= 5) {
             const t = sunTransmittance(el);
             for (let i = 0; i < 3; i++) assert.ok(t[i] < prev[i] + 1e-12 && t[i] > 0);
@@ -288,13 +288,26 @@ describe('the sun through the atmosphere (world.js)', () => {
         const at = (hour) => { WX.paletteAt(hour, P); const before = { sun: P.sun.clone(), sunI: P.sunI, hemiI: P.hemiI }; lowSun(P, WX.sunAt(hour).el); return before; };
         let b = at(11.2);
         assert.ok(P.sun.equals(b.sun) && P.sunI === b.sunI && P.hemiI === b.hemiI);
+        // noon and 5° up: the transmittance matches the palettes' own sun colours (the haze chosen for it)
+        const tn = sunTransmittance(57), t5 = sunTransmittance(5.65);
+        assert.ok(Math.abs(tn[0] / tn[1] - 1.14) < 0.1 && Math.abs(tn[2] / tn[1] - 0.81) < 0.06, `noon ${tn}`);
+        assert.ok(Math.abs(t5[0] / t5[1] - 3.9) < 0.5 && Math.abs(t5[2] / t5[1] - 0.18) < 0.06, `5° ${t5}`);
         b = at(6.25); // ~3° up
         const lum = (c) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
         assert.ok(Math.abs(lum(P.sun) - lum(b.sun)) < 1e-6, 'brightness kept');
         assert.ok(P.sun.r / P.sun.g > b.sun.r / b.sun.g && P.sun.b / P.sun.g < b.sun.b / b.sun.g, 'redder');
-        assert.ok(P.sunI < b.sunI && P.sunI >= b.sunI * 0.6 - 1e-9 && P.hemiI > b.hemiI);
+        assert.ok(P.sunI < b.sunI && P.sunI >= b.sunI * 0.9 - 1e-9 && P.hemiI > b.hemiI, 'only a little dimmer');
         b = at(23); // night: the moon
         assert.ok(P.sun.equals(b.sun) && P.sunI === b.sunI);
+    });
+});
+
+describe('exposure at dawn and dusk (world.js lowSunExposure)', () => {
+    test('1 by day and by night, opening up at low sun, continuous', () => {
+        for (const el of [16, 30, 57, -5, -12]) assert.equal(lowSunExposure(el), 1, `${el}`);
+        assert.ok(lowSunExposure(5) > 1.15 && lowSunExposure(5) <= 1.18);
+        let prev = lowSunExposure(-6);
+        for (let el = -6; el <= 20; el += 0.25) { const e = lowSunExposure(el); assert.ok(Math.abs(e - prev) < 0.02); prev = e; }
     });
 });
 

@@ -221,11 +221,12 @@ const _sunDir = new THREE.Vector3(), _glow = new THREE.Vector3(), _nightGlow = n
 // Direct-beam transmittance exp(-tau m) at red, green and blue (~680, 550, 440 nm) for a sun `el` degrees up:
 // Rayleigh and ozone optical depths from Hillaire's Earth atmosphere ("A Scalable and Production Ready Sky and
 // Atmosphere Rendering Technique", EGSR 2020: scattering 5.802, 13.558, 33.1 per Mm over an 8 km scale height;
-// ozone 0.650, 1.881, 0.085 per Mm over ~15 km), a light aerosol (optical depth 0.05 at 550 nm, Angstrom exponent
-// 1.3) and the Kasten & Young (1989) air mass, which stays finite at the horizon (about 38).
+// ozone 0.650, 1.881, 0.085 per Mm over ~15 km), the coast's evening haze (aerosol optical depth 0.25 at 550 nm,
+// Angstrom exponent 1.3: with it the transmittance lands on the artist's palettes both at noon and 5° up) and the
+// Kasten & Young (1989) air mass, which stays finite at the horizon (about 38).
 const TAU_RAYLEIGH = [5.802e-6 * 8000, 13.558e-6 * 8000, 33.1e-6 * 8000];
 const TAU_OZONE = [0.650e-6 * 15000, 1.881e-6 * 15000, 0.085e-6 * 15000];
-const TAU_AEROSOL = [0.05 * Math.pow(680 / 550, -1.3), 0.05, 0.05 * Math.pow(440 / 550, -1.3)];
+const TAU_AEROSOL = [0.25 * Math.pow(680 / 550, -1.3), 0.25, 0.25 * Math.pow(440 / 550, -1.3)];
 export function airMass(el) {
     const z = 90 - Math.max(el, -1);
     return 1 / (Math.cos(z * Math.PI / 180) + 0.50572 * Math.pow(Math.max(96.07995 - z, 0.5), -1.6364));
@@ -236,11 +237,12 @@ export function sunTransmittance(el, out = [0, 0, 0]) {
     return out;
 }
 const _tr = [0, 0, 0], _trRef = sunTransmittance(26);
+const BLUE_FILL = new THREE.Color(0x4c64dc); // the deep blue of the sky overhead at dusk, what lights the shadows
 const lum3 = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-// The palettes put the sun's colour right from ~25° up; below that the beam reddens and dims far faster than they
-// do (2.5° up it is deep orange and a tenth as bright as at noon, not three quarters). Low sun: the colour from the
-// transmittance (the palette's brightness kept), the sun a little dimmer and the sky's fill a little stronger, so
-// dawn and dusk shadows are softer in contrast, as they are, without darkening the scene (the exposure is fixed).
+// The palettes put the sun's colour right from ~25° up; below that the beam reddens far faster than they do
+// (2.5° up it is deep orange-red). Low sun: the colour from the transmittance (the palette's brightness kept), the sun
+// only a little dimmer (the beam really falls to a tenth of noon's, but eyes and cameras adapt: lowSunExposure), and the
+// sky's fill stronger, so what lies in a mountain's shadow is blue and sky-lit while the lit faces glow.
 export function lowSun(P, el) {
     // (not once it has set: the light is the moon's then, see applySky)
     const b = (1 - smoothstep(12, 26, el)) * smoothstep(-2, 0.5, el);
@@ -249,12 +251,21 @@ export function lowSun(P, el) {
     const lt = lum3(_tr), lp = 0.2126 * P.sun.r + 0.7152 * P.sun.g + 0.0722 * P.sun.b;
     const k = lp / Math.max(lt, 1e-6);
     P.sun.setRGB(P.sun.r + (_tr[0] * k - P.sun.r) * b, P.sun.g + (_tr[1] * k - P.sun.g) * b, P.sun.b + (_tr[2] * k - P.sun.b) * b);
-    const dim = Math.max(Math.pow(lt / lum3(_trRef), 0.35), 0.6); // (0.6 of the palette's sun at the horizon)
+    const dim = Math.max(Math.pow(lt / lum3(_trRef), 0.12), 0.9); // (0.9 of the palette's sun at the horizon)
     P.sunI *= 1 + (dim - 1) * b;
-    // (at sunset the sky outshines the sun on level ground: what lies in a mountain's shadow is sky-lit, not black)
-    P.hemiI *= 1 + 0.35 * b;
+    // (at sunset the sky outshines the sun on level ground: what lies in a mountain's shadow is lit blue-violet by
+    // it, not black or grey)
+    P.hemiI *= 1 + 0.55 * b;
     P.envI *= 1 + 0.2 * b;
+    P.hemiSky.lerp(BLUE_FILL, 0.7 * b);
     return P;
+}
+
+// Exposure adapting to the low sun, as an eye or a camera does: the scene's light falls at dawn and dusk (the beam
+// through ~10-38 air masses, much of the ground in long shadows) and the exposure opens up to +18 % between ~14° and
+// 4° up; exactly 1 from 16° up (midday as it was) and from 5° below the horizon (the night palettes are tuned at 1)
+export function lowSunExposure(el) {
+    return 1 + 0.18 * (1 - smoothstep(4, 16, el)) * smoothstep(-5, 1, el);
 }
 
 // a tile's trees: one instanced impostor mesh (vegetation.js)
@@ -460,6 +471,8 @@ export class World {
         this.timeKey = timeKeyFor(hour);
         const nightK = nightOf(hour);
         const P = applyWeatherToPalette(lowSun(paletteAt(hour, this.P), el), W); // (the low sun through the air)
+        this.exposure = lowSunExposure(el);
+        if (this.renderer) this.renderer.toneMappingExposure = this.exposure;
         // the light: the sun while it's up (fading out as it sets), then the moon (fading in once the sun is well down),
         // so the shadows never jump while the light is on
         let lightI;
