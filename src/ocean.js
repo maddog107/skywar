@@ -554,7 +554,7 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
                         float fl = texture(foamMap, vec2(wv.y / 11.0, wv.x / 31.0) + windDir * time * 0.006).g * 0.65 + texture(foamMap, vec2(wv.y / 4.1, wv.x / 12.0)).r * 0.35;
                         foam = max(foam, smoothstep(1.0 - W * 2.6, 1.08 - W * 2.6, fl * (0.85 + 0.3 * gust)) * fk * 0.9 * near);
                     }
-                    foam = max(foam, W * 3.5 * smoothstep(1500.0, 5000.0, dist) * near); // far off: the average cover
+                    foam = max(foam, W * 3.5 * smoothstep(1500.0, 5000.0, dist)); // far off (to the horizon): the average cover
                     // spume: in a gale the wind tears foam off the crests and lays it out in long thin streaks along the
                     // wind (the foam texture's streak channel: ~30 m along the wind, ~1 m across it), in bands
                     float sk = whitecap * whitecap * (1.0 - smoothstep(600.0, 2500.0, dist));

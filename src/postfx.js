@@ -290,11 +290,15 @@ const SSR_FRAG = /* glsl */`
             vec3 Rsv = viewRot * normalize(Rs);
             if (Rsv.z > -0.02) return;
             vec2 su = toUv(Rsv);
-            if (su.x < 0.0 || su.x > 1.0 || su.y < 0.0 || su.y > 1.0) return;
+            // (off the sides the sky changes little with the azimuth: the frame's edge stands in for it, fading slowly;
+            // above or below the frame it changes with the elevation: there the water's own sky takes over)
+            float sideOut = max(-su.x, su.x - 1.0);
+            su.x = clamp(su.x, 0.005, 0.995);
+            if (su.y < 0.0 || su.y > 1.0 || sideOut > 0.4) return;
             if (!isSky(texelFetch(tDepth, ivec2(su * size), 0).x)) return;
-            vec2 es = smoothstep(vec2(0.0), vec2(0.1), su) * smoothstep(vec2(0.0), vec2(0.1), 1.0 - su);
+            float es = smoothstep(0.0, 0.1, su.y) * smoothstep(0.0, 0.1, 1.0 - su.y) * (1.0 - smoothstep(0.0, 0.4, sideOut));
             float sunK = 1.0 - smoothstep(0.972, 0.99, dot(normalize(Rs), normalize(sunDirW)));
-            gl_FragColor = vec4(textureLod(tColor, su, 0.0).rgb, weight * es.x * es.y * sunK);
+            gl_FragColor = vec4(textureLod(tColor, su, 0.0).rgb, weight * es * sunK);
             return;
         }
         vec2 e = smoothstep(vec2(0.0), vec2(0.07), hitUv) * smoothstep(vec2(0.0), vec2(0.07), 1.0 - hitUv);
