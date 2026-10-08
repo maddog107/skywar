@@ -200,7 +200,7 @@ export function jetAtlas() {
         // strands of water, fanning out a little toward the head, each a soft wavering line
         const strands = 7 + f * 2;
         for (let k = 0; k < strands; k++) {
-            const x0 = (rnd() - 0.5) * 0.3, w0 = 0.022 + rnd() * 0.04, ph = rnd() * 6.28, amp = 0.01 + rnd() * 0.03, a0 = 0.35 + 0.45 * rnd();
+            const x0 = (rnd() - 0.5) * 0.3, w0 = 0.022 + rnd() * 0.04, ph = rnd() * 6.28, amp = 0.01 + rnd() * 0.03, a0 = 0.5 + 0.5 * rnd();
             const fan = 0.4 + rnd() * 0.8, v0 = rnd() * 0.25;
             for (let y = 0; y < S; y++) {
                 const v = (y + 0.5) / S;
@@ -230,7 +230,7 @@ export function jetAtlas() {
             let nx = -hx * 1.5, ny = -hy * 1.5;
             const l = Math.hypot(nx, ny, 1); nx /= l; ny /= l;
             const i = ((oy + y) * N + ox + x) * 4, d = D[y * S + x];
-            data[i] = (nx * 0.5 + 0.5) * 255; data[i + 1] = (ny * 0.5 + 0.5) * 255; data[i + 2] = d * 220; data[i + 3] = Math.min(1, d * 1.15) * 255;
+            data[i] = (nx * 0.5 + 0.5) * 255; data[i + 1] = (ny * 0.5 + 0.5) * 255; data[i + 2] = d * 220; data[i + 3] = Math.min(1, d * 1.7) * 255;
         }
     }
     jetTex = new THREE.DataTexture(data, N, N, THREE.RGBAFormat);
@@ -388,7 +388,7 @@ export class WaterFX {
                 // the mist it leaves hanging over the water, drifting: a burst's spouts build a cloud of it
                 _p.set(at.x + hx * S.h * 0.3, at.y + S.h * 0.2, at.z + hz * S.h * 0.3);
                 _v.set(hx * 1.5 * S.lean, Math.sqrt(2 * G * S.h) * 0.3, hz * 1.5 * S.lean);
-                this.put(this.mist, mC, _p, _v, rand(2.2, 3.4), S.r * 3 + 0.4, Math.max(S.h * (1 + 0.15 * rep), 1), MIST0, MIST1, 0.55, 0, 1.5, -0.8, 0.3, 0);
+                this.put(this.mist, mC, _p, _v, rand(2.2, 3.4), S.r * 3 + 0.4, Math.max(S.h * (1 + 0.15 * rep), 1), MIST0, MIST1, 0.32, 0, 1.5, -0.8, 0.3, 0);
             }
             // an explosive round: a pinprick of fire as it goes in (some of them)
             if (S.he && !o.skip && k >= 0.6 && dist < 3000 && Math.random() < 0.45 && this.fx.fire) {

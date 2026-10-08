@@ -609,7 +609,7 @@ export class FlybyWakes {
         const pw = Math.min(Math.max(mk.power, sp), 2.5), qk = W ? W.Q.k : 1;
         const ms = mist || sm, js = W && W.jets !== W.drops ? W.jets : null;
         // (as many a metre of path at any speed, ~1.3 particles a metre: a slow aircraft doesn't build a wall of mist)
-        const rate = ring ? (150 + 260 * sp) : clamp(s.speed * (hit.kind === 'wing' ? 1.1 : 1.3), 25, 450);
+        const rate = ring ? (70 + 150 * sp) : clamp(s.speed * (hit.kind === 'wing' ? 1.1 : 1.3), 25, 450);
         st.spray += rate * sp * dt * (s.kind === 'missile' ? 0.3 : 1) * qk;
         const V = _vv, P = _pp;
         const back = s.speed > 1 ? 1 / s.speed : 0;
@@ -618,18 +618,20 @@ export class FlybyWakes {
             st.spray -= 1;
             const r1 = Math.random(), r2 = Math.random(), r3 = Math.random();
             if (ring) {
-                const a = r1 * Math.PI * 2, rr = hit.w * (0.85 + 0.45 * r2);
+                // the outwash ring: spray torn off the water and flung out low in streaks, a thin mist over it
+                const a = r1 * Math.PI * 2, rr = hit.w * (0.8 + 0.5 * r2);
                 P.set(hit.x + Math.cos(a) * rr, hit.y + 0.4, hit.z + Math.sin(a) * rr);
-                const out = (6 + 12 * r3) * (0.5 + 0.5 * sp);
-                V.set(Math.cos(a) * out + s.vx * 0.3, 2 + 7 * r2 * sp, Math.sin(a) * out + s.vz * 0.3);
-                if (r3 < 0.42) ms.emit(P, V, 3 + 3 * r1, 4, 14 + 14 * sp, MIST0, MIST1, 0.1 + 0.2 * sp, 0, 1.1, -0.2, 0, 0.5, 0.4, 0);
-                else sm.emit(P, V, 1 + r1, 1.5 + sp, 4 + 2 * sp, DROP0, DROP1, 0.45 + 0.4 * sp, 0, 0.6, -8, 0, 0.5, 0.4, 0.05);
-                // hovering low (under ~1.5 radii): the wake fountains back up into the rotor, a cloud of spray round it
-                if (hit.h < hit.w * 1.5 && r2 < 0.25 * sp) {
-                    const a2 = r3 * Math.PI * 2, r0 = hit.w * (0.6 + 0.5 * r1);
+                const out = (7 + 12 * r3) * (0.5 + 0.5 * sp);
+                V.set(Math.cos(a) * out + s.vx * 0.3, 1.5 + 6 * r2 * sp, Math.sin(a) * out + s.vz * 0.3);
+                if (r3 < 0.22) ms.emit(P, V, 2.5 + 2.5 * r1, 3, 9 + 9 * sp, MIST0, MIST1, 0.06 + 0.12 * sp, 0, 1.1, -0.2, 0, 0.5, 0.4, 0);
+                else if (js && r3 < 0.6) js.emit(P, V, 0.8 + 0.8 * r1, 0.7 + 0.8 * sp, 1.6 + 1.4 * sp, DROP0, DROP1, 0.7 + 0.3 * sp, 0.1, 0.8, -9.8, 0, 0.5, 0.1, 0.22);
+                else sm.emit(P, V, 1 + r1, 1.2 + sp, 3 + 2 * sp, DROP0, DROP1, 0.45 + 0.4 * sp, 0, 0.6, -8, 0, 0.5, 0.4, 0.05);
+                // hovering low (under ~1.5 radii): the wake fountains back up round the rotor, a veil of spray round it
+                if (hit.h < hit.w * 1.5 && r2 < 0.12 * sp) {
+                    const a2 = r3 * Math.PI * 2, r0 = hit.w * (0.7 + 0.5 * r1);
                     P.set(hit.x + Math.cos(a2) * r0, hit.y + 1, hit.z + Math.sin(a2) * r0);
-                    V.set(-Math.cos(a2) * 3, 3 + 4 * r1, -Math.sin(a2) * 3);
-                    ms.emit(P, V, 4 + 3 * r2, 6, 16 + 10 * sp, MIST0, MIST1, 0.12 + 0.12 * sp, 0, 0.8, 0.3, 0, 0.5, 0.3, 0);
+                    V.set(-Math.cos(a2) * 2, 2.5 + 3 * r1, -Math.sin(a2) * 2);
+                    ms.emit(P, V, 3 + 2 * r2, 5, 12 + 8 * sp, MIST0, MIST1, 0.05 + 0.08 * sp, 0, 0.8, 0.3, 0, 0.5, 0.3, 0);
                 }
                 continue;
             }
