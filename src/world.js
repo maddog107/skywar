@@ -11,6 +11,7 @@ import { Craters, CRATER_U, CRATER_GLSL } from './craters.js';
 import { Ocean } from './ocean.js';
 import { foamTexture } from './shipfx.js';
 import { fireLights } from './firelight.js'; // [night] fire light budget (quality, ambient level)
+import { SunShadows, CSM, SUN_TAN_RADIUS } from './shadows.js'; // camera-centred cascaded sun shadows
 import { Weather, WX_FOG, GROUND_FOG_GLSL, BANK_GLSL, KEY_HOURS, sunAt, MOON_DIR, paletteAt, applyWeatherToPalette, newPalette, nightOf, timeKeyFor, groundFogTau, FOG_W } from './weather.js'; // [weather] the sky model
 // the height function and the airbase list live in terraincore.js (no three.js: the terrain worker uses them too)
 export { BASES, terrainHeight };
@@ -115,47 +116,9 @@ function patchFogChunks() {
     }
 }
 
-// Two-cascade sun shadows: directional light 0 (the sun) keeps its sharp ±70 m map around the jet; light 1
-// carries no light, only a wide, coarse map of the ground ahead of the camera. Light 0 reads the near map
-// inside its box and blends to the far map outside it, so hangars, houses and trees kilometres away still sit
-// on their shadows. Materials may #define SHADOW_FADE(s) to post-process the sun's shadow term.
-function patchCascadeShadows() {
-    const src = THREE.ShaderChunk.lights_fragment_begin;
-    const start = src.indexOf('#if ( NUM_DIR_LIGHTS > 0 ) && defined( RE_Direct )');
-    const end = src.indexOf('#if ( NUM_RECT_AREA_LIGHTS > 0 )');
-    const line = 'directLight.color *= ( directLight.visible && receiveShadow ) ? getShadow( directionalShadowMap[ i ], directionalLightShadow.shadowMapSize, directionalLightShadow.shadowIntensity, directionalLightShadow.shadowBias, directionalLightShadow.shadowRadius, vDirectionalShadowCoord[ i ] ) : 1.0;';
-    const re = 'RE_Direct( directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight );';
-    if (start < 0 || end < start) return false;
-    let block = src.slice(start, end);
-    if (!block.includes(line) || !block.includes(re)) return false; // three.js changed: keep single shadows
-    const args = (k) => `directionalShadowMap[ ${k} ], directionalLightShadows[ ${k} ].shadowMapSize, directionalLightShadows[ ${k} ].shadowIntensity, directionalLightShadows[ ${k} ].shadowBias, directionalLightShadows[ ${k} ].shadowRadius, vDirectionalShadowCoord[ ${k} ]`;
-    block = block.replace(line, `
-        #if ( UNROLLED_LOOP_INDEX == 0 ) && ( NUM_DIR_LIGHT_SHADOWS == 2 )
-            vec3 csmNear = vDirectionalShadowCoord[ 0 ].xyz / vDirectionalShadowCoord[ 0 ].w;
-            vec2 csmEdge = min( csmNear.xy, 1.0 - csmNear.xy );
-            float csmW = smoothstep( 0.0, 0.15, min( csmEdge.x, csmEdge.y ) );
-            float csmS = 1.0;
-            if ( csmW > 0.0 ) csmS = getShadow( ${args(0)} );
-            if ( csmW < 1.0 ) {
-                vec3 csmFar = vDirectionalShadowCoord[ 1 ].xyz / vDirectionalShadowCoord[ 1 ].w;
-                vec2 csmEdge1 = min( csmFar.xy, 1.0 - csmFar.xy );
-                float csmS1 = mix( 1.0, getShadow( ${args(1)} ), smoothstep( 0.0, 0.08, min( csmEdge1.x, csmEdge1.y ) ) );
-                csmS = mix( csmS1, csmS, csmW );
-            }
-            directLight.color *= ( directLight.visible && receiveShadow ) ? SHADOW_FADE( csmS ) : 1.0;
-        #elif ( UNROLLED_LOOP_INDEX == 1 ) && ( NUM_DIR_LIGHT_SHADOWS == 2 )
-            // light 1 only holds the far cascade's map (read by light 0 above)
-        #else
-            ${line.replace('? getShadow(', '? SHADOW_FADE( getShadow(').replace(') : 1.0;', ') ) : 1.0;')}
-        #endif`)
-        .replace(re, `#if !( ( UNROLLED_LOOP_INDEX == 1 ) && ( NUM_DIR_LIGHT_SHADOWS == 2 ) )
-            ${re}
-        #endif`);
-    THREE.ShaderChunk.lights_fragment_begin = '#ifndef SHADOW_FADE\n#define SHADOW_FADE( s ) ( s )\n#endif\n' + src.slice(0, start) + block + src.slice(end);
-    return true;
-}
 patchFogChunks();
-export const CASCADES = patchCascadeShadows();
+// (the sun's cascaded shadows patch three's light chunks in shadows.js)
+export const CASCADES = true;
 
 // ── Airbases (BASES, in terraincore.js: terrain is flattened around them) ──
 export const RUNWAY = { length: 3000, width: 55 };
@@ -242,11 +205,10 @@ function periodicNoise(u, v, P, seed) {
     return (a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy) * 1.4;
 }
 
-const FAR_SHADOW = 1500; // half-size of the far shadow cascade (m)
 // grass around the camera: a dense inner grid and a coarse outer one (cell size m, cells per side, plant scale);
 // ground data comes from tex x tex textures, texel metres apart, refilled once the camera has moved `recentre` m
 const GRASS = { layers: [{ cell: 0.5, n: 72, scale: 1 }, { cell: 1.5, n: 100, scale: 1.25 }], tex: 48, texel: 5, recentre: 20 };
-const _sx = new THREE.Vector3(), _sy = new THREE.Vector3(), _sc = new THREE.Vector3(), _fc = new THREE.Vector3(), _v1 = new THREE.Vector3();
+const _v1 = new THREE.Vector3();
 // [weather] the sea state for a weather kind (water.js has clear / cloudy / rain / storm seas)
 const SEA_KEYS = { fog: 'clear', overcast: 'cloudy' };
 const seaKey = (w) => SEA_KEYS[w] || w;
@@ -514,7 +476,10 @@ export class World {
         this.clouds.setParams(wx.A, wx.B, wx.front, force);
         this.clouds.setPalette({ lit: P.clouds, shadow: P.cloudShadow, sunDir: this.sunDir, overcast: this.overcast, reset: force });
         // under an overcast the sun's shadows go soft
-        this.sun.shadow.intensity = this.sunFar.shadow.intensity = 1 - this.overcast * 0.6;
+        this.csm.setIntensity(1 - this.overcast * 0.6);
+        // ... and soft: diffuse light from a brighter patch of sky round the sun widens the penumbra (CSM.info.y:
+        // penumbra radius per metre of blocker height, the sun's own angular radius in clear air)
+        CSM.info[1] = SUN_TAN_RADIUS * (1 + this.overcast * 6);
 
         // [night] the ambient light the fire lights are weighed against (sun + sky, as irradiance)
         fireLights.ambient = P.sunI * lightI * Math.max(this.sunDir.y, 0.1) * (1 - (P.overcast || 0) * 0.6) + P.hemiI + P.envI * 0.3;
@@ -575,46 +540,24 @@ export class World {
     }
 
     initLights() {
+        // the sun (or the moon): light 0, and the first of the shadow cascades (shadows.js adds the others)
         this.sun = new THREE.DirectionalLight(0xffffff, 3);
         this.sun.castShadow = true;
-        const sc = this.sun.shadow.camera;
-        sc.left = -70; sc.right = 70; sc.top = 70; sc.bottom = -70; sc.near = 1; sc.far = 1200;
-        this.sun.shadow.mapSize.set(2048, 2048);
-        this.sun.shadow.radius = 2.5; // PCFShadowMap is the soft one since r182
-        this.sun.shadow.bias = -0.0004;
-        this.sun.shadow.normalBias = 0.05;
         this.scene.add(this.sun);
         this.scene.add(this.sun.target);
-        // Far shadow cascade (see patchCascadeShadows): no light of its own, just a wide map ahead of the camera.
-        // Added after the sun so it sorts second among the shadow casters.
-        this.sunFar = new THREE.DirectionalLight(0xffffff, 0);
-        this.sunFar.castShadow = CASCADES;
-        this.sunFar.visible = CASCADES;
-        const fc = this.sunFar.shadow.camera;
-        fc.left = -FAR_SHADOW; fc.right = FAR_SHADOW; fc.top = FAR_SHADOW; fc.bottom = -FAR_SHADOW; fc.near = 10; fc.far = 7000;
-        this.sunFar.shadow.mapSize.set(2048, 2048);
-        this.sunFar.shadow.radius = 1.6;
-        this.sunFar.shadow.bias = -0.0003;
-        this.sunFar.shadow.normalBias = 1.2;
-        this.scene.add(this.sunFar);
-        this.scene.add(this.sunFar.target);
-        this.farShadowFrame = 0;
+        this.csm = new SunShadows(this.scene, this.sun, groundHeight);
         this.hemi = new THREE.HemisphereLight(0x9cc4ec, 0x4a5a3a, 1);
         this.scene.add(this.hemi);
     }
+
+    // every shadow cascade redraws on the next frame (main.js's warm-up, a cut)
+    refreshShadows() { this.csm.refresh(); }
 
     // Quality presets (main.js): 'low' turns every extra off and must stay at least as fast as before
     setQuality(q) {
         this.quality = q;
         const low = q === 'low';
-        this.sun.castShadow = !low;
-        const far = CASCADES && !low;
-        this.sunFar.visible = this.sunFar.castShadow = far;
-        const size = q === 'high' ? 2048 : 1024;
-        if (this.sunFar.shadow.mapSize.x !== size) {
-            this.sunFar.shadow.mapSize.set(size, size);
-            if (this.sunFar.shadow.map) { this.sunFar.shadow.map.dispose(); this.sunFar.shadow.map = null; }
-        }
+        this.csm.setQuality(q); // sun shadow cascades: 1 / 2 / 3 / 4 (shadows.js CSM_QUALITY)
         this.treeShadows = !low;
         // 'low' plants fewer trees; rebuild the tree tiles on a switch
         if (this.lowTrees !== low) { this.lowTrees = low; this.refreshTrees(); }
@@ -640,20 +583,6 @@ export class World {
         this.syncCraterMat();
         this.grassOn = q === 'high' || q === 'ultra';
         this.setFogEdge();
-    }
-
-    // Aim a shadow camera at `centre`, snapped to its own texel grid so shadow edges don't crawl as it moves
-    aimShadow(light, centre, halfSize, back) {
-        const s = this.sunDir, t = light.shadow.mapSize.x;
-        const texel = (2 * halfSize) / t;
-        _sx.set(0, 1, 0).cross(s);
-        if (_sx.lengthSq() < 1e-6) _sx.set(1, 0, 0);
-        _sx.normalize();
-        _sy.crossVectors(s, _sx);
-        const u = Math.round(centre.dot(_sx) / texel) * texel, v = Math.round(centre.dot(_sy) / texel) * texel, w = centre.dot(s);
-        _sc.copy(_sx).multiplyScalar(u).addScaledVector(_sy, v).addScaledVector(s, w);
-        light.target.position.copy(_sc);
-        light.position.copy(_sc).addScaledVector(s, back);
     }
 
     // ── Sky dome ──
@@ -1824,33 +1753,8 @@ export class World {
         // trees sway with the wind, harder in a storm
         const ws = Math.hypot(wind.x, wind.z), storm = this.weather === 'storm' ? 1 : this.weather === 'rain' ? 0.5 : 0;
         this.uWind.value.set(ws > 0.1 ? wind.x / ws : 1, 0.35 + ws * 0.06 + storm * 0.9, ws > 0.1 ? wind.z / ws : 0);
-        // sun shadows: the sharp near map follows the focus object; the wide far map covers the ground ahead
-        this.aimShadow(this.sun, focus, 70, 600);
-        // The near map's depth range must reach the ground below the jet: with the reversed depth buffer, ground
-        // beyond its far plane passes three's frustum test and reads as shadowed (a dark square on the terrain
-        // down-sun of the jet whenever it flies more than ~1 km up).
-        {
-            const sc = this.sun.shadow.camera;
-            const agl = Math.max(0, focus.y - Math.max(terrainHeight(focus.x, focus.z), 0));
-            const need = Math.min(40000, Math.max(1200, 600 + (agl + 400) / Math.max(this.sunDir.y, 0.08) + 300));
-            if (Math.abs(need - sc.far) > 150) { sc.far = need; sc.updateProjectionMatrix(); }
-        }
-        // the far map is coarse and mostly static scenery: re-render it every other frame (every third on medium)
-        const fs = this.sunFar.shadow;
-        fs.autoUpdate = false;
-        this.farShadowFrame = (this.farShadowFrame + 1) % (this.quality === 'medium' ? 3 : 2);
-        if (this.sunFar.visible && this.sunFar.castShadow && (this.farShadowFrame === 0 || !fs.map)) {
-            fs.needsUpdate = true;
-            camera.getWorldDirection(_v1);
-            const hl = Math.hypot(_v1.x, _v1.z);
-            const agl = cam.y - Math.max(terrainHeight(cam.x, cam.z), 0);
-            let ahead = FAR_SHADOW * 0.65;
-            if (_v1.y < -0.02) ahead = Math.min(ahead, (agl / -_v1.y) * hl); // where the view ray meets the ground
-            _sc.set(cam.x, 0, cam.z);
-            if (hl > 0.01) { _sc.x += (_v1.x / hl) * ahead; _sc.z += (_v1.z / hl) * ahead; }
-            _sc.y = Math.max(terrainHeight(_sc.x, _sc.z), 0);
-            this.aimShadow(this.sunFar, _fc.copy(_sc), FAR_SHADOW, 4000);
-        }
+        // sun shadows: cascades round the camera, the finest on the focus (the player's jet) when it's close
+        this.csm.update(camera, focus, this.sunDir);
         this.updateGrass(camera, dt);
         this.updateTerrain(focus);
         this.craters.update(dt);
