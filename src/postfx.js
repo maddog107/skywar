@@ -626,7 +626,10 @@ export class SceneFXPass extends Pass {
     get underActive() { return this.underwater > 0; }
     prepare(cam, blurOn) {
         this.aoActive = this.ao && this.groundDist < this.aoMat.uniforms.fadeFar.value;
-        this.ssrActive = this.ssr > 0 && !this.noWater && cam.position.y > 0.3 && this.waterVisible(cam);
+        // (the reduced SSR of high only within ~1 km of the sea: from higher up the water mirrors little but sky and
+        // cloud, which its own shader does; with a little hysteresis so it doesn't flicker at the edge)
+        const near = this.ssr >= 2 || cam.position.y < (this.ssrActive ? 1100 : 1000);
+        this.ssrActive = this.ssr > 0 && near && !this.noWater && cam.position.y > 0.3 && this.waterVisible(cam);
         this.flareActive = this.flare && this.sun.on > 0;
         this.blurActive = this.blur > 0 && blurOn;
         return this.aoActive || this.ssrActive || this.flareActive || this.blurActive || this.underActive;

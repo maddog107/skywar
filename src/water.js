@@ -191,8 +191,9 @@ export function updateWaveUniforms(originX, originZ, t = WATER.t) {
 // ── Sea-state maps (built by watermap.js, in a worker) ──
 // Two squares of size × size texels, texel metres apart, south-west corner (x0, z0): [0] fine (8 m, around the
 // camera), [1] coarse (64 m, 16 km). Per texel (RGBA): swell, wind-sea and chop factors (0..~1.2) and the water
-// depth (m; negative over land). A lake (water with no way out to the sea) has its wind factor negative. The fine map wins where it has data, fading into the coarse one over its last
-// EDGE texels; beyond both it is open, deep sea (the renderer has faded its waves out by then anyway).
+// depth (m; negative over land). A lake (water with no way out to the sea) has its wind factor negative. The fine
+// map wins where it has data, fading into the coarse one over its last EDGE texels; beyond both it is open, deep sea
+// (the renderer has faded its waves out by then anyway).
 export const SEA_MAPS = [
     { data: null, size: 0, texel: 1, x0: 0, z0: 0 },
     { data: null, size: 0, texel: 1, x0: 0, z0: 0 },

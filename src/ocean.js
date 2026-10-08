@@ -164,9 +164,15 @@ const OPTICS_GLSL = /* glsl */`
         return o;
     }
     // the light deep water sends back: the palette's water colour sets how bright (the light of the hour), the
-    // optics its hue (the clear sea's albedo sums to ALB_SUM)
+    // optics its hue (normalised so the clear sea's comes out at DEEP_K of the palette's)
     vec3 deepWater(vec3 deep, Optics o) {
         return (deep.r + deep.g + deep.b) * o.alb * (DEEP_K / ${(OPTICS.ocean.bb.reduce((s, x, i) => s + x / (OPTICS.ocean.a[i] + x), 0)).toFixed(5)});
+    }
+    // how churned the water is (0 clear .. 1 coastal) over a bed wet metres down: the surf zone stirs up sand (more
+    // in rougher seas), a storm clouds the shallows, and a gale fills the open sea with bubbles (paler, greyer)
+    float churn(float wet) {
+        return clamp((1.0 - smoothstep(0.6, 4.5, wet)) * (0.3 + 0.7 * whitecap) + whitecap * 0.35 * (1.0 - smoothstep(6.0, 40.0, wet))
+            + whitecap * whitecap * 0.25, 0.0, 1.0);
     }`;
 
 const DEEP_K = 0.75; // the deep colour's brightness against the palette's water colour
@@ -394,10 +400,8 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
         vec3 glint = sunColor * Fh * D * G * 0.55 / (4.0 * max(NdV, 0.08)) * step(0.0, L.y + 0.02) * csh;
         // ── the water body ──
         float wet = max(vSea.w, 0.0); // water depth under this pixel (m)
-        // churned water: the surf zone stirs up sand (more with rougher seas), a storm clouds the shallows
-        // (and a gale fills the open sea with bubbles and spray: a paler, greyer green)
-        float turb = (1.0 - smoothstep(0.6, 4.5, wet)) * (0.3 + 0.7 * whitecap) + whitecap * 0.35 * (1.0 - smoothstep(6.0, 40.0, wet)) + whitecap * whitecap * 0.25;
-        Optics o = waterOptics(clamp(turb, 0.0, 1.0), lake);
+        float turb = churn(wet);
+        Optics o = waterOptics(turb, lake);
         vec3 deep = deepWater(deepColor, o) * (0.45 + 0.55 * csh);
         vec3 under = deep;
         #if TIER >= 2
@@ -429,8 +433,8 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
             float path = min(length(B - vWorld), 300.0);
             float dBed = clamp(vWorld.y - B.y, 0.0, 300.0);
             wet = dBed;
-            turb = (1.0 - smoothstep(0.6, 4.5, wet)) * (0.3 + 0.7 * whitecap) + whitecap * 0.35 * (1.0 - smoothstep(6.0, 40.0, wet)) + whitecap * whitecap * 0.25;
-            o = waterOptics(clamp(turb, 0.0, 1.0), lake);
+            turb = churn(wet);
+            o = waterOptics(turb, lake);
             deep = deepWater(deepColor, o) * (0.45 + 0.55 * csh);
             vec3 bot = texture(refrColor, buv).rgb;
             if (dBed < 40.0 && zB < 1e5) {
