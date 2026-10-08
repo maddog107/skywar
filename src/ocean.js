@@ -283,7 +283,7 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
             if (agit > 0.01) {
                 vec4 f3 = texture(fftMap, mat2(0.6, 0.8, -0.8, 0.6) * vRest * fftInfo.x * 3.1 + time * 0.07);
                 float ak = agit * (1.0 - smoothstep(fftInfo.w * 0.3, fftInfo.w, dist));
-                N = normalize(N - vec3(f3.x, 0.0, f3.y) * 1.3 * ak * N.y);
+                N = normalize(N - vec3(f3.x, 0.0, f3.y) * 2.2 * ak * N.y);
                 s2u += ak * max(f3.z - dot(f3.xy, f3.xy), 0.0) * 1.7;
             }
         }
@@ -492,7 +492,8 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
         {
             vec2 wv = vec2(dot(p, windDir), dot(p, vec2(-windDir.y, windDir.x))); // along and across the wind
             float near = 1.0 - smoothstep(3000.0, 9000.0, dist);
-            float foam = 0.0, nw = 0.5, bub = 0.0;
+            // (blown water: a haze of fine bubbles and flecks under the gusts' ripples)
+            float foam = 0.0, nw = 0.5, bub = agit * 0.45;
             // the sea's edge (on the beach itself the swash brings its own foam, vFoam.z), a ship's or a flyby's wake
             float shore = (1.0 - smoothstep(0.1, 1.6, wet)) * 0.85 * (0.6 + 0.4 * sin(time * 0.9 + dot(p, vec2(0.05, 0.037)))) * step(0.0, vSea.w);
             float amt = wk.r;

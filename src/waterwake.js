@@ -309,6 +309,9 @@ const STAMP_FS = /* glsl */`
     varying vec2 vC;
     void main() {
         float shape, foamShape;
+        // broken, lacy white water (the ocean adds the fine lace), streaked along the path; ragged edges
+        float n = texture2D(foamMap, vW / 23.0 + vC.y * 0.013).g * 0.6 + texture2D(foamMap, vW / 7.0).r * 0.4;
+        float m = texture2D(foamMap, vW / 61.0 + 0.37).g;
         if (vC.x > 0.5) {
             // a rotor's ring: ripples strongest in a band round the ring radius (r = 1 / 1.6 of the quad), a calmer,
             // flattened eye under the hub, spray-whitened water at the ring's rim
@@ -317,14 +320,14 @@ const STAMP_FS = /* glsl */`
             foamShape = exp(-pow((r - 0.95) / 0.22, 2.0));
             shape *= 1.0 - smoothstep(1.45, 1.6, r);
         } else {
-            float ac = abs(vUv.x), al = abs(vUv.y);
-            shape = (1.0 - smoothstep(0.45, 1.0, ac)) * (1.0 - smoothstep(0.6, 1.0, al));
+            float ac = abs(vUv.x) * (0.8 + 0.45 * m), al = abs(vUv.y);
+            shape = (1.0 - smoothstep(0.35, 1.0, ac)) * (1.0 - smoothstep(0.6, 1.0, al));
             foamShape = (1.0 - smoothstep(0.2, 0.85, ac)) * (1.0 - smoothstep(0.5, 1.0, al));
         }
-        // broken, lacy white water (the ocean adds the fine lace), streaked along the path
-        float n = texture2D(foamMap, vW / 23.0 + vC.y * 0.013).g * 0.6 + texture2D(foamMap, vW / 7.0).r * 0.4;
         float foam = vM.y * foamShape * smoothstep(0.45, 0.8, n + vM.y * 0.25);
-        gl_FragColor = vec4(clamp(foam, 0.0, 1.0), clamp(vM.z * shape, 0.0, 1.0), 0.0, clamp(vM.w * shape, 0.0, 1.0));
+        // (the gusts' ripples are patchy too: catspaws)
+        float agit = vM.w * shape * (0.55 + 0.6 * smoothstep(0.25, 0.75, n * 0.5 + m * 0.5));
+        gl_FragColor = vec4(clamp(foam, 0.0, 1.0), clamp(vM.z * shape, 0.0, 1.0), 0.0, clamp(agit, 0.0, 1.0));
     }`;
 
 export class FlybyWakes {
