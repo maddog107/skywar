@@ -147,7 +147,7 @@ const VERT = /* glsl */`
 // view through the water fades), the diffuse attenuation Kd ≈ (a + bb) / 0.8 (how fast daylight fades on its way
 // down to the bed) and the backscatter albedo bb / (a + bb) (the colour of deep water).
 export const OPTICS = {
-    ocean: { a: [0.30, 0.07, 0.02], b: [0.015, 0.022, 0.03], bb: [0.0012, 0.0025, 0.003] },
+    ocean: { a: [0.29, 0.06, 0.015], b: [0.012, 0.016, 0.022], bb: [0.0011, 0.0021, 0.0026] },
     coast: { a: [0.38, 0.12, 0.20], b: [0.35, 0.38, 0.40], bb: [0.007, 0.0085, 0.0095] },
     lake: { a: [0.42, 0.12, 0.24], b: [0.12, 0.13, 0.14], bb: [0.003, 0.0035, 0.0035] },
 };
@@ -160,13 +160,19 @@ const OPTICS_GLSL = /* glsl */`
         vec3 b = mix(mix(${v3(OPTICS.ocean.b)}, ${v3(OPTICS.coast.b)}, turb), ${v3(OPTICS.lake.b)}, lake);
         vec3 bb = mix(mix(${v3(OPTICS.ocean.bb)}, ${v3(OPTICS.coast.bb)}, turb), ${v3(OPTICS.lake.bb)}, lake);
         Optics o;
-        o.c = a + b; o.kd = (a + bb) / 0.8; o.alb = bb / (a + bb);
+        // (the view through it: most of what the particles scatter goes on forward, so the image of the bed fades
+        // with the absorption, the backscatter and a little of the forward scattering, not all of b)
+        o.c = a + bb + 0.15 * b; o.kd = (a + bb) / 0.8; o.alb = bb / (a + bb);
         return o;
     }
-    // the light deep water sends back: the palette's water colour sets how bright (the light of the hour), the
-    // optics its hue (normalised so the clear sea's comes out at DEEP_K of the palette's)
+    // The light deep water sends back: the palette's water colour sets how bright (the light of the hour), the optics
+    // its hue, with a little of the palette's own and a neutral share: what a camera sees of the open sea from the air
+    // also holds the skylight its surface reflects and the haze in between, so deep ocean reads dark navy to indigo in
+    // photographs, not the pure blue of the water-leaving light (checked against aerial photos from 50 to 5,000 m)
     vec3 deepWater(vec3 deep, Optics o) {
-        return (deep.r + deep.g + deep.b) * o.alb * (DEEP_K / ${(OPTICS.ocean.bb.reduce((s, x, i) => s + x / (OPTICS.ocean.a[i] + x), 0)).toFixed(5)});
+        float sum = deep.r + deep.g + deep.b;
+        vec3 hue = mix(mix(o.alb / dot(o.alb, vec3(1.0)), deep / max(sum, 1e-4), 0.1), vec3(1.0 / 3.0), DEEP_GREY);
+        return sum * hue * DEEP_K;
     }
     // how churned the water is (0 clear .. 1 coastal) over a bed wet metres down: the surf zone stirs up sand (more
     // in rougher seas), a storm clouds the shallows, and a gale fills the open sea with bubbles (paler, greyer)
@@ -175,11 +181,13 @@ const OPTICS_GLSL = /* glsl */`
             + whitecap * whitecap * 0.25, 0.0, 1.0);
     }`;
 
-const DEEP_K = 0.75; // the deep colour's brightness against the palette's water colour
+const DEEP_K = 0.46;    // the deep colour's brightness against the palette's water colour
+const DEEP_GREY = 0.28; // its neutral share (see deepWater)
 const smooth01 = (e0, e1, x) => { const t = Math.min(Math.max((x - e0) / (e1 - e0), 0), 1); return t * t * (3 - 2 * t); };
 function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
     return /* glsl */`
     #define DEEP_K ${DEEP_K.toFixed(3)}
+    #define DEEP_GREY ${DEEP_GREY.toFixed(3)}
     #define CAUSTIC_K 1.0
     uniform float time, whitecap, windU, underwater, geomS2;
     uniform vec3 sunDir, sunColor, skyColor, horizonColor, deepColor, fogColor;
@@ -244,14 +252,21 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
         c += skySun * pow(sd, 90.0) * 0.6 * (1.0 - skyNight * 0.8) * (1.0 - skyOvercast * 0.8);
         return c;
     }
-    vec3 skyRefl(vec3 R, vec3 P) {
+    // (Rc: the mirrored ray off a calmer normal for the clouds: a cloud base kilometres off, looked up through every
+    // ripple's slope, would only come out as noise)
+    vec3 skyRefl(vec3 R, vec3 Rc, vec3 P) {
         vec3 c = skyAt(R);
-        if (cloudShadowA.w > 0.5 && R.y > 0.012 && P.y < cloudShadowB.x) {
-            vec3 Q = P + R * ((cloudShadowB.x - P.y) / R.y);
+        if (cloudShadowA.w > 0.5 && Rc.y > 0.012 && P.y < cloudShadowB.x) {
+            vec3 Q = P + Rc * ((cloudShadowB.x - P.y) / Rc.y);
             float cov = clamp((1.0 - cloudSunShadowAt(Q)) / max(cloudShadowB.w, 0.1), 0.0, 1.0);
             vec3 base = mix(horizonColor, vec3(dot(horizonColor, vec3(0.3, 0.59, 0.11))), 0.45) * (0.82 + 0.25 * skyOvercast)
                 + skySun * 0.06 * (1.0 - skyNight) * (1.0 - skyOvercast);
-            c = mix(c, base, cov * smoothstep(0.012, 0.07, R.y) * 0.9);
+            // (low / medium, without the screen-space reflections' real clouds, show these flat bases more gently)
+            #if TIER >= 2
+            c = mix(c, base, cov * smoothstep(0.012, 0.07, Rc.y) * 0.9);
+            #else
+            c = mix(c, base, cov * smoothstep(0.012, 0.07, Rc.y) * 0.45);
+            #endif
         }
         return c;
     }
@@ -269,7 +284,13 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
         float fp = dist * 0.0015 / max(abs(V.y), 0.06); // metres of water under a pixel (grazing angles stretch it)
         vec3 N = normalize(vNormal);
         float lake = vSea.y < 0.0 ? 1.0 : 0.0; // fresh water (watermap.js: no way out to the sea): its own colour, calmer
-        float s2u = 0.00015;    // slope variance the normal at this pixel doesn't carry (grows below)
+        // slope variance the normal at this pixel doesn't carry (grows below); low / medium's few procedural ripples
+        // carry far less of it than the FFT detail
+        #if TIER >= 2
+        float s2u = 0.00015;
+        #else
+        float s2u = 0.0022 + 0.00001 * dist;
+        #endif
         float detLost;          // share of the small-scale detail faded out here
         // the wake map (shipfx.js): foam, milky water, hull shade, agitation (a low flyby's ripples, waterwake.js)
         vec4 wk = vec4(0.0);
@@ -306,7 +327,8 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
             float r2 = texture2D(detailMap, p / 53.0 - vec2(time * 0.014, -time * 0.009)).r;
             float r3 = mix(0.5, texture2D(detailMap, p / 17.0 + vec2(-time * 0.02, time * 0.017)).r, 1.0 - smoothstep(0.6, 3.0, fp));
             float k = mix(0.1, 1.0, 1.0 - smoothstep(60.0, 900.0, dist));
-            vec2 rip = (vec2(r1 - r3, r2 - r3)) * 0.3 * k;
+            // (calmer at grazing angles, where these few big ripples would mirror the sky as wood grain)
+            vec2 rip = (vec2(r1 - r3, r2 - r3)) * 0.3 * k * (0.35 + 0.65 * smoothstep(0.04, 0.3, V.y));
             if (agit > 0.01) {
                 float a1 = texture2D(detailMap, p / 5.3 + vec2(time * 0.05, -time * 0.04)).r, a2 = texture2D(detailMap, p / 3.7 - vec2(time * 0.04, time * 0.06)).r;
                 rip += vec2(a1 - 0.5, a2 - 0.5) * 0.5 * agit * (1.0 - smoothstep(300.0, 1500.0, dist));
@@ -368,10 +390,13 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
         float vt2 = max(dot(vt, vt), 1e-6);
         float s2v = (s2w.x * vt.x * vt.x + s2w.y * vt.y * vt.y) / vt2;
         float av = sqrt(s2v);
-        float F = 0.02 + 0.98 * pow(1.0 - NdV, 5.0 * exp(-2.69 * av)) / (1.0 + 22.7 * pow(av, 1.5));
+        // (the damping by the rough slopes taken at ~a fifth: the sea's horizon greys with the sky it mirrors, as in photos)
+        float F = 0.02 + 0.98 * pow(1.0 - NdV, 5.0 * exp(-2.69 * av)) / (1.0 + 4.0 * pow(av, 1.5));
         vec3 R = reflect(-V, N);
         R.y = abs(R.y); // a ray reflected down into the next wave sees that wave's sky instead
-        vec3 sky = skyRefl(R, vWorld);
+        vec3 Rc = reflect(-V, normalize(mix(N, vec3(0.0, 1.0, 0.0), 0.75)));
+        Rc.y = abs(Rc.y);
+        vec3 sky = skyRefl(R, Rc, vWorld);
         float planarA = 0.0;
         #if TIER >= 2
         if (planarOn > 0.5) {
@@ -413,7 +438,8 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
             // guessed from the sea map's depth here, then looked up in the copy of the scene (so the bed shifts by its
             // depth, never by more: no smearing at grazing angles). Something in front of the water there (a hull
             // above the waterline): the straight view instead.
-            vec3 Tr = refract(-V, N, 0.75);
+            // (bent by a calmer normal than the shading's: the detail's full slope makes the bed shimmer and sparkle)
+            vec3 Tr = refract(-V, normalize(mix(normalize(vNormal), N, 0.4)), 0.75);
             float d0 = clamp(wet + 0.5, 0.5, 60.0);
             vec3 sp = toScreen(vWorld + Tr * (d0 / max(-Tr.y, 0.25)));
             vec2 buv = sp.xy;
@@ -437,6 +463,11 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
             o = waterOptics(turb, lake);
             deep = deepWater(deepColor, o) * (0.45 + 0.55 * csh);
             vec3 bot = texture(refrColor, buv).rgb;
+            // The sea bed's sand: the terrain draws it at ~0.2 albedo; a clear sea's carbonate sand is ~0.4–0.5, which
+            // is what makes the shallows of the Bahamas or the Maldives glow turquoise from the air. Brightened where
+            // what the refraction found is the bed itself (about as deep as the sea map says: not a hull in deep water)
+            float bedK = (1.0 - lake) * smoothstep(0.2, 1.0, dBed) * (1.0 - smoothstep(2.0, 6.0, max(vSea.w, 0.0) - dBed));
+            bot *= 1.0 + bedK;
             if (dBed < 40.0 && zB < 1e5) {
                 // the sea bed close up: sand ripples across the swell, darker patches (weed, rock) in the shallows
                 float fpB = fp + zB * 0.0008;
@@ -444,26 +475,28 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
                 vec2 bw = B.xz + 0.8 * vec2(texture(detailMap, B.xz / 9.0).r, texture(detailMap, B.xz / 9.0 + 0.5).r);
                 float ph = dot(bw, sd) * 6.2832 / 0.55;
                 vec3 Lw = refract(-L, vec3(0.0, 1.0, 0.0), 0.75);
-                float rip = cos(ph) * (1.0 - smoothstep(0.05, 0.25, fpB)) * 0.22 + cos(dot(bw, sd) * 6.2832 / 2.3 + 1.7) * (1.0 - smoothstep(0.3, 1.2, fpB)) * 0.12;
+                float rip = cos(ph) * (1.0 - smoothstep(0.03, 0.12, fpB)) * 0.22 + cos(dot(bw, sd) * 6.2832 / 2.3 + 1.7) * (1.0 - smoothstep(0.15, 0.6, fpB)) * 0.12;
                 bot *= 1.0 + rip * dot(sd, -Lw.xz) * 2.0 * csh * (1.0 - smoothstep(2.0, 30.0, dBed));
                 float pn = texture(detailMap, B.xz / 97.0).r * 0.7 + texture(detailMap, B.xz / 23.0 + 0.3).r * 0.3;
-                float weed = smoothstep(0.58, 0.7, pn) * smoothstep(1.2, 3.5, dBed) * (1.0 - lake * 0.5);
-                bot = mix(bot, bot * vec3(0.4, 0.5, 0.36), weed * 0.7);
+                float weed = smoothstep(0.62, 0.74, pn) * smoothstep(3.0, 8.0, dBed) * (1.0 - lake * 0.5);
+                bot = mix(bot, bot * vec3(0.45, 0.55, 0.42), weed * 0.5);
                 // caustics: the sun refracted through the ripples focuses on the bed. Where the sun's light reaching B
                 // entered the surface, the curvature ∇²h of the detail (oceanfft.js) bends the bundle of rays: the
                 // Jacobian of the map from the surface to a bed dBed below is 1 + dBed (1 − 1/n) ∇²h, the light on the
                 // bed its inverse. Blurred with depth (the sun's disc is half a degree wide) and by the pixel's size.
                 vec2 S = B.xz - Lw.xz * (dBed / max(-Lw.y, 0.3));
-                float lod = log2(max(max(fpB, dBed * 0.012), 0.05) * fftInfo.x * float(textureSize(fftMap, 0).x)) + 0.5;
+                float lod = log2(max(max(fpB, dBed * 0.012), 0.05) * fftInfo.x * float(textureSize(fftMap, 0).x)) + 1.5;
                 float lap = textureLod(fftMap, S * fftInfo.x, lod).w * fftInfo.z;
                 float J = 1.0 + dBed * 0.25 * lap * CAUSTIC_K;
                 // bright where the bundle of rays folds over (|J| → 0: the network of caustic lines), a little darker
                 // between; past a few metres the folds overlap and the sun's disc blurs them out
-                float cau = min(1.0 / max(abs(J), 0.2), 4.0) - 1.3;
+                // (the folds' sharpness limited by the pixel: a sharp line thinner than a pixel only sparkles)
+                float jMin = 0.35 + 6.0 * fpB;
+                float cau = min(1.0 / max(abs(J), jMin), 4.0) - 1.0 - 0.3 / (1.0 + 8.0 * fpB);
                 // (too small to see from far off: the bed's average light is unchanged)
                 cau *= csh * smoothstep(0.02, 0.25, L.y) * (1.0 - smoothstep(0.4, 1.0, turb)) * (1.0 - smoothstep(4.0, 16.0, dBed))
-                    * (1.0 - lake * 0.5) * (1.0 - smoothstep(0.06, 0.3, fpB));
-                bot *= max(1.0 + cau * 0.5, 0.4);
+                    * (1.0 - lake * 0.5) * (1.0 - smoothstep(0.015, 0.09, fpB));
+                bot *= max(1.0 + cau * 0.4, 0.45);
             }
             // Beer-Lambert both ways: daylight down to the bed (Kd over its depth), the view back up (c over the path);
             // what the water itself scatters fills in toward the deep colour
@@ -506,10 +539,11 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
         }
         #if TIER < 2
         {
-            // a little of the drawn bed through the water, more where it is shallow and clear (the waterline stays soft)
+            // a little of the drawn bed through the water where it is shallow and clear (the waterline stays soft);
+            // deep water is opaque (its bed is the estimate above: the drawn one far below would only mottle it)
             float pathL = max(vSea.w, 0.0) * (0.6 + 0.4 / max(V.y, 0.2));
             float Tl = exp(-dot(o.c + o.kd, vec3(0.25, 0.45, 0.3)) * pathL);
-            alpha = mix(mix(0.72, 0.97, clamp(F * 2.0 + smoothstep(200.0, 3000.0, dist), 0.0, 1.0)), 1.0 - Tl * 0.5, smoothstep(14.0, 3.0, vSea.w) * (1.0 - smoothstep(300.0, 2500.0, dist)));
+            alpha = 1.0 - Tl * 0.5 * (1.0 - smoothstep(300.0, 2500.0, dist));
         }
         #endif
         float foamCover = 0.0;
@@ -552,9 +586,12 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
                     float fk = (1.0 - gridK) * (1.0 - smoothstep(1500.0, 5000.0, dist));
                     if (fk > 0.0) {
                         float fl = texture(foamMap, vec2(wv.y / 11.0, wv.x / 31.0) + windDir * time * 0.006).g * 0.65 + texture(foamMap, vec2(wv.y / 4.1, wv.x / 12.0)).r * 0.35;
-                        foam = max(foam, smoothstep(1.0 - W * 2.6, 1.08 - W * 2.6, fl * (0.85 + 0.3 * gust)) * fk * 0.9 * near);
+                        // (a fleck smaller than the pixel would only sparkle: its average cover instead)
+                        float fs = smoothstep(1.0 - W * 2.6, 1.08 - W * 2.6, fl * (0.85 + 0.3 * gust));
+                        foam = max(foam, mix(fs, W * 3.5, smoothstep(0.4, 1.5, fp)) * fk * 0.9 * near);
                     }
-                    foam = max(foam, W * 3.5 * smoothstep(1500.0, 5000.0, dist)); // far off (to the horizon): the average cover
+                    // far off: the average cover, fading into the haze well before the view ends
+                    foam = max(foam, W * 2.8 * smoothstep(1500.0, 5000.0, dist) * (1.0 - smoothstep(5000.0, 14000.0, dist)));
                     // spume: in a gale the wind tears foam off the crests and lays it out in long thin streaks along the
                     // wind (the foam texture's streak channel: ~30 m along the wind, ~1 m across it), in bands
                     float sk = whitecap * whitecap * (1.0 - smoothstep(600.0, 2500.0, dist));
