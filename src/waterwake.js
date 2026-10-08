@@ -319,7 +319,7 @@ export function washOf(s, hits) {
         const u = Math.hypot(pr, w);
         if (u > 1) {
             // under the wing and just behind it, the width of the span and spreading with height
-            const back = (s.length || 15) * 0.3 + (s.span || 10) * 0.3;
+            const back = (s.length || 15) * 0.22 + (s.span || 10) * 0.12;
             const bx = s.x - s.fx * back, bz = s.z - s.fz * back;
             if (!wet) under(bx, bz);
             hits.push({ kind: 'wing', x: bx, z: bz, y: wet ? y0 : _g.y, w: (s.span || 10) * 0.55 + h0 * 0.25, u, land: !wet, h: h0 });
@@ -644,7 +644,7 @@ export class FlybyWakes {
                 const up = (3 + (8 + 22 * r3 * r3) * pw) * (edge ? 0.6 : 1);
                 const outV = side * (3 + 8 * pw * r1);
                 V.set(s.vx * (0.05 + 0.06 * r2) + cx * outV, up, s.vz * (0.05 + 0.06 * r2) + cz * outV);
-                if (r3 < 0.4) ms.emit(P, V, 2.5 + 3 * r2, 3 + 3 * sp, Math.min(10 + 18 * pw, 8 + hit.w * 2.2), MIST0, MIST1, 0.16 + 0.3 * sp, 0, 2, 0.2, 0, 0.5, 0.3, 0);
+                if (r3 < 0.4) { const sz = Math.min(12 + 18 * pw, 10 + hit.w * 2.2); P.y += sz * 0.3; ms.emit(P, V, 2.5 + 3 * r2, 4 + 3 * sp, sz, MIST0, MIST1, Math.min(0.42 + 0.35 * sp, 0.72), 0, 2, 0.2, 0, 0.5, 0.3, 0); }
                 else if (js && r3 < 0.62) js.emit(P, V, 2 * up / 9.81 * 0.6 + 0.3, 1.2 + 1.4 * pw, 2.5 + 3 * pw, DROP0, DROP1, 0.75 + 0.25 * sp, 0.2, 1.1, -9.8, 0, 0.5, 0.1, 0.28);
                 else sm.emit(P, V, 1 + 1.4 * r2, 1.2 + 1.2 * sp, 3 + 3 * pw, DROP0, DROP1, 0.45 + 0.45 * sp, 0, 1.6, -9.5, 0, 0.5, 0.8, 0.06);
             } else {
@@ -659,15 +659,16 @@ export class FlybyWakes {
                 const drag = 0.04 + 0.08 * r2;
                 V.set(s.vx * drag + cx * (r1 - 0.5) * 12, up, s.vz * drag + cz * (r1 - 0.5) * 12);
                 // (the cloud of mist grows to about the size of the patch of water blown on)
-                if (r3 < 0.45) ms.emit(P, V, 3 + 4 * r2, 4 + 3 * sp, Math.min(14 + 22 * sp, 6 + hit.w * 2.5), MIST0, MIST1, 0.14 + 0.24 * sp, 0, 2.6, 0.3, 0, 0.5, 0.3, 0);
+                if (r3 < 0.45) { const sz = Math.min(14 + 22 * sp, 8 + hit.w * 2.5); P.y += sz * 0.25; ms.emit(P, V, 3 + 4 * r2, 4 + 3 * sp, sz, MIST0, MIST1, Math.min(0.35 + 0.3 * sp, 0.62), 0, 2.6, 0.3, 0, 0.5, 0.3, 0); }
                 else sm.emit(P, V, 1.2 + 1.3 * r2, 1.4 + 1.2 * sp, 3 + 4 * sp, DROP0, DROP1, 0.45 + 0.4 * sp, 0, 1.7, -9.5, 0, 0.5, 0.8, 0.06);
             }
             // the trail of mist that hangs on behind (the finest spray, drifting with the wind): what shows first, from
             // 30–40 m up
             if (r2 > 0.8) {
-                P.y += 1 + 3 * r3 * pw;
+                const sz = 16 + 16 * Math.min(pw, 2);
+                P.y = hit.y + sz * 0.3 + 3 * r3 * pw;
                 V.set(s.vx * 0.03, 0.6 + r1 + 2 * pw * r3, s.vz * 0.03);
-                ms.emit(P, V, 5 + 5 * r1, 5 + 4 * sp, 14 + 16 * Math.min(pw, 2), MIST0, MIST1, 0.14 + 0.2 * sp, 0, 0.9, 0.12, 0, 0.5, 0.2, 0);
+                ms.emit(P, V, 5 + 5 * r1, 6 + 4 * sp, sz, MIST0, MIST1, Math.min(0.32 + 0.26 * sp, 0.58), 0, 0.9, 0.12, 0, 0.5, 0.2, 0);
             }
         }
     }
@@ -744,7 +745,7 @@ export function seaFade(sys) {
     m.vertexShader = m.vertexShader.replace('void main() {', 'varying vec2 vSea;\n    void main() {')
         .replace(vA, vA + ' vSea = vec2((inverse(viewMatrix) * mv).y, size);');
     m.fragmentShader = m.fragmentShader.replace('void main() {', 'varying vec2 vSea; uniform float seaY;\n    void main() {')
-        .replace(fA, fA + ' a *= smoothstep(seaY, seaY + max(1.0, vSea.y * 0.3), vSea.x);');
+        .replace(fA, fA + ' a *= smoothstep(seaY, seaY + clamp(vSea.y * 0.3, 1.0, 2.5), vSea.x);');
     return (m.uniforms.seaY = { value: 0 });
 }
 const _vv = new THREE.Vector3(), _pp = new THREE.Vector3();

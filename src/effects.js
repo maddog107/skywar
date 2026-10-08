@@ -227,12 +227,13 @@ function octagonGeometry() {
 
 // ── Instanced billboard particle system ──
 class ParticleSystem {
-    constructor(scene, max, { additive = false, texture, renderOrder = 6, lit = false, heat = false, atlas = false, stretch = false, knee = false, wind = 0, light = null, addK = 0.4 } = {}) {
+    constructor(scene, max, { additive = false, texture, renderOrder = 6, lit = false, heat = false, atlas = false, stretch = false, knee = false, wind = 0, light = null, addK = 0.4, fadeIn = 0.08 } = {}) {
         this.max = max;
         this.count = 0;
         this.knee = knee;
         this.windK = wind;
         this.stretch = stretch;
+        this.fadeIn = fadeIn; // (the share of its life a particle takes to fade in: long-lived spray needs less)
         // state (struct-of-arrays)
         this.p = new Float32Array(max * 3);
         this.v = new Float32Array(max * 3);
@@ -348,6 +349,7 @@ class ParticleSystem {
         // drag relaxes a puff's velocity toward the wind (smoke drifts downwind)
         const wk = this.windK && wind ? this.windK : 0;
         const wx = wk ? wind.x * wk : 0, wz = wk ? wind.z * wk : 0;
+        const fi = this.fadeIn;
         for (let i = 0; i < this.count; i++) {
             const i3 = i * 3, i4 = i * 4;
             const d = Math.exp(-this.drag[i] * dt);
@@ -363,7 +365,7 @@ class ParticleSystem {
             C[i4 + 1] = this.c0[i3 + 1] + (this.c1[i3 + 1] - this.c0[i3 + 1]) * t;
             C[i4 + 2] = this.c0[i3 + 2] + (this.c1[i3 + 2] - this.c0[i3 + 2]) * t;
             // quick fade-in over first 8% of life avoids popping
-            C[i4 + 3] = (this.a0[i] + (this.a1[i] - this.a0[i]) * t) * (t < 0.08 ? t * 12.5 : 1);
+            C[i4 + 3] = (this.a0[i] + (this.a1[i] - this.a0[i]) * t) * (t < fi ? t / fi : 1);
             S[i4] = this.s0[i] + (this.s1[i] - this.s0[i]) * te;
             S[i4 + 1] = this.rot[i];
             const hk = 1 - t / this.hT[i];

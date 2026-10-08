@@ -272,9 +272,9 @@ export class WaterFX {
                 // blue-grey), not the land's green the hemisphere light gives the smoke
                 this.lightU = { sunDirV: L.sunDirV, sunCol: L.sunCol, ambTop: L.ambTop, ambBot: { value: new THREE.Color() } };
                 const light = this.lightU;
-                this.drops = new PS(fx.scene, MAX_DROPS, { texture: sprayAtlas(), lit: true, atlas: true, stretch: true, renderOrder: 6, wind: 1, light });
-                this.jets = new PS(fx.scene, MAX_JETS, { texture: jetAtlas(), lit: true, atlas: true, stretch: true, renderOrder: 6, wind: 0.5, light });
-                this.mist = new PS(fx.scene, MAX_MIST, { texture: mistAtlas(), lit: true, atlas: true, renderOrder: 6, wind: 1, light });
+                this.drops = new PS(fx.scene, MAX_DROPS, { texture: sprayAtlas(), lit: true, atlas: true, stretch: true, renderOrder: 6, wind: 1, light, fadeIn: 0.03 });
+                this.jets = new PS(fx.scene, MAX_JETS, { texture: jetAtlas(), lit: true, atlas: true, stretch: true, renderOrder: 6, wind: 0.5, light, fadeIn: 0.04 });
+                this.mist = new PS(fx.scene, MAX_MIST, { texture: mistAtlas(), lit: true, atlas: true, renderOrder: 6, wind: 1, light, fadeIn: 0.025 });
                 this.drops.mesh.name = 'splash:drops'; this.jets.mesh.name = 'splash:jets'; this.mist.mesh.name = 'splash:mist';
                 this.seaY = [seaFade(this.drops), seaFade(this.jets), seaFade(this.mist)];
             } catch (e) { this.drops = this.jets = this.mist = null; }
@@ -349,7 +349,9 @@ export class WaterFX {
             if (vel && speed > 1) { const hs = Math.hypot(vel.x, vel.z) || 1; hx = vel.x / hs; hz = vel.z / hs; }
             const v0 = Math.sqrt(2 * G * S.h) * 1.12;
             const lean = o.skip ? 1.4 : S.lean * 0.5;
-            const w = S.h * 0.16 + S.r * 0.8, spread = 0.8 + S.h * 0.35;
+            // (far off, a little bigger than life, so a burst still reads at a kilometre or two: a spout 7 m high is 4 px there)
+            const fr = dist > 500 ? Math.min(Math.pow(dist / 500, 0.6), 2.6) : 1;
+            const w = (S.h * 0.16 + S.r * 0.8) * Math.sqrt(fr), spread = 0.8 + S.h * 0.35;
             for (let r = 0; r < rep; r++) {
                 // (the rest of the cluster round the first, each a little smaller)
                 const P = r ? _p.set(at.x + rand(-1, 1) * spread + hx * rand(-1, 1.5) * spread, at.y, at.z + rand(-1, 1) * spread + hz * rand(-1, 1.5) * spread) : at;
@@ -375,7 +377,7 @@ export class WaterFX {
                 // the top of it, a burst of white spray hanging a moment
                 const vu = v0 * 0.92;
                 _v.set(hx * vu * lean * 0.8, vu, hz * vu * lean * 0.8);
-                this.put(this.mist, mC, at, _v, 2 * vu / G * 0.9 + 0.3, S.h * 0.14 + S.r, S.h * 0.5 + S.r, MIST0, MIST1, 0.85, 0, 0.5, -G * 0.88, 0.2, 0);
+                this.put(this.mist, mC, at, _v, 2 * vu / G * 0.9 + 0.3, (S.h * 0.14 + S.r) * fr, (S.h * 0.5 + S.r) * fr, MIST0, MIST1, 0.85, 0, 0.5, -G * 0.88, 0.2, 0);
                 // a crown of drops thrown out round its foot
                 const nc = Math.round((2 + S.h * 0.4) * Q.k);
                 for (let i = 0; i < nc; i++) {
@@ -388,7 +390,7 @@ export class WaterFX {
                 // the mist it leaves hanging over the water, drifting: a burst's spouts build a cloud of it
                 _p.set(at.x + hx * S.h * 0.3, at.y + S.h * 0.2, at.z + hz * S.h * 0.3);
                 _v.set(hx * 1.5 * S.lean, Math.sqrt(2 * G * S.h) * 0.3, hz * 1.5 * S.lean);
-                this.put(this.mist, mC, _p, _v, rand(2.2, 3.4), S.r * 3 + 0.4, Math.max(S.h * (1 + 0.15 * rep), 1), MIST0, MIST1, 0.32, 0, 1.5, -0.8, 0.3, 0);
+                this.put(this.mist, mC, _p, _v, rand(2.2, 3.4), (S.r * 3 + 0.4) * fr, Math.max(S.h * (1 + 0.15 * rep), 1) * fr, MIST0, MIST1, 0.32, 0, 1.5, -0.8, 0.3, 0);
             }
             // an explosive round: a pinprick of fire as it goes in (some of them)
             if (S.he && !o.skip && k >= 0.6 && dist < 3000 && Math.random() < 0.45 && this.fx.fire) {
