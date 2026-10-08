@@ -311,7 +311,11 @@ export class Ordnance {
         const low = at.y - s.h < 1.5;
         const camD = g.camera.position.distanceTo(at);
         // the look and sound
-        if (o.water) { fx.waterSplash(_v.set(at.x, 0.3, at.z), kind === 'rocket' ? 0.8 : 0.5); fx.explosion(at, 0.35); }
+        // in the water: an RPG bursts on the surface, a grenade sinks a metre or two and throws up a neat little column
+        if (o.water) {
+            if (fx.water) fx.water.blast(_v.set(at.x, 0, at.z), { kg: kind === 'rocket' ? 0.73 : 0.18, depth: kind === 'rocket' ? 'contact' : 'optimal', agl: 0, sound: 'hiss' });
+            else { fx.waterSplash(_v.set(at.x, 0.3, at.z), kind === 'rocket' ? 0.8 : 0.5); fx.explosion(at, 0.35); }
+        }
         else {
             fx.explosion(at, kind === 'rocket' ? 0.72 : 0.5, o.vel ? _v2.copy(o.vel).multiplyScalar(0.05) : null);
             if (low) {

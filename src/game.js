@@ -62,6 +62,7 @@ const WINGMEN = ['BOLT', 'SABRE'];
 export class Game {
     constructor({ scene, camera, world, effects, audio, input, hud, cockpit, settings }) {
         Object.assign(this, { scene, camera, world, effects, audio, input, hud, cockpit, settings });
+        if (effects) effects.game = this; // (splash.js reaches the wake map, the ocean and the audio through it)
         this.events = new Events();
         this.weapons = new Weapons(this);
         this.wreckage = new Wreckage(this);

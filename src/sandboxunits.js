@@ -634,7 +634,7 @@ export function duelShot(g, shooter, target, pHit = 0.5, dmg = [10, 18]) {
         const dir = _v2.subVectors(target.pos, m).normalize();
         m.addScaledVector(dir, 4);
         if (fx.sprite && fx.flashTex) fx.sprite(fx.flashTex, m, 4, 0.08, 1, 1, [1, 0.85, 0.6]);
-        if (g.weapons && g.weapons.newBullet) g.weapons.newBullet(m, dir.multiplyScalar(1300), SANDBOX_FIRE, 0, d / 1300 + 0.05, true, shooter.team === 'red' ? TRACER_RED : TRACER_BLUE);
+        if (g.weapons && g.weapons.newBullet) g.weapons.newBullet(m, dir.multiplyScalar(1300), SANDBOX_FIRE, 0, d / 1300 + 0.05, true, shooter.team === 'red' ? TRACER_RED : TRACER_BLUE).cal = 30;
     }
     const hit = Math.random() < pHit;
     if (hit) {

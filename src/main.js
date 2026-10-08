@@ -122,6 +122,7 @@ function applyQuality() {
     const q = settings.quality;
     postfx.setQuality(q, settings); // [postfx] pixel ratio (fixed or adaptive), MSAA, AO, SSR, blur, flare
     nightfx.setQuality(q);
+    effects.setQuality(q); // water splashes: particle budgets, wake-map marks, the sea's heave (splash.js)
     renderer.shadowMap.enabled = true; // (low: one small cascade, world.js / shadows.js)
     bloom.enabled = q !== 'low';
     if (world) {

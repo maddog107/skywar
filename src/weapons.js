@@ -10,6 +10,7 @@ import { CRATER_KINDS, craterAdj } from './craters.js';
 import { AIR_TARGETS, segHitsSphere } from './softtargets.js';
 import { seatHitTest, seatBody, seatCanopyUp, seatCanopyCenter, isEnemySeat, hitEnemySeat, shredEnemyCanopy } from './pilot.js';
 import { materielDamage, targetClass, damageAt } from './arsenal.js';
+import { gunCalibre, gunRealRate, WARHEAD_KG } from './splash.js';
 
 // what a round does to a target class: small arms (b.small, from ordnance.js) carry their weapon's table
 // (arsenal.js: armour shrugs them off, walls stop them); everything else deals its flat damage
@@ -79,6 +80,9 @@ export class Weapons {
             const vel = dir.multiplyScalar(WEAPONS.bulletSpeed).add(ac.vel);
             const b = this.newBullet(muzzle, vel, ac, gun.damage, WEAPONS.bulletLife, ac.ammo % 3 !== 0, ac.team === 'blue' ? GUN_BLUE : GUN_RED);
             b.flak = false;
+            // (its splash in the water, splash.js: the calibre, and how many real rounds this one stands for)
+            b.cal = gun.cal || (gun.cal = gunCalibre(gun.name));
+            b.rep = gun.rep || (gun.rep = clamp(Math.round(gunRealRate(gun.name) / gun.rate), 1, 6));
         }
         this.game.events.emit('gunfire', ac);
         // muzzle flash
@@ -86,10 +90,12 @@ export class Weapons {
         return n;
     }
 
-    // Flak / AAA rounds from ground units
-    fireFlak(pos, dir, owner, damage = 6, speed = 900, fuse = rand(1.2, 2.8)) {
+    // Flak / AAA rounds from ground units (cal: mm, for the splash a round makes in the water: 23 mm AAA, a CIWS's
+    // 20 / 30 mm, a ship's 76–130 mm gun)
+    fireFlak(pos, dir, owner, damage = 6, speed = 900, fuse = rand(1.2, 2.8), cal = 23, rep = 1) {
         const b = this.newBullet(pos, _v4.copy(dir).multiplyScalar(speed), owner, damage, Math.min(3, isFinite(fuse) ? fuse + 0.1 : 2.2), true, FLAK_COLOR);
-        b.flak = isFinite(fuse); b.fuse = fuse;
+        b.flak = isFinite(fuse); b.fuse = fuse; b.cal = cal; b.rep = rep;
+        return b;
     }
 
     // a round from the pool (or a new one), pushed onto the live list
@@ -97,7 +103,7 @@ export class Weapons {
         const b = this.bulletPool.pop() || { pos: new THREE.Vector3(), vel: new THREE.Vector3(), pooled: true };
         b.pos.copy(pos); b.vel.copy(vel);
         b.owner = owner; b.team = owner.team; b.damage = damage; b.life = life; b.tracer = tracer; b.color = color;
-        b.flak = false; b.fuse = 0; b.small = false; b.def = null; b.whizzed = false;
+        b.flak = false; b.fuse = 0; b.small = false; b.def = null; b.whizzed = false; b.cal = 0; b.rep = 0; b.skips = 0;
         this.bullets.push(b);
         return b;
     }
@@ -163,8 +169,11 @@ export class Weapons {
             if (!dead && b.pos.y < 3000) {
                 const h = terrainHeight(b.pos.x, b.pos.z);
                 if (b.pos.y < h || b.pos.y < 0) {
-                    if (b.pos.y < 0 && h < 0) g.effects.smoke.emit(b.pos, _v1.set(0, 18, 0), 0.7, 1, 4, [0.9, 0.95, 1], [0.8, 0.85, 0.9], 0.7, 0, 1, -20);
-                    else {
+                    if (b.pos.y < 0 && h < 0) {
+                        // into the sea: a spout sized to the round, or at a shallow angle it skips off and flies on (splash.js)
+                        const W = g.effects.water;
+                        if (W && W.round(b, _prev)) continue;
+                    } else {
                         g.effects.groundImpact(b.pos);
                         // strafing: a round striking the ground right by someone on foot still hurts (fragments, ricochet)
                         const pm = g.pilotMode;
@@ -330,7 +339,8 @@ export class Weapons {
             }
             const h = terrainHeight(m.pos.x, m.pos.z);
             if (m.pos.y < Math.max(h, 0) || m.life <= 0 || (m.age > W.boost + 2 && speed < 170)) {
-                if (m.pos.y < 0 && h < 0) fx.waterSplash(m.pos, 0.6);
+                // into the sea: its warhead throws a column up (splash.js), a fireball on the surface inside it
+                if (m.pos.y < 0 && h < 0) { if (fx.water) fx.water.blast(m.pos, { kg: WARHEAD_KG[m.kind] ?? 8, depth: 'contact', vel: m.vel, agl: 0 }); else fx.waterSplash(m.pos, 0.6); }
                 else {
                     fx.explosion(m.pos, m.pos.y < h + 3 ? 0.8 : 0.5); this.splash(m);
                     if (m.pos.y < h + 2.5) this.addCrater(_v2.set(m.pos.x, h, m.pos.z), m.kind === 'aam' ? 'missile' : m.kind, m.vel);
@@ -562,18 +572,20 @@ export class Weapons {
             // impact
             const at = b.pos.clone();
             if (!hitShip && !onBuilding) at.y = s.h;
-            if (s.water && !hitShip) {
-                fx.waterSplash(at, 2.2);
-                fx.explosion(at, 0.8);
+            const wet = s.water && !hitShip;
+            if (wet) {
+                // a 500 lb bomb into the sea goes off a few metres down: the column, the base surge, the slick (splash.js)
+                if (fx.water) fx.water.blast(at, { kg: WARHEAD_KG.bomb, depth: 'shallow', vel: b.vel, agl: 0 });
+                else { fx.waterSplash(at, 2.2); fx.explosion(at, 0.8); }
             } else {
                 fx.explosion(at, 2.4);
                 fx.debrisBurst(at, _v1.set(0, 40, 0), 5, 0.8);
                 for (let k = 0; k < 20; k++) fx.smoke.emit(at, _v1.set(rand(-25, 25), rand(15, 60), rand(-25, 25)), rand(2, 4), 6, 22, [0.35, 0.3, 0.24], [0.5, 0.45, 0.38], 0.8, 0, 1.2, -12);
                 if (!hitShip && !s.ship && !onBuilding && !s.bridge) this.addCrater(at, 'bomb', b.vel);
             }
-            g.audio.boom(g.camera.position.distanceTo(at), 1.6);
-            if (g.camera.position.distanceTo(at) < 800) g.shake = Math.min(1.5, g.shake + 0.6);
-            g.events.emit('bombImpact', b, { at, water: !!(s.water && !hitShip), ship: hitShip }); // (bases.js: runway craters)
+            if (!wet || !fx.water) g.audio.boom(g.camera.position.distanceTo(at), 1.6); // (in the water: splash.js's own whoomp)
+            if (g.camera.position.distanceTo(at) < 800) g.shake = Math.min(1.5, g.shake + (wet ? 0.45 : 0.6));
+            g.events.emit('bombImpact', b, { at, water: wet, ship: hitShip }); // (bases.js: runway craters)
             // splash damage
             if (g.ground) for (const t of g.ground.targets) {
                 if (!t.alive || t.team === b.team) continue;

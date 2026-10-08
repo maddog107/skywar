@@ -907,6 +907,8 @@ export class Ship {
         this.fires = this.fires || [];
         while (this.fires.length < 12) this.fires.push({ p: new THREE.Vector3(rand(-this.def.B * 0.35, this.def.B * 0.35), this.def.deckY + 1, rand(-this.def.L * 0.45, this.def.L * 0.45)), size: 1, grow: 0.5 });
         const fx = this.game.effects;
+        // the water round her: churned white and dark with fuel oil (splash.js), boiling up again as she goes down
+        if (fx.water) fx.water.slick(this.mesh.position.x, this.mesh.position.z, this.def.L * 0.75, 90, 0.55);
         for (let i = 0; i < 6; i++) {
             this.naval.later(() => {
                 const p = this.toWorld(rand(-15, 15), this.def.deckY, rand(-this.def.L * 0.4, this.def.L * 0.4));
@@ -948,7 +950,11 @@ export class Ship {
 
     update(dt) {
         const g = this.game, fx = g.effects;
-        if (!this.alive) this.sinkT += dt;
+        if (!this.alive) {
+            this.sinkT += dt;
+            // air and oil boiling up round the hull as she goes down
+            if (fx.water && this.sinkT < 60 && Math.floor(this.sinkT / 3) !== Math.floor((this.sinkT - dt) / 3)) fx.water.slick(this.mesh.position.x, this.mesh.position.z, this.def.L * 0.55, 30, 0.35);
+        }
         this.place(dt);
         this.updateLod();
         if (this.parts.radar) this.parts.radar.rotation.y += dt * 1.6;
@@ -1011,7 +1017,7 @@ export class Ship {
                     const tt = dist / 1100;
                     const aim = _v2.copy(tgt.pos).addScaledVector(tgt.vel, tt).sub(mp).normalize();
                     aim.x += rand(-0.012, 0.012); aim.y += rand(-0.012, 0.012); aim.z += rand(-0.012, 0.012);
-                    g.weapons.fireFlak(mp, aim.normalize(), this, isMissile ? 0 : 3 + diff.skill * 3, 1100, Infinity);
+                    g.weapons.fireFlak(mp, aim.normalize(), this, isMissile ? 0 : 3 + diff.skill * 3, 1100, Infinity, this.team === 'red' ? 30 : 20, 4); // (Phalanx 20 mm, AK-630 30 mm: ~75–80 rounds/s for the 20 here)
                     m.engagedT = g.time; m.target = tgt; // (navalops.js: "CIWS ENGAGING")
                     if (isMissile && Math.random() < (this.team === 'red' ? 0.028 : 0.05)) {
                         // CIWS kill
@@ -1035,7 +1041,7 @@ export class Ship {
                 if (m.fireT <= 0) {
                     m.fireT = lerp(1.6, 0.9, diff.skill);
                     aim.x += rand(-0.03, 0.03); aim.y += rand(-0.02, 0.03); aim.z += rand(-0.03, 0.03);
-                    g.weapons.fireFlak(mp, aim.normalize(), this, 10, 900, tt * rand(0.85, 1.1));
+                    g.weapons.fireFlak(mp, aim.normalize(), this, 10, 900, tt * rand(0.85, 1.1), this.team === 'red' ? 100 : 127);
                     g.effects.fire.emit(mp, _v.set(0, 0, 0), 0.12, 6, 3, [2.2, 1.6, 0.9], [1.2, 0.5, 0.15], 1, 0, 0, 0);
                     g.effects.puffSmoke(mp, _v.set(0, 2, 0), 2.5, 0.55, 2.5, 0.45);
                 }

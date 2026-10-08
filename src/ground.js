@@ -448,7 +448,7 @@ class GroundTarget {
                     this.burst = (this.burst || 0) + 1;
                     if (this.burst > 14) { this.burst = 0; this.fireT = rand(1.5, 3.5) / Math.max(diff.enemyMissileRate, 0.4); }
                     const muzzle = _v1.copy(this.pos).setY(this.pos.y + 3);
-                    g.weapons.fireFlak(muzzle, dir, this, 5 + diff.skill * 4);
+                    g.weapons.fireFlak(muzzle, dir, this, 5 + diff.skill * 4, 900, undefined, 23, 3); // (a ZSU-23-4's four barrels)
                     g.events.emit('aaaFire', this);
                 }
             }

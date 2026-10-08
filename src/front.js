@@ -944,7 +944,7 @@ export class FrontLine {
             m.addScaledVector(dir, 4);
             fx.sprite(fx.flashTex, m, 5, 0.08, 1, 1, [1, 0.85, 0.6]);
             fx.smoke.emit(m, _v3.copy(dir).multiplyScalar(6), rand(1, 2), 1.5, 6, [0.5, 0.48, 0.45], [0.6, 0.58, 0.55], 0.5, 0, 1, 0.5);
-            if (g.weapons && g.weapons.newBullet) g.weapons.newBullet(m, dir.multiplyScalar(1400), FRONT_FIRE, 0, d / 1400 + 0.05, true, redShoots ? TRACER_RED : TRACER_BLUE);
+            if (g.weapons && g.weapons.newBullet) g.weapons.newBullet(m, dir.multiplyScalar(1400), FRONT_FIRE, 0, d / 1400 + 0.05, true, redShoots ? TRACER_RED : TRACER_BLUE).cal = 30;
         }
         // the round lands (a near miss often)
         const hit = Math.random() < 0.55;

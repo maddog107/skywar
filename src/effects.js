@@ -14,6 +14,7 @@ import { rand, clamp, smoothstep, fbm, makeRadialTexture } from './util.js';
 import { terrainHeight } from './world.js';
 import { fireLights, FIRE_VIEW_GLSL, fireUniforms } from './firelight.js'; // [night] light from fires, motors, flashes
 import { splitTwoSided } from './meshmerge.js';
+import { WaterFX, explosionKg } from './splash.js'; // what hits the water: spouts, columns, slicks (splash.js)
 
 // Squash HDR colours from other systems (muzzle flashes of ~6) into a soft knee that tops out ~2.4:
 // hot enough to bloom, not enough to blow a white halo over half the screen. Keeps the hue.
@@ -24,6 +25,7 @@ function kneeColour(src, out) {
     return out;
 }
 const _k0 = [0, 0, 0], _k1 = [0, 0, 0];
+const SOOT_C = [0.26, 0.25, 0.24], QUENCH_C = [0.62, 0.63, 0.64];
 
 // ── Textures ──
 // 2×2 atlas of smoke puffs. RG: tangent-space normal (so puffs are lit by the real sun), B: thickness
@@ -132,7 +134,8 @@ const PARTICLE_VS = /* glsl */`
         float sp = length(vv.xy);
         if (iVel.w > 0.0 && sp > 0.01) {
             vec2 d = vv.xy / sp;
-            q = d * position.y * max(size, sp * iVel.w) + vec2(-d.y, d.x) * position.x * size;
+            // (x across to the right of d, y along it: the quad keeps its winding, so it isn't culled as a back face)
+            q = d * position.y * max(size, sp * iVel.w) + vec2(d.y, -d.x) * position.x * size;
         }
         #endif
         mv.xy += q;
@@ -555,6 +558,9 @@ export class Effects {
         // this scene renders
         this.fireLights = fireLights;
         fireLights.attachScene(scene);
+        // rounds, shells, bombs, missiles and wrecks into the water (splash.js; its particles are made on first use)
+        this.game = null; // (game.js: the wake map, the ocean, the audio and the camera the splashes reach)
+        this.water = new WaterFX(this);
         // Pooled additive sprites: explosion flashes and shockwave rings
         this.flashTex = makeFlashTexture();
         this.ringTex = makeRingTexture();
@@ -619,19 +625,24 @@ export class Effects {
         return t;
     }
 
+    // particle budgets and the water's detail by the quality setting (main.js)
+    setQuality(q) { this.water.setQuality(q); }
+
     // true when there is open water under this point (effects then splash instead of throwing dirt)
     isWater(x, z) { return terrainHeight(x, z) < -0.5; }
     heightAt(x, z) { return this.groundHeight ? this.groundHeight(x, z) : Math.max(terrainHeight(x, z), 0); }
 
     // ── Composite effects ──
-    explosion(pos, size = 1, vel = null) {
+    // opts: { noWater: true: no splash of its own (splash.js asked for this fireball), quench: as on the water }
+    explosion(pos, size = 1, vel = null, opts = null) {
         const V = this._tmpV, P = this._tmpP, s = size;
         const base = this._base.set(0, 0, 0);
         if (vel) base.copy(vel).multiplyScalar(0.25);
         const gh = this.heightAt(pos.x, pos.z);
         const agl = pos.y - gh;
         const low = agl < 5 + 6 * s;
-        const water = low && this.isWater(pos.x, pos.z);
+        const onWater = low && this.isWater(pos.x, pos.z);
+        const water = onWater || !!(opts && opts.quench);
 
         // flash + shockwave + light
         this.sprite(this.flashTex, pos, 16 * s, 0.13, 0.5, 1, [1, 0.9, 0.75]);
@@ -639,21 +650,24 @@ export class Effects {
         this.light(pos, 40 * s, 0.6);
 
         // lingering smoke that rises and drifts (emitted first so the fireball draws over it)
-        const nm = Math.round((3 + 3 * s) * (water ? 0.4 : 1));
+        const quench = !!(opts && opts.quench); // (splash.js: a burst inside its own column of water: a flash, little smoke)
+        const nm = Math.round((3 + 3 * s) * (quench ? 0.2 : water ? 0.4 : 1));
         for (let i = 0; i < nm; i++) {
             V.set(rand(-1, 1), rand(-0.2, 1), rand(-1, 1)).normalize().multiplyScalar(rand(3, 12) * s).add(base);
             P.copy(pos).addScaledVector(V, 0.15);
             this.flame.emit(P, V, rand(6, 11), rand(8, 12) * s, rand(26, 40) * s, [0.16, 0.15, 0.14], [0.4, 0.39, 0.38], 0.5, 0, 1.2, 3, 0, 0.5, 0.5);
         }
         // fireball: hot billows that cool into a dark, lit smoke cloud (a ground burst mushrooms upward)
-        const nf = Math.round((9 + 6 * s) * (water ? 0.6 : 1)); // water quenches a surface burst
+        const nf = Math.round((9 + 6 * s) * (quench ? 0.3 : water ? 0.6 : 1)); // water quenches a surface burst
         const lift = low ? Math.max(0, 5 * s - agl * 0.5) : 0;
         for (let i = 0; i < nf; i++) {
             V.set(rand(-1, 1), rand(low ? 0 : -0.6, 1), rand(-1, 1)).normalize().multiplyScalar(rand(4, 20) * s).add(base);
             P.copy(pos).addScaledVector(V, 0.05);
             P.y += lift;
-            const life = rand(1.8, 3.2) * (0.85 + 0.15 * s);
-            this.flame.emit(P, V, life, rand(7, 11) * s, rand(18, 30) * s, [0.1, 0.085, 0.075], [0.26, 0.25, 0.24], 0.95, 0, 2.6, 4, rand(0.85, 1), rand(0.22, 0.38), 1.4);
+            const life = rand(1.8, 3.2) * (0.85 + 0.15 * s) * (quench ? 0.4 : 1);
+            // (quenched: smaller, it cools into steam, not soot)
+            const qs = quench ? 0.6 : 1;
+            this.flame.emit(P, V, life, rand(7, 11) * s * qs, rand(18, 30) * s * qs, [0.1, 0.085, 0.075], quench ? QUENCH_C : SOOT_C, 0.95, 0, 2.6, 4, rand(0.85, 1), rand(0.22, 0.38), 1.4);
         }
         // hot core flare (brief additive pop)
         for (let i = 0; i < 3; i++) {
@@ -674,7 +688,9 @@ export class Effects {
                 this.emitters.push({ kind: 'tendril', pos: pos.clone().addScaledVector(tv, 0.08), vel: tv, life: rand(0.8, 1.9), t: 0, acc: 0, size: s * rand(0.6, 1) });
             }
         }
-        if (water) this.waterSplash(P.copy(pos).setY(Math.max(gh, 0) + 0.5), Math.min(3, s * 1.2), this.flame);
+        // over the water: its splash (a burst on the surface throws a column, one higher up a ring of spray: splash.js)
+        if (onWater) { if (!(opts && opts.noWater)) this.water.blast(pos, { kg: explosionKg(Math.min(s, 3.5)), depth: 'contact', agl: Math.max(0, pos.y - Math.max(gh, 0)), fireball: false, sound: 'hiss' }); }
+        else if (water) { /* (quenched: splash.js's own fireball) */ }
         else if (low) {
             this.dustBurst(P.copy(pos).setY(gh + 0.5), s, Math.max(0, 1 - agl / (5 + 6 * s)));
             if (s >= 1.2) this.smokeColumn(P.copy(pos).setY(gh + 1), s * 0.7, 6 + s * 4);
@@ -789,10 +805,8 @@ export class Effects {
 
     groundImpact(pos) {
         const V = this._tmpV;
-        if (this.isWater(pos.x, pos.z)) {
-            for (let i = 0; i < 3; i++) this.smoke.emit(pos, V.set(rand(-4, 4), rand(14, 28), rand(-4, 4)), rand(0.6, 1.1), 0.8, 4, [0.85, 0.9, 0.95], [0.8, 0.85, 0.9], 0.7, 0, 1, -25);
-            return;
-        }
+        // (a near miss into the water: a shell's spout)
+        if (this.isWater(pos.x, pos.z)) { this.water.spout(this._tmpP.set(pos.x, 0, pos.z), null, 30); return; }
         for (let i = 0; i < 3; i++) {
             V.set(rand(-8, 8), rand(10, 30), rand(-8, 8));
             this.smoke.emit(pos, V, rand(0.8, 1.6), 1.5, 7, [0.45, 0.4, 0.33], [0.55, 0.5, 0.42], 0.6, 0, 2, -15);
@@ -803,33 +817,9 @@ export class Effects {
         }
     }
 
-    // sys: the particle system to use (an explosion's splash goes in with its fireball so it isn't hidden behind it)
-    waterSplash(pos, size = 1, sys = this.smoke) {
-        const V = this._tmpV, s = size;
-        const W0 = [0.92, 0.96, 1], W1 = [0.82, 0.87, 0.92];
-        // central plume
-        for (let i = 0; i < 12 * s + 4; i++) {
-            V.set(rand(-1, 1) * 6, rand(30, 75), rand(-1, 1) * 6).multiplyScalar(Math.sqrt(s));
-            sys.emit(pos, V, rand(1.4, 2.6), 3 * s, 14 * s, W0, W1, 0.85, 0, 0.7, -32, 0, 0.5, 0.5);
-        }
-        // crown thrown out sideways
-        const n = Math.round(10 + 8 * s);
-        for (let i = 0; i < n; i++) {
-            const a = (i / n) * Math.PI * 2 + rand(-0.15, 0.15);
-            V.set(Math.cos(a) * rand(10, 22), rand(14, 34), Math.sin(a) * rand(10, 22)).multiplyScalar(Math.sqrt(s));
-            sys.emit(pos, V, rand(1.2, 2.2), 2.5 * s, 9 * s, W0, W1, 0.75, 0, 0.9, -30, 0, 0.5, 0.8);
-        }
-        // droplets
-        for (let i = 0; i < 16 * s; i++) {
-            V.set(rand(-1, 1) * 20, rand(25, 70), rand(-1, 1) * 20).multiplyScalar(Math.sqrt(s));
-            sys.emit(pos, V, rand(1, 2), rand(0.5, 1.1) * s, 0.3 * s, W0, W0, 0.9, 0.4, 0.2, -38, 0, 0.5, 2);
-        }
-        // foam and mist left on the surface
-        for (let i = 0; i < 6; i++) {
-            V.set(rand(-1, 1) * 5, rand(0.5, 2), rand(-1, 1) * 5);
-            sys.emit(pos, V, rand(4, 7), 6 * s, 24 * s, [0.88, 0.92, 0.95], [0.8, 0.84, 0.88], 0.45, 0, 0.8, 0, 0, 0.5, 0.3);
-        }
-    }
+    // Something falling into the water (a wreck, debris, a car off a bridge): a splash scaled by `size` (0.25 a
+    // fragment ... 3 a big wreck: splash.js impact). (The old third argument, a particle system, is no longer used.)
+    waterSplash(pos, size = 1) { return this.water.impact(pos, { size }); }
 
     // Engine exhaust / damage smoke helpers
     puffSmoke(pos, vel, size, dark = 0.2, life = 2.2, alpha = 0.55) {
@@ -944,6 +934,7 @@ export class Effects {
         if (groundHeight) this.groundHeight = groundHeight;
         this.updateLighting(camera);
         this.updateEmitters(dt);
+        this.water.update(dt, camera, fog);
         this.smoke.update(dt, fog, this.wind);
         this.flame.update(dt, fog, this.wind);
         this.fire.update(dt, fog, null);
@@ -985,7 +976,10 @@ export class Effects {
             }
             const gh = this.heightAt(d.mesh.position.x, d.mesh.position.z);
             if (d.mesh.position.y < gh || d.life <= 0) {
-                if (d.mesh.position.y < gh + 2) this.groundImpact(d.mesh.position);
+                if (d.mesh.position.y < gh + 2) {
+                    if (this.isWater(d.mesh.position.x, d.mesh.position.z)) this.water.impact(d.mesh.position, { size: 0.22 + 0.2 * d.big, sound: false });
+                    else this.groundImpact(d.mesh.position);
+                }
                 if (d.keep && !this.isWater(d.mesh.position.x, d.mesh.position.z)) {
                     // come to rest, roughly flat, half dug in
                     d.mesh.position.y = gh + 0.2;
@@ -999,6 +993,7 @@ export class Effects {
 
     clear() {
         this.smoke.clear(); this.fire.clear(); this.flame.clear(); this.sparks.clear();
+        this.water.clear();
         this.trails.forEach(t => t.dispose()); this.trails = [];
         this.debris.forEach(d => this.scene.remove(d.mesh)); this.debris = [];
         this.landed.forEach(m => this.scene.remove(m)); this.landed = [];
