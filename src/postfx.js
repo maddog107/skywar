@@ -352,7 +352,10 @@ const COMPOSITE_FRAG = /* glsl */`
     uniform float debugView; // 1: AO, 2: water mask (blue) + reflection weight (white)
     // under water (ocean.js / water.js): the camera at or below the surface
     uniform float underOn;
-    uniform vec3 underColor, underExt;
+    uniform vec3 underColor, underExt, underKd, underSun, sunDirU;
+    uniform float underScat;
+    uniform sampler2D fftMap;   // the ocean's detail (oceanfft.js): its ∇²h focuses the sun into caustics and shafts
+    uniform vec4 fftInfo;
     uniform mat3 camRotM;
     varying vec2 vUv;
     ${WAVE_GLSL}
@@ -460,8 +463,11 @@ const COMPOSITE_FRAG = /* glsl */`
         }
         #endif
         // under water: every pixel whose eye (its point on the near plane) is below the waves looks through
-        // water to what it sees: absorbed and scattered (Beer-Lambert), darker the deeper the camera; a dark
-        // meniscus where the surface crosses the lens
+        // water to what it sees (ocean.js underwaterPalette: the water's own optics). What it sees was lit as if
+        // dry: daylight reaching it had to come down through the water first (Kd over its depth), focused into
+        // caustics by the waves above it; the view back is absorbed and filled in by the light the water scatters
+        // (Beer-Lambert over the path: brighter looking up toward the light, darker the deeper the camera), and the
+        // sun's light through the waves hangs in it as shafts. A dark meniscus where the surface crosses the lens.
         if (underOn > 0.5) {
             vec2 usz = vec2(textureSize(tDepth, 0));
             ivec2 up = ivec2(vUv * usz);
@@ -471,9 +477,46 @@ const COMPOSITE_FRAG = /* glsl */`
             float below = nearW.y - surf;
             if (below < 0.0) {
                 float dist = isSky(ud) ? 4000.0 : length(viewPos(pixelUv(up, usz), linDepth(ud)));
-                vec3 T = exp(-underExt * dist);
-                float dim = exp(-max(surf - camPos.y, 0.0) * 0.045);
-                c.rgb = c.rgb * T + underColor * dim * (1.0 - T);
+                vec3 dirW = normalize(camRotM * viewPos(vUv, 1.0));
+                float camDepth = max(surf - camPos.y, 0.0);
+                vec3 Lw = refract(-normalize(sunDirU), vec3(0.0, 1.0, 0.0), 0.75); // the sun in the water
+                float sunUp = smoothstep(0.0, 0.2, sunDirU.y);
+                if (!isSky(ud)) {
+                    vec3 P = camPos + dirW * dist;
+                    float dP = max(-P.y, 0.0);
+                    if (dP > 0.0) {
+                        // caustics: the curvature of the waves where its light came in (oceanfft.js: ∇²h), the
+                        // Jacobian of the refracted rays at this depth
+                        vec2 S = P.xz - Lw.xz * (dP / max(-Lw.y, 0.3));
+                        float lod = log2(max(max(dP * 0.012, dist * 0.0012), 0.05) * fftInfo.x * float(textureSize(fftMap, 0).x));
+                        float J = 1.0 + dP * 0.25 * textureLod(fftMap, S * fftInfo.x, lod).w * fftInfo.z;
+                        // (bright where the ray bundle folds over, |J| → 0: the network of caustic lines)
+                        float cau = (min(1.0 / max(abs(J), 0.2), 4.0) - 1.3) * (1.0 - smoothstep(10.0, 35.0, dP)) * sunUp * (1.0 - smoothstep(20.0, 80.0, dist));
+                        c.rgb *= exp(-underKd * dP) * max(1.0 + cau * 0.5, 0.35);
+                    }
+                }
+                vec3 T = exp(-underExt * min(dist, 4000.0));
+                vec3 inS = underColor * exp(-underKd * camDepth) * (0.5 + 0.7 * smoothstep(-0.7, 0.9, dirW.y));
+                // shafts: the sunlight in the water along the view (a few steps, jittered), bright where the waves
+                // above focus it, scattered forward toward the camera (Henyey-Greenstein, g 0.8)
+                vec3 shafts = vec3(0.0);
+                if (sunUp > 0.0) {
+                    float tMax = min(dist, 45.0), j = fract(52.98 * fract(dot(gl_FragCoord.xy, vec2(0.0671, 0.00584))));
+                    float cosT = dot(dirW, -Lw), g = 0.8;
+                    float ph = (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * cosT, 1.5) * 0.25;
+                    float acc = 0.0;
+                    for (int k = 0; k < 10; k++) {
+                        float t = (float(k) + j) / 10.0 * tMax;
+                        vec3 X = camPos + dirW * t;
+                        float dx = max(surf - X.y, 0.0);
+                        vec2 S = X.xz - Lw.xz * (dx / max(-Lw.y, 0.3));
+                        float lap = textureLod(fftMap, S * fftInfo.x, 2.5).w * fftInfo.z;
+                        float J = 1.0 + max(dx, 2.0) * 0.25 * lap * 3.0;
+                        acc += (clamp(1.0 / max(J, 0.3), 0.0, 3.0) - 0.6) * exp(-dot(underExt, vec3(0.33)) * t - dot(underKd, vec3(0.33)) * dx);
+                    }
+                    shafts = underSun * max(acc, 0.0) / 10.0 * tMax * ph * underScat;
+                }
+                c.rgb = c.rgb * T + inS * (1.0 - T) + shafts;
             }
             c.rgb *= 1.0 - 0.55 * exp(-abs(below) * 40.0);
         }
@@ -536,6 +579,8 @@ export class SceneFXPass extends Pass {
             reproj: { value: new THREE.Matrix4() }, blurOn: { value: 0 }, blurScale: { value: 0 }, blurMaxPx: { value: 20 }, nearCut: { value: 0 },
             debugView: { value: 0 },
             underOn: { value: 0 }, underColor: { value: new THREE.Color(0.012, 0.05, 0.065) }, underExt: { value: new THREE.Vector3(0.42, 0.1, 0.075) },
+            underKd: { value: new THREE.Vector3(0.4, 0.09, 0.03) }, underSun: { value: new THREE.Color(0, 0, 0) }, sunDirU: { value: new THREE.Vector3(0, 1, 0) },
+            underScat: { value: 0.02 }, fftMap: { value: _emptyF }, fftInfo: { value: new THREE.Vector4(1 / 32, 1 / 86, 0, 2500) },
             camRotM: { value: new THREE.Matrix3() }, ...waveUniformSlots(),
         }, { TAPS: 8 });
         this.quad = new FullScreenQuad(null);

@@ -40,9 +40,9 @@ const MORPH_START = 0.7; // morph over the outer 30 % of each level's range
 const FFT_L = 32;        // FFT patch size (m)
 
 const _frustum = new THREE.Frustum(), _pv = new THREE.Matrix4(), _box = new THREE.Box3(), _v = new THREE.Vector3();
-const _col = new THREE.Color(), _lakeTint = new THREE.Color(0.75, 1.15, 0.85);
 // the uniforms of WAVE_GLSL (see shareWaveUniforms)
-const WAVE_UNIFORMS = ['waveA', 'waveB', 'waveN', 'waveOrigin', 'waveLod', 'setDepth', 'seaMapFine', 'seaMapCoarse', 'seaFineInfo', 'seaCoarseInfo', 'shoreInfo', 'time'];
+const WAVE_UNIFORMS = ['waveA', 'waveB', 'waveN', 'waveOrigin', 'waveLod', 'setDepth', 'seaMapFine', 'seaMapCoarse', 'seaFineInfo', 'seaCoarseInfo', 'shoreInfo', 'time',
+    'fftMap', 'fftInfo']; // (and the detail, for the caustics and shafts seen from under water: postfx.js)
 const _sf = [0, 0, 0, 0];
 const isLakeAt = (x, z) => seaFactors(x || 0, z || 0, _sf)[1] < 0; // (watermap.js: a lake's wind factor is negative)
 
@@ -164,9 +164,11 @@ const OPTICS_GLSL = /* glsl */`
         return (deep.r + deep.g + deep.b) * o.alb * (DEEP_K / ${(OPTICS.ocean.bb.reduce((s, x, i) => s + x / (OPTICS.ocean.a[i] + x), 0)).toFixed(5)});
     }`;
 
+const DEEP_K = 0.75; // the deep colour's brightness against the palette's water colour
+const smooth01 = (e0, e1, x) => { const t = Math.min(Math.max((x - e0) / (e1 - e0), 0), 1); return t * t * (3 - 2 * t); };
 function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
     return /* glsl */`
-    #define DEEP_K 0.75
+    #define DEEP_K ${DEEP_K.toFixed(3)}
     #define CAUSTIC_K 1.0
     uniform float time, whitecap, windU, underwater, geomS2, waterDebug;
     uniform vec3 sunDir, sunColor, skyColor, horizonColor, deepColor, fogColor;
@@ -317,20 +319,27 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
             // ── seen from below ──
             N = -N;
             float c = dot(V, N); // cosine to the surface normal (facing the camera)
-            // Snell's window: inside ~48.6° of the normal the sky comes through (refracted); outside it the surface
-            // is a mirror of the water below
-            float win = smoothstep(0.62, 0.7, c);
+            // Snell's window: inside ~48.6° of the normal the whole sky comes through, squeezed (refracted out into
+            // the air: the sky dome's colours along the bent ray, the sun's disc where it lines up); outside it the
+            // surface is a mirror (total internal reflection) of the water below. Fresnel rises to 1 at the rim.
+            vec3 Ta = refract(-V, N, 1.333);
+            float win = smoothstep(0.645, 0.69, c);
             Optics o = waterOptics(0.0, lake);
             vec3 below = deepWater(deepColor, o) * (0.45 + 0.55 * csh) * 1.4;
-            vec3 above = mix(horizonColor, skyColor, 0.6) * 1.1 + sunColor * pow(max(dot(-V, L), 0.0), 60.0) * 2.0 * csh;
+            vec3 Tu = dot(Ta, Ta) > 0.0 ? normalize(Ta) : vec3(0.0, 1.0, 0.0);
+            float cosT = max(Tu.y, 0.0);
+            float Ft = 0.02 + 0.98 * pow(1.0 - cosT, 5.0);
+            vec3 above = skyAt(Tu) * 1.05 + sunColor * pow(max(dot(Tu, L), 0.0), 900.0) * 8.0 * csh;
             #if TIER >= 2
             if (refrOn > 0.5) {
+                // what stands above the water (a hull, a pier, the shore) through the window
                 vec2 suv = gl_FragCoord.xy / vec2(textureSize(refrColor, 0));
-                above = mix(above, texture(refrColor, suv + N.xz * 0.05).rgb, 0.7);
+                vec2 uvA = suv + N.xz * 0.05;
+                if (!isSky(texture(refrDepth, uvA).r)) above = mix(above, texture(refrColor, uvA).rgb, 0.8);
             }
             #endif
             // the window's rim: the light grazing in from the horizon, bent and split
-            col = mix(below, above, win) + horizonColor * 0.25 * exp(-pow((c - 0.66) / 0.025, 2.0));
+            col = mix(below, above * (1.0 - Ft) + below * Ft, win) + horizonColor * 0.25 * exp(-pow((c - 0.66) / 0.025, 2.0));
             gl_FragColor = vec4(col, 1.0);
             #include <tonemapping_fragment>
             #include <colorspace_fragment>
@@ -861,11 +870,23 @@ export class Ocean {
         for (const k of WAVE_UNIFORMS) if (dst[k]) dst[k].value = this.uniforms[k].value;
     }
 
-    // the colour of the light in the water around an underwater camera, and how fast the water swallows light
+    // the water round an underwater camera (postfx.js composite), from the same optics as the surface: the light it
+    // scatters (the deep colour), the beam attenuation c (the view), the diffuse attenuation Kd (daylight going down),
+    // the sun in it and how much of it the water scatters toward the camera
     underwaterPalette(dst, x, z) {
-        const u = this.uniforms, lake = isLakeAt(x, z) ? 1 : 0;
-        dst.underColor.value.copy(u.deepColor.value).multiplyScalar(0.8).lerp(_col.copy(u.deepColor.value).multiply(_lakeTint), lake);
-        dst.underExt.value.set(0.42 + 0.2 * lake, 0.1 + 0.18 * lake, 0.075 + 0.3 * lake);
+        const u = this.uniforms, f = seaFactors(x || 0, z || 0, _sf), lake = f[1] < 0 ? 1 : 0;
+        const turb = Math.min(1, (1 - smooth01(0.6, 4.5, f[3])) * (0.3 + 0.7 * WATER.whitecap) + WATER.whitecap * 0.35 * (1 - smooth01(6, 40, f[3])));
+        const d = u.deepColor.value, sum = d.r + d.g + d.b;
+        const opt = (k, i) => { const O = OPTICS; return (O.ocean[k][i] + (O.coast[k][i] - O.ocean[k][i]) * turb) * (1 - lake) + O.lake[k][i] * lake; };
+        const alb = [0, 1, 2].map(i => opt('bb', i) / (opt('a', i) + opt('bb', i)));
+        const albRef = [0, 1, 2].reduce((s, i) => s + OPTICS.ocean.bb[i] / (OPTICS.ocean.a[i] + OPTICS.ocean.bb[i]), 0);
+        // (near the surface the light all round is a few times what deep water sends back up out of it)
+        dst.underColor.value.setRGB(alb[0], alb[1], alb[2]).multiplyScalar(sum * DEEP_K / albRef * 3);
+        dst.underExt.value.set(...[0, 1, 2].map(i => opt('a', i) + opt('b', i)));
+        if (dst.underKd) dst.underKd.value.set(...[0, 1, 2].map(i => (opt('a', i) + opt('bb', i)) / 0.8));
+        if (dst.underSun) dst.underSun.value.copy(u.sunColor.value);
+        if (dst.sunDirU) dst.sunDirU.value.copy(u.sunDir.value);
+        if (dst.underScat) dst.underScat.value = (opt('b', 0) + opt('b', 1) + opt('b', 2)) / 3 + 0.02;
     }
 
     dispose() {
