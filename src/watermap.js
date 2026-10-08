@@ -10,10 +10,14 @@
 // Two maps: a coarse one (64 m texels, 16 km) for the exposure, and a fine one (8 m texels, 2 km) around the
 // camera that adds the true depth at beach scale (the shallows fade the waves; the renderer tints by depth).
 // Channels per texel: swell, wind, chop (0..1.2), depth (m, negative over land).
+// Lakes: water that isn't connected to the open sea (a flood fill from the edge of the coarse map's surroundings,
+// through water) gets no swell, and its wind channel is stored negative (−(wind + 0.01)): the waves take its size,
+// the renderer its sign (fresh water's own colour, ocean.js). Use windGain() / isLake() to read it.
 // ═══════════════════════════════════════════════════════════════
 import { terrainHeight } from './terraincore.js';
 
 export const COARSE = { size: 256, texel: 64 };
+const SWASH_REACH = 3; // m above the sea: beach the swash can reach (water.js SWASH_H)
 export const FINE = { size: 256, texel: 8 };
 const R_SWELL = 5200, R_WIND = 2600, R_CHOP = 700;
 const smooth = (e0, e1, x) => { const t = Math.min(Math.max((x - e0) / (e1 - e0), 0), 1); return t * t * (3 - 2 * t); };
@@ -47,6 +51,19 @@ export function* coarseJob(cx, cz, wx, wz) {
         const W = N + 1;
         return (sat[j1 * W + i1] - sat[j0 * W + i1] - sat[j1 * W + i0] + sat[j0 * W + i0]) / n;
     };
+    // the sea: water reached from the edge of the extended grid (anything that opens onto the wider world)
+    const sea = new Uint8Array(N * N), queue = new Int32Array(N * N);
+    let qh = 0, qt = 0;
+    const seed = (k) => { if (!sea[k] && depth[k] > 0) { sea[k] = 1; queue[qt++] = k; } };
+    for (let i = 0; i < N; i++) { seed(i); seed((N - 1) * N + i); seed(i * N); seed(i * N + N - 1); }
+    while (qh < qt) {
+        const k = queue[qh++], i = k % N;
+        if (i > 0) seed(k - 1);
+        if (i < N - 1) seed(k + 1);
+        if (k >= N) seed(k - N);
+        if (k < N * (N - 1)) seed(k + N);
+    }
+    yield;
     const wl = Math.hypot(wx, wz) || 1, ux = -wx / wl, uz = -wz / wl; // upwind
     const data = new Float32Array(S * S * 4);
     const rs = R_SWELL / T, rw = R_WIND / T, rc = R_CHOP / T;
@@ -59,9 +76,11 @@ export function* coarseJob(cx, cz, wx, wz) {
             const oBig = box(gi + 0.5, gj + 0.5, rs, rs);
             const oUp = box(gi + 0.5 + ux * rw, gj + 0.5 + uz * rw, rw, rw);
             const oLoc = box(gi + 0.5, gj + 0.5, rc, rc);
-            const swell = smooth(0.3, 0.8, oBig);
+            const lake = !sea[gj * N + gi];
+            const swell = lake ? 0 : smooth(0.3, 0.8, oBig);
+            const wind = smooth(0.2, 0.88, oUp) * Math.min(1, 0.3 + 1.2 * swell);
             data[k] = swell;
-            data[k + 1] = smooth(0.2, 0.88, oUp) * Math.min(1, 0.3 + 1.2 * swell);
+            data[k + 1] = lake ? -(wind + 0.01) : wind;
             data[k + 2] = 0.45 + 0.55 * smooth(0.05, 0.55, oLoc);
         }
         if ((j & 15) === 15) yield;
@@ -80,7 +99,9 @@ export function* fineJob(cx, cz, coarse) {
             const x = x0 + (i + 0.5) * T, z = z0 + (j + 0.5) * T, k = (j * S + i) * 4;
             const d = -terrainHeight(x, z);
             data[k + 3] = d;
-            if (d <= 0) { data[k] = data[k + 1] = data[k + 2] = 0; continue; }
+            // (the beach just above the waterline keeps the exposure of the water beside it: the swash runs up
+            // there, water.js; the waves themselves still see land, depth ≤ 0)
+            if (d <= -SWASH_REACH) { data[k] = data[k + 1] = data[k + 2] = 0; continue; }
             let s0 = 1, s1 = 1, s2 = 1;
             if (c) {
                 const fx = (x - c.x0) / c.texel - 0.5, fz = (z - c.z0) / c.texel - 0.5;
@@ -103,5 +124,9 @@ export function* fineJob(cx, cz, coarse) {
     }
     return { data, size: S, texel: T, x0, z0 };
 }
+
+// the wind-sea factor of a map sample (lakes store it negative) and whether the sample is a lake
+export const windGain = (w) => (w < 0 ? -w : w);
+export const isLake = (w) => w < 0;
 
 export function runJob(it) { let r; do { r = it.next(); } while (!r.done); return r.value; }

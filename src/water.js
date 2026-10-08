@@ -74,6 +74,17 @@ export const SET_DEPTH = [22, 12, 2];
 export const SHORE = { aSwell: 0, aWind: 0, omega: 0.65, C: 0 };
 export const SHORE_DMAX = 10;
 const SHORE_SLOPE = 0.05, SHORE_E = 4;
+// ── The swash: what's left of a broken wave running up the beach and back ──
+// Each shore wave that reaches the waterline runs up as a thin sheet to R ≈ 1.6 × its incoming amplitude above the
+// still water (Stockdon et al. 2006's 2 % run-up for a 1:20 beach: ~0.7 m in a 1 m swell, up to ~2 m in a gale),
+// fast on the way up (a third of the period), slower back down; how far varies along the beach. The CPU surface over
+// the beach is the true water level η (what floats and what a beached seaplane stands in); the shader draws it where
+// the terrain draws that height (terraincore.js shore(): the first metre of beach is raised 0.6 m off the sea
+// plane), so the sheet meets the sand exactly where it reaches, and leaves the water at sea level (under the
+// beach) when the sheet has drained. Land within SWASH_H of the sea level only.
+export const SWASH_H = 3;
+const SWASH_MAX = 2.2;
+const fract = (x) => x - Math.floor(x);
 
 // ── The live wave field ──
 const W = {
@@ -180,8 +191,9 @@ export function updateWaveUniforms(originX, originZ, t = WATER.t) {
 // ── Sea-state maps (built by watermap.js, in a worker) ──
 // Two squares of size × size texels, texel metres apart, south-west corner (x0, z0): [0] fine (8 m, around the
 // camera), [1] coarse (64 m, 16 km). Per texel (RGBA): swell, wind-sea and chop factors (0..~1.2) and the water
-// depth (m; negative over land). The fine map wins where it has data, fading into the coarse one over its last
-// EDGE texels; beyond both it is open, deep sea (the renderer has faded its waves out by then anyway).
+// depth (m; negative over land). A lake (water with no way out to the sea) has its wind factor negative. The fine
+// map wins where it has data, fading into the coarse one over its last EDGE texels; beyond both it is open, deep sea
+// (the renderer has faded its waves out by then anyway).
 export const SEA_MAPS = [
     { data: null, size: 0, texel: 1, x0: 0, z0: 0 },
     { data: null, size: 0, texel: 1, x0: 0, z0: 0 },
@@ -223,8 +235,9 @@ export function seaFactors(x, z, out = _fb) {
     return out;
 }
 const smooth = (e0, e1, x) => { const t = Math.min(Math.max((x - e0) / (e1 - e0), 0), 1); return t * t * (3 - 2 * t); };
-// amplitude multiplier per set at a map sample f: exposure × the shallows
-function setGain(f, s) { return f[s] * smooth(0, SET_DEPTH[s], f[3]); }
+// amplitude multiplier per set at a map sample f: exposure × the shallows (a lake's wind factor is stored negative:
+// watermap.js)
+function setGain(f, s) { return Math.abs(f[s]) * smooth(0, SET_DEPTH[s], f[3]); }
 // how much the fine map speaks for (x, z) (0 outside it)
 const _fw = [0, 0, 0, 0];
 function fineWeight(x, z) { return sampleMap(SEA_MAPS[0], x, z, _fw); }
@@ -233,14 +246,34 @@ function fineWeight(x, z) { return sampleMap(SEA_MAPS[0], x, z, _fw); }
 // SHORE_OUT.br = how close to breaking it is (0..1) and SHORE_OUT.crest (0..1 at the crest)
 export const SHORE_OUT = { br: 0, crest: 0, gx: 0, gz: 0 };
 const _sa = [0, 0, 0, 0];
+// the swash over a beach point (rest point x, z; true depth d < 0): the water surface height, foam in O.br
+export function swash(x, z, t, f) {
+    const O = SHORE_OUT;
+    const d = f[3];
+    if (!(d <= 0 && d > -SWASH_H) || !SHORE.C) return 0;
+    const wf = fineWeight(x, z);
+    if (wf <= 0) return 0;
+    const a0 = SHORE.aSwell * f[0] + SHORE.aWind * Math.abs(f[1]);
+    // how far it runs varies along the beach (cusps, the bed), and so does its timing a little
+    const along = 0.7 + 0.3 * Math.sin(0.11 * x + 1.3) * Math.sin(0.083 * z - 0.7) + 0.3 * Math.sin(0.037 * x - 0.051 * z);
+    const R = Math.min(1.6 * a0 * along, SWASH_MAX) * wf;
+    if (R <= 1e-3) return 0;
+    const ph = fract((SHORE.omega * t + 0.4 + 0.05 * Math.sin(0.021 * x + 0.017 * z)) / (Math.PI * 2));
+    const sw = ph < 0.35 ? Math.sin(ph / 0.35 * Math.PI / 2) : ph < 0.85 ? Math.cos((ph - 0.35) / 0.5 * Math.PI / 2) ** 2 : 0;
+    const eta = R * sw, h = -d;
+    O.br = eta > h ? (1 - smooth(0, 0.35, eta - h)) * (ph < 0.35 ? 1 : 0.55) * wf : 0;
+    O.crest = 1; // (the foam rides the sheet's leading edge)
+    return eta;
+}
 export function shoreWave(x, z, t, f) {
     const O = SHORE_OUT;
     O.br = 0; O.crest = 0; O.gx = 0; O.gz = 0;
     const d = f[3];
+    if (d <= 0) return swash(x, z, t, f);
     if (!(d > 0 && d < SHORE_DMAX) || !SHORE.C) return 0;
     const wf = fineWeight(x, z);
     if (wf <= 0) return 0;
-    const a0 = SHORE.aSwell * f[0] + SHORE.aWind * f[1];
+    const a0 = SHORE.aSwell * f[0] + SHORE.aWind * Math.abs(f[1]);
     const A = Math.min(a0 * Math.pow(4 / Math.max(d, 0.5), 0.25), 0.39 * d) * smooth(SHORE_DMAX, SHORE_DMAX * 0.5, d) * smooth(0, 0.3, d) * wf;
     if (A <= 1e-5) return 0;
     const rel = A / Math.max(d, 0.05), b = smooth(0.15, 0.39, rel), n = 1 + 4 * b;
@@ -391,7 +424,7 @@ export const WAVE_GLSL = /* glsl */`
         return mix(base, fine, wf);
     }
     vec3 setGains(vec4 f) {
-        return f.xyz * vec3(smoothstep(0.0, setDepth.x, f.w), smoothstep(0.0, setDepth.y, f.w), smoothstep(0.0, setDepth.z, f.w));
+        return abs(f.xyz) * vec3(smoothstep(0.0, setDepth.x, f.w), smoothstep(0.0, setDepth.y, f.w), smoothstep(0.0, setDepth.z, f.w));
     }
     // Displacement of rest point p0 (world xz) seen from dist metres away (short waves fade out with distance),
     // with the tangents Tx = d(pos)/dx0 and Tz = d(pos)/dz0, and for whitecaps the horizontal Jacobian (crest folding,
@@ -441,13 +474,33 @@ export const WAVE_GLSL = /* glsl */`
         if (f.x < 0.0 || f.y < 0.0 || f.x > S - 1.0 || f.y > S - 1.0) return 0.0;
         return min(1.0, min(min(f.x, f.y), min(S - 1.0 - f.x, S - 1.0 - f.y)) / ${SEA_MAP_EDGE.toFixed(1)});
     }
+    // the swash over a beach point (water.js swash)
+    float swash(vec2 p, vec4 f, out float br, out float crest) {
+        br = 0.0; crest = 1.0; // (the foam rides the sheet's leading edge)
+        float d = f.w;
+        if (!(d <= 0.0 && d > -${SWASH_H.toFixed(1)}) || shoreInfo.w <= 0.0) return 0.0;
+        float wf = seaFineWeight(p);
+        if (wf <= 0.0) return 0.0;
+        float a0 = shoreInfo.x * f.x + shoreInfo.y * abs(f.y);
+        float along = 0.7 + 0.3 * sin(0.11 * p.x + 1.3) * sin(0.083 * p.y - 0.7) + 0.3 * sin(0.037 * p.x - 0.051 * p.y);
+        float R = min(1.6 * a0 * along, ${SWASH_MAX.toFixed(1)}) * wf;
+        if (R <= 1e-3) return 0.0;
+        float ph = fract((shoreInfo.z * time + 0.4 + 0.05 * sin(0.021 * p.x + 0.017 * p.y)) / 6.2831853);
+        float c = ph < 0.35 ? sin(ph / 0.35 * 1.5707963) : ph < 0.85 ? cos((ph - 0.35) / 0.5 * 1.5707963) : 0.0;
+        float sw = ph < 0.35 ? c : c * c;
+        float eta = R * sw, h = -d;
+        br = eta > h ? (1.0 - smoothstep(0.0, 0.35, eta - h)) * (ph < 0.35 ? 1.0 : 0.55) * wf : 0.0;
+        // drawn where the terrain draws that height (terraincore.js shore()); drained: back under the beach
+        return eta > 0.02 ? eta + 0.6 * max(0.0, 1.0 - eta) : 0.0;
+    }
     float shoreWave(vec2 p, vec4 f, out vec2 grad, out float br, out float crest) {
         grad = vec2(0.0); br = 0.0; crest = 0.0;
         float d = f.w;
+        if (d <= 0.0) return swash(p, f, br, crest);
         if (!(d > 0.0 && d < ${SHORE_DMAX.toFixed(1)}) || shoreInfo.w <= 0.0) return 0.0;
         float wf = seaFineWeight(p);
         if (wf <= 0.0) return 0.0;
-        float a0 = shoreInfo.x * f.x + shoreInfo.y * f.y;
+        float a0 = shoreInfo.x * f.x + shoreInfo.y * abs(f.y);
         float A = min(a0 * pow(4.0 / max(d, 0.5), 0.25), 0.39 * d) * smoothstep(${SHORE_DMAX.toFixed(1)}, ${(SHORE_DMAX * 0.5).toFixed(1)}, d) * smoothstep(0.0, 0.3, d) * wf;
         if (A <= 1e-5) return 0.0;
         float rel = A / max(d, 0.05), b = smoothstep(0.15, 0.39, rel), n = 1.0 + 4.0 * b;

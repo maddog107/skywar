@@ -8,8 +8,9 @@
 //  • createHullShadow(ship) darker water / contact occlusion hugging the hull, plus the flight deck's
 //                          (or main deck's) shadow projected on the sea along the sun direction.
 //  • WakeMap                a top-down render target the decals above are drawn into (foam, milky wake water, hull
-//                          shade as three channels): the water shader (ocean.js) lays it on the displaced sea, so a
-//                          wake rides the waves instead of cutting into them.
+//                          shade and agitation (ripples) as four channels): the water shader (ocean.js) lays it on
+//                          the displaced sea, so a wake rides the waves instead of cutting into them. Low flybys
+//                          (waterwake.js: jets, helicopters, sea-skimming missiles) stamp their marks into it too.
 //  • ShipFX                 owns all of the above for every ship: add(ship, layout) / remove(ship) /
 //                          update(dt, game) / clear().
 // With a WakeMap (always, in the game) the decals go into it; without one they are drawn as transparent decals
@@ -18,6 +19,7 @@
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
 import { offsetUnits, mulberry32 } from './util.js';
+import { FlybyWakes, reflectorsNear } from './waterwake.js';
 
 const TAN_KELVIN = Math.tan(19.47 * Math.PI / 180);
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3();
@@ -131,9 +133,9 @@ const COMMON_FS_HEAD = /* glsl */`
         col = mix(col, fogColor, fogF);
         return vec4(col, a * (1.0 - 0.6 * fogF));
     }
-    // into the wake map: white foam, milky water, shade (max-blended); on screen: the lit, fogged decal
+    // into the wake map: white foam, milky water, shade, no agitation (max-blended); on screen: the lit, fogged decal
     #ifdef WATER_RT
-    #define EMIT(col, a, fw, mk, dk) gl_FragColor = vec4(clamp(fw, 0.0, 1.0), clamp(mk, 0.0, 1.0), clamp(dk, 0.0, 1.0), 1.0);
+    #define EMIT(col, a, fw, mk, dk) gl_FragColor = vec4(clamp(fw, 0.0, 1.0), clamp(mk, 0.0, 1.0), clamp(dk, 0.0, 1.0), 0.0);
     #else
     #define EMIT(col, a, fw, mk, dk) gl_FragColor = finish(col, a);
     #endif`;
@@ -178,8 +180,8 @@ function setRT(m, on) {
 
 // ═════════════ Wake map ═════════════
 // A top-down orthographic render of the wake decals into an RGBA8 target: R white foam, G milky wake water, B shade
-// by a hull. It covers a square ahead of the camera (wider the higher the camera is), and ocean.js samples it by
-// world position, so the foam follows the displaced waves.
+// by a hull, A agitation (ripples blown up by a low flyby, waterwake.js). It covers a square ahead of the camera
+// (wider the higher the camera is), and ocean.js samples it by world position, so the foam follows the displaced waves.
 export class WakeMap {
     constructor(renderer, res = 2048) {
         this.renderer = renderer;
@@ -714,6 +716,7 @@ export class ShipFX {
         this.underMats = new Set();
         this.wakeMap = null; // WakeMap once there is a renderer and an ocean to show it (update)
         this.trails = new Set(); // other wakes drawn into the map (a seaplane's, seaplane.js)
+        this.flyby = new FlybyWakes(foamTexture()); // what low flybys do to the water (waterwake.js), drawn into the map
     }
 
     // where the decals go: the wake map's scene, or (no map) the world
@@ -725,6 +728,7 @@ export class ShipFX {
     useWakeMap(renderer) {
         if (this.wakeMap) return;
         this.wakeMap = new WakeMap(renderer);
+        this.wakeMap.scene.add(this.flyby.mesh || this.flyby.makeMesh());
         for (const e of this.entries.values()) {
             for (const m of [e.wake.meshW, e.wake.meshK, e.shadow.mesh, e.follow]) this.wakeMap.scene.add(m);
             for (const m of this.materialsOf(e)) setRT(m, true);
@@ -767,7 +771,8 @@ export class ShipFX {
     clear() {
         for (const s of [...this.entries.keys()]) this.remove(s);
         for (const t of [...this.trails]) this.removeTrail(t);
-        if (this.ocean) this.ocean.setWakeMap(null); // (nothing draws it again until the next sortie's first update)
+        this.flyby.clear();
+        if (this.ocean) { this.ocean.setWakeMap(null); if (this.ocean.setReflectors) this.ocean.setReflectors(null); } // (nothing draws it again until the next sortie's first update)
     }
 
     // a wake of some other craft (seaplane.js WakeTrail): its meshes go into the wake map
@@ -832,12 +837,16 @@ export class ShipFX {
                 fx.smoke.emit(p, new THREE.Vector3(vx, 2.5 + Math.random() * 2, vz), 1.6, 2 * k, 7 * k, [0.95, 0.97, 1], [0.9, 0.94, 0.97], 0.35, 0, 0.8, -4);
             }
         }
+        // low flybys: jets, helicopters and missiles over the water (waterwake.js)
+        if (game) this.flyby.update(dt, game);
         // the wake map, laid on the water by the ocean shader (also carries other trails: addTrail)
         if (this.wakeMap && game && game.camera && world && world.ocean) {
             for (const t of this.trails) t.update(dt, env);
             this.wakeMap.update(game.camera);
             this.ocean = world.ocean;
             world.ocean.setWakeMap(this.wakeMap.rt.texture, this.wakeMap.x0, this.wakeMap.z0, this.wakeMap.size);
+            // the aircraft low over the water near the camera: mirrored by the ocean's planar pass (high / ultra)
+            if (world.ocean.setReflectors) world.ocean.setReflectors(reflectorsNear(game, game.camera.position, this._refl || (this._refl = [])));
         }
     }
 }

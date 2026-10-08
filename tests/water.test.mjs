@@ -7,7 +7,8 @@ import assert from 'node:assert/strict';
 
 const W = await src('water.js');
 const M = await src('watermap.js');
-const { terrainHeight } = await src('terraincore.js');
+const TC = await src('terraincore.js');
+const { terrainHeight } = TC;
 const { WATER, SEA_STATES, MAX_WAVES } = W;
 
 const close = (a, b, eps, msg) => assert.ok(Math.abs(a - b) <= eps, `${msg}: ${a} vs ${b} (±${eps})`);
@@ -151,6 +152,25 @@ describe('sea-state maps: lakes and shallows are calmer than the open sea', () =
         assert.ok(lake.f[0] < 0.2, `lake swell factor ${lake.f[0].toFixed(2)}`);
         assert.ok(lake.rms < sea.rms * 0.25, `lake rms ${lake.rms.toFixed(2)} m vs sea ${sea.rms.toFixed(2)} m`);
         assert.ok(lake.rms > 0.02, 'but the lake is not glass in a storm');
+        // fresh water is told from the sea by a flood fill through the water from the map's surroundings: a lake's
+        // wind factor is stored negative (its waves take the size, the renderer the sign: ocean.js colours it)
+        assert.ok(M.isLake(lake.f[1]) && lake.f[0] === 0, `the lake is a lake (wind ${lake.f[1].toFixed(3)}, swell ${lake.f[0]})`);
+        assert.ok(!M.isLake(sea.f[1]), 'the open sea is not');
+        assert.equal(M.windGain(-0.25), 0.25);
+    });
+    test('a lake is water with no way out: the flood fill marks enclosed water only', () => {
+        const c = M.runJob(M.coarseJob(0, 0, 1, 0)), S = c.size, D = c.data;
+        let lakes = 0, seas = 0, mixed = 0;
+        for (let j = 1; j < S - 1; j++) for (let i = 1; i < S - 1; i++) {
+            const k = (j * S + i) * 4;
+            if (D[k + 3] <= 0) continue;
+            const lake = D[k + 1] < 0;
+            if (lake) lakes++; else seas++;
+            // water touching water is the same water: a lake texel never borders a sea texel
+            for (const o of [4, -4, S * 4, -S * 4]) if (D[k + o + 3] > 0 && (D[k + o + 1] < 0) !== lake) mixed++;
+        }
+        assert.ok(lakes > 100 && seas > 1000, `lakes ${lakes}, sea ${seas} texels round the home base`);
+        assert.equal(mixed, 0, 'no lake texel borders a sea texel');
     });
     test('the open-water waves die away into the shallows; a surf of breakers rolls in to the beach instead', () => {
         W.setSeaState('rain', 7, -5);
@@ -170,6 +190,32 @@ describe('sea-state maps: lakes and shallows are calmer than the open sea', () =
         assert.ok(shallow < deep * 0.45, `the open-water waves at 4 m: rms ${shallow.toFixed(2)} vs ${deep.toFixed(2)} offshore`);
         assert.ok(hi - lo > 0.3 && hi - lo < 0.78 * 2.5 * 1.2, `breakers ${(hi - lo).toFixed(2)} m high in 2.5 m of water`);
     });
+    test('the swash: the broken waves run up the beach as a thin sheet and back, further in rougher seas, never far inland', () => {
+        const runUp = (weather) => {
+            W.setSeaState(weather, 7, -5);
+            const c = M.runJob(M.coarseJob(-2500, 0, WATER.windX, WATER.windZ));
+            W.setSeaMap(1, c); W.setSeaMap(0, M.runJob(M.fineJob(-2300, 0, c)));
+            // walk up the beach west of the home base (z 0) from the waterline
+            let x0 = -2150; while (terrainHeight(x0, 0) < 0) x0 += 1;
+            const res = {};
+            for (const above of [0.15, 0.6, 2.8]) {
+                let x = x0; while (terrainHeight(x, 0) < above) x += 0.5;
+                // the sheet covers the sand when the water stands above it (the CPU surface: the true water level)
+                let wet = 0, n = 0;
+                for (let t = 0; t < 30; t += 0.2) { if (W.waterHeight(x, 0, t) > terrainHeight(x, 0) + 0.01) wet++; n++; }
+                res[above] = wet / n;
+            }
+            W.setSeaMap(0, null); W.setSeaMap(1, null);
+            return res;
+        };
+        const calm = runUp('clear'), rough = runUp('storm');
+        assert.ok(calm[0.15] > 0.2 && calm[0.15] < 0.8, `the first metres of sand are wet part of the time in a light swell (${calm[0.15].toFixed(2)})`);
+        assert.equal(calm[0.6], 0, 'a light swell stays below 0.6 m');
+        assert.ok(rough[0.6] > 0.3, `a storm runs well up the beach (${rough[0.6].toFixed(2)} of the time at 0.6 m)`);
+        assert.equal(rough[2.8], 0, 'never 2.8 m up the beach');
+        // the shader runs the same swash over land (drawn where the terrain draws that height)
+        assert.ok(/float swash\(/.test(W.WAVE_GLSL) && /if \(d <= 0\.0\) return swash/.test(W.WAVE_GLSL), 'the shader runs the same swash');
+    });
     test('the maps are deterministic and their fine map agrees with the true depth', () => {
         const a = M.runJob(M.coarseJob(1000, -2000, 1, 0)), b = M.runJob(M.coarseJob(1000, -2000, 1, 0));
         assert.deepEqual(Array.from(a.data.slice(0, 4000)), Array.from(b.data.slice(0, 4000)));
@@ -177,7 +223,8 @@ describe('sea-state maps: lakes and shallows are calmer than the open sea', () =
         for (let k = 0; k < 50; k++) {
             const i = (k * 37) % f.size, j = (k * 91) % f.size, x = f.x0 + (i + 0.5) * f.texel, z = f.z0 + (j + 0.5) * f.texel;
             close(f.data[(j * f.size + i) * 4 + 3], -terrainHeight(x, z), 1e-3, 'depth');
-            for (let c = 0; c < 3; c++) assert.ok(f.data[(j * f.size + i) * 4 + c] >= 0 && f.data[(j * f.size + i) * 4 + c] <= 1.2, 'factor in range');
+            for (let c = 0; c < 3; c++) assert.ok(Math.abs(f.data[(j * f.size + i) * 4 + c]) <= 1.2, 'factor in range');
+            for (const c of [0, 2]) assert.ok(f.data[(j * f.size + i) * 4 + c] >= 0, 'only the wind factor carries a sign (lakes)');
         }
     });
 });
