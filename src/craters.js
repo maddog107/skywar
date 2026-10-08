@@ -42,24 +42,26 @@ export const CRATER_KINDS = {
 };
 
 // ── Shared GPU state: the index grid, the crater data, and the uniforms every patched material points at ──
-const gridData = new Uint8Array(GRID * 2 * GRID * 4);
-const gridTex = new THREE.DataTexture(gridData, GRID * 2, GRID, THREE.RGBAFormat, THREE.UnsignedByteType);
+// One float texture holds both (a sampler less on every material that reads craters: the terrain on ultra was at
+// the GPU's 16-texture limit): rows 0-2 the crater data (a column per crater), from row GRID_ROW0 the index grid
+const TEX_W = GRID * 2, GRID_ROW0 = 3;
+export const CRATER_GRID_ROW0 = GRID_ROW0;
+const texArr = new Float32Array(TEX_W * (GRID + GRID_ROW0) * 4);
+const gridTex = new THREE.DataTexture(texArr, TEX_W, GRID + GRID_ROW0, THREE.RGBAFormat, THREE.FloatType);
 gridTex.needsUpdate = true;
+const gridData = texArr, dataArr = texArr;
+const D = (row, s) => (row * TEX_W + s) * 4; // a crater's texel in data row 0-2
 // per crater (a column): row 0 centre x, z, long axis x, z; row 1 hole radii (along, across), depth, rim;
 // row 2 fade (0..1), seed, scorch, reach
-const dataArr = new Float32Array(CRATER_MAX * 3 * 4);
-const dataTex = new THREE.DataTexture(dataArr, CRATER_MAX, 3, THREE.RGBAFormat, THREE.FloatType);
-for (let i = 0; i < CRATER_MAX; i++) dataArr.set([1, 1], (CRATER_MAX + i) * 4); // sane radii in empty columns
-dataTex.needsUpdate = true;
+for (let i = 0; i < CRATER_MAX; i++) dataArr.set([1, 1], D(1, i)); // sane radii in empty columns
 export const CRATER_U = {
     craterGrid: { value: gridTex },
-    craterData: { value: dataTex },
     craterInfo: { value: new THREE.Vector4(1 / CELL, 0, GRID, 0) }, // 1 / cell size, craters alive, grid size
     craterBox: { value: new THREE.Vector4(1e9, 1e9, -1e9, -1e9) },  // bounds (x0, z0, x1, z1) of every crater's reach
 };
 
 export const CRATER_GLSL = /* glsl */`
-    uniform highp sampler2D craterGrid, craterData;
+    uniform highp sampler2D craterGrid; // rows 0-2: the craters' data; from row 3: the index grid
     uniform vec4 craterInfo, craterBox;
     // rim height wobble and hole outline wobble around a crater (seeded)
     float crWob(float a, float s) { return 0.5 * sin(3.0 * a + s) + 0.3 * sin(5.0 * a + 1.7 * s) + 0.2 * sin(11.0 * a + 2.9 * s); }
@@ -89,17 +91,17 @@ export const CRATER_GLSL = /* glsl */`
         // (most of the ground is nowhere near a crater: one comparison, no texture read)
         if (xz.x < craterBox.x || xz.y < craterBox.y || xz.x > craterBox.z || xz.y > craterBox.w) return r;
         ivec2 cell = ivec2(mod(floor(xz * craterInfo.x), craterInfo.z));
-        cell.x *= 2;
+        cell.x *= 2; cell.y += 3;
         vec4 s0 = texelFetch(craterGrid, cell, 0);
         if (s0.x == 0.0) return r;
         vec4 s1 = s0.w > 0.0 ? texelFetch(craterGrid, cell + ivec2(1, 0), 0) : vec4(0.0);
         for (int k = 0; k < ${SLOTS}; k++) {
             float v = k < 4 ? s0[k] : s1[k - 4];
             if (v == 0.0) break;
-            int i = int(v * 255.0 + 0.5) - 1;
-            vec4 A = texelFetch(craterData, ivec2(i, 0), 0), C = texelFetch(craterData, ivec2(i, 2), 0);
+            int i = int(v + 0.5) - 1;
+            vec4 A = texelFetch(craterGrid, ivec2(i, 0), 0), C = texelFetch(craterGrid, ivec2(i, 2), 0);
             vec2 d = xz - A.xy;
-            vec2 l = vec2(dot(d, A.zw), dot(d, vec2(-A.w, A.z))) / texelFetch(craterData, ivec2(i, 1), 0).xy;
+            vec2 l = vec2(dot(d, A.zw), dot(d, vec2(-A.w, A.z))) / texelFetch(craterGrid, ivec2(i, 1), 0).xy;
             float ql = length(l);
             if (ql > C.w * 1.08) continue;
             float a = crAngle(l);
@@ -118,7 +120,7 @@ export const CRATER_GLSL = /* glsl */`
     float craterLift(vec4 a, inout vec3 n) {
         if (a.w > 1.5) return 0.0;
         int i = int(a.z + 0.5);
-        vec4 A = texelFetch(craterData, ivec2(i, 0), 0), B = texelFetch(craterData, ivec2(i, 1), 0), C = texelFetch(craterData, ivec2(i, 2), 0);
+        vec4 A = texelFetch(craterGrid, ivec2(i, 0), 0), B = texelFetch(craterGrid, ivec2(i, 1), 0), C = texelFetch(craterGrid, ivec2(i, 2), 0);
         float q, qe;
         float y = crProfile(a.xy, B, C, q);
         if (a.w > 0.5) return q < 1.0 ? y : max(y, 0.0); // a clod rests on the rim or the ground beyond it
@@ -358,8 +360,8 @@ export class Craters {
         c.slot = -1;
         const i = this.list.indexOf(c);
         if (i >= 0) this.list.splice(i, 1);
-        dataArr.fill(0, s * 4, s * 4 + 4); dataArr.fill(0, (CRATER_MAX * 2 + s) * 4, (CRATER_MAX * 2 + s) * 4 + 4);
-        dataArr.set([1, 1, 0, 0], (CRATER_MAX + s) * 4);
+        dataArr.fill(0, D(0, s), D(0, s) + 4); dataArr.fill(0, D(2, s), D(2, s) + 4);
+        dataArr.set([1, 1, 0, 0], D(1, s));
         this.dataDirty = true;
         this.collapse(s, true);
         this.updateBounds();
@@ -435,7 +437,7 @@ export class Craters {
     }
 
     writeCell(gi, owners) {
-        const row = Math.floor(gi / GRID), col = gi % GRID, o = (row * GRID * 2 + col * 2) * 4;
+        const row = Math.floor(gi / GRID), col = gi % GRID, o = ((GRID_ROW0 + row) * TEX_W + col * 2) * 4;
         for (let k = 0; k < SLOTS; k++) gridData[o + k] = k < owners.length ? owners[k].slot + 1 : 0;
         gridTex.addUpdateRange(o, 8);
         gridTex.needsUpdate = true;
@@ -443,11 +445,11 @@ export class Craters {
 
     writeData(c) {
         const s = c.slot;
-        let o = s * 4;
+        let o = D(0, s);
         dataArr[o] = c.x; dataArr[o + 1] = c.z; dataArr[o + 2] = c.dx; dataArr[o + 3] = c.dz;
-        o = (CRATER_MAX + s) * 4;
+        o = D(1, s);
         dataArr[o] = c.ra; dataArr[o + 1] = c.rb; dataArr[o + 2] = c.depth; dataArr[o + 3] = c.rim;
-        o = (CRATER_MAX * 2 + s) * 4;
+        o = D(2, s);
         dataArr[o] = c.fade; dataArr[o + 1] = c.seed; dataArr[o + 2] = c.scorch; dataArr[o + 3] = c.reach;
         this.dataDirty = true;
     }
@@ -574,6 +576,6 @@ export class Craters {
             c.queued = false;
             if (c.slot >= 0) this.conform(c, false);
         }
-        if (this.dataDirty) { dataTex.needsUpdate = true; this.dataDirty = false; }
+        if (this.dataDirty) { gridTex.addUpdateRange(0, CRATER_MAX * 4); gridTex.addUpdateRange(D(1, 0), CRATER_MAX * 4); gridTex.addUpdateRange(D(2, 0), CRATER_MAX * 4); gridTex.needsUpdate = true; this.dataDirty = false; }
     }
 }

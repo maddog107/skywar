@@ -2,7 +2,7 @@ import { src } from './helpers/setup.mjs';
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { Craters, craterAdj, CRATER_KINDS, CRATER_MAX, CRATER_U } = await src('craters.js');
+const { Craters, craterAdj, CRATER_KINDS, CRATER_MAX, CRATER_U, CRATER_GRID_ROW0 } = await src('craters.js');
 const { Weapons } = await src('weapons.js');
 const { BASES, terrainHeight } = await src('world.js');
 
@@ -21,7 +21,7 @@ function stubWorld(h = 100) {
 function gridSlots(x, z) {
     const tex = CRATER_U.craterGrid.value, W = tex.image.width, G = W / 2, CELL = 1 / CRATER_U.craterInfo.value.x;
     const cx = ((Math.floor(x / CELL) % G) + G) % G, cz = ((Math.floor(z / CELL) % G) + G) % G;
-    const o = (cz * W + cx * 2) * 4, d = tex.image.data, out = [];
+    const o = ((CRATER_GRID_ROW0 + cz) * W + cx * 2) * 4, d = tex.image.data, out = [];
     for (let k = 0; k < 8; k++) if (d[o + k]) out.push(d[o + k] - 1);
     return out;
 }
