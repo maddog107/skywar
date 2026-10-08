@@ -66,6 +66,58 @@ describe('how hard the air blows on the water', () => {
     });
 });
 
+describe('a low pass, all told (lowPassWash)', () => {
+    // an F/A-18 (13.6 m span, 18.3 m long) at ~290 m/s; military power ~120 kN, reheat ~190 kN
+    const size = { span: 13.6, length: 18.3 }, mass = 60 * 13.6 * 18.3, MIL = mass * 13 * 0.62, AB = mass * 13;
+    const at = (h, T = MIL, v = 290) => WW.lowPassWash(h, T, v, size);
+    test('by height: spray and a wake begin at 30–40 m, a solid rooster tail below ~20 m, still growing below 15 m', () => {
+        assert.ok(at(40).spray > 0.05 && at(40).spray < 0.45, `40 m: ${at(40).spray.toFixed(2)}`);
+        assert.ok(at(30).spray > 0.3 && at(30).spray > at(40).spray, `30 m: ${at(30).spray.toFixed(2)}`);
+        assert.ok(at(20).spray > 0.8 && at(15).spray > 0.95, `20 m ${at(20).spray.toFixed(2)}, 15 m ${at(15).spray.toFixed(2)}`);
+        const pw = (h) => WW.washMarks(at(h).u).power;
+        assert.ok(pw(10) > pw(15) * 1.4 && pw(5) > pw(10), `the tail's power: 15 m ${pw(15).toFixed(2)}, 10 m ${pw(10).toFixed(2)}, 5 m ${pw(5).toFixed(2)}`);
+        assert.ok(at(60).spray < 0.06 && WW.washMarks(at(60).u).agit > 0.5, '60 m: ripples, next to no spray');
+        assert.equal(at(150).spray, 0);
+        assert.ok(WW.washMarks(at(150).u).agit < 0.05, '150 m: nothing');
+        let last = 2;
+        for (const h of [5, 8, 10, 15, 20, 30, 40, 60, 100]) { assert.ok(at(h).u < last * 1e3 && (h === 5 || at(h).u <= last), `weaker higher at ${h} m`); last = at(h).u; }
+    });
+    test('by thrust, speed and size: reheat harder than military power, idle and slow less; a transonic pass hardest', () => {
+        assert.ok(at(30, AB).spray > at(30).spray && at(30).spray > at(30, 0).spray, `30 m: AB ${at(30, AB).spray.toFixed(2)}, mil ${at(30).spray.toFixed(2)}, idle ${at(30, 0).spray.toFixed(2)}`);
+        assert.ok(at(30, MIL, 150).spray < at(30).spray * 0.5, 'slow: much less');
+        assert.ok(at(30, MIL, 325).u > at(30).u * 1.2, 'near the speed of sound: the pressure field swells');
+        const small = WW.lowPassWash(25, 0.5 * MIL, 290, { span: 8, length: 10 }), big = WW.lowPassWash(25, MIL, 290, size);
+        assert.ok(small.u < big.u, 'a smaller, lighter jet blows less');
+        assert.ok(WW.pressureWash(5, 70, 20) < 70 * 0.27, 'in ground effect never more than a fraction of the airspeed');
+    });
+});
+
+describe('over dry land: dust', () => {
+    test('what the ground is: the sea, a beach, snow up high, forest and fields', () => {
+        assert.equal(WW.groundKind(SEA.x, SEA.z), 'water');
+        // walk in from the sea to the first sand above the waterline
+        let beach = null;
+        for (let x = -9000; x < 0 && !beach; x += 5) { const h = terrainHeight(x, -1500); if (h > 0.4 && h < 2) beach = x; }
+        assert.ok(beach != null && WW.groundKind(beach, -1500) === 'sand', 'a beach is sand');
+        const kinds = new Set();
+        for (let x = -20000; x < 20000; x += 997) for (let z = -20000; z < 20000; z += 1301) kinds.add(WW.groundKind(x, z));
+        for (const k of ['water', 'grass', 'forest', 'dirt', 'rock']) assert.ok(kinds.has(k), `${k} somewhere (${[...kinds].join(', ')})`);
+        for (const k of kinds) assert.ok(k === 'water' || WW.GROUND_DUST[k], `${k} has a dust`);
+    });
+    test('a jet low over land raises dust and no marks; a hovering helicopter a ring of it', () => {
+        const a = jet({ alt: 8, x: 900, z: 0 }), g = stubGame({ aircraft: [a] }), F = new WW.FlybyWakes();
+        assert.ok(terrainHeight(900, 0) > 2);
+        a.pos.y = terrainHeight(900, 0) + 8;
+        fly(F, g, 1, a);
+        assert.equal(F.field.n, 0, 'no marks on land');
+        assert.ok(g.effects.n > 30, `${g.effects.n} dust and bits`);
+        const hi = jet({ alt: 0, x: 900, z: 0 }), g2 = stubGame({ aircraft: [hi] }), F2 = new WW.FlybyWakes();
+        hi.pos.y = terrainHeight(900, 0) + 120;
+        fly(F2, g2, 1, hi);
+        assert.equal(g2.effects.n, 0, 'nothing from 120 m');
+    });
+});
+
 describe('the marks on the water', () => {
     test('foam bursts within seconds, the milky water lingers longer, the ripples die away; all of it spreads', () => {
         const at = (t) => WW.stampAt(1, 1, 1, 5, false, t, {});
@@ -93,13 +145,13 @@ describe('the marks on the water', () => {
 });
 
 describe('low flybys leave their marks', () => {
-    test('a jet at 10 m leaves a long line of churned, rippled water and throws spray; at 40 m only ripples; at 150 m nothing', () => {
+    test('a jet at 10 m leaves a long line of churned, rippled water and throws spray; at 40 m a faint trail; at 60 m only ripples; at 150 m nothing', () => {
         const run = (alt) => {
             const a = jet({ alt }), g = stubGame({ aircraft: [a] }), F = new WW.FlybyWakes();
             fly(F, g, 3, a);
             return { F, a, g };
         };
-        const low = run(10), mid = run(40), high = run(150);
+        const low = run(10), mid = run(40), far = run(60), high = run(150);
         assert.ok(low.F.field.n > 50, `${low.F.field.n} marks at 10 m`);
         assert.ok(low.g.effects.n > 100, `${low.g.effects.n} spray particles at 10 m`);
         let foam = 0, agit = 0;
@@ -110,9 +162,11 @@ describe('low flybys leave their marks', () => {
         let gaps = 0;
         for (let d = 100; d < 600; d += 10) { low.F.field.sample(SEA.x, low.a.pos.z + d, s); if (s.agit < 0.2) gaps++; }
         assert.equal(gaps, 0, 'no gaps in the line');
-        assert.ok(mid.F.field.n > 10 && mid.g.effects.n === 0, `40 m: ${mid.F.field.n} marks, ${mid.g.effects.n} spray`);
-        let mf = 0; for (let i = 0; i < mid.F.field.n; i++) mf = Math.max(mf, mid.F.field.f0[i]);
+        assert.ok(mid.F.field.n > 10 && mid.g.effects.n < low.g.effects.n / 10, `40 m: ${mid.F.field.n} marks, ${mid.g.effects.n} spray (10 m: ${low.g.effects.n})`);
+        let mf = 0, ms = 0; for (let i = 0; i < mid.F.field.n; i++) { mf = Math.max(mf, mid.F.field.f0[i]); ms = Math.max(ms, mid.F.field.sh[i]); }
         assert.ok(mf < 0.05, 'no white water from 40 m');
+        assert.ok(ms > 0.05, `a darker streak from 40 m (shade ${ms.toFixed(2)})`);
+        assert.ok(far.F.field.n > 5 && far.g.effects.n < 3, `60 m: ${far.F.field.n} marks of ripples, ${far.g.effects.n} spray`);
         assert.equal(high.F.field.n, 0, 'nothing from 150 m');
     });
     test('afterburner: a harder blast than military power at the same height', () => {

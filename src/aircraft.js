@@ -910,7 +910,6 @@ export class Aircraft {
     crash(water = false) {
         if (!this.alive && !this.falling) return;
         if (this.invincible && this.alive && !this.falling) { this.sandboxBounce(water); return; }
-        if (water) this.game.effects.waterSplash(this.pos, 1.4);
         this.health = 0;
         this.explode(true, water);
     }
@@ -1009,7 +1008,8 @@ export class Aircraft {
         this.exploded = true;
         this.falling = false;
         const fx = this.game.effects;
-        if (water) fx.waterSplash(this.pos, 1.4);
+        // into the sea: a sheet of spray along its path, the fuel going up on the water, a slick left (splash.js)
+        if (water) { if (fx.water) fx.water.crash(this); else fx.waterSplash(this.pos, 1.4); }
         if (!water) {
             fx.explosion(this.pos, ground ? 2.2 : 1.6, ground ? null : this.vel);
             fx.debrisBurst(this.pos, ground ? _v1.set(0, 0, 0) : this.vel, ground ? 6 : 12, this.spec.length / 22);
@@ -1176,8 +1176,12 @@ export class Aircraft {
             }
         }
 
+        // Fast and low over the sea the air is near saturated: the low pressure over the wing and in the tip vortices
+        // condenses it (the vapour seen on jets in low passes over water), more the faster and the lower
+        const seaVap = this.alive && !this.onGround && this.pos.y < 70 && this.mach > 0.68 && terrainHeight(this.pos.x, this.pos.z) < -1
+            ? clamp((this.mach - 0.68) / 0.22, 0, 1) * clamp((70 - this.pos.y) / 45, 0, 1) : 0;
         // Wingtip vortices when pulling hard / high AoA
-        const vapor = this.alive && !this.onGround && (this.gLoad > 5 || (this.alpha > 0.22 && this.speed > 110));
+        const vapor = this.alive && !this.onGround && (this.gLoad > 5 || (this.alpha > 0.22 && this.speed > 110) || seaVap > 0.35);
         for (let i = 0; i < 2; i++) {
             if (vapor) {
                 if (!this.vortex[i]) this.vortex[i] = fx.addTrail({ max: 60, width: 0.3, life: 0.7, color: [1, 1, 1], alpha: 0.3, minDist: 4, widthGrow: 1.2 });
@@ -1188,8 +1192,8 @@ export class Aircraft {
                 this.vortex[i] = null;
             }
         }
-        // Wing vapour cloud over the wing in very high-G pulls
-        if (this.alive && this.gLoad > 6.5 && this.speed > 150 && Math.random() < 0.6) {
+        // Wing vapour cloud over the wing in very high-G pulls (and in a fast pass low over the sea)
+        if (this.alive && ((this.gLoad > 6.5 && this.speed > 150) || seaVap > 0.2) && Math.random() < 0.6 * Math.max(seaVap, this.gLoad > 6.5 ? 1 : 0)) {
             worldPos.set(rand(-1, 1) * this.rig.halfSpan * 0.5 || rand(-3, 3), 1, rand(-2, 3)).applyMatrix4(this.model.matrixWorld);
             fx.smoke.emit(worldPos, _v2.copy(this.vel).multiplyScalar(0.92), 0.25, 3, 6, [0.95, 0.97, 1], [1, 1, 1], 0.35, 0, 0.5, 0);
         }
@@ -1206,7 +1210,7 @@ export class Aircraft {
             this.contrails[i].push(worldPos, fx.now);
         }
         // Vapour cone near Mach 1
-        if (this.alive && Math.abs(this.mach - 1) < 0.045 && this.pos.y < 3500 && Math.random() < 0.8) {
+        if (this.alive && Math.abs(this.mach - 1) < 0.045 + 0.08 * seaVap && this.pos.y < 3500 && Math.random() < 0.8) {
             for (let k = 0; k < 3; k++) {
                 const a = Math.random() * 6.28;
                 const r = this.spec.length * 0.14;

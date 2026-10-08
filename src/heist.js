@@ -447,7 +447,7 @@ export class HeistOp {
                         const aim = _v2.subVectors(jet.pos, from).addScaledVector(jet.vel, dj / 700).normalize();
                         const spread = 0.015 + dj / 40000;
                         aim.x += rand(-spread, spread); aim.y += rand(-spread, spread); aim.z += rand(-spread, spread);
-                        g.weapons.newBullet(from, aim.normalize().multiplyScalar(700), u, 0.6, 1.1, u.burst % 2 === 0, MP_TRACER); // ~0.7 hull/s per MP up close (veteran)
+                        g.weapons.newBullet(from, aim.normalize().multiplyScalar(700), u, 0.6, 1.1, u.burst % 2 === 0, MP_TRACER).cal = 7.62; // ~0.7 hull/s per MP up close (veteran)
                     }
                 }
             }

@@ -62,6 +62,7 @@ const WINGMEN = ['BOLT', 'SABRE'];
 export class Game {
     constructor({ scene, camera, world, effects, audio, input, hud, cockpit, settings }) {
         Object.assign(this, { scene, camera, world, effects, audio, input, hud, cockpit, settings });
+        if (effects) effects.game = this; // (splash.js reaches the wake map, the ocean and the audio through it)
         this.events = new Events();
         this.weapons = new Weapons(this);
         this.wreckage = new Wreckage(this);
@@ -1883,7 +1884,11 @@ export class Game {
             // (on a carrier's deck a little higher: from the usual height the raised blast deflector behind the
             // catapult hid the jet's lower half; eased back once it's off the deck)
             this.deckCamLift = damp(this.deckCamLift || 0, p.onGround && p.deck ? 5 : 0, 1.5, dt);
-            const height = (far ? L * 1.1 + 10 : L * 0.3 + 3.5) + this.deckCamLift;
+            // (firing the gun nose-down, a strafe: the camera rises over the jet so the rounds' splashes ahead show above
+            // its tail instead of behind it; eased back once the burst ends)
+            const strafing = this.firing && p.spec && p.spec.gun && p.alive && p.getForward(_v3).y < -0.12 ? 1 : 0;
+            this.gunCamLift = damp(this.gunCamLift || 0, far ? 0 : strafing, strafing ? 3 : 1.2, dt);
+            const height = (far ? L * 1.1 + 10 : L * 0.3 + 3.5) + this.deckCamLift + this.gunCamLift * (L * 0.55 + 6);
             let targetQ;
             if (this.settings.controlMode === 'mouseaim' && !holdLook) {
                 // camera looks along the aim direction (horizon stays level)
@@ -1915,7 +1920,8 @@ export class Game {
             cam.position.copy(desired);
             cam.quaternion.copy(this.camQuat);
             // look slightly above the jet so it sits in the lower third
-            cam.rotateX(-Math.atan2(height * 0.55, back));
+            // (strafing, less of that: the camera is higher, and the splashes ahead must stay in the frame above the jet)
+            cam.rotateX(-Math.atan2(height * 0.55, back) * (1 - 0.45 * (this.gunCamLift || 0)));
             fov = 58 + clamp((p.speed - 150) / 300, 0, 1) * 14 + (p.afterburner ? 3 : 0);
         }
         // shake

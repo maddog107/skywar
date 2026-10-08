@@ -146,7 +146,7 @@ function touchdown(ac) {
     // back on the water moments after lifting off (skipping off a crest on the takeoff run): not a landing
     const skip = s.offAt != null && g.time - s.offAt < 4;
     if (!ac.alive || ac.falling || severity >= 1) {
-        if (g.effects) g.effects.waterSplash(ac.pos, 1.8);
+        // (its splash and slick: Aircraft.explode on the water, splash.js crash)
         if (ac.isPlayer && g.addFeed) g.addFeed('CRASHED ON THE WATER' + (why.length ? ' — ' + why.join(', ') : ''), '#ff4a3d');
         ac.health = 0;
         ac.explode(true, true);

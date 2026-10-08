@@ -42,6 +42,7 @@ export const PLANAR_LAYER = 30; // the objects (and lights) the planar reflectio
 const LEVELS = 15;       // quadtree depth: the root nodes are P0 · 2^14 across (1–2 thousand km at P0 64..8: the horizon is inside)
 const MORPH_START = 0.7; // morph over the outer 30 % of each level's range
 const FFT_L = 32;        // FFT patch size (m)
+const HEAVES = 4;        // blasts heaving the surface at once (splash.js)
 
 const _frustum = new THREE.Frustum(), _pv = new THREE.Matrix4(), _box = new THREE.Box3(), _v = new THREE.Vector3();
 const _pt = new THREE.Vector3(), _up = new THREE.Vector3(), _cc = new THREE.Color();
@@ -74,6 +75,10 @@ const VERT = /* glsl */`
     uniform float gridN, lodR0, foamJ;
     uniform sampler2D wakeMap;
     uniform vec4 wakeInfo;   // x0, z0, 1/size, on
+    // the surface heaving over a blast (splash.js): x, z, age (s), the dome's height (m) / its radius (m), the waves'
+    // length (m), their height (m), fade
+    uniform vec4 heaveA[${HEAVES}], heaveB[${HEAVES}];
+    uniform int heaveN;
     varying vec3 vWorld;
     varying vec2 vRest;
     varying vec3 vNormal;
@@ -81,6 +86,25 @@ const VERT = /* glsl */`
     varying vec3 vFoam;   // whitecap now, a moment ago; surf (a breaking shore wave)
     varying float vCrest;
     ${WAVE_GLSL}
+    // A charge under the water lifts the surface over it in a dome that falls back into a trough, and rings of waves
+    // run out from it (gravity waves from an impulse: the crests move out through their packet at twice its speed,
+    // so the rings keep coming out of it and dying ahead of it), lower the further they've run
+    float heaveAt(vec2 p) {
+        float h = 0.0;
+        for (int i = 0; i < ${HEAVES}; i++) {
+            if (i >= heaveN) break;
+            vec4 A = heaveA[i], B = heaveB[i];
+            float r = length(p - A.xy), t = A.z;
+            float cp = sqrt(9.81 * B.y / 6.2832), cg = 0.5 * cp;
+            if (r > B.x * 2.5 + cp * t + B.y * 2.0) continue;
+            float x2 = r * r / (B.x * B.x);
+            float dome = A.w * exp(-x2) * (1.0 - exp(-t / 0.12)) * (exp(-t / 0.9) - 0.4 * smoothstep(0.5, 1.8, t) * exp(-t / 3.5));
+            float rc = cg * t + B.x * 0.4, w = B.y * 0.8 + 0.3 * cg * t;
+            float env = exp(-pow((r - rc) / w, 2.0)) * B.z * sqrt(B.x / (B.x + rc)) * smoothstep(0.2, 1.4, t);
+            h += (dome + env * cos(6.2832 / B.y * (r - cp * t))) * B.w;
+        }
+        return h;
+    }
     float lodDist(vec2 p) { return length(vec3(p.x - cameraPosition.x, cameraPosition.y, p.y - cameraPosition.z)); }
     float morphK(float level, float d) {
         float r = lodR0 * exp2(level);
@@ -130,6 +154,11 @@ const VERT = /* glsl */`
         vec2 sg; float br, crest;
         float hs = shoreWave(p, sea, sg, br, crest);
         disp.y += hs; Tx.y += sg.x; Tz.y += sg.y;
+        if (heaveN > 0) {
+            float h0 = heaveAt(p), e = 0.75;
+            disp.y += h0;
+            Tx.y += (heaveAt(p + vec2(e, 0.0)) - h0) / e; Tz.y += (heaveAt(p + vec2(0.0, e)) - h0) / e;
+        }
         vec3 world = vec3(p.x + disp.x, disp.y, p.y + disp.z);
         vWorld = world; vRest = p; vNormal = normalize(cross(Tz, Tx)); vSea = sea; vCrest = disp.y;
         // whitecaps where crests fold (and the foam they leave), surf on the breaker's face and in its wake
@@ -681,6 +710,7 @@ export class Ocean {
             refrColor: { value: this.blackTex }, refrDepth: { value: empty }, refrOn: { value: 0 },
             camNear: { value: 1 }, camFar: { value: 1000 }, invProj: { value: new THREE.Vector2(1, 1) }, camWorld: { value: new THREE.Matrix4() },
             wakeMap: { value: this.blackTex }, wakeInfo: { value: new THREE.Vector4(0, 0, 1, 0) },
+            heaveA: { value: Array.from({ length: HEAVES }, () => new THREE.Vector4()) }, heaveB: { value: Array.from({ length: HEAVES }, () => new THREE.Vector4(1, 1, 0, 0)) }, heaveN: { value: 0 },
             planarMap: { value: this.blackTex }, planarVP: { value: new THREE.Matrix4() }, planarOn: { value: 0 },
             ...fireUniforms(), // [night]
         };
@@ -717,6 +747,7 @@ export class Ocean {
         this.initWorker();
         this.setQuality('high');
         this.shipFX = null;     // shipfx.js registers its wake map here (see setWakeMap)
+        this.heaveMax = 0;      // the highest heave now (splash.js, setHeaves): the patches' boxes allow for it
         // the planar reflection pass (renderPlanar): its target, the mirrored camera, the objects it draws
         this.planar = { rt: null, cam: new THREE.PerspectiveCamera(), reflectors: [], on: new Set(), lightsAt: -1e9, frame: 0 };
         this.planar.cam.layers.set(PLANAR_LAYER);
@@ -899,7 +930,7 @@ export class Ocean {
         const T = this.T, P0 = T.P0, R0 = P0 * T.ratio, cam = camera.position;
         const top = LEVELS - 1, rootSize = P0 * Math.pow(2, top);
         const A = this.patchAttr.array;
-        const crest = WATER.maxCrest + 1;
+        const crest = WATER.maxCrest + 1 + this.heaveMax;
         let n = 0;
         const camY = Math.abs(cam.y);
         const visit = (x0, z0, L) => {
@@ -1029,6 +1060,20 @@ export class Ocean {
         st.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
         st.bindFramebuffer(gl.DRAW_FRAMEBUFFER, from); // (three still has the scene's framebuffer bound for drawing)
         return true;
+    }
+
+    // splash.js: the surface heaving over recent blasts ({ x, z, born, amp, R, lam, life }, at most HEAVES)
+    setHeaves(list, now) {
+        const u = this.uniforms, n = Math.min(list ? list.length : 0, HEAVES);
+        let mx = 0;
+        for (let i = 0; i < n; i++) {
+            const h = list[i], t = now - h.born, fade = 1 - smooth01(h.life * 0.6, h.life, t);
+            u.heaveA.value[i].set(h.x, h.z, t, h.amp);
+            u.heaveB.value[i].set(h.R, h.lam, h.amp * 0.4, fade);
+            mx = Math.max(mx, h.amp);
+        }
+        u.heaveN.value = n;
+        this.heaveMax = mx;
     }
 
     // shipfx.js: a top-down map of wake foam (R), milky wake water (G) and hull shade (B) over a square

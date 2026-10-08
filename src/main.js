@@ -122,6 +122,7 @@ function applyQuality() {
     const q = settings.quality;
     postfx.setQuality(q, settings); // [postfx] pixel ratio (fixed or adaptive), MSAA, AO, SSR, blur, flare
     nightfx.setQuality(q);
+    effects.setQuality(q); // water splashes: particle budgets, wake-map marks, the sea's heave (splash.js)
     renderer.shadowMap.enabled = true; // (low: one small cascade, world.js / shadows.js)
     bloom.enabled = q !== 'low';
     if (world) {
@@ -558,6 +559,7 @@ function launch() {
     // compile every material now so ships, targets and explosions don't hitch on first sight
     try {
         game.effects.explosion(new THREE.Vector3(0, -500, 0), 0.1);
+        game.effects.water.warm(); // (splash.js: its particle systems and textures, so the first splash doesn't hitch)
         renderer.compile(scene, camera);
         warmUpload();
         cockpit.viewModel.prewarm(SLOTS); // every weapon and the arms, so the first draw on foot doesn't hitch

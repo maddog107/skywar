@@ -300,6 +300,7 @@ export class Audio {
             for (const k in this.tones) set(this.tones[k].g.gain, 0, 0.03);
             for (const v of this.voices) { set(v.out.gain, 0, 0.2); v.target = null; }
             if (this.heli) set(this.heli.out.gain, 0, 0.3);
+            if (this.roarV && !state.playing) set(this.roarV.out.gain, 0, 0.3);
             this.last = {};
             return;
         }
@@ -561,6 +562,103 @@ export class Audio {
             rg.gain.linearRampToValueAtTime(rv, t + 0.5); rg.gain.setTargetAtTime(0, t + 0.9, 0.9);
             r.connect(rf).connect(rg).connect(this.sfx); r.start(t, Math.random()); r.stop(t + 4.5);
             this.cleanup(r, rf, rg);
+        }
+    }
+
+    // ── Water (splash.js, waterwake.js) ──
+    // A round into the sea, heard `dist` m away: a sharp slap (the cavity it punches snapping shut) and the plop of the
+    // bubble, deeper for a bigger round; a heavy round's spout pattering back down a moment later. At most a few dozen
+    // a second (a burst's rounds blur into a crackle; the far ones are lost under the guns anyway).
+    waterSlap(dist = 0, cal = 20) {
+        if (!this.running || dist > 700) return;
+        const ctx = this.ctx, t0 = ctx.currentTime;
+        if (t0 - (this._slapT || 0) < 0.028) return;
+        this._slapT = t0;
+        const k = clamp(cal / 20, 0.3, 1.8), v = 0.32 * Math.min(k, 1.25) / (1 + dist / 40);
+        if (v < 0.006) return;
+        const t = t0 + Math.min(dist / SOUND, 2);
+        const air = Math.exp(-dist / 260); // (the air dulls the crack with distance)
+        const r = Math.random();
+        this.burst(t, { type: 'bandpass', freq: (1300 + 1500 / k) * (0.85 + 0.3 * r) * (0.5 + 0.5 * air), q: 0.8, gain: v, attack: 0.001, decay: 0.025 + 0.025 * k, out: this.sfx });
+        this.burst(t, { type: 'lowpass', freq: 380 + 200 / k, q: 0.7, buf: this.brown, gain: v * 0.9 * Math.min(k, 1.4), attack: 0.002, decay: 0.07 + 0.05 * k, out: this.sfx });
+        this.tone(t + 0.012, { type: 'sine', f0: (520 + 380 * r) / Math.sqrt(k), f1: 240 / Math.sqrt(k), gain: v * 0.35, decay: 0.05 + 0.04 * k, out: this.sfx });
+        if (k > 1.15 && dist < 300) this.burst(t + 0.45 + 0.2 * r, { buf: this.pink, freq: 2600, q: 0.6, gain: v * 0.22, attack: 0.08, decay: 0.45, out: this.sfx });
+    }
+
+    // A charge going off in (or on) the water `dist` m away: size the column's height / 50 m; kind 'full' (a bomb a
+    // few metres down: a deep, muffled whoomp, the water swallowing the crack), 'shell' (a shell's crack and the
+    // smack of its column), 'hiss' (the blast itself is heard elsewhere: only the water). Then the roar of the column
+    // going up and, as it comes down (after rise s), the long hiss and patter of tons of water falling back.
+    waterBoom(dist = 0, size = 1, kind = 'full', rise = 3) {
+        if (!this.running) return;
+        const ctx = this.ctx, t0 = ctx.currentTime;
+        const vol = Math.min(1.1, clamp(1.5 / (1 + dist / 380), 0, 1.2) * clamp(size, 0.15, 2.5));
+        if (vol < 0.015) return;
+        this.boomEnds = this.boomEnds.filter(e => e > t0);
+        if (this.boomEnds.length > 10 && vol < 0.4) return;
+        const t = t0 + Math.min(dist / SOUND, 2.5), near = Math.exp(-dist / 500);
+        const len = 1.2 + Math.min(size, 3) * 0.8;
+        this.boomEnds.push(t + len + rise);
+        const one = (src, f, g, end) => { src.connect(f).connect(g).connect(this.sfx); src.start(t, Math.random()); src.stop(end); this.cleanup(src, f, g); };
+        if (kind !== 'hiss') {
+            // the whoomp: a sub thump and a closing low rumble; a shell's or a burst on the surface has its crack
+            const o = ctx.createOscillator(); o.type = 'sine';
+            o.frequency.setValueAtTime(kind === 'shell' ? 80 : 62, t); o.frequency.exponentialRampToValueAtTime(22, t + 0.7);
+            const og = ctx.createGain(); og.gain.setValueAtTime(0, t0); og.gain.setValueAtTime(0, t); og.gain.linearRampToValueAtTime(vol * 0.95, t + 0.02); og.gain.exponentialRampToValueAtTime(0.001, t + 0.9);
+            o.connect(og).connect(this.sfx); o.start(t); o.stop(t + 0.95); this.cleanup(o, og);
+            const b = this.noiseSrc(this.brown), bf = ctx.createBiquadFilter(); bf.type = 'lowpass';
+            bf.frequency.setValueAtTime(kind === 'shell' ? 1400 : 520, t); bf.frequency.exponentialRampToValueAtTime(60, t + len);
+            const bg = ctx.createGain(); bg.gain.setValueAtTime(0, t0); bg.gain.setValueAtTime(0, t); bg.gain.linearRampToValueAtTime(vol * 0.85, t + 0.03); bg.gain.exponentialRampToValueAtTime(0.001, t + len);
+            one(b, bf, bg, t + len + 0.1);
+            if (kind === 'shell' && near > 0.1) this.burst(t, { type: 'highpass', freq: 1100, q: 0.7, gain: vol * near * 0.45, attack: 0.001, decay: 0.07, out: this.sfx });
+        }
+        // the column going up: a rushing roar
+        const rs = this.noiseSrc(this.pink), rf = ctx.createBiquadFilter(); rf.type = 'bandpass'; rf.Q.value = 0.6;
+        rf.frequency.setValueAtTime(500, t); rf.frequency.exponentialRampToValueAtTime(1600, t + rise * 0.6);
+        const rg = ctx.createGain(); rg.gain.setValueAtTime(0, t0); rg.gain.setValueAtTime(0, t); rg.gain.linearRampToValueAtTime(vol * 0.32, t + 0.12); rg.gain.exponentialRampToValueAtTime(0.001, t + rise * 0.9 + 0.3);
+        one(rs, rf, rg, t + rise + 0.4);
+        // and coming down: the hiss and patter of the water falling back, for seconds
+        const fall = 1.5 + rise * 1.3;
+        const hs = this.noiseSrc(this.white), hf = ctx.createBiquadFilter(); hf.type = 'bandpass'; hf.Q.value = 0.5;
+        hf.frequency.value = 2400 + 1600 * near;
+        const hg = ctx.createGain(); hg.gain.setValueAtTime(0, t0); hg.gain.setValueAtTime(0, t + rise * 0.5);
+        hg.gain.linearRampToValueAtTime(vol * 0.2 * (0.4 + 0.6 * near), t + rise * 1.05); hg.gain.setTargetAtTime(0, t + rise * 1.1, fall * 0.35);
+        hs.connect(hf).connect(hg).connect(this.sfx); hs.start(t, Math.random()); hs.stop(t + rise + fall * 1.6); this.cleanup(hs, hf, hg);
+        // (the crash of the column hitting the water, under the hiss)
+        const cs = this.noiseSrc(this.pink), cf = ctx.createBiquadFilter(); cf.type = 'lowpass'; cf.frequency.value = 700;
+        const cg = ctx.createGain(); cg.gain.setValueAtTime(0, t0); cg.gain.setValueAtTime(0, t + rise * 1.1); cg.gain.linearRampToValueAtTime(vol * 0.3, t + rise * 1.3); cg.gain.setTargetAtTime(0, t + rise * 1.45, 0.6);
+        cs.connect(cf).connect(cg).connect(this.sfx); cs.start(t, Math.random()); cs.stop(t + rise * 1.5 + 3); this.cleanup(cs, cf, cg);
+    }
+
+    // The roar of spray thrown up by a low pass or a hovering rotor (waterwake.js): level 0..~1.5 at (x, y, z), called
+    // every frame (0: nothing near). One voice: a hissing roar over a low rush, panned, dulled with distance.
+    sprayRoar(level, x, y, z, cam) {
+        if (!this.running) return;
+        const ctx = this.ctx, t = ctx.currentTime;
+        if (!this.roarV) {
+            if (!(level > 0.01)) return;
+            const out = ctx.createGain(); out.gain.value = 0;
+            const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+            const air = ctx.createBiquadFilter(); air.type = 'lowpass'; air.frequency.value = 6000;
+            const h = this.loop(this.white), hf = ctx.createBiquadFilter(); hf.type = 'bandpass'; hf.frequency.value = 2200; hf.Q.value = 0.45;
+            const hg = ctx.createGain(); hg.gain.value = 0.55;
+            const r = this.loop(this.brown), rf = ctx.createBiquadFilter(); rf.type = 'lowpass'; rf.frequency.value = 260;
+            const rgn = ctx.createGain(); rgn.gain.value = 0.9;
+            h.connect(hf).connect(hg).connect(air); r.connect(rf).connect(rgn).connect(air);
+            if (pan) air.connect(pan).connect(out); else air.connect(out);
+            out.connect(this.world);
+            this.roarV = { out, pan, air };
+        }
+        const V = this.roarV;
+        V.out.gain.setTargetAtTime(clamp(level, 0, 1.5) * 0.45, t, 0.12);
+        if (cam && level > 0.01) {
+            const d = Math.max(1, Math.hypot(x - cam.position.x, y - cam.position.y, z - cam.position.z));
+            V.air.frequency.setTargetAtTime(600 + 7000 * Math.exp(-d / 300), t, 0.1);
+            if (V.pan) {
+                const e = cam.matrixWorldInverse.elements;
+                const cx = e[0] * x + e[4] * y + e[8] * z + e[12];
+                V.pan.pan.setTargetAtTime(clamp(cx / (d * 0.8), -0.9, 0.9), t, 0.05);
+            }
         }
     }
 

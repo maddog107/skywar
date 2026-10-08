@@ -844,12 +844,15 @@ export class StrikeManager {
         const ground = terrainHeight(at.x, at.z);
         if (!water && at.y < ground + 1) at.y = ground + 0.5;
         const size = clamp(Math.sqrt(s.warhead / 150), 0.6, 2.4);
-        fx.explosion(at, size * 1.4, m.vel);
+        // into the sea: the warhead's column, crown, base surge and slick (splash.js; a ballistic one goes in deep
+        // before it bursts and throws the taller column), its fireball smothered inside it
+        if (water && fx.water) fx.water.blast(at, { kg: s.warhead, depth: s.kind === 'ballistic' ? 'shallow' : 'contact', vel: m.vel, agl: 0, sound: 'hiss' });
+        else fx.explosion(at, size * 1.4, m.vel);
         if (!water) {
             if (s.warhead >= 300) fx.smokeColumn(_v.copy(at).setY(Math.max(ground, 0) + 2), size, 25 + size * 10);
             const shape = { r: clamp(s.blast * 0.22, 2, 9), depth: clamp(s.warhead / 180, 1, 4), rim: 0.8, scorch: 1.2, reach: 2.6, clods: 16 };
             if (at.y - ground < 4) g.weapons.addCrater(_v.set(at.x, ground, at.z), shape, m.vel);
-        } else fx.waterSplash(_v.copy(at).setY(0.5), 3);
+        } else if (!fx.water) fx.waterSplash(_v.copy(at).setY(0.5), 3);
         this.boom(at, size);
         // damage: units near the blast (war registry covers ground targets, ships, aircraft and plug-in units)
         // (big things — a 320 m carrier — can be hit far from their centre: look wider, and a hull hit is a hit)

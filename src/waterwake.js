@@ -21,15 +21,22 @@
 //   spreading as it ages; a rotor's rings run outward like the real rings of rotor-wash ripples. The stamps are
 //   drawn into the ocean's wake map (shipfx.js WakeMap: R foam, G milk, A agitation) and laid on the displaced sea
 //   by ocean.js, which also flattens the short waves under fresh agitation (the downwash's pressure) and roughens
-//   the surface with ripples. Spray and mist are particles (effects.js smoke): a rooster tail where the exhaust
-//   lands, a spray line under the wing tips, a ring of mist round a rotor.
-// Everything that moves low over water feeds it: the player's and the AI's aircraft (gear on the water: a
-// seaplane's take-off run), helicopters (softtargets.js AIR_TARGETS), cruise and anti-ship missiles
-// (strikes.js). The numbers (washMarks, exhaustWash, wingWash, rotorWash, WashField) need no renderer: tests.
+//   the surface with ripples. Spray and mist are particles (splash.js's water particles, or effects.js smoke): a
+//   rooster tail where the exhaust lands, a V of spray thrown up under a fast jet by its pressure field
+//   (pressureWash: a transonic pass over a calm sea), a spray line under the wing tips, a ring of mist round a
+//   rotor (and the cloud it pulls up round a helicopter hovering low), and a long mist trail that hangs behind.
+//   How strong, for a fighter at military power and ~290 m/s (lowPassWash): a faint mist and a darker streak
+//   from ~40 m, a plain trail at 30 m, a solid rooster tail below ~20 m that keeps growing below 15 m.
+// Over dry land the same air raises dust instead (dust, by what the ground is: groundKind): sand off a beach, dirt
+// and dry grass, leaves and grass cuttings over fields and forest, grit off rock, powder snow high up.
+// Everything that moves low feeds it: the player's and the AI's aircraft (gear on the water: a seaplane's
+// take-off run), helicopters (softtargets.js AIR_TARGETS), cruise and anti-ship missiles (strikes.js). The numbers
+// (washMarks, exhaustWash, pressureWash, wingWash, rotorWash, lowPassWash, WashField) need no renderer: tests.
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
 import { waterHeight, WATER } from './water.js';
 import { terrainHeight } from './terraincore.js';
+import { fbm } from './noise.js';
 import { AIR_TARGETS } from './softtargets.js';
 
 const RHO = 1.225, G = 9.81;
@@ -62,14 +69,39 @@ export function rotorWash(h, massKg, R, speed = 0) {
     const u = 2 * vi * Math.min(1, Math.pow(0.8 * D / Math.max(h, 0.5), 1.5)) * (1 - 0.65 * fwd);
     return { u, ring: R * (1.15 + 0.5 * smooth(0, 2 * D, h)), back: h * Math.min(speed / Math.max(2 * vi, 1), 3) };
 }
-// What wind of u m/s over the water does to it, 0..1 per kind of mark
+// The aircraft's own pressure field on the water right under it (m/s of equivalent wind): the air it pushes aside
+// and pulls down round the fuselage and wing, q (L / h)^2.4 of a body length L at h metres (a near field that dies
+// off within a few lengths), swollen near the speed of sound (Prandtl-Glauert, 1 / sqrt(1 - M^2), held at 3.5 past
+// M 0.95: the shock reaching the water). Why a fast jet low over a calm sea throws the sheet of spray seen in
+// photos of transonic passes (the Hornet and Mirage "Mach wakes") even before its exhaust touches the water.
+export function pressureWash(h, speed, length, mach = speed / 340) {
+    if (!(speed > 0) || !(length > 0) || !(h >= 0)) return 0;
+    const pg = mach < 0.95 ? 1 / Math.sqrt(1 - mach * mach) : 3.5;
+    const k = Math.sqrt(PRESS_K * pg);
+    // (in ground effect it can't blow harder than a fraction of the airspeed: the pressure under a wing is about q)
+    return speed * Math.min(k * Math.pow(length / Math.max(h, 2), 1.2), 0.25 * Math.sqrt(pg)) * (1 - smooth(4 * length, 7 * length, h));
+}
+const PRESS_K = 0.006;
+// What wind of u m/s over the water does to it, 0..1 per kind of mark (spray goes on growing with u: the sheet
+// thrown up gets taller and thicker past the point where the water is all torn up, `power`)
 export function washMarks(u) {
     return {
         agit: smooth(1.2, 8, u),         // ripples, catspaws (roughness)
         foam: smooth(12, 34, u) * 0.75,  // white water, spume (a gust that passes in a moment: patches, not a sheet)
         milk: smooth(9, 26, u) * 0.5,    // the bubbles under it
-        spray: smooth(10, 26, u),        // water thrown into the air
+        spray: smooth(5, 36, u),         // water thrown into the air
+        shade: smooth(3, 16, u) * 0.3,   // the darker, flattened streak (its glitter blown off)
+        power: clamp(u / 40, 0, 2.5),    // how hard: the rooster tail's height and bulk
     };
+}
+// How hard a low pass blows on the water under it, all told (tests and the HUD-less checks): a jet's exhaust, its
+// pressure field and (within a span) its wing's downwash, as the equivalent wind u (m/s) and the spray it throws (0..1).
+// thrustN: newtons, speed m/s, size: { span, length, mass }
+export function lowPassWash(h, thrustN, speed, size = {}, pitch = 0) {
+    const L = size.length || 15, b = size.span || 11, m = size.mass || 60 * b * L;
+    const ex = exhaustWash(h, thrustN, pitch).u, pr = pressureWash(h, speed, L), wg = wingWash(h, m, speed, b) * 2.2;
+    const u = Math.sqrt(ex * ex + pr * pr + wg * wg);
+    return { u, exhaust: ex, pressure: pr, wing: wg, spray: washMarks(u).spray };
 }
 
 // ── The marks on the water ──
@@ -78,13 +110,22 @@ export function washMarks(u) {
 export const MARK_LIFE = { foam: 3.5, milk: 12, agit: 5.5, max: 30 };
 const SPREAD = { streak: 0.6, ring: 2.2 }; // m/s: a streak widens, a rotor's ring of ripples runs outward
 export const MAX_STAMPS = 4096;
-// one stamp's strength `age` seconds after it was made (into out: foam, milk, agit, width / radius)
-export function stampAt(f0, m0, a0, w0, ring, age, out = { foam: 0, milk: 0, agit: 0, w: 0 }) {
+// The kinds of mark (WashField.ring): a streak along a path, a rotor's ring of ripples, the small ring a round leaves
+// where it went in, the slick over a blast (a disc of churned, darkened water), a ring of waves running out (the
+// blast's shock and the gravity waves after it). splash.js makes the last three.
+export const KIND = { streak: 0, rotor: 1, splash: 2, slick: 3, wave: 4 };
+// one stamp's strength `age` seconds after it was made (into out: foam, milk, agit, width / radius, shade).
+// lk scales its lifetimes (a blast's slick lasts many times a gust's), sp is its spread (m/s; < 0: the kind's own),
+// slowing over tau seconds when tau > 0; sh0 its shade (darker water: the flattened streak, a slick)
+export function stampAt(f0, m0, a0, w0, ring, age, out = { foam: 0, milk: 0, agit: 0, w: 0, shade: 0 }, lk = 1, sp = -1, tau = 0, sh0 = 0) {
     // (each builds up over a moment: the blast takes a fraction of a second to whip the water up)
-    out.foam = f0 * (1 - Math.exp(-age / 0.3)) * Math.exp(-age / MARK_LIFE.foam);
-    out.milk = m0 * Math.min(1, 0.2 + age / 1.5) * Math.exp(-age / MARK_LIFE.milk);
-    out.agit = a0 * (1 - Math.exp(-age / 0.12)) * Math.exp(-age / MARK_LIFE.agit);
-    out.w = w0 + age * (ring ? SPREAD.ring : SPREAD.streak);
+    const L = lk > 0 ? lk : 1;
+    out.foam = f0 * (1 - Math.exp(-age / 0.3)) * Math.exp(-age / (MARK_LIFE.foam * L));
+    out.milk = m0 * Math.min(1, 0.2 + age / 1.5) * Math.exp(-age / (MARK_LIFE.milk * L));
+    out.agit = a0 * (1 - Math.exp(-age / 0.12)) * Math.exp(-age / (MARK_LIFE.agit * L));
+    out.shade = sh0 ? sh0 * Math.min(1, age / 0.4) * Math.exp(-age / (MARK_LIFE.agit * 1.4 * L)) : 0;
+    const v = sp >= 0 ? sp : ring ? SPREAD.ring : SPREAD.streak;
+    out.w = w0 + (tau > 0 ? v * tau * (1 - Math.exp(-age / tau)) : age * v);
     return out;
 }
 
@@ -96,23 +137,32 @@ export class WashField {
         this.x = new Float32Array(max); this.z = new Float32Array(max);
         this.ang = new Float32Array(max); this.len = new Float32Array(max); this.w0 = new Float32Array(max);
         this.f0 = new Float32Array(max); this.m0 = new Float32Array(max); this.a0 = new Float32Array(max);
-        this.born = new Float64Array(max); this.ring = new Uint8Array(max);
+        this.born = new Float64Array(max); this.ring = new Uint8Array(max); // (the kind: KIND)
+        this.lk = new Float32Array(max); this.sp = new Float32Array(max); this.tau = new Float32Array(max); this.sh = new Float32Array(max);
+        this.arrays = [this.x, this.z, this.ang, this.len, this.w0, this.f0, this.m0, this.a0, this.born, this.ring, this.lk, this.sp, this.tau, this.sh];
         this.time = 0;
-        this._s = { foam: 0, milk: 0, agit: 0, w: 0 };
+        this._s = { foam: 0, milk: 0, agit: 0, w: 0, shade: 0 };
     }
     // a mark: centre (x, z), heading of travel ang (rad, atan2(dx, dz)), length along it, half-width (or a ring's
-    // radius), initial foam / milk / agitation (0..1)
-    add(x, z, ang, len, w, foam, milk, agit, ring = false) {
+    // radius), initial foam / milk / agitation (0..1); ring: true (a rotor's ring) or a KIND; o: { life (scale),
+    // spread (m/s), tau (s), shade (0..1) }
+    add(x, z, ang, len, w, foam, milk, agit, ring = false, o = null) {
         let i = this.n;
         if (i >= this.max) {
             // full: replace the oldest
-            let o = 0, ob = Infinity;
-            for (let k = 0; k < this.n; k++) if (this.born[k] < ob) { ob = this.born[k]; o = k; }
-            i = o;
+            let k0 = 0, ob = Infinity;
+            for (let k = 0; k < this.n; k++) if (this.born[k] < ob) { ob = this.born[k]; k0 = k; }
+            i = k0;
         } else this.n++;
         this.x[i] = x; this.z[i] = z; this.ang[i] = ang; this.len[i] = len; this.w0[i] = w;
-        this.f0[i] = foam; this.m0[i] = milk; this.a0[i] = agit; this.born[i] = this.time; this.ring[i] = ring ? 1 : 0;
+        this.f0[i] = foam; this.m0[i] = milk; this.a0[i] = agit; this.born[i] = this.time;
+        this.ring[i] = typeof ring === 'number' ? ring : ring ? KIND.rotor : KIND.streak;
+        this.lk[i] = o && o.life || 1; this.sp[i] = o && o.spread != null ? o.spread : -1; this.tau[i] = o && o.tau || 0; this.sh[i] = o && o.shade || 0;
         return i;
+    }
+    // stamp i now (into the scratch object)
+    at(i, s = this._s) {
+        return stampAt(this.f0[i], this.m0[i], this.a0[i], this.w0[i], this.ring[i] === KIND.rotor, this.time - this.born[i], s, this.lk[i], this.sp[i], this.tau[i], this.sh[i]);
     }
     // age everything by dt, drift with (dx, dz) m/s, drop what has faded
     update(dt, driftX = 0, driftZ = 0) {
@@ -120,15 +170,15 @@ export class WashField {
         const s = this._s;
         for (let i = this.n - 1; i >= 0; i--) {
             const age = this.time - this.born[i];
-            stampAt(this.f0[i], this.m0[i], this.a0[i], this.w0[i], this.ring[i], age, s);
-            if (age > MARK_LIFE.max || (s.foam < 0.01 && s.milk < 0.01 && s.agit < 0.01)) { this.kill(i); continue; }
+            this.at(i, s);
+            if (age > MARK_LIFE.max * Math.max(this.lk[i], 0.3) || (s.foam < 0.01 && s.milk < 0.01 && s.agit < 0.01 && s.shade < 0.01)) { this.kill(i); continue; }
             this.x[i] += driftX * dt; this.z[i] += driftZ * dt;
         }
     }
     kill(i) {
         const j = --this.n;
         if (i === j) return;
-        for (const a of [this.x, this.z, this.ang, this.len, this.w0, this.f0, this.m0, this.a0, this.born, this.ring]) a[i] = a[j];
+        for (const a of this.arrays) a[i] = a[j];
     }
     clear() { this.n = 0; }
     // the strongest mark at (x, z) now (for tests and the HUD-less checks): max over stamps of each channel
@@ -136,16 +186,16 @@ export class WashField {
         out.foam = out.milk = out.agit = 0;
         const s = this._s;
         for (let i = 0; i < this.n; i++) {
-            const age = this.time - this.born[i];
-            stampAt(this.f0[i], this.m0[i], this.a0[i], this.w0[i], this.ring[i], age, s);
+            this.at(i, s);
             const dx = x - this.x[i], dz = z - this.z[i];
             let inside;
-            if (this.ring[i]) inside = Math.hypot(dx, dz) < s.w * 1.4;
-            else {
+            const k = this.ring[i];
+            if (k === KIND.streak) {
                 const c = Math.cos(this.ang[i]), sn = Math.sin(this.ang[i]);
                 const along = dx * sn + dz * c, across = dx * c - dz * sn;
                 inside = Math.abs(along) < this.len[i] * 0.5 + s.w * 0.3 && Math.abs(across) < s.w;
-            }
+            } else if (k === KIND.wave) inside = Math.abs(Math.hypot(dx, dz) - s.w) < Math.max(2, s.w * 0.12);
+            else inside = Math.hypot(dx, dz) < s.w * (k === KIND.rotor ? 1.4 : 1);
             if (!inside) continue;
             out.foam = Math.max(out.foam, s.foam); out.milk = Math.max(out.milk, s.milk); out.agit = Math.max(out.agit, s.agit);
         }
@@ -169,38 +219,42 @@ function rotorRadius(t) {
 export const massOf = (spec) => 60 * (spec.span || 10) * (spec.length || 12);
 
 // One frame's description of a source: { kind: 'jet' | 'rotor' | 'missile', x, y, z, vx, vz, speed, pitch, thrust (N),
-// mass (kg), span (m) or R (m), k (strength scale) }. Returns a list of the sources low over water.
+// mass (kg), span (m) or R (m), length (m), mach, k (its exhaust's strength scale), kp (its pressure field's) }.
+// Returns the sources flying low (over water or land: washOf tells them apart).
+const isLow = (p, lowY) => p.y <= lowY || p.y - terrainHeight(p.x, p.z) < 160;
 export function lowSources(game, out = []) {
     out.length = 0;
     const lowY = WATER.maxCrest + 160;
     if (game.aircraft) for (const a of game.aircraft) {
-        if (!a || a.exploded || !a.pos || a.pos.y > lowY) continue;
+        if (!a || a.exploded || !a.pos || !isLow(a.pos, lowY)) continue;
         if (a.onGround && !a.onWater) continue; // on a deck, a runway or a beach
         if (!a.spec) continue;
         const m = massOf(a.spec), acc = a.afterburner ? a.thrustAB : (a.thrustMil || 0) * Math.min((a.throttle || 0) / 0.9, 1);
         a.getForward(_f);
+        const speed = Math.hypot(a.vel.x, a.vel.z);
         out.push({
-            kind: 'jet', src: a, x: a.pos.x, y: a.pos.y, z: a.pos.z, vx: a.vel.x, vz: a.vel.z, speed: Math.hypot(a.vel.x, a.vel.z),
+            kind: 'jet', src: a, x: a.pos.x, y: a.pos.y, z: a.pos.z, vx: a.vel.x, vz: a.vel.z, speed,
             pitch: Math.asin(clamp(_f.y, -1, 1)), fx: _f.x, fz: _f.z, thrust: a.alive && !a.flameout ? m * (acc || 0) : 0, mass: m, span: a.spec.span || 10,
+            length: a.spec.length || 12, mach: speed / 340,
             // (a propeller's slipstream is a broad, slow jet: far weaker at the water than a jet's exhaust of the same
             // thrust; a hull on the water: its own wake and spray are seaplane.js's, the propwash only ruffles it)
-            k: (a.spec.prop ? 0.3 : 1) * (a.onWater ? 0.45 : 1),
+            k: (a.spec.prop ? 0.3 : 1) * (a.onWater ? 0.45 : 1), kp: a.onWater ? 0 : 1,
         });
     }
     for (const t of AIR_TARGETS) {
         if (!t || t.alive === false || !t.mesh || !t.mesh.visible || !t.mesh.userData || !t.mesh.userData.rotor) continue;
         const p = t.mesh.position;
-        if (p.y > lowY) continue;
+        if (!isLow(p, lowY)) continue;
         const v = t.vel || _f.set(0, 0, 0);
         const civil = /CIVIL/.test(t.name || '');
-        out.push({ kind: 'rotor', src: t, x: p.x, y: p.y, z: p.z, vx: v.x, vz: v.z, speed: Math.hypot(v.x, v.z), R: rotorRadius(t), mass: civil ? 3200 : 9500, k: 1 });
+        out.push({ kind: 'rotor', src: t, x: p.x, y: p.y, z: p.z, vx: v.x, vz: v.z, speed: Math.hypot(v.x, v.z), R: rotorRadius(t), mass: civil ? 3200 : 9500, k: 1, kp: 0 });
     }
     const S = game.strikes;
     if (S && S.missiles) for (const m of S.missiles) {
         if (!m.alive || m.phase === 'launch' || m.phase === 'boost' || !m.pos || m.pos.y > 60) continue;
         if (m.kind !== 'cruise' && m.kind !== 'antiship') continue;
         const sp = Math.hypot(m.vel.x, m.vel.z) || 1;
-        out.push({ kind: 'missile', src: m, x: m.pos.x, y: m.pos.y, z: m.pos.z, vx: m.vel.x, vz: m.vel.z, speed: sp, pitch: Math.atan2(m.vel.y, sp), fx: m.vel.x / sp, fz: m.vel.z / sp, thrust: 3500, k: 1 });
+        out.push({ kind: 'missile', src: m, x: m.pos.x, y: m.pos.y, z: m.pos.z, vx: m.vel.x, vz: m.vel.z, speed: sp, pitch: Math.atan2(m.vel.y, sp), fx: m.vel.x / sp, fz: m.vel.z / sp, thrust: 3500, length: 5, mach: sp / 340, k: 1, kp: 0 });
     }
     return out;
 }
@@ -231,44 +285,78 @@ export function reflectorsNear(game, cam, out = []) {
     return out;
 }
 
-// What one source does to the water this frame: the marks to stamp and the spray to throw. Returns the strongest
-// Fills `hits` with the patches of water it blows on: { kind: 'exhaust' | 'wing' | 'ring', x, z, y (the surface
-// there), w (half-width or the ring's radius, m), u (m/s) }.
-const water = (x, z) => terrainHeight(x, z) < -0.8;
+// What one source does to the water (or the ground) this frame. Fills `hits` with the patches it blows on:
+// { kind: 'exhaust' | 'wing' | 'ring', x, z, y (the surface there), w (half-width or the ring's radius, m), u (m/s),
+// land (dry ground: dust, not spray) }. 'wing' is the patch right under a jet: its pressure field and, within about a
+// span, its wing's downwash.
+const _g = { water: false, y: 0 };
+function under(x, z, out = _g) {
+    const t = terrainHeight(x, z);
+    if (t < -0.8) { out.water = true; out.y = waterHeight(x, z); } else { out.water = false; out.y = Math.max(t, 0); }
+    return out;
+}
 export function washOf(s, hits) {
     hits.length = 0;
-    const surf = water(s.x, s.z) ? waterHeight(s.x, s.z) : NaN;
+    under(s.x, s.z);
+    const wet = _g.water, y0 = _g.y, h0 = Math.max(s.y - y0, 0);
     if (s.kind === 'rotor') {
-        if (!(surf === surf)) return hits;
-        const h = s.y - surf, r = rotorWash(h, s.mass, s.R, s.speed);
+        const r = rotorWash(h0, s.mass, s.R, s.speed);
         if (r.u < 1) return hits;
         const sl = s.speed > 0.5 ? 1 / s.speed : 0;
-        hits.push({ kind: 'ring', x: s.x - s.vx * sl * r.back, z: s.z - s.vz * sl * r.back, y: surf, w: r.ring, u: r.u * s.k });
+        hits.push({ kind: 'ring', x: s.x - s.vx * sl * r.back, z: s.z - s.vz * sl * r.back, y: y0, w: r.ring, u: r.u * s.k, land: !wet, h: h0 });
         return hits;
     }
     // exhaust: lands x behind the nozzle along the flight path
-    const h0 = s.y - (surf === surf ? surf : 0);
-    const ex = exhaustWash(Math.max(h0, 0), s.thrust, s.pitch);
+    const ex = exhaustWash(h0, s.thrust, s.pitch);
     if (ex.u * s.k > 1) {
         const hx = s.x - s.fx * ex.x, hz = s.z - s.fz * ex.x;
-        if (water(hx, hz)) hits.push({ kind: 'exhaust', x: hx, z: hz, y: surf === surf ? surf : 0, w: clamp(Math.max(h0, 0) * 0.75 + 2.5, 2.5, 45), u: ex.u * s.k });
+        under(hx, hz);
+        hits.push({ kind: 'exhaust', x: hx, z: hz, y: _g.y, w: clamp(h0 * 0.75 + 2.5, 2.5, 45), u: ex.u * s.k, land: !_g.water, h: h0 });
     }
-    if (s.kind === 'jet' && s.span && surf === surf) {
-        const w = wingWash(Math.max(h0, 0), s.mass, s.speed, s.span) * s.k;
-        if (w > 1) {
-            // the downwash sheet between the tip vortices, half a span behind the wing
-            const bx = s.x - s.fx * s.span * 0.5, bz = s.z - s.fz * s.span * 0.5;
-            hits.push({ kind: 'wing', x: bx, z: bz, y: surf, w: s.span * 0.55, u: w * 2.2 });
+    if (s.kind === 'jet') {
+        const pr = (s.kp ?? 1) * pressureWash(h0, s.speed, s.length || 15, s.mach);
+        const w = s.span ? wingWash(h0, s.mass, s.speed, s.span) * 2.2 * s.k : 0;
+        const u = Math.hypot(pr, w);
+        if (u > 1) {
+            // under the wing and just behind it, the width of the span and spreading with height
+            const back = (s.length || 15) * 0.22 + (s.span || 10) * 0.12;
+            const bx = s.x - s.fx * back, bz = s.z - s.fz * back;
+            if (!wet) under(bx, bz);
+            hits.push({ kind: 'wing', x: bx, z: bz, y: wet ? y0 : _g.y, w: (s.span || 10) * 0.55 + h0 * 0.25, u, land: !wet, h: h0 });
         }
     }
     return hits;
+}
+
+// What the ground is at (x, z), for the dust a low pass raises (the terrain shader's own cover, world.js: the beach's
+// sand band just above the waterline, rock on steep slopes, snow high up, forest, dry highland and dirt patches)
+export const GROUND_DUST = {
+    // dust: the colour of the cloud; k: how readily it lifts; bits: what's thrown about in it and how much
+    sand: { dust: [0.66, 0.57, 0.42], k: 1.0, bits: [0.55, 0.47, 0.33], bitK: 0.25, bitSize: 0.12 },
+    dirt: { dust: [0.5, 0.41, 0.3], k: 0.85, bits: [0.24, 0.18, 0.12], bitK: 0.35, bitSize: 0.16 },
+    grass: { dust: [0.55, 0.52, 0.42], k: 0.32, bits: [0.3, 0.38, 0.14], bitK: 0.9, bitSize: 0.22 },  // cuttings, seed heads
+    forest: { dust: [0.47, 0.46, 0.38], k: 0.18, bits: [0.32, 0.36, 0.12], bitK: 1, bitSize: 0.3 },   // leaves torn off
+    rock: { dust: [0.58, 0.56, 0.53], k: 0.35, bits: [0.4, 0.38, 0.35], bitK: 0.2, bitSize: 0.1 },
+    snow: { dust: [0.93, 0.95, 0.99], k: 1.25, bits: [0.96, 0.97, 1], bitK: 0.5, bitSize: 0.1 },
+};
+export function groundKind(x, z) {
+    const h = terrainHeight(x, z);
+    if (h < -0.8) return 'water';
+    const e = 4, hx = terrainHeight(x + e, z) - h, hz = terrainHeight(x, z + e) - h;
+    const slope = 1 - e / Math.hypot(hx, e, hz);
+    if (h < 2.6 && slope < 0.1) return 'sand';
+    if (h > 1150 + fbm(x * 0.0021, z * 0.0021, 2) * 90 && slope < 0.45) return 'snow';
+    if (slope > 0.28) return 'rock';
+    if (fbm(x * 0.0006 + 40, z * 0.0006 - 12, 3) > 0.12) return 'forest';
+    if (h > 350 || fbm(x * 0.0043 + 0.61, z * 0.0043 + 0.2, 2) > 0.22) return 'dirt';
+    return 'grass';
 }
 
 // ── Spray: its own particles (the effects' particle system, effects.js, with a texture of fine droplets) ──
 // 2×2 atlas in the smoke atlas's format (RG normal, B thickness, A density): a soft cloud of droplets, denser in the
 // middle, its edge broken up, the normals from its density (so the sun lights its top)
 let sprayTex = null;
-function sprayAtlas() {
+export function sprayAtlas() {
     if (sprayTex) return sprayTex;
     const S = 64, N = S * 2, data = new Uint8Array(N * N * 4);
     let seed = 91;
@@ -311,19 +399,24 @@ function sprayAtlas() {
 }
 
 // ── The manager: sources → stamps and spray; stamps → an instanced mesh in the wake map ──
+// The kinds (KIND): a streak along a path; a rotor's ring of ripples; a round's splash (a white boil, a ring of
+// ripples running out); a blast's slick (a ragged disc of churned, darker water: boiling foam patches, milky water
+// between, the roughest at its rim); a ring of waves running out (thin, rough, a little white on it).
 const STAMP_VS = /* glsl */`
     attribute vec4 iA;  // x, z, heading, length
     attribute vec4 iB;  // half-width (radius), foam, milk, agitation
-    attribute vec2 iC;  // ring, age
+    attribute vec4 iC;  // kind, age, shade, -
     varying vec2 vUv;
     varying vec4 vM;
     varying vec2 vW;
-    varying vec2 vC;
+    varying vec4 vC;
     void main() {
         vUv = position.xy;            // -1..1
         vM = iB; vC = iC;
-        float c = cos(iA.z), s = sin(iA.z);
-        vec2 q = iC.x > 0.5 ? position.xy * iB.x * 1.6 : vec2(position.x * iB.x, position.y * (iA.w * 0.5 + iB.x * 0.35));
+        float c = cos(iA.z), s = sin(iA.z), k = iC.x;
+        // (a round mark's quad spans its rim and a little more: in radii)
+        float ext = k < 1.5 ? 1.6 : k < 2.5 ? 1.3 : k < 3.5 ? 1.35 : 1.15;
+        vec2 q = k > 0.5 ? position.xy * iB.x * ext : vec2(position.x * iB.x, position.y * (iA.w * 0.5 + iB.x * 0.35));
         // local x across, y along the heading (+z when heading 0)
         vec2 w = vec2(iA.x + q.x * c + q.y * s, iA.y - q.x * s + q.y * c);
         vW = w;
@@ -334,28 +427,49 @@ const STAMP_FS = /* glsl */`
     varying vec2 vUv;
     varying vec4 vM;
     varying vec2 vW;
-    varying vec2 vC;
+    varying vec4 vC;
     void main() {
-        float shape, foamShape;
+        float k = vC.x;
+        float shape, foamShape, milkShape = -1.0;
         // broken, lacy white water (the ocean adds the fine lace), streaked along the path; ragged edges
         float n = texture2D(foamMap, vW / 23.0 + vC.y * 0.013).g * 0.6 + texture2D(foamMap, vW / 7.0).r * 0.4;
         float m = texture2D(foamMap, vW / 61.0 + 0.37).g;
-        if (vC.x > 0.5) {
+        if (k < 0.5) {
+            float ac = abs(vUv.x) * (0.8 + 0.45 * m), al = abs(vUv.y);
+            shape = (1.0 - smoothstep(0.35, 1.0, ac)) * (1.0 - smoothstep(0.6, 1.0, al));
+            foamShape = (1.0 - smoothstep(0.2, 0.85, ac)) * (1.0 - smoothstep(0.5, 1.0, al));
+        } else if (k < 1.5) {
             // a rotor's ring: ripples strongest in a band round the ring radius (r = 1 / 1.6 of the quad), a calmer,
             // flattened eye under the hub, spray-whitened water at the ring's rim
             float r = length(vUv) * 1.6;
             shape = exp(-pow((r - 1.0) / 0.32, 2.0)) + 0.35 * (1.0 - smoothstep(0.0, 0.9, r));
             foamShape = exp(-pow((r - 0.95) / 0.22, 2.0));
             shape *= 1.0 - smoothstep(1.45, 1.6, r);
+        } else if (k < 2.5) {
+            // a round's splash: the white boil where it went in, a ring of ripples running out round it
+            float r = length(vUv) * 1.3;
+            foamShape = exp(-pow(r / 0.5, 2.0)) + 0.45 * exp(-pow((r - 0.9) / 0.16, 2.0));
+            shape = (exp(-pow((r - 0.92) / 0.22, 2.0)) + 0.4 * (1.0 - smoothstep(0.0, 0.7, r))) * (1.0 - smoothstep(1.12, 1.3, r));
+            milkShape = 1.0 - smoothstep(0.3, 1.0, r);
+        } else if (k < 3.5) {
+            // a blast's slick: boiling foam in patches, milky water between, darker; the rim rough and ragged
+            float r = length(vUv) * 1.35 + (m - 0.5) * 0.4 + (n - 0.5) * 0.12;
+            float disc = 1.0 - smoothstep(0.72, 1.02, r);
+            foamShape = disc * (0.3 + 0.9 * smoothstep(0.38, 0.72, n)) * (0.75 + 0.35 * exp(-pow((r - 0.85) / 0.15, 2.0)));
+            shape = disc * (0.3 + 0.7 * smoothstep(0.5, 0.95, r));
+            milkShape = disc;
         } else {
-            float ac = abs(vUv.x) * (0.8 + 0.45 * m), al = abs(vUv.y);
-            shape = (1.0 - smoothstep(0.35, 1.0, ac)) * (1.0 - smoothstep(0.6, 1.0, al));
-            foamShape = (1.0 - smoothstep(0.2, 0.85, ac)) * (1.0 - smoothstep(0.5, 1.0, al));
+            // a ring of waves running out
+            float r = length(vUv) * 1.15;
+            shape = exp(-pow((r - 1.0) / 0.075, 2.0));
+            foamShape = shape * 0.7 * smoothstep(0.4, 0.75, n);
         }
+        if (milkShape < 0.0) milkShape = shape;
         float foam = vM.y * foamShape * smoothstep(0.45, 0.8, n + vM.y * 0.25);
         // (the gusts' ripples are patchy too: catspaws)
         float agit = vM.w * shape * (0.55 + 0.6 * smoothstep(0.25, 0.75, n * 0.5 + m * 0.5));
-        gl_FragColor = vec4(clamp(foam, 0.0, 1.0), clamp(vM.z * shape, 0.0, 1.0), 0.0, clamp(agit, 0.0, 1.0));
+        float shade = vC.z * (k > 2.5 && k < 3.5 ? milkShape * (0.65 + 0.55 * m) : shape);
+        gl_FragColor = vec4(clamp(foam, 0.0, 1.0), clamp(vM.z * milkShape, 0.0, 1.0), clamp(shade, 0.0, 1.0), clamp(agit, 0.0, 1.0));
     }`;
 
 export class FlybyWakes {
@@ -368,7 +482,9 @@ export class FlybyWakes {
         this.foamTex = foamTex;
         this.wind = { x: 0, z: 0 };
         this.active = 0;            // sources disturbing the water this frame
-        this._s = { foam: 0, milk: 0, agit: 0, w: 0 };
+        this.roar = 0;              // the loudest spray's level near the camera (audio.js sprayRoar)
+        this._s = { foam: 0, milk: 0, agit: 0, w: 0, shade: 0 };
+        this._o = { shade: 0 };
     }
 
     // the instanced stamp mesh for the wake map (made on first use: tests never need it)
@@ -376,10 +492,10 @@ export class FlybyWakes {
         const g = new THREE.InstancedBufferGeometry();
         g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0]), 3));
         g.setIndex([0, 1, 2, 0, 2, 3]);
-        const M = MAX_STAMPS;
+        const M = this.field.max;
         this.iA = new THREE.InstancedBufferAttribute(new Float32Array(M * 4), 4).setUsage(THREE.DynamicDrawUsage);
         this.iB = new THREE.InstancedBufferAttribute(new Float32Array(M * 4), 4).setUsage(THREE.DynamicDrawUsage);
-        this.iC = new THREE.InstancedBufferAttribute(new Float32Array(M * 2), 2).setUsage(THREE.DynamicDrawUsage);
+        this.iC = new THREE.InstancedBufferAttribute(new Float32Array(M * 4), 4).setUsage(THREE.DynamicDrawUsage);
         g.setAttribute('iA', this.iA); g.setAttribute('iB', this.iB); g.setAttribute('iC', this.iC);
         g.instanceCount = 0;
         const mat = new THREE.ShaderMaterial({
@@ -394,10 +510,10 @@ export class FlybyWakes {
         return this.mesh;
     }
 
-    clear() { this.field.clear(); if (this.mesh) this.mesh.geometry.instanceCount = 0; if (this.sys) this.sys.clear(); }
+    clear() { this.field.clear(); if (this.mesh) this.mesh.geometry.instanceCount = 0; if (this.sys) this.sys.clear(); this.roar = 0; }
 
     // the spray's particles: the effects' own particle system class (effects.js), lit like the smoke, with droplets that
-    // streak along their fall
+    // streak along their fall (only when splash.js isn't there to lend its own)
     spraySystem(fx) {
         if (this.sys !== undefined) return this.sys;
         this.sys = null;
@@ -405,16 +521,7 @@ export class FlybyWakes {
             const PS = fx.smoke.constructor;
             this.sys = new PS(fx.scene, 5000, { texture: sprayAtlas(), lit: true, atlas: true, stretch: true, renderOrder: 6, wind: 1, light: fx.lightU });
             this.sys.mesh.name = 'waterwake:spray';
-            // A puff's billboard dips into the sea it rose from, and the water's depth would cut it along a hard line:
-            // the spray thins out toward the surface instead (by its height above the mean sea, a fraction of its size)
-            const m = this.sys.mat, vA = 'mv.xy += q;', fA = 'float a = t.a * vCol.a;';
-            if (m.vertexShader.includes(vA) && m.fragmentShader.includes(fA)) {
-                m.vertexShader = m.vertexShader.replace('void main() {', 'varying vec2 vSea;\n    void main() {')
-                    .replace(vA, vA + ' vSea = vec2((inverse(viewMatrix) * mv).y, size);');
-                m.fragmentShader = m.fragmentShader.replace('void main() {', 'varying vec2 vSea; uniform float seaY;\n    void main() {')
-                    .replace(fA, fA + ' a *= smoothstep(seaY, seaY + max(1.0, vSea.y * 0.3), vSea.x);');
-                m.uniforms.seaY = this.seaY = { value: 0 };
-            }
+            this.seaY = seaFade(this.sys);
         } catch (e) { this.sys = null; }
         return this.sys;
     }
@@ -427,23 +534,42 @@ export class FlybyWakes {
         this.wind.x = wind ? wind.x * 0.03 : 0; this.wind.z = wind ? wind.z * 0.03 : 0;
         F.update(dt, this.wind.x, this.wind.z);
         const fx = game && game.effects;
-        const sys = fx && fx.smoke && fx.scene ? this.spraySystem(fx) : null;
-        if (sys) { sys.update(dt, (game.scene && game.scene.fog) || FOG0, fx.wind); if (this.seaY) this.seaY.value = WATER.maxCrest * 0.35; }
+        // splash.js's water particles when it's there (it updates them), else a system of our own
+        const W = fx && fx.water && fx.water.ready ? fx.water.ready() : null;
+        let sys = W ? W.drops : null;
+        if (!sys && fx && fx.smoke && fx.scene) {
+            sys = this.spraySystem(fx);
+            if (sys) { sys.update(dt, (game.scene && game.scene.fog) || FOG0, fx.wind); if (this.seaY) this.seaY.value = WATER.maxCrest * 0.35; }
+        }
+        const mist = W ? W.mist : null;
+        const cam = game && game.camera ? game.camera.position : null;
         this.active = 0;
+        let roar = 0, roarX = 0, roarY = 0, roarZ = 0;
         for (const s of lowSources(game, this.sources)) {
             const hits = washOf(s, this.hits);
             if (!hits.length) continue;
             let st = this.state.get(s.src);
-            if (!st) { st = { last: new Map(), spray: 0, mist: 0, t: 0 }; this.state.set(s.src, st); }
+            if (!st) { st = { last: new Map(), spray: 0, mist: 0, dust: 0, t: 0, gk: null, gkT: 0 }; this.state.set(s.src, st); }
             st.t += dt;
             for (const hit of hits) {
                 const mk = washMarks(hit.u);
+                if (hit.land) { if (fx && fx.smoke) this.dust(fx, st, s, hit, dt, W); continue; }
                 if (mk.agit < 0.02) continue;
                 this.active++;
                 this.stamp(st, s, hit, mk);
-                if (mk.spray > 0.01 && (sys || (fx && fx.smoke))) this.spray(sys || fx.smoke, st, s, hit, mk, dt);
+                // (a rotor's downwash beats straight down on the water: it lifts spray at a lower speed than a gust)
+                const sp = s.kind === 'rotor' ? smooth(6, 24, hit.u) : mk.spray;
+                if (sp > 0.01 && (sys || (fx && fx.smoke))) this.spray(sys || fx.smoke, mist, st, s, hit, mk, sp, dt, W);
+                if (sp > 0.02 && cam) {
+                    const d = Math.hypot(hit.x - cam.x, hit.y - cam.y, hit.z - cam.z);
+                    const l = sp * (0.6 + 0.4 * Math.min(mk.power, 1.5)) / (1 + d / 140);
+                    if (l > roar) { roar = l; roarX = hit.x; roarY = hit.y; roarZ = hit.z; }
+                }
             }
         }
+        // the roar of the spray (audio.js): the loudest near the camera
+        this.roar = roar;
+        if (game && game.audio && game.audio.sprayRoar && game.camera) game.audio.sprayRoar(roar, roarX, roarY, roarZ, game.camera);
         this.upload();
     }
 
@@ -454,6 +580,8 @@ export class FlybyWakes {
         const ring = hit.kind === 'ring';
         const step = ring ? Math.max(hit.w * 0.5, 3) : Math.max(hit.w * 0.6, 3);
         const ang = Math.atan2(s.vx, s.vz);
+        const o = this._o;
+        o.shade = ring ? mk.shade * 0.5 : mk.shade;
         if (last && F.time - last.t < 1.0) {
             const d = Math.hypot(hit.x - last.x, hit.z - last.z);
             if (ring ? (d < step && F.time - last.t < 0.2) : d < step) return;
@@ -462,54 +590,125 @@ export class FlybyWakes {
                 const n = Math.min(Math.ceil(d / step), 40);
                 for (let k = 1; k <= n; k++) {
                     const f = k / n;
-                    F.add(last.x + (hit.x - last.x) * f, last.z + (hit.z - last.z) * f, ang, d / n * 1.6, hit.w, mk.foam, mk.milk, mk.agit, false);
+                    F.add(last.x + (hit.x - last.x) * f, last.z + (hit.z - last.z) * f, ang, d / n * 1.6, hit.w, mk.foam, mk.milk, mk.agit, false, o);
                 }
-                st.last.set(key, { x: hit.x, z: hit.z, t: F.time });
+                last.x = hit.x; last.z = hit.z; last.t = F.time;
                 return;
             }
         }
-        F.add(hit.x, hit.z, ang, step * 1.6, hit.w, mk.foam, mk.milk, mk.agit, ring);
-        st.last.set(key, { x: hit.x, z: hit.z, t: F.time });
+        F.add(hit.x, hit.z, ang, step * 1.6, hit.w, mk.foam, mk.milk, mk.agit, ring, o);
+        if (last) { last.x = hit.x; last.z = hit.z; last.t = F.time; } else st.last.set(key, { x: hit.x, z: hit.z, t: F.time });
     }
 
-    // spray and mist: a rooster tail where the exhaust lands, spray lines under the wing tips, a ring of mist round a rotor
-    spray(sm, st, s, hit, mk, dt) {
-        const sp = mk.spray;
+    // Spray and mist: a rooster tail where the exhaust lands (a sheet thrown up and back, its middle the highest); a V
+    // of spray thrown up and out under a fast jet (its pressure field) with spray lines under the wing tips; a ring of
+    // spray and mist round a rotor, and when it hovers low the cloud its wake pulls back up round it; a long trail of
+    // mist that hangs on behind a fast, low pass. sm: the droplets' system, mist: the puffs' (splash.js) or null
+    spray(sm, mist, st, s, hit, mk, sp, dt, W) {
         const ring = hit.kind === 'ring';
-        // (a fast jet spreads its spray over more water: the rate goes with the path flown, ~1.3 particles a metre)
-        // (as many a metre of path at any speed: a slow aircraft doesn't build a wall of mist)
-        const rate = ring ? 150 : clamp(s.speed * (hit.kind === 'wing' ? 0.6 : 1.3), 25, 450);
-        st.spray += rate * sp * dt * (s.kind === 'missile' ? 0.3 : 1);
+        const pw = Math.min(Math.max(mk.power, sp), 2.5), qk = W ? W.Q.k : 1;
+        const ms = mist || sm, js = W && W.jets !== W.drops ? W.jets : null;
+        // (as many a metre of path at any speed, ~1.3 particles a metre: a slow aircraft doesn't build a wall of mist)
+        const rate = ring ? (70 + 150 * sp) : clamp(s.speed * (hit.kind === 'wing' ? 1.1 : 1.3), 25, 450);
+        st.spray += rate * sp * dt * (s.kind === 'missile' ? 0.3 : 1) * qk;
         const V = _vv, P = _pp;
         const back = s.speed > 1 ? 1 / s.speed : 0;
+        const cx = s.fz || 0, cz = -(s.fx || 0); // right of the flight path (in xz)
         while (st.spray >= 1) {
             st.spray -= 1;
             const r1 = Math.random(), r2 = Math.random(), r3 = Math.random();
             if (ring) {
-                const a = r1 * Math.PI * 2, rr = hit.w * (0.85 + 0.45 * r2);
+                // the outwash ring: spray torn off the water and flung out low in streaks, a thin mist over it
+                const a = r1 * Math.PI * 2, rr = hit.w * (0.8 + 0.5 * r2);
                 P.set(hit.x + Math.cos(a) * rr, hit.y + 0.4, hit.z + Math.sin(a) * rr);
-                const out = (5 + 10 * r3) * (0.5 + 0.5 * sp);
-                V.set(Math.cos(a) * out + s.vx * 0.3, 1.5 + 4 * r2 * sp, Math.sin(a) * out + s.vz * 0.3);
-                const big = r3 < 0.4;
-                if (big) sm.emit(P, V, 3 + 3 * r1, 4, 14 + 12 * sp, MIST0, MIST1, 0.08 + 0.16 * sp, 0, 1.2, -0.3, 0, 0.5, 0.4, 0);
-                else sm.emit(P, V, 1 + r1, 1.5, 4, DROP0, DROP1, 0.4 + 0.4 * sp, 0, 0.6, -8, 0, 0.5, 0.4, 0.05);
+                const out = (7 + 12 * r3) * (0.5 + 0.5 * sp);
+                V.set(Math.cos(a) * out + s.vx * 0.3, 1.5 + 6 * r2 * sp, Math.sin(a) * out + s.vz * 0.3);
+                if (r3 < 0.22) ms.emit(P, V, 2.5 + 2.5 * r1, 3, 9 + 9 * sp, MIST0, MIST1, 0.06 + 0.12 * sp, 0, 1.1, -0.2, 0, 0.5, 0.4, 0);
+                else if (js && r3 < 0.6) js.emit(P, V, 0.8 + 0.8 * r1, 0.7 + 0.8 * sp, 1.6 + 1.4 * sp, DROP0, DROP1, 0.7 + 0.3 * sp, 0.1, 0.8, -9.8, 0, 0.5, 0.1, 0.22);
+                else sm.emit(P, V, 1 + r1, 1.2 + sp, 3 + 2 * sp, DROP0, DROP1, 0.45 + 0.4 * sp, 0, 0.6, -8, 0, 0.5, 0.4, 0.05);
+                // hovering low (under ~1.5 radii): the wake fountains back up round the rotor, a veil of spray round it
+                if (hit.h < hit.w * 1.5 && r2 < 0.12 * sp) {
+                    const a2 = r3 * Math.PI * 2, r0 = hit.w * (0.7 + 0.5 * r1);
+                    P.set(hit.x + Math.cos(a2) * r0, hit.y + 1, hit.z + Math.sin(a2) * r0);
+                    V.set(-Math.cos(a2) * 2, 2.5 + 3 * r1, -Math.sin(a2) * 2);
+                    ms.emit(P, V, 3 + 2 * r2, 5, 12 + 8 * sp, MIST0, MIST1, 0.05 + 0.08 * sp, 0, 0.8, 0.3, 0, 0.5, 0.3, 0);
+                }
                 continue;
             }
-            // across the patch, a little ahead/behind
-            const across = (r1 - 0.5) * 2 * hit.w * (hit.kind === 'wing' ? 1 : 0.6);
-            const cx = s.fz, cz = -s.fx; // right of the flight path (in xz)
-            P.set(hit.x + cx * across - s.vx * back * (r2 * 6), hit.y + 0.5, hit.z + cz * across - s.vz * back * (r2 * 6));
-            // the rooster tail: where the exhaust lands it throws a sheet of water up and back, tens of metres when it
-            // blows hard (its middle the highest); under the wing the downwash only lifts a low spray
-            const mid = 1 - Math.abs(r1 - 0.5) * 2;
-            const up = hit.kind === 'exhaust' ? (4 + (10 + 34 * mid * mid) * Math.pow(r3, 1.2) * sp) * (0.4 + 0.6 * sp) : 2 + 6 * r3 * sp;
-            // a little of the aircraft's speed (the air its wake drags along), soon lost: the plume stays where it rose
-            const drag = 0.04 + 0.08 * r2;
-            V.set(s.vx * drag + cx * (r1 - 0.5) * 12, up, s.vz * drag + cz * (r1 - 0.5) * 12);
-            const mist = r3 < 0.45;
-            // (the cloud of mist grows to about the size of the patch of water blown on)
-            if (mist) sm.emit(P, V, 3 + 4 * r2, 4 + 3 * sp, Math.min(14 + 22 * sp, 6 + hit.w * 2.5), MIST0, MIST1, 0.14 + 0.24 * sp, 0, 2.6, 0.3, 0, 0.5, 0.3, 0);
-            else sm.emit(P, V, 1.2 + 1.3 * r2, 1.4 + 1.2 * sp, 3 + 4 * sp, DROP0, DROP1, 0.45 + 0.4 * sp, 0, 1.7, -9.5, 0, 0.5, 0.8, 0.06);
+            if (hit.kind === 'wing') {
+                // under the jet: a V of spray thrown up and out from the track (the higher the harder it blows: a wall of
+                // it, the rooster tail, below ~15 m), spray lines under the tips
+                const side = r1 < 0.5 ? -1 : 1, edge = r2 < 0.3;
+                const across = side * hit.w * (edge ? 0.85 + 0.2 * r3 : 0.15 + 0.6 * r3);
+                P.set(hit.x + cx * across - s.vx * back * (r2 * 8), hit.y + 0.5, hit.z + cz * across - s.vz * back * (r2 * 8));
+                const up = (3 + (8 + 22 * r3 * r3) * pw) * (edge ? 0.6 : 1);
+                const outV = side * (3 + 8 * pw * r1);
+                V.set(s.vx * (0.05 + 0.06 * r2) + cx * outV, up, s.vz * (0.05 + 0.06 * r2) + cz * outV);
+                if (r3 < 0.4) { const sz = Math.min(12 + 18 * pw, 10 + hit.w * 2.2); P.y += sz * 0.3; ms.emit(P, V, 2.5 + 3 * r2, 4 + 3 * sp, sz, MIST0, MIST1, Math.min(0.42 + 0.35 * sp, 0.72), 0, 2, 0.2, 0, 0.5, 0.3, 0); }
+                else if (js && r3 < 0.62) js.emit(P, V, 2 * up / 9.81 * 0.6 + 0.3, 1.2 + 1.4 * pw, 2.5 + 3 * pw, DROP0, DROP1, 0.75 + 0.25 * sp, 0.2, 1.1, -9.8, 0, 0.5, 0.1, 0.28);
+                else sm.emit(P, V, 1 + 1.4 * r2, 1.2 + 1.2 * sp, 3 + 3 * pw, DROP0, DROP1, 0.45 + 0.45 * sp, 0, 1.6, -9.5, 0, 0.5, 0.8, 0.06);
+            } else {
+                // across the patch, a little ahead/behind
+                const across = (r1 - 0.5) * 2 * hit.w * 0.6;
+                P.set(hit.x + cx * across - s.vx * back * (r2 * 6), hit.y + 0.5, hit.z + cz * across - s.vz * back * (r2 * 6));
+                // the rooster tail: where the exhaust lands it throws a sheet of water up and back, tens of metres when it
+                // blows hard (its middle the highest)
+                const mid = 1 - Math.abs(r1 - 0.5) * 2;
+                const up = (4 + (10 + 30 * mid * mid) * Math.pow(r3, 1.2) * sp) * (0.4 + 0.6 * sp) * (0.75 + 0.35 * Math.min(pw, 2));
+                // a little of the aircraft's speed (the air its wake drags along), soon lost: the plume stays where it rose
+                const drag = 0.04 + 0.08 * r2;
+                V.set(s.vx * drag + cx * (r1 - 0.5) * 12, up, s.vz * drag + cz * (r1 - 0.5) * 12);
+                // (the cloud of mist grows to about the size of the patch of water blown on)
+                if (r3 < 0.45) { const sz = Math.min(14 + 22 * sp, 8 + hit.w * 2.5); P.y += sz * 0.25; ms.emit(P, V, 3 + 4 * r2, 4 + 3 * sp, sz, MIST0, MIST1, Math.min(0.35 + 0.3 * sp, 0.62), 0, 2.6, 0.3, 0, 0.5, 0.3, 0); }
+                else sm.emit(P, V, 1.2 + 1.3 * r2, 1.4 + 1.2 * sp, 3 + 4 * sp, DROP0, DROP1, 0.45 + 0.4 * sp, 0, 1.7, -9.5, 0, 0.5, 0.8, 0.06);
+            }
+            // the trail of mist that hangs on behind (the finest spray, drifting with the wind): what shows first, from
+            // 30–40 m up
+            if (r2 > 0.8) {
+                const sz = 16 + 16 * Math.min(pw, 2);
+                P.y = hit.y + sz * 0.3 + 3 * r3 * pw;
+                V.set(s.vx * 0.03, 0.6 + r1 + 2 * pw * r3, s.vz * 0.03);
+                ms.emit(P, V, 5 + 5 * r1, 6 + 4 * sp, sz, MIST0, MIST1, Math.min(0.32 + 0.26 * sp, 0.58), 0, 0.9, 0.12, 0, 0.5, 0.2, 0);
+            }
+        }
+    }
+
+    // Over dry ground: dust (sand, dirt, dry grass, powder snow) blown up where the exhaust lands, under the jet and round
+    // a rotor, with bits thrown about in it (grass cuttings and leaves over fields and forest, grit, sand)
+    dust(fx, st, s, hit, dt, W) {
+        st.gkT -= dt;
+        if (!st.gk || st.gkT <= 0 || st.gkKind !== hit.kind) { st.gk = GROUND_DUST[groundKind(hit.x, hit.z)] || GROUND_DUST.grass; st.gkT = 0.3; st.gkKind = hit.kind; }
+        const G = st.gk, ring = hit.kind === 'ring';
+        // (sand starts to move at a few m/s of wind at the surface; the jet's blast raises a wall of it)
+        const lift = smooth(5, 30, hit.u) * G.k;
+        if (lift < 0.01) return;
+        const qk = W ? W.Q.k : 1;
+        const rate = (ring ? 70 + 80 * lift : clamp(s.speed * 0.6, 18, 240)) * Math.min(lift, 1.2) * qk;
+        st.dust += rate * dt;
+        const V = _vv, P = _pp, sm = fx.smoke, c = G.dust;
+        const cx = s.fz || 0, cz = -(s.fx || 0);
+        while (st.dust >= 1) {
+            st.dust -= 1;
+            const r1 = Math.random(), r2 = Math.random(), r3 = Math.random();
+            if (ring) {
+                const a = r1 * Math.PI * 2, rr = hit.w * (0.7 + 0.6 * r2);
+                P.set(hit.x + Math.cos(a) * rr, hit.y + 0.6, hit.z + Math.sin(a) * rr);
+                const out = (5 + 10 * r3) * (0.5 + 0.5 * lift);
+                V.set(Math.cos(a) * out + s.vx * 0.3, 1 + 4 * r2 * lift, Math.sin(a) * out + s.vz * 0.3);
+            } else {
+                const across = (r1 - 0.5) * 2 * hit.w * (hit.kind === 'wing' ? 1 : 0.6);
+                P.set(hit.x + cx * across, hit.y + 0.6, hit.z + cz * across);
+                const up = (1.5 + 9 * r3 * lift) * (hit.kind === 'exhaust' ? 1.3 : 0.8);
+                V.set(s.vx * (0.03 + 0.06 * r2) + cx * (r1 - 0.5) * 10, up, s.vz * (0.03 + 0.06 * r2) + cz * (r1 - 0.5) * 10);
+            }
+            const k = 0.85 + 0.3 * r2;
+            if (r3 < 0.75) sm.emit(P, V, 3 + 4 * r2, 2.5 + 2 * lift, (8 + 14 * Math.min(lift, 1.2)) * (ring ? 1.2 : 1), [c[0] * k, c[1] * k, c[2] * k], [c[0] * 1.1, c[1] * 1.1, c[2] * 1.1], 0.22 + 0.4 * Math.min(lift, 1), 0, 1.3, 0.35, 0, 0.5, 0.5);
+            if (r1 < G.bitK * 0.5) {
+                // a bit thrown about: tumbling up and falling back
+                V.set(V.x * 0.8 + (r2 - 0.5) * 6, 3 + 8 * r3 * lift, V.z * 0.8 + (r3 - 0.5) * 6);
+                const b = G.bits, sz = G.bitSize * (0.6 + 0.8 * r2);
+                sm.emit(P, V, 1 + 1.5 * r3, sz, sz * 0.8, b, b, 1, 0.8, 0.9, -7, 0, 0.5, 3);
+            }
         }
     }
 
@@ -518,11 +717,10 @@ export class FlybyWakes {
         if (!this.mesh) return;
         const F = this.field, A = this.iA.array, B = this.iB.array, C = this.iC.array, s = this._s;
         for (let i = 0; i < F.n; i++) {
-            const age = F.time - F.born[i];
-            stampAt(F.f0[i], F.m0[i], F.a0[i], F.w0[i], F.ring[i], age, s);
+            F.at(i, s);
             A[i * 4] = F.x[i]; A[i * 4 + 1] = F.z[i]; A[i * 4 + 2] = F.ang[i]; A[i * 4 + 3] = F.len[i];
             B[i * 4] = s.w; B[i * 4 + 1] = s.foam; B[i * 4 + 2] = s.milk; B[i * 4 + 3] = s.agit;
-            C[i * 2] = F.ring[i]; C[i * 2 + 1] = age;
+            C[i * 4] = F.ring[i]; C[i * 4 + 1] = F.time - F.born[i]; C[i * 4 + 2] = s.shade; C[i * 4 + 3] = 0;
         }
         for (const a of [this.iA, this.iB, this.iC]) {
             a.clearUpdateRanges();
@@ -537,6 +735,24 @@ export class FlybyWakes {
         if (this.sys) { this.sys.mesh.removeFromParent(); this.sys.geo.dispose(); this.sys.mat.dispose(); this.sys = undefined; }
     }
 }
+
+// A puff's billboard dips into the sea it rose from, and the water's depth would cut it along a hard line: a water
+// particle system's puffs thin out toward the surface instead (by their height above the mean sea, a fraction of their
+// size). Patches the system's material; returns its seaY uniform (set it to the mean sea's height).
+export function seaFade(sys) {
+    const m = sys.mat, vA = 'mv.xy += q;', fA = 'float a = t.a * vCol.a;';
+    const vN = 'vCol.a *= clamp((vDist - 0.3) / max(size * 0.6, 0.5), 0.0, 1.0);';
+    if (!m.vertexShader.includes(vA) || !m.fragmentShader.includes(fA)) return null;
+    m.vertexShader = m.vertexShader.replace('void main() {', 'varying vec2 vSea;\n    void main() {')
+        .replace(vA, vA + ' vSea = vec2((inverse(viewMatrix) * mv).y, size);')
+        // and near the camera: gone within a few metres, and a puff that would fill much of the view fades out (a chase
+        // camera flying through a jet's own spray keeps the jet and the HUD in sight; the trail behind still shows)
+        .replace(vN, vN + ' vCol.a *= smoothstep(4.0, 14.0, vDist) * (1.0 - smoothstep(0.15, 0.45, size / max(vDist, 0.1)));');
+    m.fragmentShader = m.fragmentShader.replace('void main() {', 'varying vec2 vSea; uniform float seaY;\n    void main() {')
+        .replace(fA, fA + ' a *= smoothstep(seaY, seaY + clamp(vSea.y * 0.3, 1.0, 2.5), vSea.x);');
+    return (m.uniforms.seaY = { value: 0 });
+}
 const _vv = new THREE.Vector3(), _pp = new THREE.Vector3();
-const MIST0 = [0.93, 0.95, 0.98], MIST1 = [0.86, 0.89, 0.93], DROP0 = [0.95, 0.97, 1], DROP1 = [0.88, 0.92, 0.96];
+// (brighter than white albedo under the smoke's lighting: spray scatters far more than smoke, splash.js)
+const MIST0 = [1.45, 1.48, 1.53], MIST1 = [1.28, 1.32, 1.39], DROP0 = [1.45, 1.48, 1.53], DROP1 = [1.28, 1.33, 1.4];
 const FOG0 = { color: new THREE.Color(0.75, 0.82, 0.9), density: 0 };
