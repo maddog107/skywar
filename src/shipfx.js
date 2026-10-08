@@ -19,7 +19,7 @@
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
 import { offsetUnits, mulberry32 } from './util.js';
-import { FlybyWakes } from './waterwake.js';
+import { FlybyWakes, reflectorsNear } from './waterwake.js';
 
 const TAN_KELVIN = Math.tan(19.47 * Math.PI / 180);
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3();
@@ -772,7 +772,7 @@ export class ShipFX {
         for (const s of [...this.entries.keys()]) this.remove(s);
         for (const t of [...this.trails]) this.removeTrail(t);
         this.flyby.clear();
-        if (this.ocean) this.ocean.setWakeMap(null); // (nothing draws it again until the next sortie's first update)
+        if (this.ocean) { this.ocean.setWakeMap(null); if (this.ocean.setReflectors) this.ocean.setReflectors(null); } // (nothing draws it again until the next sortie's first update)
     }
 
     // a wake of some other craft (seaplane.js WakeTrail): its meshes go into the wake map
@@ -845,6 +845,8 @@ export class ShipFX {
             this.wakeMap.update(game.camera);
             this.ocean = world.ocean;
             world.ocean.setWakeMap(this.wakeMap.rt.texture, this.wakeMap.x0, this.wakeMap.z0, this.wakeMap.size);
+            // the aircraft low over the water near the camera: mirrored by the ocean's planar pass (high / ultra)
+            if (world.ocean.setReflectors) world.ocean.setReflectors(reflectorsNear(game, game.camera.position, this._refl || (this._refl = [])));
         }
     }
 }

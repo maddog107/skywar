@@ -203,6 +203,32 @@ export function lowSources(game, out = []) {
     return out;
 }
 
+// The aircraft whose reflection in the water is worth a planar pass (ocean.js renderPlanar): flying (not on a deck,
+// a runway or the water), over the water near the camera, low enough that its mirror image is near too. Their root
+// objects into out.
+const _rv = new THREE.Vector3();
+export function reflectorsNear(game, cam, out = []) {
+    out.length = 0;
+    if (!cam) return out;
+    const add = (root, pos, size) => {
+        if (!root || !pos || root.visible === false) return;
+        const h = pos.y - Math.max(WATER.maxCrest, 0);
+        if (h < 0.5 || h > 260) return;
+        const d = _rv.copy(pos).sub(cam).length();
+        // (its mirror image's distance: the reflection must be more than a speck)
+        const dm = Math.hypot(pos.x - cam.x, pos.z - cam.z, pos.y + cam.y);
+        if (d > 2500 || size / Math.max(dm, 1) < 0.004) return;
+        if (terrainHeight(pos.x, pos.z) > -1) return; // over land: no water under it to mirror it
+        out.push(root);
+    };
+    if (game.aircraft) for (const a of game.aircraft) {
+        if (!a || a.exploded || (a.onGround && !a.onWater) || a.onWater || !a.root) continue;
+        add(a.root, a.pos, a.spec ? a.spec.length || 12 : 12);
+    }
+    for (const t of AIR_TARGETS) if (t && t.alive !== false && t.mesh && t.mesh.userData && t.mesh.userData.rotor) add(t.mesh, t.mesh.position, 16);
+    return out;
+}
+
 // What one source does to the water this frame: the marks to stamp and the spray to throw. Returns the strongest
 // Fills `hits` with the patches of water it blows on: { kind: 'exhaust' | 'wing' | 'ring', x, z, y (the surface
 // there), w (half-width or the ring's radius, m), u (m/s) }.

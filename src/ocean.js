@@ -19,6 +19,9 @@
 //                  (the FFT detail's mip-averaged slope², oceanfft.js), sky reflection with Fresnel, and a
 //                  subsurface glow through thin crests with the sun behind them. The alpha channel carries the
 //                  reflection weight for the screen-space reflections (postfx.js reads it as the water mask).
+//   high / ultra also mirror the aircraft flying low near the camera in a planar reflection (a half-res pass of just
+//                  them from the camera mirrored in the sea: renderPlanar): a jet's belly over the water, which the
+//                  screen-space reflections can't show (they only know what the camera sees).
 //   From below (the camera under the surface): Snell's window onto the sky and total internal reflection.
 // The grid is in the opaque queue at renderOrder 1: after every opaque object, before every transparent one.
 // ═══════════════════════════════════════════════════════════════
@@ -32,14 +35,16 @@ import { FIRE_WORLD_GLSL, fireUniforms } from './firelight.js'; // [night] fires
 const TIERS = {
     low: { tier: 0, g: 8, P0: 64, ratio: 3, lod: [2.5, 3.5], fft: 0 },
     medium: { tier: 1, g: 16, P0: 16, ratio: 3, lod: [4, 6], fft: 0 },
-    high: { tier: 2, g: 32, P0: 16, ratio: 3, lod: [8, 12], fft: 256, fftEvery: 2 },
-    ultra: { tier: 3, g: 32, P0: 8, ratio: 3, lod: [9, 13], fft: 256, fftEvery: 1 },
+    high: { tier: 2, g: 32, P0: 16, ratio: 3, lod: [8, 12], fft: 256, fftEvery: 2, planar: 0.5 },
+    ultra: { tier: 3, g: 32, P0: 8, ratio: 3, lod: [9, 13], fft: 256, fftEvery: 1, planar: 0.5 },
 };
+export const PLANAR_LAYER = 30; // the objects (and lights) the planar reflection pass draws (renderPlanar)
 const LEVELS = 15;       // quadtree depth: the root nodes are P0 · 2^14 across (1–2 thousand km at P0 64..8: the horizon is inside)
 const MORPH_START = 0.7; // morph over the outer 30 % of each level's range
 const FFT_L = 32;        // FFT patch size (m)
 
 const _frustum = new THREE.Frustum(), _pv = new THREE.Matrix4(), _box = new THREE.Box3(), _v = new THREE.Vector3();
+const _pt = new THREE.Vector3(), _up = new THREE.Vector3(), _cc = new THREE.Color();
 // the uniforms of WAVE_GLSL (see shareWaveUniforms)
 const WAVE_UNIFORMS = ['waveA', 'waveB', 'waveN', 'waveOrigin', 'waveLod', 'setDepth', 'seaMapFine', 'seaMapCoarse', 'seaFineInfo', 'seaCoarseInfo', 'shoreInfo', 'time',
     'fftMap', 'fftInfo']; // (and the detail, for the caustics and shafts seen from under water: postfx.js)
@@ -180,7 +185,9 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
     #if TIER >= 2
     uniform sampler2D fftMap, refrColor, refrDepth;
     uniform vec4 fftInfo;       // 1/L, 1/L2, slope gain, detail fade distance
-    uniform float refrOn, camNear, camFar;
+    uniform float refrOn, camNear, camFar, planarOn;
+    uniform sampler2D planarMap;
+    uniform mat4 planarVP;
     uniform vec2 invProj;
     uniform mat4 camWorld;
     #endif
@@ -359,6 +366,21 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
         vec3 R = reflect(-V, N);
         R.y = abs(R.y); // a ray reflected down into the next wave sees that wave's sky instead
         vec3 sky = skyRefl(R, vWorld);
+        float planarA = 0.0;
+        #if TIER >= 2
+        if (planarOn > 0.5) {
+            // the low aircraft mirrored (renderPlanar): the camera mirrored in the mean sea sees them through the
+            // water point, shifted by the waves' slope (more the further off the reflected thing is)
+            float dd = 1.5 + 0.004 * dist;
+            vec4 pc = planarVP * vec4(vWorld.x + N.x * dd, 0.0, vWorld.z + N.z * dd, 1.0);
+            vec2 puv = pc.xy / pc.w * 0.5 + 0.5;
+            if (pc.w > 0.0 && puv.x > 0.0 && puv.y > 0.0 && puv.x < 1.0 && puv.y < 1.0) {
+                vec4 pr = texture(planarMap, puv); // (premultiplied: cleared to nothing round them)
+                planarA = clamp(pr.a, 0.0, 1.0);
+                sky = sky * (1.0 - planarA) + pr.rgb;
+            }
+        }
+        #endif
         // ── sun (moon) glint: an anisotropic Beckmann distribution of the slopes left over, Smith masking ──
         vec3 H = normalize(L + V);
         float hy = max(dot(H, N), 1e-3);
@@ -569,7 +591,8 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
         alpha = mix(alpha, 1.0, fg.x);
         #else
         // the reflection weight for postfx's screen-space reflections (and < 0.7 marks water): foam doesn't mirror
-        alpha = 0.1 + 0.5 * clamp(F * (1.0 - foamCover) * (1.0 - fg.x), 0.0, 1.0);
+        // (and where the planar pass mirrored an aircraft: it knows its underside, the screen doesn't)
+        alpha = 0.1 + 0.5 * clamp(F * (1.0 - foamCover) * (1.0 - fg.x) * (1.0 - planarA), 0.0, 1.0);
         #endif
         gl_FragColor = vec4(col, alpha);
         #include <tonemapping_fragment>
@@ -617,6 +640,7 @@ export class Ocean {
             refrColor: { value: this.blackTex }, refrDepth: { value: empty }, refrOn: { value: 0 },
             camNear: { value: 1 }, camFar: { value: 1000 }, invProj: { value: new THREE.Vector2(1, 1) }, camWorld: { value: new THREE.Matrix4() },
             wakeMap: { value: this.blackTex }, wakeInfo: { value: new THREE.Vector4(0, 0, 1, 0) },
+            planarMap: { value: this.blackTex }, planarVP: { value: new THREE.Matrix4() }, planarOn: { value: 0 },
             ...fireUniforms(), // [night]
         };
         if (skyUniforms) {
@@ -652,6 +676,9 @@ export class Ocean {
         this.initWorker();
         this.setQuality('high');
         this.shipFX = null;     // shipfx.js registers its wake map here (see setWakeMap)
+        // the planar reflection pass (renderPlanar): its target, the mirrored camera, the objects it draws
+        this.planar = { rt: null, cam: new THREE.PerspectiveCamera(), reflectors: [], on: new Set(), lightsAt: -1e9, frame: 0 };
+        this.planar.cam.layers.set(PLANAR_LAYER);
     }
 
     initWorker() {
@@ -863,7 +890,9 @@ export class Ocean {
     beforeRender(renderer, camera) {
         const u = this.uniforms;
         u.refrOn.value = 0;
+        u.planarOn.value = 0;
         if (this.T.tier < 2 || !camera.isPerspectiveCamera) return;
+        if (this.T.planar) this.renderPlanar(renderer, camera);
         u.camNear.value = camera.near; u.camFar.value = camera.far;
         const e = camera.projectionMatrix.elements;
         u.invProj.value.set(1 / e[0], 1 / e[5]);
@@ -882,6 +911,67 @@ export class Ocean {
         u.refrColor.value = this.refrRT.texture;
         u.refrDepth.value = this.refrRT.depthTexture;
         u.refrOn.value = 1;
+    }
+
+    // The aircraft near the camera and low over the water (waterwake.js reflectorsNear): what the planar pass draws
+    setReflectors(list) { this.planar.reflectors = list || []; }
+
+    // Planar reflection of the low aircraft: the camera mirrored in the mean sea (y = 0) draws just them (and the
+    // lights) into a half-res target, cleared to nothing; the water reads it where it mirrors them. Drawn from inside the
+    // main render (the ocean's onBeforeRender, after everything opaque), so every matrix is this frame's and the scene
+    // needn't be updated again. Nothing below the water is drawn (an aircraft on the water or the deck isn't a
+    // reflector), so no clip plane is needed.
+    renderPlanar(renderer, camera) {
+        const P = this.planar, list = P.reflectors, u = this.uniforms, scene = this.scene;
+        const cp = camera.position;
+        // what to draw: the reflectors on the layer, the rest off it
+        const want = new Set();
+        if (cp.y > 0.5 && cp.y < 1500) for (const r of list) if (r && r.visible !== false && r.parent) want.add(r);
+        for (const r of P.on) if (!want.has(r)) { r.traverse(o => o.layers.disable(PLANAR_LAYER)); P.on.delete(r); }
+        if (!want.size) return;
+        for (const r of want) { r.traverse(o => o.layers.enable(PLANAR_LAYER)); P.on.add(r); }
+        // the lights too (a few times a second: they come and go with the time of day)
+        if (P.frame++ % 90 === 0) for (const o of scene.children) if (o.isLight) o.layers.enable(PLANAR_LAYER);
+        const target = renderer.getRenderTarget();
+        const W = target ? target.width : renderer.domElement.width, H = target ? target.height : renderer.domElement.height;
+        const w = Math.max(8, Math.round(W * this.T.planar)), h = Math.max(8, Math.round(H * this.T.planar));
+        if (!P.rt) {
+            P.rt = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, generateMipmaps: false, depthBuffer: true, stencilBuffer: false });
+            P.rt.texture.name = 'Ocean.planar';
+        } else if (P.rt.width !== w || P.rt.height !== h) P.rt.setSize(w, h);
+        // the mirrored camera: the same lens at the camera's mirror image below the sea, looking at the mirror image of
+        // what it looks at (a proper camera, so faces keep their winding; the water projects its points through it)
+        const mc = P.cam;
+        mc.copy(camera, false);
+        mc.layers.set(PLANAR_LAYER);
+        camera.getWorldDirection(_v);
+        _pt.copy(cp).addScaledVector(_v, 100); _pt.y = -_pt.y;
+        _up.set(0, 1, 0).applyQuaternion(camera.quaternion); _up.y = -_up.y;
+        mc.position.set(cp.x, -cp.y, cp.z);
+        mc.up.copy(_up);
+        mc.lookAt(_pt);
+        mc.updateMatrixWorld(true);
+        mc.updateProjectionMatrix();
+        // draw (no shadow maps redrawn, the scene's matrices as they are, no background)
+        const sm = renderer.shadowMap, au = sm.autoUpdate, nu = sm.needsUpdate, bg = scene.background, mwa = scene.matrixWorldAutoUpdate;
+        const ca = renderer.getClearAlpha();
+        renderer.getClearColor(_cc);
+        try {
+            sm.autoUpdate = false; sm.needsUpdate = false;
+            scene.background = null; scene.matrixWorldAutoUpdate = false;
+            renderer.setRenderTarget(P.rt);
+            renderer.setClearColor(0x000000, 0);
+            renderer.clear(true, true, false);
+            renderer.render(scene, mc);
+        } finally {
+            renderer.setRenderTarget(target);
+            renderer.setClearColor(_cc, ca);
+            sm.autoUpdate = au; sm.needsUpdate = nu;
+            scene.background = bg; scene.matrixWorldAutoUpdate = mwa;
+        }
+        u.planarVP.value.multiplyMatrices(mc.projectionMatrix, mc.matrixWorldInverse);
+        u.planarMap.value = P.rt.texture;
+        u.planarOn.value = 1;
     }
 
     copyTarget(renderer, target) {
@@ -938,6 +1028,7 @@ export class Ocean {
     dispose() {
         if (this.worker) this.worker.terminate();
         if (this.refrRT) this.refrRT.dispose();
+        if (this.planar.rt) this.planar.rt.dispose();
         if (this.fft) this.fft.dispose();
         this.material.dispose(); this.mesh.geometry.dispose();
         this.scene.remove(this.mesh);

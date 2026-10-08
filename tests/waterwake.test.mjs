@@ -188,3 +188,15 @@ describe('low flybys leave their marks', () => {
         assert.equal(F3.field.n, 0);
     });
 });
+
+describe('what the water mirrors in its planar pass (ocean.js renderPlanar)', () => {
+    test('aircraft flying low over the water near the camera; not high up, far off, on the deck or over land', () => {
+        const cam = new THREE.Vector3(SEA.x, 20, SEA.z + 150);
+        const mk = (y, dx = 0, extra = {}) => { const a = jet({ alt: y, x: SEA.x + dx }); a.root = new THREE.Group(); a.root.position.copy(a.pos); return Object.assign(a, extra); };
+        const low = mk(25), high = mk(900), far = mk(25, 6000), deck = mk(25, 30, { onGround: true }), land = mk(25);
+        land.pos.set(0, 25, 0);
+        const out = WW.reflectorsNear({ aircraft: [low, high, far, deck, land] }, cam);
+        assert.deepEqual(out, [low.root]);
+        assert.equal(WW.reflectorsNear({ aircraft: [] }, null).length, 0);
+    });
+});
