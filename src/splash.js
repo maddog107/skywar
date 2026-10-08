@@ -113,6 +113,21 @@ export function blastSplash(kg, depth = 'contact', agl = 0) {
         fire: agl > 0 ? 0 : depth === 'contact' ? 0.6 : depth === 'shell' ? 0.35 : depth === 'shallow' ? 0.12 : 0, // how much of a fireball shows
     };
 }
+// A drag-limited rise: spray, unlike a stone, is held back by the air, so a column shoots up in about a second and
+// then stands for seconds while it settles (as in the footage). The launch speed that reaches height h against a
+// drag of d (1/s) and gravity, and the time up to the top and back down to the sea
+export function riseSpeed(h, d) {
+    if (!(h > 0)) return 0;
+    let lo = 0, hi = 600;
+    for (let i = 0; i < 22; i++) { const v = (lo + hi) / 2; if (v / d - (G / (d * d)) * Math.log(1 + d * v / G) < h) lo = v; else hi = v; }
+    return (lo + hi) / 2;
+}
+export function riseTime(h, d, v0 = riseSpeed(h, d)) {
+    const up = Math.log(1 + d * v0 / G) / d;
+    let lo = 0, hi = 200;
+    for (let i = 0; i < 22; i++) { const t = (lo + hi) / 2; if (h - (G / d) * t + (G / (d * d)) * (1 - Math.exp(-d * t)) > 0) lo = t; else hi = t; }
+    return up + (lo + hi) / 2;
+}
 // a kinetic impact's energy as kg of TNT (4.184 MJ/kg): what a wreck or a crashing jet throws up
 export const impactKg = (massKg, speed) => 0.5 * massKg * speed * speed / 4.184e6;
 // the charges (kg TNT equivalent): a 500 lb Mk 82 (87 kg tritonal), AIM-9 / AIM-120 / SA-6 class warheads' fill, a
@@ -439,9 +454,9 @@ export class WaterFX {
         if (P.H < 0.8) return P;
         const at = _at.set(x, sea, z);
         // (seen from far off, the column is drawn bigger than life: a 65 m tower 3 km away is a couple of dozen pixels;
-        // up to 1.8 times from ~1 km out, so a player sees it from the jet that dropped the bomb)
+        // growing from 600 m out to 3 times at ~2.6 km, so a player sees a tower from the jet that dropped the bomb)
         const cam = this.camPos();
-        const vis = cam ? clamp(Math.pow(Math.hypot(x - cam.x, sea - cam.y, z - cam.z) / 700, 0.65), 1, 2.4) : 1;
+        const vis = cam ? clamp(Math.pow(Math.hypot(x - cam.x, sea - cam.y, z - cam.z) / 600, 0.75), 1, 3) : 1;
         const PV = vis > 1.01 ? { ...P, H: P.H * vis, R: P.R * vis, tTop: P.tTop * Math.sqrt(vis), surgeV: P.surgeV * Math.sqrt(vis), surge: P.surge * vis } : P;
         const Q = this.Q, q = Q.k, s = Math.sqrt(PV.H / 50);
         const W = this.ready();
@@ -486,6 +501,8 @@ export class WaterFX {
     // the column at the moment of the burst: the dome, the jets, the column's body, the crown and the skirt of spray
     column(at, P, s, q, vel) {
         const R = P.R, H = P.H, vTop = Math.sqrt(2 * G * H) * 1.12;
+        // (the air holds a tall column back less: big masses of water fall faster than a small splash's spray)
+        const dB = clamp(8 / Math.sqrt(Math.max(H, 1)), 0.35, 1.2), dT = dB * 0.7, dJ = dB * 0.5;
         const dC = this.dropCap(false), mC = this.mistCap(false), jC = this.jetCap(false);
         const D = this.drops, M = this.mist;
         // (a moving charge's splash is thrown on along its path a little: a missile into the sea at a slant)
@@ -508,23 +525,23 @@ export class WaterFX {
         const nt = Math.max(4, Math.round(12 * s * Math.sqrt(q)));
         for (let i = 0; i < nt; i++) {
             const a = Math.random() * Math.PI * 2, rr = R * 0.35 * Math.sqrt(Math.random()), e = rand(0, 0.08);
-            const vu = vTop * rand(0.55, 1.02);
+            const h = H * rand(0.35, 1.02), vu = riseSpeed(h, dT);
             _p.set(at.x + Math.cos(a) * rr, at.y - R * 0.3, at.z + Math.sin(a) * rr);
             _v.set(Math.cos(a) * Math.sin(e) * vu + lx * vu, Math.cos(e) * vu, Math.sin(a) * Math.sin(e) * vu + lz * vu);
             const w = R * rand(0.4, 0.62);
-            this.put(this.jets, jC, _p, _v, 2 * vu / G * 0.92, w, w * 1.6, MIST0, MIST1, 1, 0.45, 0.08, -G, 0.05, 0.55);
+            this.put(this.jets, jC, _p, _v, riseTime(h, dT, vu) * 0.8, w, w * 1.6, MIST0, MIST1, 1, 0.45, dT, -G, 0.05, 0.4);
         }
         // the column's body: dense white spray rising, a shell of it from the surface to the top at any moment, falling
         // back on itself; the fastest of it billowing out at the head
         const nc = Math.round(100 * s * q);
         for (let i = 0; i < nc; i++) {
-            const head = i % 3 === 0, u = head ? rand(0.85, 1.04) : Math.sqrt(rand(0.03, 1)), vu = vTop * u;
+            const head = i % 3 === 0, h = H * (head ? rand(0.72, 1.05) : rand(0.03, 1)), vu = riseSpeed(h, dB);
             const a = Math.random() * Math.PI * 2, rr = R * 0.45 * Math.sqrt(Math.random());
             _p.set(at.x + Math.cos(a) * rr, at.y + 0.5, at.z + Math.sin(a) * rr);
             const out = rr / R * vu * (head ? 0.3 : 0.16) + rand(0, 1.5);
             _v.set(Math.cos(a) * out + lx * vu, vu, Math.sin(a) * out + lz * vu);
-            const life = 2 * vu / G * 0.95 + rand(0.3, 0.9);
-            this.put(M, mC, _p, _v, life, R * rand(0.45, 0.65), R * (head ? rand(1.05, 1.45) : rand(0.85, 1.15)), MIST0, MIST1, 1, 0.6, 0.12, -G * 0.92, 0.3, 0);
+            const life = riseTime(h, dB, vu) * 0.75 + rand(0.3, 0.9);
+            this.put(M, mC, _p, _v, life, R * rand(0.45, 0.65), R * (head ? rand(1.05, 1.45) : rand(0.85, 1.15)), MIST0, MIST1, 1, 0.55, dB, -G, 0.3, 0);
         }
         // the dark core at its foot for the first second: water and spray churned up from below, grey in the white
         const ng = Math.round(16 * s * Math.sqrt(q));
@@ -538,12 +555,12 @@ export class WaterFX {
         const nj = Math.round(170 * s * q);
         for (let i = 0; i < nj; i++) {
             const e = Math.min(rand(0, 0.45) * rand(0.3, 1.2), 0.55), a = Math.random() * Math.PI * 2;
-            const vu = vTop * rand(0.5, 1.12);
+            const u = rand(0.5, 1.12), h = H * u * u, vu = riseSpeed(h, dJ) / Math.cos(e), life = riseTime(h, dJ) * 0.8 + 0.2;
             _v.set(Math.cos(a) * Math.sin(e) * vu + lx * vu, Math.cos(e) * vu, Math.sin(a) * Math.sin(e) * vu + lz * vu);
             const rr = R * 0.45 * Math.sqrt(Math.random());
             _p.set(at.x + Math.cos(a) * rr, at.y + 0.3, at.z + Math.sin(a) * rr);
-            if (i % 4) { const sz = R * rand(0.12, 0.26); this.put(this.jets, jC, _p, _v, 2 * _v.y / G * 0.92 + 0.2, sz, sz * 2.2, DROP0, DROP1, 1, 0.3, 0.1, -G, 0.1, 0.36); }
-            else { const sz = R * rand(0.07, 0.14); this.put(D, dC, _p, _v, 2 * _v.y / G * 0.92 + 0.2, sz, sz * 2.2, DROP0, DROP1, 0.95, 0.1, 0.1, -G, 0.2, 0.22); }
+            if (i % 4) { const sz = R * rand(0.12, 0.26); this.put(this.jets, jC, _p, _v, life, sz, sz * 2.2, DROP0, DROP1, 1, 0.3, dJ, -G, 0.1, 0.3); }
+            else { const sz = R * rand(0.07, 0.14); this.put(D, dC, _p, _v, life, sz, sz * 2.2, DROP0, DROP1, 0.95, 0.1, dJ, -G, 0.2, 0.2); }
         }
         // the crown: a sheet of spray thrown up and out at 30–60° round the column's foot
         const nr = Math.round((40 + 30 * (P.crown || 0)) * s * q);
