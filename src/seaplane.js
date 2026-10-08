@@ -78,7 +78,7 @@ export function seaHs(x, z) {
     const f = seaFactors(x, z, _sf);
     let hs2 = 0;
     for (let i = 0; i < 3; i++) {
-        const t = Math.min(Math.max(f[3] / SET_DEPTH[i], 0), 1), g = f[i] * t * t * (3 - 2 * t);
+        const t = Math.min(Math.max(f[3] / SET_DEPTH[i], 0), 1), g = Math.abs(f[i]) * t * t * (3 - 2 * t); // (a lake's wind factor is negative)
         hs2 += (S.sets[i].hs * g) ** 2;
     }
     return Math.sqrt(hs2);

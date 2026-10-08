@@ -19,7 +19,7 @@ import { WAVE_GLSL, WATER, waterHeight } from './water.js';
 export const QUALITY = {
     low: { pr: 1, top: 1, floor: 0.6, msaa: 0, ao: false, ssr: 0, flare: false, blur: 0, dof: 0 },
     medium: { pr: 1.25, top: 1.25, floor: 0.7, msaa: 0, ao: false, ssr: 0, flare: true, blur: 0, dof: 32 },
-    high: { pr: 1.75, top: 2, floor: 0.85, msaa: 0, ao: false, ssr: 0, flare: true, blur: 0, dof: 48 },
+    high: { pr: 1.75, top: 2, floor: 0.85, msaa: 0, ao: false, ssr: 1, flare: true, blur: 0, dof: 48 },
     ultra: { pr: 2, top: 2, floor: 1, msaa: 4, ao: true, ssr: 2, flare: true, blur: 8, dof: 64 },
 };
 const STEPS = [1, 0.875, 0.75, 0.667, 0.6, 0.5]; // adaptive resolution levels, as fractions of `top`
@@ -196,16 +196,20 @@ const AO_BLUR_FRAG = /* glsl */`
 
 // ═════════════ Water reflections (half resolution) ═════════════
 // The water (ocean.js) marks its pixels in the scene's alpha: 0.1 + 0.5 × its reflection weight (Fresnel, less
-// through fog); everything else is ≥ 1 (opaque) or blends toward 1 over it. The water's normal comes from the
-// depth buffer (the displaced waves as drawn), nudged by a few ripples. The reflected ray is marched through
-// the depth buffer in view space with exponentially growing steps, then refined by bisection.
+// for foam and through fog); everything else is ≥ 1 (opaque) or blends toward 1 over it. The water's normal comes
+// from the depth buffer (the displaced waves as drawn), nudged by a few ripples. The reflected ray is marched through
+// the depth buffer in view space with exponentially growing steps, then refined by bisection. A ray that meets
+// nothing on screen goes to the sky: the sky and the clouds drawn over it lie, for a mirror, along the ray's
+// direction alone (no parallax), so where that direction is on screen and only sky stands there, the frame's own
+// sky and clouds are what the water mirrors (away from the sun: its disc and glow are the water's own glint). Off
+// screen, the water keeps its own sky (ocean.js: the dome's colours and the clouds from the cloud-shadow map).
 const SSR_FRAG = /* glsl */`
     ${DEPTH_GLSL}
     uniform sampler2D tColor;
     uniform mat3 viewRot, camRot;
-    uniform vec3 camPos;
+    uniform vec3 camPos, sunDirW;
     uniform vec2 proj; // projectionMatrix[0][0], [1][1]
-    uniform float time, fogDensity, strength, maxDist;
+    uniform float time, fogDensity, strength, maxDist, skyOn;
     varying vec2 vUv;
     vec2 toUv(vec3 q) { return vec2(q.x * proj.x, q.y * proj.y) / -q.z * 0.5 + 0.5; }
     void main() {
@@ -277,7 +281,34 @@ const SSR_FRAG = /* glsl */`
             tPrev = t;
             t *= grow;
         }
-        if (hitUv.x < 0.0) return;
+        if (hitUv.x < 0.0) {
+            if (skyOn < 0.5) return;
+            // the sky's image is far away: what blurs it is the waves' slopes, spread mostly up and down the frame
+            // (the classic streaks of a mirror image on water). A gentler normal than the march's, and four taps
+            // across the slope spread in elevation, wider with distance (the unresolved ripples)
+            vec3 Ns = normalize(mix(N, vec3(0.0, 1.0, 0.0), 0.5));
+            vec3 Rs = reflect(V, Ns);
+            Rs.y = max(Rs.y, 0.01);
+            Rs = normalize(Rs);
+            vec3 up = normalize(vec3(0.0, 1.0, 0.0) - Rs * Rs.y);
+            float spread = 0.03 + 0.09 * smoothstep(30.0, 1500.0, z);
+            vec3 acc = vec3(0.0); float n = 0.0, wsum = 0.0;
+            for (int k = 0; k < 4; k++) {
+                vec3 Rk = normalize(Rs + up * (float(k) - 1.5) * spread);
+                vec3 Rkv = viewRot * Rk;
+                if (Rkv.z > -0.02) continue;
+                vec2 su = toUv(Rkv);
+                if (su.x < 0.0 || su.x > 1.0 || su.y < 0.0 || su.y > 1.0) continue;
+                if (!isSky(texelFetch(tDepth, ivec2(su * size), 0).x)) continue;
+                vec2 es = smoothstep(vec2(0.0), vec2(0.1), su) * smoothstep(vec2(0.0), vec2(0.1), 1.0 - su);
+                acc += textureLod(tColor, su, 0.0).rgb;
+                n += 1.0; wsum += es.x * es.y;
+            }
+            if (n < 0.5) return;
+            float sunK = 1.0 - smoothstep(0.972, 0.99, dot(Rs, normalize(sunDirW)));
+            gl_FragColor = vec4(acc / n, weight * (wsum / 4.0) * sunK);
+            return;
+        }
         vec2 e = smoothstep(vec2(0.0), vec2(0.07), hitUv) * smoothstep(vec2(0.0), vec2(0.07), 1.0 - hitUv);
         float conf = e.x * e.y * (1.0 - smoothstep(tMax * 0.6, tMax, t));
         vec3 c = textureLod(tColor, hitUv, 0.0).rgb;
@@ -491,7 +522,7 @@ export class SceneFXPass extends Pass {
         this.ssrMat = fxMaterial(SSR_FRAG, {
             ...depthUniforms(), tColor: { value: null }, viewRot: { value: new THREE.Matrix3() }, camRot: { value: new THREE.Matrix3() },
             camPos: { value: new THREE.Vector3() }, proj: { value: new THREE.Vector2() }, time: { value: 0 }, fogDensity: { value: 0 },
-            strength: { value: 1 }, maxDist: { value: 4000 },
+            strength: { value: 1 }, maxDist: { value: 4000 }, sunDirW: { value: new THREE.Vector3(0, 1, 0) }, skyOn: { value: 1 },
         }, { STEPS: 24, REFINE: 5 });
         this.visMat = fxMaterial(SUNVIS_FRAG, {
             tColor: { value: null }, tPrev: { value: null }, sunUv: { value: new THREE.Vector2() }, sunRadius: { value: new THREE.Vector2() },
@@ -512,6 +543,7 @@ export class SceneFXPass extends Pass {
         this.sun = { uv: new THREE.Vector2(), on: 0, color: new THREE.Color() }; // set by PostFX each frame
         this.fogDensity = 0;
         this.groundDist = 1e9;
+        this.sunDirW = new THREE.Vector3(0, 1, 0); // the sun (or the moon) in world space: the water's glint (PostFX)
     }
 
     configure({ ao, ssr, flare, blur }) {
@@ -589,6 +621,7 @@ export class SceneFXPass extends Pass {
             su.time.value = this.time;
             su.fogDensity.value = this.fogDensity;
             su.maxDist.value = this.ssr >= 2 ? 5000 : 2500;
+            su.sunDirW.value.copy(this.sunDirW);
             this.renderQuad(renderer, this.ssrMat, this.ssrRT);
         }
 
@@ -1353,6 +1386,7 @@ export class PostFX {
         if (world) {
             fx.fogDensity = world.scene.fog ? world.scene.fog.density : 0;
             fx.groundDist = cam.position.y - Math.max(terrainHeight(cam.position.x, cam.position.z), 0);
+            if (world.sunDir) fx.sunDirW.copy(world.sunDir);
             this.updateSun(world, cam);
         } else { fx.groundDist = 1e9; fx.sun.on = 0; }
 

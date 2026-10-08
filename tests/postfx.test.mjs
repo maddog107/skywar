@@ -65,7 +65,9 @@ describe('DynamicResolution', () => {
             assert.ok(q.floor <= q.pr && q.pr <= q.top, k);
         }
         assert.ok(QUALITY.ultra.ao && QUALITY.ultra.ssr && QUALITY.ultra.blur && QUALITY.ultra.msaa, 'ultra enables AO, SSR, blur, MSAA');
-        assert.ok(!QUALITY.high.ao && !QUALITY.high.ssr && !QUALITY.high.blur && !QUALITY.high.msaa, 'high keeps its old cost');
+        assert.ok(!QUALITY.high.ao && !QUALITY.high.blur && !QUALITY.high.msaa, 'high keeps its old cost');
+        assert.ok(QUALITY.high.ssr === 1 && QUALITY.ultra.ssr === 2, 'high mirrors ships and clouds in the water with the reduced SSR, ultra with the full one');
+        assert.ok(!QUALITY.low.ssr && !QUALITY.medium.ssr, 'low and medium mirror only the sky');
         assert.ok(!QUALITY.low.flare && !QUALITY.low.dof, 'low stays lean');
     });
 });

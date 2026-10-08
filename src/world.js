@@ -1666,7 +1666,7 @@ export class World {
 
     // ── Ocean: the displaced, shaded sea and lakes (ocean.js; the wave field itself is water.js) ──
     initWater() {
-        this.ocean = new Ocean(this.scene, this.renderer, { detailTex: this.detailTex, foamTex: foamTexture(), SKY_FOG, FOG_GLSL, CLOUD_SHADOW_GLSL });
+        this.ocean = new Ocean(this.scene, this.renderer, { detailTex: this.detailTex, foamTex: foamTexture(), SKY_FOG, FOG_GLSL, CLOUD_SHADOW_GLSL, skyUniforms: this.skyMat.uniforms });
         this.waterMat = this.ocean.material; // (world palette + cloud shadows set its uniforms)
         this.water = this.ocean.mesh;
     }

@@ -4,9 +4,9 @@
 // water.js (geometry, shared with the physics); this adds the part too small to matter to anything floating.
 //
 // Per frame: one pass evolves the spectrum to time t (h0(k) e^{iωt} + h0*(−k) e^{−iωt}, deep-water ω = √(gk)),
-// packing three real fields into two complex ones (slope x + i slope z, and the divergence of the choppy
-// displacement), log2 N horizontal and log2 N vertical Stockham butterfly passes, and a final pass that writes
-// (slope x, slope z, slope², divergence) into a mipmapped half-float texture. slope² survives mip averaging, so
+// packing three real fields into two complex ones (slope x + i slope z, and the surface's Laplacian), log2 N
+// horizontal and log2 N vertical Stockham butterfly passes, and a final pass that writes (slope x, slope z,
+// slope², Laplacian ∇²h) into a mipmapped half-float texture. slope² survives mip averaging, so
 // far away the shader knows how rough the water it can no longer resolve is (glint width).
 //
 // The passes are plain WebGL2 calls on three.js's own textures and framebuffers (a three.js render call costs
@@ -39,7 +39,7 @@ const SPECTRUM_FRAG = HEAD + `
         vec2 e = vec2(cos(w * time), sin(w * time));
         vec2 H = cmul(s.xy, e) + cmul(s.zw, vec2(e.x, -e.y));
         vec2 SX = cmul(vec2(0.0, k.x), H), SZ = cmul(vec2(0.0, k.y), H);
-        vec2 DV = kl * H;
+        vec2 DV = -kl * kl * H; // the surface's Laplacian (curvature): where the ripples focus the sun (caustics)
         // two real fields per complex channel: C1 = SX + i SZ, C2 = DV (+ i 0)
         fragColor = vec4(SX.x - SZ.y, SX.y + SZ.x, DV.x, DV.y);
     }`;
@@ -58,7 +58,7 @@ const FFT_FRAG = (horizontal) => HEAD + `
         vec2 tw = vec2(cos(a), sin(a));
         fragColor = vec4(even.xy + cmul(tw, odd.xy), even.zw + cmul(tw, odd.zw));
     }`;
-// (−1)^(x+y) undoes the centred spectrum; out: slope x, slope z, slope², divergence
+// (−1)^(x+y) undoes the centred spectrum; out: slope x, slope z, slope², ∇²h (the curvature: caustics, ocean.js)
 const FINAL_FRAG = HEAD + `
     uniform sampler2D src;
     void main() {

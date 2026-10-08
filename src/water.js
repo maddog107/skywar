@@ -180,7 +180,7 @@ export function updateWaveUniforms(originX, originZ, t = WATER.t) {
 // ── Sea-state maps (built by watermap.js, in a worker) ──
 // Two squares of size × size texels, texel metres apart, south-west corner (x0, z0): [0] fine (8 m, around the
 // camera), [1] coarse (64 m, 16 km). Per texel (RGBA): swell, wind-sea and chop factors (0..~1.2) and the water
-// depth (m; negative over land). The fine map wins where it has data, fading into the coarse one over its last
+// depth (m; negative over land). A lake (water with no way out to the sea) has its wind factor negative. The fine map wins where it has data, fading into the coarse one over its last
 // EDGE texels; beyond both it is open, deep sea (the renderer has faded its waves out by then anyway).
 export const SEA_MAPS = [
     { data: null, size: 0, texel: 1, x0: 0, z0: 0 },
@@ -223,8 +223,9 @@ export function seaFactors(x, z, out = _fb) {
     return out;
 }
 const smooth = (e0, e1, x) => { const t = Math.min(Math.max((x - e0) / (e1 - e0), 0), 1); return t * t * (3 - 2 * t); };
-// amplitude multiplier per set at a map sample f: exposure × the shallows
-function setGain(f, s) { return f[s] * smooth(0, SET_DEPTH[s], f[3]); }
+// amplitude multiplier per set at a map sample f: exposure × the shallows (a lake's wind factor is stored negative:
+// watermap.js)
+function setGain(f, s) { return Math.abs(f[s]) * smooth(0, SET_DEPTH[s], f[3]); }
 // how much the fine map speaks for (x, z) (0 outside it)
 const _fw = [0, 0, 0, 0];
 function fineWeight(x, z) { return sampleMap(SEA_MAPS[0], x, z, _fw); }
@@ -240,7 +241,7 @@ export function shoreWave(x, z, t, f) {
     if (!(d > 0 && d < SHORE_DMAX) || !SHORE.C) return 0;
     const wf = fineWeight(x, z);
     if (wf <= 0) return 0;
-    const a0 = SHORE.aSwell * f[0] + SHORE.aWind * f[1];
+    const a0 = SHORE.aSwell * f[0] + SHORE.aWind * Math.abs(f[1]);
     const A = Math.min(a0 * Math.pow(4 / Math.max(d, 0.5), 0.25), 0.39 * d) * smooth(SHORE_DMAX, SHORE_DMAX * 0.5, d) * smooth(0, 0.3, d) * wf;
     if (A <= 1e-5) return 0;
     const rel = A / Math.max(d, 0.05), b = smooth(0.15, 0.39, rel), n = 1 + 4 * b;
@@ -391,7 +392,7 @@ export const WAVE_GLSL = /* glsl */`
         return mix(base, fine, wf);
     }
     vec3 setGains(vec4 f) {
-        return f.xyz * vec3(smoothstep(0.0, setDepth.x, f.w), smoothstep(0.0, setDepth.y, f.w), smoothstep(0.0, setDepth.z, f.w));
+        return abs(f.xyz) * vec3(smoothstep(0.0, setDepth.x, f.w), smoothstep(0.0, setDepth.y, f.w), smoothstep(0.0, setDepth.z, f.w));
     }
     // Displacement of rest point p0 (world xz) seen from dist metres away (short waves fade out with distance),
     // with the tangents Tx = d(pos)/dx0 and Tz = d(pos)/dz0, and for whitecaps the horizontal Jacobian (crest folding,
@@ -447,7 +448,7 @@ export const WAVE_GLSL = /* glsl */`
         if (!(d > 0.0 && d < ${SHORE_DMAX.toFixed(1)}) || shoreInfo.w <= 0.0) return 0.0;
         float wf = seaFineWeight(p);
         if (wf <= 0.0) return 0.0;
-        float a0 = shoreInfo.x * f.x + shoreInfo.y * f.y;
+        float a0 = shoreInfo.x * f.x + shoreInfo.y * abs(f.y);
         float A = min(a0 * pow(4.0 / max(d, 0.5), 0.25), 0.39 * d) * smoothstep(${SHORE_DMAX.toFixed(1)}, ${(SHORE_DMAX * 0.5).toFixed(1)}, d) * smoothstep(0.0, 0.3, d) * wf;
         if (A <= 1e-5) return 0.0;
         float rel = A / max(d, 0.05), b = smoothstep(0.15, 0.39, rel), n = 1.0 + 4.0 * b;

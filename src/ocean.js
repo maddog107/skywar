@@ -44,7 +44,7 @@ const _col = new THREE.Color(), _lakeTint = new THREE.Color(0.75, 1.15, 0.85);
 // the uniforms of WAVE_GLSL (see shareWaveUniforms)
 const WAVE_UNIFORMS = ['waveA', 'waveB', 'waveN', 'waveOrigin', 'waveLod', 'setDepth', 'seaMapFine', 'seaMapCoarse', 'seaFineInfo', 'seaCoarseInfo', 'shoreInfo', 'time'];
 const _sf = [0, 0, 0, 0];
-const seaFactorsAt = (x, z) => seaFactors(x || 0, z || 0, _sf)[0];
+const isLakeAt = (x, z) => seaFactors(x || 0, z || 0, _sf)[1] < 0; // (watermap.js: a lake's wind factor is negative)
 
 // one grid patch: (g+1)² vertices on [0,1]² in x/z, every cell split on the same diagonal (so a fully morphed
 // patch collapses onto exactly the next coarser grid's triangles)
@@ -122,10 +122,46 @@ const VERT = /* glsl */`
         gl_Position = projectionMatrix * viewMatrix * vec4(world, 1.0);
     }`;
 
+// Inherent optical properties of the water (per metre, at R G B ≈ 600, 550, 465 nm): absorption a, scattering b,
+// backscattering bb. Clear oceanic water (Jerlov I–IB): pure water's own absorption (Pope & Fry 1997) plus a
+// little particle scattering, so a sand bed shows through 10–20 m of it; coastal water (Jerlov 3–5: the surf zone,
+// a storm's churned shallows): sediment that scatters and chlorophyll / CDOM that absorb the blue, greener and
+// cloudier; lake water: humic CDOM, brown-green and darker. From them: the beam attenuation c = a + b (how fast the
+// view through the water fades), the diffuse attenuation Kd ≈ (a + bb) / 0.8 (how fast daylight fades on its way
+// down to the bed) and the backscatter albedo bb / (a + bb) (the colour of deep water).
+export const OPTICS = {
+    ocean: { a: [0.30, 0.07, 0.02], b: [0.015, 0.022, 0.03], bb: [0.0012, 0.0025, 0.003] },
+    coast: { a: [0.38, 0.12, 0.20], b: [0.35, 0.38, 0.40], bb: [0.007, 0.0085, 0.0095] },
+    lake: { a: [0.42, 0.12, 0.24], b: [0.12, 0.13, 0.14], bb: [0.003, 0.0035, 0.0035] },
+};
+const v3 = (a) => `vec3(${a.map(x => x.toFixed(4)).join(', ')})`;
+const OPTICS_GLSL = /* glsl */`
+    struct Optics { vec3 c; vec3 kd; vec3 alb; };
+    // turb: 0 clear sea .. 1 churned coastal water; lake: 0 sea .. 1 lake
+    Optics waterOptics(float turb, float lake) {
+        vec3 a = mix(mix(${v3(OPTICS.ocean.a)}, ${v3(OPTICS.coast.a)}, turb), ${v3(OPTICS.lake.a)}, lake);
+        vec3 b = mix(mix(${v3(OPTICS.ocean.b)}, ${v3(OPTICS.coast.b)}, turb), ${v3(OPTICS.lake.b)}, lake);
+        vec3 bb = mix(mix(${v3(OPTICS.ocean.bb)}, ${v3(OPTICS.coast.bb)}, turb), ${v3(OPTICS.lake.bb)}, lake);
+        Optics o;
+        o.c = a + b; o.kd = (a + bb) / 0.8; o.alb = bb / (a + bb);
+        return o;
+    }
+    // the light deep water sends back: the palette's water colour sets how bright (the light of the hour), the
+    // optics its hue (the clear sea's albedo sums to ALB_SUM)
+    vec3 deepWater(vec3 deep, Optics o) {
+        return (deep.r + deep.g + deep.b) * o.alb * (DEEP_K / ${(OPTICS.ocean.bb.reduce((s, x, i) => s + x / (OPTICS.ocean.a[i] + x), 0)).toFixed(5)});
+    }`;
+
 function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
     return /* glsl */`
-    uniform float time, whitecap, windU, underwater;
+    #define DEEP_K 0.75
+    #define CAUSTIC_K 1.0
+    uniform float time, whitecap, windU, underwater, geomS2, waterDebug;
     uniform vec3 sunDir, sunColor, skyColor, horizonColor, deepColor, fogColor;
+    // the sky dome's own palette (world.js skyMat, shared): the sky the water mirrors
+    uniform vec3 skyGlow, skyBelt, skyGlowDir, skySun;
+    uniform float skyLowSun, skyOvercast, skyNight;
+    uniform vec2 swellDir;
     uniform sampler2D detailMap, foamMap;
     #if TIER >= 2
     uniform sampler2D fftMap, refrColor, refrDepth;
@@ -146,6 +182,7 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
     ${FOG_GLSL}
     ${CLOUD_SHADOW_GLSL}
     ${FIRE_WORLD_GLSL}
+    ${OPTICS_GLSL}
     #if TIER >= 2
     float linDepth(float d) {
         #ifdef USE_REVERSED_DEPTH_BUFFER
@@ -161,12 +198,40 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
         return d >= 1.0;
         #endif
     }
+    // world point -> screen uv (and its view depth in w)
+    vec3 toScreen(vec3 w) {
+        vec3 v = (viewMatrix * vec4(w, 1.0)).xyz;
+        return vec3(v.xy / (-v.z * invProj) * 0.5 + 0.5, -v.z);
+    }
     #endif
+    // The sky the water mirrors: the dome's gradient, the glow round the sun and the twilight belt (world.js skyMat,
+    // less the sun's disc: that is the glint), then the clouds: where the mirrored ray meets the cloud base, the
+    // cloud-shadow map says how much cloud stands there (its column toward the sun), drawn as the clouds' grey bases.
     vec3 skyAt(vec3 R) {
         float up = clamp(R.y, 0.0, 1.0);
         vec3 c = mix(horizonColor, skyColor, pow(up, 0.5));
-        float sd = max(dot(R, normalize(sunDir)), 0.0);
-        return c + sunColor * pow(sd, 8.0) * 0.12;
+        vec3 gd = normalize(skyGlowDir);
+        float sdr = dot(R, gd), sd = max(sdr, 0.0);
+        c += skyGlow * pow(sd, 6.0) * (0.25 + skyLowSun * 0.9 * exp(-up * 6.0)) * (1.0 - skyOvercast * 0.6);
+        c += skyBelt * skyLowSun * pow(max(-sdr, 0.0), 1.5) * exp(-abs(up - 0.08) * 14.0) * (1.0 - skyNight);
+        c += skySun * pow(sd, 90.0) * 0.6 * (1.0 - skyNight * 0.8) * (1.0 - skyOvercast * 0.8);
+        return c;
+    }
+    vec3 skyRefl(vec3 R, vec3 P) {
+        vec3 c = skyAt(R);
+        if (cloudShadowA.w > 0.5 && R.y > 0.012 && P.y < cloudShadowB.x) {
+            vec3 Q = P + R * ((cloudShadowB.x - P.y) / R.y);
+            float cov = clamp((1.0 - cloudSunShadowAt(Q)) / max(cloudShadowB.w, 0.1), 0.0, 1.0);
+            vec3 base = mix(horizonColor, vec3(dot(horizonColor, vec3(0.3, 0.59, 0.11))), 0.45) * (0.82 + 0.25 * skyOvercast)
+                + skySun * 0.06 * (1.0 - skyNight) * (1.0 - skyOvercast);
+            c = mix(c, base, cov * smoothstep(0.012, 0.07, R.y) * 0.9);
+        }
+        return c;
+    }
+    // Smith's masking for a Beckmann surface (Walter et al. 2007's rational fit); s2: the slope variance seen along w
+    float smithL(float cosT, float s2) {
+        float a = cosT / sqrt(max(s2 * (1.0 - cosT * cosT), 1e-7));
+        return a < 1.6 ? (1.0 - 1.259 * a + 0.396 * a * a) / (3.535 * a + 2.181 * a * a) : 0.0;
     }
     void main() {
         vec3 toCam = cameraPosition - vWorld;
@@ -176,8 +241,9 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
         vec2 p = vWorld.xz;
         float fp = dist * 0.0015 / max(abs(V.y), 0.06); // metres of water under a pixel (grazing angles stretch it)
         vec3 N = normalize(vNormal);
-        float rough = 0.0015 + 0.00002 * dist;          // slope variance the geometry can't show at this distance
-        float lake = 1.0 - smoothstep(0.08, 0.5, vSea.x); // closed water: greener, murkier, calmer
+        float lake = vSea.y < 0.0 ? 1.0 : 0.0; // fresh water (watermap.js: no way out to the sea): its own colour, calmer
+        float s2u = 0.00015;    // slope variance the normal at this pixel doesn't carry (grows below)
+        float detLost;          // share of the small-scale detail faded out here
         // ── small-scale detail ──
         #if TIER >= 2
         {
@@ -187,23 +253,32 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
             vec2 s2 = mat2(0.8, 0.6, -0.6, 0.8) * f2.xy;
             vec2 slope = (f1.xy + 0.55 * s2) * det;
             N = normalize(N - vec3(slope.x, 0.0, slope.y) * N.y);
-            // what the mips averaged away (and what fades out with distance) becomes roughness for the glint
+            // what the mips averaged away becomes roughness for the glint
             float unres = max(f1.z - dot(f1.xy, f1.xy), 0.0) + 0.3 * max(f2.z - dot(f2.xy, f2.xy), 0.0);
-            rough += unres * fftInfo.z * fftInfo.z + (1.0 - det / max(fftInfo.z, 1e-3)) * 0.012 * (0.3 + windU / 12.0);
+            s2u += unres * det * det;
+            detLost = 1.0 - det / max(fftInfo.z, 1e-3);
         }
         #else
         {
-            vec3 n2 = vec3(0.0, 1.0, 0.0);
             float r1 = texture2D(detailMap, p / 140.0 + vec2(time * 0.010, time * 0.006)).r;
             float r2 = texture2D(detailMap, p / 53.0 - vec2(time * 0.014, -time * 0.009)).r;
             float r3 = mix(0.5, texture2D(detailMap, p / 17.0 + vec2(-time * 0.02, time * 0.017)).r, 1.0 - smoothstep(0.6, 3.0, fp));
-            vec2 rip = (vec2(r1 - r3, r2 - r3)) * 0.3 * mix(0.1, 1.0, 1.0 - smoothstep(60.0, 900.0, dist));
+            float k = mix(0.1, 1.0, 1.0 - smoothstep(60.0, 900.0, dist));
+            vec2 rip = (vec2(r1 - r3, r2 - r3)) * 0.3 * k;
             N = normalize(N - vec3(rip.x, 0.0, rip.y));
-            rough += 0.01 * smoothstep(200.0, 5000.0, dist);
+            detLost = 1.0 - k;
         }
         #endif
         // far away the water flattens to its mean (only the glint's width remembers the waves)
-        N = normalize(mix(N, vec3(0.0, 1.0, 0.0), smoothstep(1500.0, 14000.0, dist) * 0.85));
+        float flatK = smoothstep(1500.0, 14000.0, dist) * 0.85;
+        N = normalize(mix(N, vec3(0.0, 1.0, 0.0), flatK));
+        // What the normal no longer carries is roughness, up to the total for this wind (Cox & Munk 1954, a clean
+        // sea: mean-square slope 0.00316 U up-wind, 0.003 + 0.00192 U across it): the detail's share as it fades
+        // with distance, the waves' own as the grid drops them and the normal flattens. (Lakes: young, smaller waves.)
+        vec2 cm = vec2(0.00316 * windU, 0.003 + 0.00192 * windU) * mix(1.0, 0.5, lake);
+        float geomLost = max(flatK / 0.85, smoothstep(250.0, 5000.0, dist));
+        vec2 s2w = vec2(s2u) + cm * 0.55 * detLost + vec2(geomS2 * 0.5) * geomLost;
+        s2w = min(s2w, cm + 0.004);
         float csh = cloudSunShadowAt(vWorld);
         vec3 col;
         float alpha = 1.0;
@@ -214,7 +289,8 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
             // Snell's window: inside ~48.6° of the normal the sky comes through (refracted); outside it the surface
             // is a mirror of the water below
             float win = smoothstep(0.62, 0.7, c);
-            vec3 below = deepColor * (0.25 + 0.5 * csh);
+            Optics o = waterOptics(0.0, lake);
+            vec3 below = deepWater(deepColor, o) * (0.45 + 0.55 * csh) * 1.4;
             vec3 above = mix(horizonColor, skyColor, 0.6) * 1.1 + sunColor * pow(max(dot(-V, L), 0.0), 60.0) * 2.0 * csh;
             #if TIER >= 2
             if (refrOn > 0.5) {
@@ -222,65 +298,129 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
                 above = mix(above, texture(refrColor, suv + N.xz * 0.05).rgb, 0.7);
             }
             #endif
-            col = mix(below, above, win);
+            // the window's rim: the light grazing in from the horizon, bent and split
+            col = mix(below, above, win) + horizonColor * 0.25 * exp(-pow((c - 0.66) / 0.025, 2.0));
             gl_FragColor = vec4(col, 1.0);
             #include <tonemapping_fragment>
             #include <colorspace_fragment>
             return;
         }
-        float NdV = max(dot(N, V), 0.0);
-        float F = 0.02 + 0.98 * pow(1.0 - NdV, 5.0);
+        float NdV = max(dot(N, V), 1e-4);
+        // wind frame round the normal (for the anisotropic slopes)
+        vec3 wd = vec3(windDir.x, 0.0, windDir.y);
+        vec3 T1 = normalize(wd - N * dot(wd, N)), T2 = cross(N, T1);
+        // Fresnel with the unresolved roughness (rough water reflects less at grazing angles: the facets tilt toward
+        // the viewer; Schlick with the correction of the Atlas water talk, GDC 2019)
+        vec2 vt = vec2(dot(V, T1), dot(V, T2));
+        float vt2 = max(dot(vt, vt), 1e-6);
+        float s2v = (s2w.x * vt.x * vt.x + s2w.y * vt.y * vt.y) / vt2;
+        float av = sqrt(s2v);
+        float F = 0.02 + 0.98 * pow(1.0 - NdV, 5.0 * exp(-2.69 * av)) / (1.0 + 22.7 * pow(av, 1.5));
         vec3 R = reflect(-V, N);
         R.y = abs(R.y); // a ray reflected down into the next wave sees that wave's sky instead
-        vec3 sky = skyAt(R);
-        // sun glint: the Cox-Munk slope distribution, as wide as the roughness left over
+        vec3 sky = skyRefl(R, vWorld);
+        // ── sun (moon) glint: an anisotropic Beckmann distribution of the slopes left over, Smith masking ──
         vec3 H = normalize(L + V);
-        float NdH = max(dot(N, H), 1e-3), t2 = (1.0 - NdH * NdH) / (NdH * NdH);
-        float s2 = rough;
-        float Pslope = exp(-t2 / s2) / (3.14159 * s2 * NdH * NdH * NdH * NdH);
+        float hy = max(dot(H, N), 1e-3);
+        vec2 hxz = vec2(dot(H, T1), dot(H, T2)) / hy;
+        float D = exp(-(hxz.x * hxz.x / s2w.x + hxz.y * hxz.y / s2w.y)) / (3.14159 * sqrt(s2w.x * s2w.y) * hy * hy * hy * hy);
+        vec2 lt = vec2(dot(L, T1), dot(L, T2));
+        float NdL = dot(N, L);
+        float s2l = (s2w.x * lt.x * lt.x + s2w.y * lt.y * lt.y) / max(dot(lt, lt), 1e-6);
+        float G = NdL > 0.0 ? 1.0 / (1.0 + smithL(NdV, s2v) + smithL(NdL, s2l)) : 0.0;
         float Fh = 0.02 + 0.98 * pow(1.0 - max(dot(V, H), 0.0), 5.0);
-        vec3 glint = sunColor * Fh * Pslope * 0.55 / (4.0 * max(NdV, 0.08)) * step(0.0, L.y + 0.02) * csh;
+        vec3 glint = sunColor * Fh * D * G * 0.55 / (4.0 * max(NdV, 0.08)) * step(0.0, L.y + 0.02) * csh;
         // ── the water body ──
-        vec3 body = mix(deepColor, deepColor * vec3(0.75, 1.15, 0.85), lake) * (0.45 + 0.55 * csh);
-        vec3 ext = mix(vec3(0.46, 0.105, 0.085), vec3(0.62, 0.3, 0.42), lake); // extinction per metre (sea, lake)
-        float wet = 1.0;        // water depth under this pixel (m), for the surf
-        vec3 under = body;
+        float wet = max(vSea.w, 0.0); // water depth under this pixel (m)
+        // churned water: the surf zone stirs up sand (more with rougher seas), a storm clouds the shallows
+        float turb = (1.0 - smoothstep(0.6, 4.5, wet)) * (0.3 + 0.7 * whitecap) + whitecap * 0.35 * (1.0 - smoothstep(6.0, 40.0, wet));
+        Optics o = waterOptics(clamp(turb, 0.0, 1.0), lake);
+        vec3 deep = deepWater(deepColor, o) * (0.45 + 0.55 * csh);
+        vec3 under = deep;
         #if TIER >= 2
         if (refrOn > 0.5) {
             vec2 size = vec2(textureSize(refrColor, 0));
             vec2 suv = gl_FragCoord.xy / size;
-            vec3 fwd = -vec3(camWorld[2][0], camWorld[2][1], camWorld[2][2]);
-            float zS = dot(vWorld - cameraPosition, fwd);
-            // refraction: bend the view by the slope, more for thicker water, less far away
-            vec2 off = (N.xz - vec2(0.0)) * 0.035 / (1.0 + zS * 0.004);
-            ivec2 pix = ivec2((suv + off) * size);
-            float d0 = texelFetch(refrDepth, clamp(pix, ivec2(0), ivec2(size) - 1), 0).r;
-            float zB = isSky(d0) ? 1e6 : linDepth(d0);
-            if (zB < zS) { off = vec2(0.0); pix = ivec2(gl_FragCoord.xy); d0 = texelFetch(refrDepth, pix, 0).r; zB = isSky(d0) ? 1e6 : linDepth(d0); }
-            vec2 buv = suv + off;
-            vec3 bottomV = vec3((buv * 2.0 - 1.0) * invProj * zB, -zB);
-            vec3 bottomW = (camWorld * vec4(bottomV, 1.0)).xyz;
-            float path = min(length(bottomW - vWorld), 400.0);
-            wet = vWorld.y - bottomW.y;
-            vec3 T = exp(-ext * path);
+            float zS = toScreen(vWorld).z;
+            // Refraction: the view bent at the surface (Snell, water's index 1.333) and followed down to the bed, first
+            // guessed from the sea map's depth here, then looked up in the copy of the scene (so the bed shifts by its
+            // depth, never by more: no smearing at grazing angles). Something in front of the water there (a hull
+            // above the waterline): the straight view instead.
+            vec3 Tr = refract(-V, N, 0.75);
+            float d0 = clamp(wet + 0.5, 0.5, 60.0);
+            vec3 sp = toScreen(vWorld + Tr * (d0 / max(-Tr.y, 0.25)));
+            vec2 buv = sp.xy;
+            ivec2 pix = ivec2(buv * size);
+            bool ok = buv.x > 0.0 && buv.y > 0.0 && buv.x < 1.0 && buv.y < 1.0;
+            float d1 = ok ? texelFetch(refrDepth, clamp(pix, ivec2(0), ivec2(size) - 1), 0).r : 0.0;
+            float zB = isSky(d1) ? 1e6 : linDepth(d1);
+            float fb = 0.0;
+            if (!ok || zB < zS + 0.05) { fb = 1.0;
+                buv = suv;
+                float dd = texelFetch(refrDepth, ivec2(gl_FragCoord.xy), 0).r;
+                zB = isSky(dd) ? 1e6 : linDepth(dd);
+            }
+            vec3 B = (camWorld * vec4(vec3((buv * 2.0 - 1.0) * invProj * zB, -zB), 1.0)).xyz;
+            // (the drawn shore steps a shallow bed 1.5 m down at the waterline, terraincore.js shore(): undone; the
+            // step itself, drawn from −1.5 m up to the beach, stands for the waterline)
+            if (B.y > -6.0 && B.y < 0.0 && zB < 1e5) B.y = min((B.y + 1.5) / 0.75, 0.0);
+            float path = min(length(B - vWorld), 300.0);
+            float dBed = clamp(vWorld.y - B.y, 0.0, 300.0);
+            wet = dBed;
+            turb = (1.0 - smoothstep(0.6, 4.5, wet)) * (0.3 + 0.7 * whitecap) + whitecap * 0.35 * (1.0 - smoothstep(6.0, 40.0, wet));
+            o = waterOptics(clamp(turb, 0.0, 1.0), lake);
+            deep = deepWater(deepColor, o) * (0.45 + 0.55 * csh);
             vec3 bot = texture(refrColor, buv).rgb;
-            // caustics: light focused by the waves dances on the bottom in the shallows
-            float cau = texture(detailMap, bottomW.xz / 9.0 + vec2(time * 0.03, time * 0.021)).r * texture(detailMap, bottomW.xz / 6.3 - vec2(time * 0.025, -time * 0.018)).r;
-            bot *= 1.0 + smoothstep(0.18, 0.45, cau) * 1.2 * exp(-max(wet, 0.0) * 0.35) * csh * max(L.y, 0.0) * (1.0 - lake * 0.6);
-            under = mix(body, bot, T);
+            if (dBed < 40.0 && zB < 1e5) {
+                // the sea bed close up: sand ripples across the swell, darker patches (weed, rock) in the shallows
+                float fpB = fp + zB * 0.0008;
+                vec2 sd = normalize(swellDir);
+                vec2 bw = B.xz + 0.8 * vec2(texture(detailMap, B.xz / 9.0).r, texture(detailMap, B.xz / 9.0 + 0.5).r);
+                float ph = dot(bw, sd) * 6.2832 / 0.55;
+                vec3 Lw = refract(-L, vec3(0.0, 1.0, 0.0), 0.75);
+                float rip = cos(ph) * (1.0 - smoothstep(0.05, 0.25, fpB)) * 0.22 + cos(dot(bw, sd) * 6.2832 / 2.3 + 1.7) * (1.0 - smoothstep(0.3, 1.2, fpB)) * 0.12;
+                bot *= 1.0 + rip * dot(sd, -Lw.xz) * 2.0 * csh * (1.0 - smoothstep(2.0, 30.0, dBed));
+                float pn = texture(detailMap, B.xz / 61.0).r * 0.65 + texture(detailMap, B.xz / 17.0 + 0.3).r * 0.35;
+                float weed = smoothstep(0.56, 0.68, pn) * smoothstep(1.2, 3.5, dBed) * (1.0 - lake * 0.5);
+                bot = mix(bot, bot * vec3(0.32, 0.42, 0.3), weed * 0.85);
+                // caustics: the sun refracted through the ripples focuses on the bed. Where the sun's light reaching B
+                // entered the surface, the curvature ∇²h of the detail (oceanfft.js) bends the bundle of rays: the
+                // Jacobian of the map from the surface to a bed dBed below is 1 + dBed (1 − 1/n) ∇²h, the light on the
+                // bed its inverse. Blurred with depth (the sun's disc is half a degree wide) and by the pixel's size.
+                vec2 S = B.xz - Lw.xz * (dBed / max(-Lw.y, 0.3));
+                float lod = log2(max(max(fpB, dBed * 0.012), 0.05) * fftInfo.x * float(textureSize(fftMap, 0).x)) + 0.5;
+                float lap = textureLod(fftMap, S * fftInfo.x, lod).w * fftInfo.z;
+                float J = 1.0 + dBed * 0.25 * lap * CAUSTIC_K;
+                float cau = clamp(1.0 / max(J, 0.25), 0.0, 3.5) - 1.0;
+                // (too small to see from far off: the bed's average light is unchanged)
+                cau *= csh * smoothstep(0.02, 0.25, L.y) * (1.0 - smoothstep(0.4, 1.0, turb)) * (1.0 - smoothstep(12.0, 40.0, dBed))
+                    * (1.0 - lake * 0.5) * (1.0 - smoothstep(0.12, 0.5, fpB));
+                bot *= 1.0 + cau * 0.6;
+            }
+            // Beer-Lambert both ways: daylight down to the bed (Kd over its depth), the view back up (c over the path);
+            // what the water itself scatters fills in toward the deep colour
+            float cosw = clamp(dBed / max(path, 1e-3), 0.0, 1.0);
+            vec3 Tb = exp(-(o.c + o.kd * cosw) * path);
+            under = mix(deep, bot, Tb);
+            if (waterDebug > 0.5) {
+                vec3 dbg = waterDebug < 1.5 ? vec3(dBed / 10.0, fract(dBed), fb) : waterDebug < 2.5 ? vec3(lake, turb, vSea.w / 20.0) : vec3(path / 30.0, cosw, B.y < -1.5 ? 1.0 : 0.0);
+                gl_FragColor = vec4(dbg, 0.5);
+                return;
+            }
         }
         #else
-        wet = vSea.w;
+        // low / medium: the water blends over the drawn bed (alpha below), coloured by its own optics
         #endif
-        // subsurface: the sun through a thin crest, seen from its back
+        // subsurface: the sun through a thin crest, seen from its back (the water's own colour, forward scattered)
         float sss = pow(clamp(dot(V, -vec3(L.x, 0.0, L.z) / max(length(L.xz), 1e-3)) * 0.5 + 0.5, 0.0, 1.0), 4.0)
             * clamp(vCrest * 0.35 + 0.15, 0.0, 1.0) * (1.0 - F) * csh * max(L.y + 0.1, 0.0);
-        under += vec3(0.05, 0.3, 0.26) * sunColor * sss * 0.35;
-        col = mix(under, sky, F) + glint;
+        under += mix(vec3(0.05, 0.3, 0.26), vec3(0.1, 0.25, 0.08), lake) * sunColor * sss * 0.35;
+        col = under * (1.0 - F) + sky * F + glint;
         // [night] fires, motors, flares and flashes on the water: a glint off the waves (the sun's slope statistics,
         // wider for a near light) and a little light in the water body (firelight.js; its first eight)
         if (fireLightInfo.x > 0.5) {
             int fn = min(int(fireLightInfo.x), 8);
+            float rough = 0.5 * (s2w.x + s2w.y);
             for (int fi = 0; fi < 8; fi++) {
                 if (fi >= fn) break;
                 vec3 fL, fE;
@@ -294,8 +434,14 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
             }
         }
         #if TIER < 2
-        alpha = mix(0.72, 0.97, clamp(F * 2.0 + smoothstep(200.0, 3000.0, dist), 0.0, 1.0));
+        {
+            // as see-through as the water is over its bed: Beer-Lambert over the view's path to the bed
+            float pathL = max(vSea.w, 0.0) * (0.6 + 0.4 / max(V.y, 0.2));
+            float Tl = exp(-dot(o.c + o.kd, vec3(0.25, 0.45, 0.3)) * pathL);
+            alpha = mix(mix(0.72, 0.97, clamp(F * 2.0 + smoothstep(200.0, 3000.0, dist), 0.0, 1.0)), 1.0 - Tl * 0.8, smoothstep(14.0, 3.0, vSea.w) * (1.0 - smoothstep(300.0, 2500.0, dist)));
+        }
         #endif
+        float foamCover = 0.0;
         // ── foam ──
         {
             // gusts: km-scale patches of rougher, whiter water drifting downwind
@@ -331,6 +477,7 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
             // under foam and in a wake: a milky turquoise of bubbles just under the surface; shade by a hull
             col = mix(col, vec3(0.35, 0.62, 0.66) * light, max(wk.g, amt * 0.35) * (1.0 - foam) * 0.6);
             col *= 1.0 - wk.b * 0.55;
+            foamCover = max(foam, wk.g * 0.5);
             #if TIER < 2
             alpha = max(alpha, foam);
             #endif
@@ -341,8 +488,8 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
         #if TIER < 2
         alpha = mix(alpha, 1.0, fg.x);
         #else
-        // the reflection weight for postfx's screen-space reflections (and < 0.7 marks water)
-        alpha = 0.1 + 0.5 * clamp(F * (1.0 - fg.x), 0.0, 1.0);
+        // the reflection weight for postfx's screen-space reflections (and < 0.7 marks water): foam doesn't mirror
+        alpha = 0.1 + 0.5 * clamp(F * (1.0 - foamCover) * (1.0 - fg.x), 0.0, 1.0);
         #endif
         gl_FragColor = vec4(col, alpha);
         #include <tonemapping_fragment>
@@ -351,7 +498,7 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
 }
 
 export class Ocean {
-    constructor(scene, renderer, { detailTex, foamTex, SKY_FOG, FOG_GLSL, CLOUD_SHADOW_GLSL }) {
+    constructor(scene, renderer, { detailTex, foamTex, SKY_FOG, FOG_GLSL, CLOUD_SHADOW_GLSL, skyUniforms = null }) {
         this.scene = scene;
         this.renderer = renderer;
         this.quality = null;
@@ -374,6 +521,10 @@ export class Ocean {
             ...SKY_FOG.uniforms(), // (the haze, the mist, and the ground fog and front: world.js FOG_GLSL)
             whitecap: { value: 0 }, foamJ: { value: 0.7 }, windU: { value: 5 }, underwater: { value: 0 }, windDir: { value: new THREE.Vector2(1, 0) },
             shoreInfo: { value: new THREE.Vector4() },
+            waterDebug: { value: 0 }, geomS2: { value: 0.01 }, swellDir: { value: new THREE.Vector2(1, 0) }, // the waves' own mean-square slope; the swell's heading
+            // the sky dome's palette (world.js skyMat; its uniform objects are shared when given, so always current)
+            skyGlow: { value: new THREE.Color(0, 0, 0) }, skyBelt: { value: new THREE.Color(0, 0, 0) }, skyGlowDir: { value: new THREE.Vector3(0, 1, 0) },
+            skySun: { value: new THREE.Color(1, 1, 1) }, skyLowSun: { value: 0 }, skyOvercast: { value: 0 }, skyNight: { value: 0 },
             // the wave field (water.js)
             waveA: { value: WATER.gpuA }, waveB: { value: WATER.gpuB }, waveN: { value: 0 }, waveOrigin: { value: new THREE.Vector2() },
             waveLod: { value: new THREE.Vector2(8, 12) }, setDepth: { value: new THREE.Vector3(...SET_DEPTH) },
@@ -388,6 +539,12 @@ export class Ocean {
             wakeMap: { value: this.blackTex }, wakeInfo: { value: new THREE.Vector4(0, 0, 1, 0) },
             ...fireUniforms(), // [night]
         };
+        if (skyUniforms) {
+            const u = this.uniforms, k = skyUniforms;
+            if (k.glowColor) u.skyGlow = k.glowColor; if (k.beltColor) u.skyBelt = k.beltColor; if (k.sunDir) u.skyGlowDir = k.sunDir;
+            if (k.sunColor) u.skySun = k.sunColor; if (k.lowSun) u.skyLowSun = k.lowSun; if (k.overcast) u.skyOvercast = k.overcast;
+            if (k.night) u.skyNight = k.night;
+        }
         this.FOG_GLSL = FOG_GLSL; this.CLOUD_SHADOW_GLSL = CLOUD_SHADOW_GLSL;
         this.material = new THREE.ShaderMaterial({
             uniforms: this.uniforms, vertexShader: VERT, fragmentShader: fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL),
@@ -554,6 +711,16 @@ export class Ocean {
             this.uniforms.windU.value = WATER.U;
             this.uniforms.windDir.value.set(WATER.windX, WATER.windZ);
             this.uniforms.shoreInfo.value.set(SHORE.aSwell, SHORE.aWind, SHORE.omega, SHORE.C);
+            // the Gerstner waves' mean-square slope (Σ (a k)² / 2 per axis: what the grid shows up close, and what
+            // the glint has to spread over once the grid drops them far away), and the swell's heading (sand ripples)
+            const Wv = WATER.waves;
+            let s2 = 0, sx = 0, sz = 0;
+            for (let i = 0; i < Wv.n; i++) {
+                s2 += (Wv.a[i] * Wv.k[i]) ** 2 / 2;
+                if (Wv.set[i] === 0) { sx += Wv.dx[i] * Wv.a[i]; sz += Wv.dz[i] * Wv.a[i]; }
+            }
+            this.uniforms.geomS2.value = s2;
+            if (Math.hypot(sx, sz) > 1e-6) this.uniforms.swellDir.value.set(sx, sz).normalize();
         }
         this.uniforms.waveN.value = WATER.waves.n;
         return changed;
@@ -671,7 +838,7 @@ export class Ocean {
 
     // the colour of the light in the water around an underwater camera, and how fast the water swallows light
     underwaterPalette(dst, x, z) {
-        const u = this.uniforms, lake = 1 - Math.min(1, Math.max(0, (seaFactorsAt(x, z) - 0.08) / 0.42));
+        const u = this.uniforms, lake = isLakeAt(x, z) ? 1 : 0;
         dst.underColor.value.copy(u.deepColor.value).multiplyScalar(0.8).lerp(_col.copy(u.deepColor.value).multiply(_lakeTint), lake);
         dst.underExt.value.set(0.42 + 0.2 * lake, 0.1 + 0.18 * lake, 0.075 + 0.3 * lake);
     }

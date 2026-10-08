@@ -151,6 +151,25 @@ describe('sea-state maps: lakes and shallows are calmer than the open sea', () =
         assert.ok(lake.f[0] < 0.2, `lake swell factor ${lake.f[0].toFixed(2)}`);
         assert.ok(lake.rms < sea.rms * 0.25, `lake rms ${lake.rms.toFixed(2)} m vs sea ${sea.rms.toFixed(2)} m`);
         assert.ok(lake.rms > 0.02, 'but the lake is not glass in a storm');
+        // fresh water is told from the sea by a flood fill through the water from the map's surroundings: a lake's
+        // wind factor is stored negative (its waves take the size, the renderer the sign: ocean.js colours it)
+        assert.ok(M.isLake(lake.f[1]) && lake.f[0] === 0, `the lake is a lake (wind ${lake.f[1].toFixed(3)}, swell ${lake.f[0]})`);
+        assert.ok(!M.isLake(sea.f[1]), 'the open sea is not');
+        assert.equal(M.windGain(-0.25), 0.25);
+    });
+    test('a lake is water with no way out: the flood fill marks enclosed water only', () => {
+        const c = M.runJob(M.coarseJob(0, 0, 1, 0)), S = c.size, D = c.data;
+        let lakes = 0, seas = 0, mixed = 0;
+        for (let j = 1; j < S - 1; j++) for (let i = 1; i < S - 1; i++) {
+            const k = (j * S + i) * 4;
+            if (D[k + 3] <= 0) continue;
+            const lake = D[k + 1] < 0;
+            if (lake) lakes++; else seas++;
+            // water touching water is the same water: a lake texel never borders a sea texel
+            for (const o of [4, -4, S * 4, -S * 4]) if (D[k + o + 3] > 0 && (D[k + o + 1] < 0) !== lake) mixed++;
+        }
+        assert.ok(lakes > 100 && seas > 1000, `lakes ${lakes}, sea ${seas} texels round the home base`);
+        assert.equal(mixed, 0, 'no lake texel borders a sea texel');
     });
     test('the open-water waves die away into the shallows; a surf of breakers rolls in to the beach instead', () => {
         W.setSeaState('rain', 7, -5);
@@ -177,7 +196,8 @@ describe('sea-state maps: lakes and shallows are calmer than the open sea', () =
         for (let k = 0; k < 50; k++) {
             const i = (k * 37) % f.size, j = (k * 91) % f.size, x = f.x0 + (i + 0.5) * f.texel, z = f.z0 + (j + 0.5) * f.texel;
             close(f.data[(j * f.size + i) * 4 + 3], -terrainHeight(x, z), 1e-3, 'depth');
-            for (let c = 0; c < 3; c++) assert.ok(f.data[(j * f.size + i) * 4 + c] >= 0 && f.data[(j * f.size + i) * 4 + c] <= 1.2, 'factor in range');
+            for (let c = 0; c < 3; c++) assert.ok(Math.abs(f.data[(j * f.size + i) * 4 + c]) <= 1.2, 'factor in range');
+            for (const c of [0, 2]) assert.ok(f.data[(j * f.size + i) * 4 + c] >= 0, 'only the wind factor carries a sign (lakes)');
         }
     });
 });
