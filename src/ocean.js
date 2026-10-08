@@ -446,7 +446,15 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
             under = mix(deep, bot, Tb);
         }
         #else
-        // low / medium: the water blends over the drawn bed (alpha below), coloured by its own optics
+        // low / medium (no copy of the scene): the bed is estimated, a sandy bottom at the sea map's depth lit by the
+        // daylight that gets down to it and seen back up through the water (the same Beer-Lambert both ways), so the
+        // shallows go turquoise over sand; the drawn bed shows a little through the blend (alpha below)
+        {
+            float pathL = max(vSea.w, 0.0) * (0.6 + 0.4 / max(V.y, 0.2));
+            vec3 Tl = exp(-(o.c + o.kd * 0.7) * pathL);
+            vec3 Ein = sunColor * (max(L.y, 0.0) * 0.9 * csh + 0.05) + mix(horizonColor, skyColor, 0.5) * 0.55;
+            under = mix(deep, vec3(0.33, 0.29, 0.19) * Ein, Tl * (1.0 - lake * 0.4) * (1.0 - smoothstep(600.0, 3000.0, dist)));
+        }
         #endif
         // subsurface: the sun through a thin crest, seen from its back (the water's own colour, forward scattered)
         float sss = pow(clamp(dot(V, -vec3(L.x, 0.0, L.z) / max(length(L.xz), 1e-3)) * 0.5 + 0.5, 0.0, 1.0), 4.0)
@@ -472,10 +480,10 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
         }
         #if TIER < 2
         {
-            // as see-through as the water is over its bed: Beer-Lambert over the view's path to the bed
+            // a little of the drawn bed through the water, more where it is shallow and clear (the waterline stays soft)
             float pathL = max(vSea.w, 0.0) * (0.6 + 0.4 / max(V.y, 0.2));
             float Tl = exp(-dot(o.c + o.kd, vec3(0.25, 0.45, 0.3)) * pathL);
-            alpha = mix(mix(0.72, 0.97, clamp(F * 2.0 + smoothstep(200.0, 3000.0, dist), 0.0, 1.0)), 1.0 - Tl * 0.8, smoothstep(14.0, 3.0, vSea.w) * (1.0 - smoothstep(300.0, 2500.0, dist)));
+            alpha = mix(mix(0.72, 0.97, clamp(F * 2.0 + smoothstep(200.0, 3000.0, dist), 0.0, 1.0)), 1.0 - Tl * 0.5, smoothstep(14.0, 3.0, vSea.w) * (1.0 - smoothstep(300.0, 2500.0, dist)));
         }
         #endif
         float foamCover = 0.0;
@@ -487,9 +495,10 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
             float foam = 0.0, nw = 0.5, bub = 0.0;
             // the sea's edge (on the beach itself the swash brings its own foam, vFoam.z), a ship's or a flyby's wake
             float shore = (1.0 - smoothstep(0.1, 1.6, wet)) * 0.85 * (0.6 + 0.4 * sin(time * 0.9 + dot(p, vec2(0.05, 0.037)))) * step(0.0, vSea.w);
-            float amt = max(shore, wk.r);
+            float amt = wk.r;
             float gridK = 1.0 - smoothstep(250.0, 650.0, dist);
-            if (whitecap > 0.0 || amt > 0.004 || vFoam.z > 0.004) {
+            float surf = max(vFoam.z, shore);
+            if (whitecap > 0.0 || amt > 0.004 || surf > 0.004) {
                 float nf = texture(foamMap, p / 23.0 + vec2(time * 0.012, time * 0.008)).r * 0.6 + texture(foamMap, p / 7.1 - vec2(time * 0.02, -time * 0.015)).r * 0.4;
                 nw = texture(foamMap, p / 14.0 - windDir * time * 0.03).g * 0.65 + nf * 0.35;
                 if (whitecap > 0.0) {
@@ -531,10 +540,13 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
                 }
                 amt = clamp(amt, 0.0, 1.0);
                 foam = max(foam, smoothstep(1.0 - amt, 1.25 - amt, nf) * near);
-                // the surf: a breaker's white water and the swash's leading edge, churned (billows, not lace)
-                float sA = min(vFoam.z, 0.9);
-                foam = max(foam, smoothstep(1.0 - sA, 1.3 - sA, nw * 0.7 + nf * 0.3) * near);
-                amt = max(amt, vFoam.z);
+                // the surf: a breaker's white water, the swash's leading edge, the sea's edge: churned (billows, not lace)
+                float sA = min(surf, 0.82);
+                if (sA > 0.004) {
+                    float ns = texture(foamMap, p / 14.0 - windDir * time * 0.03).g * 0.6 + texture(foamMap, p / 4.7 + vec2(time * 0.05, -time * 0.03)).g * 0.4;
+                    foam = max(foam, smoothstep(1.0 - sA, 1.45 - sA, ns) * near);
+                }
+                amt = max(amt, surf);
                 bub = max(bub, amt); // the bubbles under the foam
             }
             // foam is a rough white diffuser: lit through the wave's own slope (so a breaking face shows its shape)
