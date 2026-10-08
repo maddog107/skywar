@@ -42,12 +42,12 @@ describe('a round into the water', () => {
         assert.equal(S.roundCalibre({ small: true, def: { id: 'ak47' } }), 7.62);
         assert.equal(S.roundCalibre({ cal: 30 }), 30);
     });
-    test('the spout by calibre: rifle bullets under a metre or so, 20 mm 3–6 m, 30 mm bigger', () => {
+    test('the spout by calibre: rifle bullets under a metre or so; cannon shells drawn tall to read (20 mm 6–13 m), 30 mm bigger', () => {
         const strafe = Math.sin(12 * Math.PI / 180);
         const h = (cal, v = 1000, s = 1) => S.spoutHeight(cal, v, s);
         assert.ok(h(5.56, 900) < h(7.62, 800) && h(7.62, 800) < 1.4, `5.56 mm ${h(5.56, 900).toFixed(2)} m, 7.62 mm ${h(7.62, 800).toFixed(2)} m`);
         assert.ok(h(12.7, 880) > 1.5 && h(12.7, 880) < 3.5, `12.7 mm ${h(12.7, 880).toFixed(2)} m`);
-        for (const s of [1, strafe]) assert.ok(h(20, 1000, s) >= 3 && h(20, 1000, s) <= 6.5, `20 mm ${h(20, 1000, s).toFixed(2)} m (sin ${s.toFixed(2)})`);
+        for (const s of [1, strafe, Math.sin(25 * Math.PI / 180)]) assert.ok(h(20, 1000, s) >= 6 && h(20, 1000, s) <= 13, `20 mm ${h(20, 1000, s).toFixed(2)} m (sin ${s.toFixed(2)})`);
         assert.ok(h(30, 1000, strafe) > h(20, 1000, strafe) * 1.3, `30 mm ${h(30, 1000, strafe).toFixed(2)} vs 20 mm ${h(20, 1000, strafe).toFixed(2)}`);
         let last = 0;
         for (const c of [5.56, 7.62, 9, 12.7, 20, 23, 25, 27, 30]) { assert.ok(h(c) > last, `grows with calibre at ${c} mm`); last = h(c); }
@@ -89,7 +89,7 @@ describe('a round into the water', () => {
 describe('a charge in the water', () => {
     test('the column by warhead: tens of metres for a 500 lb bomb or a missile, 100 m and more for the biggest', () => {
         const bomb = S.blastSplash(S.WARHEAD_KG.bomb, 'shallow'), aam = S.blastSplash(S.WARHEAD_KG.aam, 'contact');
-        assert.ok(bomb.H > 35 && bomb.H < 75, `500 lb bomb: ${bomb.H.toFixed(0)} m`);
+        assert.ok(bomb.H > 55 && bomb.H < 85, `500 lb bomb: ${bomb.H.toFixed(0)} m`);
         assert.ok(aam.H > 8 && aam.H < 25, `AIM-9: ${aam.H.toFixed(0)} m`);
         const harpoon = S.blastSplash(300, 'contact'), scud = S.blastSplash(700, 'shallow'), ton = S.blastSplash(1000, 'optimal');
         assert.ok(harpoon.H > 35, `Harpoon: ${harpoon.H.toFixed(0)} m`);

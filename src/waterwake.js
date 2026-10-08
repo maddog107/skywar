@@ -741,9 +741,13 @@ export class FlybyWakes {
 // size). Patches the system's material; returns its seaY uniform (set it to the mean sea's height).
 export function seaFade(sys) {
     const m = sys.mat, vA = 'mv.xy += q;', fA = 'float a = t.a * vCol.a;';
+    const vN = 'vCol.a *= clamp((vDist - 0.3) / max(size * 0.6, 0.5), 0.0, 1.0);';
     if (!m.vertexShader.includes(vA) || !m.fragmentShader.includes(fA)) return null;
     m.vertexShader = m.vertexShader.replace('void main() {', 'varying vec2 vSea;\n    void main() {')
-        .replace(vA, vA + ' vSea = vec2((inverse(viewMatrix) * mv).y, size);');
+        .replace(vA, vA + ' vSea = vec2((inverse(viewMatrix) * mv).y, size);')
+        // and near the camera: gone within a few metres, and a puff that would fill much of the view fades out (a chase
+        // camera flying through a jet's own spray keeps the jet and the HUD in sight; the trail behind still shows)
+        .replace(vN, vN + ' vCol.a *= smoothstep(4.0, 14.0, vDist) * (1.0 - smoothstep(0.15, 0.45, size / max(vDist, 0.1)));');
     m.fragmentShader = m.fragmentShader.replace('void main() {', 'varying vec2 vSea; uniform float seaY;\n    void main() {')
         .replace(fA, fA + ' a *= smoothstep(seaY, seaY + clamp(vSea.y * 0.3, 1.0, 2.5), vSea.x);');
     return (m.uniforms.seaY = { value: 0 });

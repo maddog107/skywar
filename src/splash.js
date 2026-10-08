@@ -9,14 +9,14 @@
 // ~6–9° for bullets) a round skips off the surface, a low feather of spray thrown forward, and flies on, slowed
 // and tumbling up: tracers seen glancing off the sea in gun-camera film. Pooled: a frame's spouts are budgeted
 // (SPLASH_QUALITY) and the far ones thinned, so hundreds of rounds a second cost a few hundred particles.
-// Charges (blast): a column scaled by the charge (blastSplash: H ≈ 13.5 W^⅓ m for W kg TNT at the depth that throws it
+// Charges (blast): a column scaled by the charge (blastSplash: H ≈ 17.5 W^⅓ m for W kg TNT at the depth that throws it
 // highest, about half that for a burst on the surface), as filmed in US Navy underwater-detonation and SINKEX
 // footage: a white spray dome over a burst below the surface, then plumes of jets punching through it, a crown of
 // spray, the column standing a few seconds and collapsing into a base surge of mist rolling out over the water,
 // droplets raining back down for seconds after, a dark churned slick that lasts tens of seconds, a ring of shock
 // racing out and the gravity waves following it, a muffled flash under the water (and its light at night), and
 // the surface itself heaving up over the burst and ringing out in waves (ocean.js heave). A 500 lb bomb throws its
-// column ~50 m up, a heavy cruise or ballistic missile's warhead 60–100 m, a ton under a keel ~130 m.
+// column ~65 m up, a heavy cruise or ballistic missile's warhead 70–130 m, a ton under a keel ~175 m.
 // Impacts (impact): things that hit the water without a charge throw a splash scaled by their energy (debris, a
 // wreck, a crashing jet: a long sheet of spray thrown along its path, a fuel fire on the water and a foam patch).
 // Particles: two systems of the effects' own kind (effects.js ParticleSystem): droplets (streaked along their flight,
@@ -58,13 +58,15 @@ export function gunRealRate(name) {
     return /M61/.test(n) ? 100 : /GAU-8/.test(n) ? 65 : /GAU-22/.test(n) ? 55 : /GSh-30/.test(n) ? 30 : /BK-27/.test(n) ? 28
         : /GIAT/.test(n) ? 40 : /GSh-23|Type 23/.test(n) ? 55 : /M39/.test(n) ? 50 : /DEFA|ADEN/.test(n) ? 42 : 0;
 }
-// How high (m) a round's spout stands: about 0.2 cal^1.1 for a cannon shell going in steeply at ~900 m/s (20 mm
-// 5.5 m, 30 mm 8.5 m: the shell's cavity collapsing throws a jet up, an HE shell's burst more), less than that for
+// How high (m) a round's spout stands: about 0.2 cal^1.1 for a round going in steeply at ~900 m/s, less than that for
 // rifle bullets (a slender, slow round makes a narrow, low jet: 7.62 mm ~1 m), lower and leaning over along its path
-// when it goes in at a shallow angle (sinA: sine of the angle below the horizon; 20 mm ~4 m in a 12° strafe)
+// when it goes in at a shallow angle (sinA: sine of the angle below the horizon). Cannon shells (20 mm and up) are
+// drawn twice that, for the game's sake: an HE shell's burst just under the surface throws more than the cavity
+// alone, and a strafe has to read from the cockpit a kilometre back (20 mm ~11 m steep, ~8 m in a 25° dive; 30 mm
+// ~17 m and ~13 m)
 export function spoutHeight(cal, speed = 900, sinA = 1) {
     const c = Math.max(cal, 4);
-    let h = 0.2 * Math.pow(c, 1.11) * (c < 15 ? Math.pow(c / 15, 0.8) : 1);
+    let h = 0.2 * Math.pow(c, 1.11) * (c < 15 ? Math.pow(c / 15, 0.8) : 1) * (1 + smooth(12.7, 20, c));
     h *= clamp(Math.sqrt(speed / 900), 0.45, 1.2);
     return h * (0.55 + 0.45 * smooth(0.05, 0.5, sinA));
 }
@@ -94,7 +96,8 @@ export function blastSplash(kg, depth = 'contact', agl = 0) {
     const W = Math.max(kg || 0, 0.01), w3 = Math.cbrt(W);
     let f = DEPTH[depth] ?? DEPTH.contact;
     if (agl > 0) f *= Math.exp(-agl / (1.1 * w3 + 0.5));
-    const H = Math.min(13.5 * w3 * f, 240);
+    // (a little over the depth-charge and near-miss footage's ~13 W^⅓ m, so a 500 lb bomb's tower reads from a few km)
+    const H = Math.min(17.5 * w3 * f, 240);
     const R = 0.22 * H + 0.6 * w3 + 0.5;
     const under = depth === 'shallow' || depth === 'optimal' || depth === 'deep';
     return {
@@ -133,6 +136,7 @@ const GUN_SHARE = 0.55; // (rounds may fill this share of the droplets: a long b
 // (spray is a far better diffuser than smoke: brighter than white albedo under the smoke's lighting, the sunlit side
 // near the bloom threshold, the shaded side a pale sky-blue grey)
 const DROP0 = [1.5, 1.53, 1.58], DROP1 = [1.3, 1.35, 1.42], MIST0 = [1.58, 1.61, 1.66], MIST1 = [1.36, 1.4, 1.47];
+const HEAD0 = [1.75, 1.78, 1.82], CORE0 = [0.62, 0.63, 0.65], CORE1 = [1.0, 1.02, 1.06];
 const SURGE0 = [1.4, 1.43, 1.48], SURGE1 = [1.16, 1.2, 1.27], GLOW = [0.55, 0.85, 1], FOG0 = { color: new THREE.Color(0.75, 0.82, 0.9), density: 0 };
 const _v = new THREE.Vector3(), _p = new THREE.Vector3(), _d = new THREE.Vector3(), _at = new THREE.Vector3();
 
@@ -174,7 +178,7 @@ export function mistAtlas() {
             let nx = -hx * 2.2, ny = -hy * 2.2;
             const l = Math.hypot(nx, ny, 1); nx /= l; ny /= l;
             const i = ((oy + y) * N + ox + x) * 4, d = D[y * S + x];
-            data[i] = (nx * 0.5 + 0.5) * 255; data[i + 1] = (ny * 0.5 + 0.5) * 255; data[i + 2] = d * 230; data[i + 3] = d * 255;
+            data[i] = (nx * 0.5 + 0.5) * 255; data[i + 1] = (ny * 0.5 + 0.5) * 255; data[i + 2] = d * 230; data[i + 3] = Math.min(1, d * 1.3) * 255;
         }
     }
     mistTex = new THREE.DataTexture(data, N, N, THREE.RGBAFormat);
@@ -354,11 +358,12 @@ export class WaterFX {
             // the round's direction over the water (the spout leans along it)
             let hx = 0, hz = 0;
             if (vel && speed > 1) { const hs = Math.hypot(vel.x, vel.z) || 1; hx = vel.x / hs; hz = vel.z / hs; }
-            const v0 = Math.sqrt(2 * G * S.h) * 1.12;
+            // (far off, bigger than life, so a burst reads from the cockpit and the chase camera a kilometre or two back:
+            // a 10 m spout there is a few pixels; drawn up to ~2.6 times as high and nearly as wide)
+            const fr = dist > 300 ? Math.min(Math.pow(dist / 300, 0.8), 3.2) : 1;
+            const v0 = Math.sqrt(2 * G * S.h * fr) * 1.12;
             const lean = o.skip ? 1.4 : S.lean * 0.5;
-            // (far off, a little bigger than life, so a burst still reads at a kilometre or two: a spout 7 m high is 4 px there)
-            const fr = dist > 500 ? Math.min(Math.pow(dist / 500, 0.6), 2.6) : 1;
-            const w = (S.h * 0.16 + S.r * 0.8) * Math.sqrt(fr), spread = 0.8 + S.h * 0.35;
+            const w = (S.h * 0.16 + S.r * 0.8) * Math.pow(fr, 0.75), spread = (0.8 + S.h * 0.35) * Math.sqrt(fr);
             for (let r = 0; r < rep; r++) {
                 // (the rest of the cluster round the first, each a little smaller)
                 const P = r ? _p.set(at.x + rand(-1, 1) * spread + hx * rand(-1, 1.5) * spread, at.y, at.z + rand(-1, 1) * spread + hz * rand(-1, 1.5) * spread) : at;
@@ -369,7 +374,7 @@ export class WaterFX {
                 for (let i = 0; i < nb; i++) {
                     const vu = v0 * kr * (nb === 1 ? 0.85 : 0.55 + 0.5 * i / (nb - 1)) * (o.skip ? 0.6 : 1);
                     _v.set(hx * vu * lean * 0.8 + rand(-0.05, 0.05) * vu, vu * (o.skip ? 0.6 : 1), hz * vu * lean * 0.8 + rand(-0.05, 0.05) * vu);
-                    this.put(this.jets, jC, P, _v, 2 * vu / G * 0.88 + 0.2, w * kr, w * kr * 2.2, DROP0, DROP1, 1, 0.4, 0.35, -G, 0.1, 0.32);
+                    this.put(this.jets, jC, P, _v, 2 * vu / G * 0.88 + 0.2, w * kr, w * kr * 2.2, DROP0, DROP1, 1, 0.6, 0.35, -G, 0.1, 0.32);
                 }
                 // and the spray off it: streaks of drops flung up and out
                 const n = r ? 2 : Math.max(1, Math.round(S.drops * k * Q.k * (o.skip ? 0.7 : 1)));
@@ -382,9 +387,11 @@ export class WaterFX {
             }
             if (k >= 0.6 && !o.skip) {
                 // the top of it, a burst of white spray hanging a moment
-                const vu = v0 * 0.92;
-                _v.set(hx * vu * lean * 0.8, vu, hz * vu * lean * 0.8);
-                this.put(this.mist, mC, at, _v, 2 * vu / G * 0.9 + 0.3, (S.h * 0.14 + S.r) * fr, (S.h * 0.5 + S.r) * fr, MIST0, MIST1, 0.85, 0, 0.5, -G * 0.88, 0.2, 0);
+                for (let i = 0; i < 2; i++) {
+                    const vu = v0 * (i ? 0.75 : 0.95);
+                    _v.set(hx * vu * lean * 0.8, vu, hz * vu * lean * 0.8);
+                    this.put(this.mist, mC, at, _v, 2 * vu / G * 0.9 + 0.4, (S.h * 0.2 + S.r) * fr, (S.h * 0.6 + S.r) * fr, HEAD0, MIST1, 1, 0.3, 0.5, -G * 0.88, 0.2, 0);
+                }
                 // a crown of drops thrown out round its foot
                 const nc = Math.round((2 + S.h * 0.4) * Q.k);
                 for (let i = 0; i < nc; i++) {
@@ -397,11 +404,12 @@ export class WaterFX {
                 // the mist it leaves hanging over the water, drifting: a burst's spouts build a cloud of it
                 _p.set(at.x + hx * S.h * 0.3, at.y + S.h * 0.2, at.z + hz * S.h * 0.3);
                 _v.set(hx * 1.5 * S.lean, Math.sqrt(2 * G * S.h) * 0.3, hz * 1.5 * S.lean);
-                this.put(this.mist, mC, _p, _v, rand(2.2, 3.4), (S.r * 3 + 0.4) * fr, Math.max(S.h * (1 + 0.15 * rep), 1) * fr, MIST0, MIST1, 0.32, 0, 1.5, -0.8, 0.3, 0);
+                this.put(this.mist, mC, _p, _v, rand(3, 4.5), (S.r * 3 + 0.4) * fr, Math.max(S.h * (1 + 0.15 * rep), 1) * fr, MIST0, MIST1, 0.55, 0, 1.5, -0.8, 0.3, 0);
             }
             // an explosive round: a pinprick of fire as it goes in (some of them)
-            if (S.he && !o.skip && k >= 0.6 && dist < 3000 && Math.random() < 0.45 && this.fx.fire) {
-                this.fx.fire.emit(at, _v.set(0, 2, 0), 0.08, 0.8 + cal * 0.04, 1.6 + cal * 0.07, [3.4, 2.4, 1.2], [1.6, 0.6, 0.15], 1, 0, 0, 0);
+            if (S.he && !o.skip && k >= 0.6 && dist < 4000 && Math.random() < (cal >= 25 ? 0.7 : 0.5) && this.fx.fire) {
+                const f = Math.sqrt(fr);
+                this.fx.fire.emit(at, _v.set(0, 2, 0), 0.09, (0.8 + cal * 0.05) * f, (1.6 + cal * 0.09) * f, [3.4, 2.4, 1.2], [1.6, 0.6, 0.15], 1, 0, 0, 0);
             }
         }
         // the ring of boiling, rippled water in the wake map (every round, or every few on lower settings)
@@ -430,7 +438,12 @@ export class WaterFX {
         this.stats.blasts++; this.last = { x, z, t: this.now, H: P.H };
         if (P.H < 0.8) return P;
         const at = _at.set(x, sea, z);
-        const Q = this.Q, q = Q.k, s = Math.sqrt(P.H / 50);
+        // (seen from far off, the column is drawn bigger than life: a 65 m tower 3 km away is a couple of dozen pixels;
+        // up to 1.8 times from ~1 km out, so a player sees it from the jet that dropped the bomb)
+        const cam = this.camPos();
+        const vis = cam ? clamp(Math.pow(Math.hypot(x - cam.x, sea - cam.y, z - cam.z) / 700, 0.65), 1, 2.4) : 1;
+        const PV = vis > 1.01 ? { ...P, H: P.H * vis, R: P.R * vis, tTop: P.tTop * Math.sqrt(vis), surgeV: P.surgeV * Math.sqrt(vis), surge: P.surge * vis } : P;
+        const Q = this.Q, q = Q.k, s = Math.sqrt(PV.H / 50);
         const W = this.ready();
         const fx = this.fx;
         // the flash: a fireball on the surface for a contact burst (the water swallows most of it), a muffled glow
@@ -438,15 +451,16 @@ export class WaterFX {
         if (P.fire > 0 && o.fireball !== false && fx.explosion) fx.explosion(_p.set(x, sea + 1.5, z), clamp(Math.cbrt(P.kg / 6) * P.fire * 0.8, 0.25, 2), null, { noWater: true, quench: true });
         if (P.flash > 0 && fx.sprite && fx.flashTex) {
             const glow = Math.cbrt(P.kg);
-            fx.sprite(fx.flashTex, _p.set(x, sea + 1.2, z), P.R * 2.2, 0.22 + 0.04 * glow, 0.5, 0.35 + 0.35 * P.flash, P.fire > 0.3 ? [1, 0.9, 0.75] : GLOW);
+            const deep = o.depth === 'deep' || o.depth === 'optimal';
+            fx.sprite(fx.flashTex, _p.set(x, sea + 1.2, z), PV.R * 2.8, 0.2 + 0.03 * glow, 0.5, Math.min(0.55 + 0.45 * P.flash, 0.95), deep ? GLOW : [1, 0.94, 0.8]);
             if (fx.light) fx.light(_p.set(x, sea - 1, z), 18 * glow * P.flash, 0.3 + 0.05 * glow, { color: P.fire > 0.3 ? undefined : GLOW, cloud: 0.8, merge: 15 });
         }
-        if (W) this.column(at, P, s, q, o.vel);
+        if (W) this.column(at, PV, s, q, o.vel);
         // what follows, in its own time
         if (W && P.H > 4) {
-            this.events.push({ kind: 'rain', t: this.now + P.tTop * 0.55, end: this.now + P.tTop * 2.6, x, z, y: sea, P, acc: 0, n: 200 * s * q });
-            this.events.push({ kind: 'hang', t: this.now + P.tTop * 0.9, x, z, y: sea, P, s, q });
-            if (P.surge > 0) this.events.push({ kind: 'surge', t: this.now + P.tTop * 1.2, end: this.now + P.tTop * 1.2 + 1.2, x, z, y: sea, P, acc: 0, n: 64 * s * q, stamped: false });
+            this.events.push({ kind: 'rain', t: this.now + PV.tTop * 0.55, end: this.now + PV.tTop * 2.6, x, z, y: sea, P: PV, acc: 0, n: 200 * s * q });
+            this.events.push({ kind: 'hang', t: this.now + PV.tTop * 0.9, x, z, y: sea, P: PV, s, q });
+            if (P.surge > 0) this.events.push({ kind: 'surge', t: this.now + PV.tTop * 1.2, end: this.now + PV.tTop * 1.2 + 1.2, x, z, y: sea, P: PV, acc: 0, n: 64 * s * q, stamped: false });
         }
         if (this.events.length > 120) this.events.splice(0, this.events.length - 120);
         // the water: a churned slick, the shock racing out, waves following it
@@ -464,7 +478,7 @@ export class WaterFX {
         // the surface heaving over it (ocean.js)
         if (P.heave > 0 && Q.heave > 0) this.addHeave(x, z, P);
         // the sound: a deep, muffled whoomp (or a shell's crack), the roar of the column, the long hiss of it falling back
-        const g = this.game, cam = this.camPos();
+        const g = this.game;
         if (g && g.audio && g.audio.waterBoom && o.sound !== false && cam) g.audio.waterBoom(Math.hypot(x - cam.x, sea - cam.y, z - cam.z), P.H / 50, o.sound || 'full', P.tTop);
         return P;
     }
@@ -502,7 +516,7 @@ export class WaterFX {
         }
         // the column's body: dense white spray rising, a shell of it from the surface to the top at any moment, falling
         // back on itself; the fastest of it billowing out at the head
-        const nc = Math.round(60 * s * q);
+        const nc = Math.round(100 * s * q);
         for (let i = 0; i < nc; i++) {
             const head = i % 3 === 0, u = head ? rand(0.85, 1.04) : Math.sqrt(rand(0.03, 1)), vu = vTop * u;
             const a = Math.random() * Math.PI * 2, rr = R * 0.45 * Math.sqrt(Math.random());
@@ -510,7 +524,15 @@ export class WaterFX {
             const out = rr / R * vu * (head ? 0.3 : 0.16) + rand(0, 1.5);
             _v.set(Math.cos(a) * out + lx * vu, vu, Math.sin(a) * out + lz * vu);
             const life = 2 * vu / G * 0.95 + rand(0.3, 0.9);
-            this.put(M, mC, _p, _v, life, R * rand(0.4, 0.6), R * (head ? rand(1, 1.4) : rand(0.8, 1.1)), MIST0, MIST1, 1, 0.35, 0.12, -G * 0.92, 0.3, 0);
+            this.put(M, mC, _p, _v, life, R * rand(0.45, 0.65), R * (head ? rand(1.05, 1.45) : rand(0.85, 1.15)), MIST0, MIST1, 1, 0.6, 0.12, -G * 0.92, 0.3, 0);
+        }
+        // the dark core at its foot for the first second: water and spray churned up from below, grey in the white
+        const ng = Math.round(16 * s * Math.sqrt(q));
+        for (let i = 0; i < ng; i++) {
+            const a = Math.random() * Math.PI * 2, rr = R * 0.3 * Math.sqrt(Math.random());
+            _p.set(at.x + Math.cos(a) * rr, at.y + R * 0.2, at.z + Math.sin(a) * rr);
+            _v.set(Math.cos(a) * rand(0, 3), vTop * rand(0.05, 0.25), Math.sin(a) * rand(0, 3));
+            this.put(M, mC, _p, _v, rand(0.9, 1.4), R * rand(0.45, 0.6), R * rand(0.75, 0.95), CORE0, CORE1, 1, 0, 0.8, -G * 0.5, 0.2, 0);
         }
         // the jets punching up through it: streaks of spray, some flung out at an angle
         const nj = Math.round(170 * s * q);
