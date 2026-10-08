@@ -298,11 +298,30 @@ export function installCascadeShader() {
         #else
             ${own}
         #endif`)
-        .replace(re, `#if defined( CSM_ON ) && ( UNROLLED_LOOP_INDEX > 0 ) && ( UNROLLED_LOOP_INDEX < NUM_DIR_LIGHT_SHADOWS )
+        .replace(re, `#if ( UNROLLED_LOOP_INDEX == 0 )
+            vec3 csmPre = reflectedLight.directDiffuse + reflectedLight.directSpecular;
+            #endif
+            #if defined( CSM_ON ) && ( UNROLLED_LOOP_INDEX > 0 ) && ( UNROLLED_LOOP_INDEX < NUM_DIR_LIGHT_SHADOWS )
             if ( csmInfo.x < 0.5 )
             #endif
-            ${re}`);
-    C.lights_fragment_begin = '#ifndef SHADOW_FADE\n#define SHADOW_FADE( s ) ( s )\n#endif\n' + src.slice(0, start) + block + src.slice(end);
+            ${re}
+            #if ( UNROLLED_LOOP_INDEX == 0 )
+            csmSun = reflectedLight.directDiffuse + reflectedLight.directSpecular - csmPre; // (the sun's own light)
+            #endif`);
+    C.lights_fragment_begin = '#ifndef SHADOW_FADE\n#define SHADOW_FADE( s ) ( s )\n#endif\nvec3 csmSun = vec3( 0.0 );\n#define CSM_SUN_SHARE\n' + src.slice(0, start) + block + src.slice(end);
+    // An opaque pixel's alpha carries the sun's share of its light (after the haze), 1 + 0.5 × share: the post
+    // passes (postfx.js) apply ambient occlusion to the rest and contact shadows to that share. (The water marks
+    // itself below 0.7 and every opaque pixel stays at 1 or more, so the water's mark is untouched.)
+    C.premultiplied_alpha_fragment = `#if defined( CSM_SUN_SHARE ) && defined( OPAQUE ) && defined( CSM_ON )
+        if ( csmInfo.x > 0.5 ) {
+            float csmL = dot( csmSun, vec3( 0.2126, 0.7152, 0.0722 ) );
+            #ifdef USE_FOG
+            csmL *= 1.0 - fogAmt.x;
+            #endif
+            gl_FragColor.a = 1.0 + 0.5 * clamp( csmL / max( dot( gl_FragColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) ), 1e-5 ), 0.0, 1.0 );
+        }
+    #endif
+    ` + C.premultiplied_alpha_fragment;
     C.shadowmap_pars_fragment += '\n' + CSM_GLSL;
     // the uniforms, for every built-in material with shadows (and custom ones that merge UniformsLib.lights)
     const U = CSM_UNIFORMS();

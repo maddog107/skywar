@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 const THREE = await import('three');
 const { practicalSplits, cascadeLayout, lightBasis, snapToTexel, cascadeAhead, SunShadows, CSM_QUALITY, CSM_INSTALLED, CSM, SUN_TAN_RADIUS } = await src('shadows.js');
 const { sweepShadow, sampleHeights, shadowAt, terrainVisibility, toHalf, NO_SHADOW } = await src('terrainshadowcore.js');
+const { SHADING, QUALITY } = await src('postfx.js');
 
 const QUALITIES = ['low', 'medium', 'high', 'ultra'];
 
@@ -241,5 +242,14 @@ describe('terrain shadow (shadow-top sweep)', () => {
             assert.ok(Math.abs(back - v) <= Math.max(Math.abs(v) * 1e-3, 1e-4), `${v} -> ${back}`);
             assert.ok(Math.abs(h - THREE.DataUtils.toHalfFloat(v)) <= 1, `${v}`); // (ties may round either way)
         }
+    });
+});
+
+describe('ambient occlusion and contact shadows (postfx.js SHADING)', () => {
+    test('every quality has a setting; off on low and medium; ultra at least high', () => {
+        for (const q of Object.keys(QUALITY)) assert.ok(SHADING[q], q);
+        for (const q of ['low', 'medium']) assert.equal(SHADING[q].slices + SHADING[q].contact, 0);
+        assert.ok(SHADING.high.slices > 0 && SHADING.high.contact > 0);
+        for (const k of ['slices', 'steps', 'contact']) assert.ok(SHADING.ultra[k] >= SHADING.high[k], k);
     });
 });
