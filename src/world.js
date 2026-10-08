@@ -251,7 +251,9 @@ export function lowSun(P, el) {
     P.sun.setRGB(P.sun.r + (_tr[0] * k - P.sun.r) * b, P.sun.g + (_tr[1] * k - P.sun.g) * b, P.sun.b + (_tr[2] * k - P.sun.b) * b);
     const dim = Math.max(Math.pow(lt / lum3(_trRef), 0.35), 0.6); // (0.6 of the palette's sun at the horizon)
     P.sunI *= 1 + (dim - 1) * b;
-    P.hemiI *= 1 + 0.18 * b;
+    // (at sunset the sky outshines the sun on level ground: what lies in a mountain's shadow is sky-lit, not black)
+    P.hemiI *= 1 + 0.35 * b;
+    P.envI *= 1 + 0.2 * b;
     return P;
 }
 
