@@ -337,7 +337,7 @@ export const CSM_INSTALLED = installCascadeShader();
 // ═══════════════════════════════════════════════════════════════
 // The cascades: lights, placement, update schedule, caster culling
 const _ox = new THREE.Vector3(), _oy = new THREE.Vector3(), _dir = new THREE.Vector3(), _p = new THREE.Vector3(), _snap = new THREE.Vector3();
-const _sph = new THREE.Sphere();
+const _sph = new THREE.Sphere(), _box = new THREE.Box3();
 
 export class SunShadows {
     // scene: the world scene; sun: its DirectionalLight (cascade 0, the one that carries the light);
@@ -472,7 +472,13 @@ export class SunShadows {
             _sph.copy(bs).applyMatrix4(o.matrixWorld);
             const kk = self.lights.indexOf(L);
             if (kk > 0 && !self.wantCaster(kk, _sph)) { self.skipped[kk]++; return false; }
-            const hit = this.intersectsSphere(_sph);
+            let hit = this.intersectsSphere(_sph);
+            // a big caster that carries a tight box of its own (geometry.userData.shadowBox: a forest tile) is tested
+            // with it too, the sphere being far too loose for a cascade's thin slab. (Only on request: other code keeps
+            // spheres current, or makes them huge on purpose, and leaves boxes stale.)
+            if (hit && kk >= 0 && o.geometry.userData.shadowBox && o.geometry.boundingBox && _sph.radius > self.cascades[kk].R) {
+                hit = this.intersectsBox(_box.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld));
+            }
             if (hit && kk >= 0) self.casters[kk]++;
             return hit;
         };

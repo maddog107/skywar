@@ -217,6 +217,44 @@ const seaKey = (w) => SEA_KEYS[w] || w;
 // sky colour a lightning flash lifts it toward
 const _sunDir = new THREE.Vector3(), _glow = new THREE.Vector3(), _nightGlow = new THREE.Vector3(-0.3, 0.45, -0.85).normalize(), _flashSky = new THREE.Color(0.8, 0.82, 0.95);
 
+// ── The sun through the atmosphere ──
+// Direct-beam transmittance exp(-tau m) at red, green and blue (~680, 550, 440 nm) for a sun `el` degrees up:
+// Rayleigh and ozone optical depths from Hillaire's Earth atmosphere ("A Scalable and Production Ready Sky and
+// Atmosphere Rendering Technique", EGSR 2020: scattering 5.802, 13.558, 33.1 per Mm over an 8 km scale height;
+// ozone 0.650, 1.881, 0.085 per Mm over ~15 km), a light aerosol (optical depth 0.05 at 550 nm, Angstrom exponent
+// 1.3) and the Kasten & Young (1989) air mass, which stays finite at the horizon (about 38).
+const TAU_RAYLEIGH = [5.802e-6 * 8000, 13.558e-6 * 8000, 33.1e-6 * 8000];
+const TAU_OZONE = [0.650e-6 * 15000, 1.881e-6 * 15000, 0.085e-6 * 15000];
+const TAU_AEROSOL = [0.05 * Math.pow(680 / 550, -1.3), 0.05, 0.05 * Math.pow(440 / 550, -1.3)];
+export function airMass(el) {
+    const z = 90 - Math.max(el, -1);
+    return 1 / (Math.cos(z * Math.PI / 180) + 0.50572 * Math.pow(Math.max(96.07995 - z, 0.5), -1.6364));
+}
+export function sunTransmittance(el, out = [0, 0, 0]) {
+    const m = airMass(el);
+    for (let i = 0; i < 3; i++) out[i] = Math.exp(-(TAU_RAYLEIGH[i] + TAU_OZONE[i] + TAU_AEROSOL[i]) * m);
+    return out;
+}
+const _tr = [0, 0, 0], _trRef = sunTransmittance(26);
+const lum3 = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+// The palettes put the sun's colour right from ~25° up; below that the beam reddens and dims far faster than they
+// do (2.5° up it is deep orange and a tenth as bright as at noon, not three quarters). Low sun: the colour from the
+// transmittance (the palette's brightness kept), the sun a little dimmer and the sky's fill a little stronger, so
+// dawn and dusk shadows are softer in contrast, as they are, without darkening the scene (the exposure is fixed).
+export function lowSun(P, el) {
+    // (not once it has set: the light is the moon's then, see applySky)
+    const b = (1 - smoothstep(12, 26, el)) * smoothstep(-2, 0.5, el);
+    if (b <= 0) return P;
+    sunTransmittance(Math.max(el, 0), _tr);
+    const lt = lum3(_tr), lp = 0.2126 * P.sun.r + 0.7152 * P.sun.g + 0.0722 * P.sun.b;
+    const k = lp / Math.max(lt, 1e-6);
+    P.sun.setRGB(P.sun.r + (_tr[0] * k - P.sun.r) * b, P.sun.g + (_tr[1] * k - P.sun.g) * b, P.sun.b + (_tr[2] * k - P.sun.b) * b);
+    const dim = Math.max(Math.pow(lt / lum3(_trRef), 0.35), 0.6); // (0.6 of the palette's sun at the horizon)
+    P.sunI *= 1 + (dim - 1) * b;
+    P.hemiI *= 1 + 0.18 * b;
+    return P;
+}
+
 // a tile's trees: one instanced impostor mesh (vegetation.js)
 function disposeTrees(g) {
     if (g) g.geometry.dispose();
@@ -419,7 +457,7 @@ export class World {
         const h24 = ((hour % 24) + 24) % 24, morning = h24 < 12;
         this.timeKey = timeKeyFor(hour);
         const nightK = nightOf(hour);
-        const P = applyWeatherToPalette(paletteAt(hour, this.P), W);
+        const P = applyWeatherToPalette(lowSun(paletteAt(hour, this.P), el), W); // (the low sun through the air)
         // the light: the sun while it's up (fading out as it sets), then the moon (fading in once the sun is well down),
         // so the shadows never jump while the light is on
         let lightI;
@@ -1383,6 +1421,9 @@ export class World {
         geo.instanceCount = n;
         const cy = (minY + maxY + maxH) / 2;
         geo.boundingSphere = new THREE.Sphere(new THREE.Vector3((tx + 0.5) * T, cy, (tz + 0.5) * T), Math.hypot(T * 0.72, (maxY + maxH - minY) / 2 + 10));
+        // (and a tight box: a shadow cascade hung in the air round a jet doesn't draw a whole forest, shadows.js)
+        geo.boundingBox = new THREE.Box3(new THREE.Vector3(tx * T - 20, minY - 10, tz * T - 20), new THREE.Vector3((tx + 1) * T + 20, maxY + maxH + 10, (tz + 1) * T + 20));
+        geo.userData.shadowBox = true;
         const mesh = new THREE.Mesh(geo, this.forestMat);
         mesh.customDepthMaterial = this.forestDepth;
         mesh.castShadow = !!this.treeShadows;

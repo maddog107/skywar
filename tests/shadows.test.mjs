@@ -6,6 +6,8 @@ const THREE = await import('three');
 const { practicalSplits, cascadeLayout, lightBasis, snapToTexel, cascadeAhead, SunShadows, CSM_QUALITY, CSM_INSTALLED, CSM, SUN_TAN_RADIUS } = await src('shadows.js');
 const { sweepShadow, sampleHeights, shadowAt, terrainVisibility, toHalf, NO_SHADOW } = await src('terrainshadowcore.js');
 const { SHADING, QUALITY } = await src('postfx.js');
+const { sunTransmittance, airMass, lowSun } = await src('world.js');
+const WX = await src('weather.js');
 
 const QUALITIES = ['low', 'medium', 'high', 'ultra'];
 
@@ -242,6 +244,41 @@ describe('terrain shadow (shadow-top sweep)', () => {
             assert.ok(Math.abs(back - v) <= Math.max(Math.abs(v) * 1e-3, 1e-4), `${v} -> ${back}`);
             assert.ok(Math.abs(h - THREE.DataUtils.toHalfFloat(v)) <= 1, `${v}`); // (ties may round either way)
         }
+    });
+});
+
+describe('the sun through the atmosphere (world.js)', () => {
+    test('air mass: 1 overhead, ~2 at 30°, finite (~38) at the horizon', () => {
+        assert.ok(Math.abs(airMass(90) - 1) < 1e-3);
+        assert.ok(Math.abs(airMass(30) - 2) < 0.01);
+        assert.ok(airMass(0) > 30 && airMass(0) < 45);
+    });
+
+    test('transmittance: blue goes first, everything dims monotonically toward the horizon', () => {
+        let prev = sunTransmittance(90);
+        assert.ok(prev[0] > prev[1] && prev[1] > prev[2] && prev[2] > 0.6, 'overhead: warm white');
+        for (let el = 80; el >= 0; el -= 5) {
+            const t = sunTransmittance(el);
+            for (let i = 0; i < 3; i++) assert.ok(t[i] < prev[i] + 1e-12 && t[i] > 0);
+            assert.ok(t[2] / t[1] <= prev[2] / prev[1] + 1e-12, 'redder as it sinks');
+            prev = t;
+        }
+        const h = sunTransmittance(2.5);
+        assert.ok(h[0] / h[1] > 3 && h[2] / h[1] < 0.15, `2.5° up: deep orange ${h.map(v => v.toFixed(3))}`);
+    });
+
+    test('low sun: the palette untouched above 26°, redder and a little dimmer below, the sky fill up; not the moon', () => {
+        const P = WX.newPalette();
+        const at = (hour) => { WX.paletteAt(hour, P); const before = { sun: P.sun.clone(), sunI: P.sunI, hemiI: P.hemiI }; lowSun(P, WX.sunAt(hour).el); return before; };
+        let b = at(11.2);
+        assert.ok(P.sun.equals(b.sun) && P.sunI === b.sunI && P.hemiI === b.hemiI);
+        b = at(6.25); // ~3° up
+        const lum = (c) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+        assert.ok(Math.abs(lum(P.sun) - lum(b.sun)) < 1e-6, 'brightness kept');
+        assert.ok(P.sun.r / P.sun.g > b.sun.r / b.sun.g && P.sun.b / P.sun.g < b.sun.b / b.sun.g, 'redder');
+        assert.ok(P.sunI < b.sunI && P.sunI >= b.sunI * 0.6 - 1e-9 && P.hemiI > b.hemiI);
+        b = at(23); // night: the moon
+        assert.ok(P.sun.equals(b.sun) && P.sunI === b.sunI);
     });
 });
 

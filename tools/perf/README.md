@@ -49,6 +49,11 @@ every typed array lives in the JS heap. What the performance pass settled on, fo
 - **Boot:** anything that can wait for the menu should (background loads, `warmUploadStep`, precut surfaces); the
   boot marks (`boot:terrain`, `boot:models`, `boot:towns`, …, `boot:menu`) show where the time goes.
 
+- **Sun shadows** (shadows.js): every cascade is a shadow pass over the scene. A new shadow caster should be a merged
+  mesh with a sane bounding sphere; a huge instanced one (a forest tile) can carry a tight `geometry.boundingBox` with
+  `geometry.userData.shadowBox = true` so cascades hung in the air round a jet skip it. `node tools/perf/cascades.mjs`
+  prints each quality's cascades (size, texel, update period, filter); `CSM.info[3] = 1` tints the scene by cascade.
+
 To see where draws, triangles and heap go, the useful probes are: `renderer.renderBufferDirect` wrapped to count
 draws per object (label objects by where they hang in the game graph), attribute bytes per allocation site
 (wrap `BufferGeometry.setAttribute`, keep `WeakRef`s to the arrays, GC, sum what's alive), a CPU profile through
