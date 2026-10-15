@@ -12,7 +12,7 @@ CC BY models require the attribution below to be shown to players (e.g. on the c
 The Sketchfab models were obtained without a login from the Objaverse mirror of Sketchfab
 (https://huggingface.co/datasets/allenai/objaverse, whose metadata lists each object's licence); every
 licence was re-checked against the live Sketchfab API (`api.sketchfab.com/v3/models/<uid>` →
-"CC Attribution") on 2026-09-25 (the CL-415's on 2026-09-26).
+"CC Attribution") on 2026-09-25 (the CL-415's on 2026-09-26, the MiG-21's, MiG-25's and MiG-31's on 2026-10-15).
 
 | File | Aircraft | Title / Author | Licence | Source |
 |---|---|---|---|---|
@@ -37,6 +37,9 @@ licence was re-checked against the live Sketchfab API (`api.sketchfab.com/v3/mod
 | `rafale.glb` | Dassault Rafale | "Dassault Rafale" by so_O (quick_loop) | CC BY 4.0 | https://sketchfab.com/3d-models/dassault-rafale-d8bbfb0970ca4128b73e7e5364828fd3 |
 | `racer.glb` | Unlimited air racer (P-51 airframe) | "P-51 Mustang" by UlissesVinicios | CC BY 4.0 | https://sketchfab.com/3d-models/p-51-mustang-36f0f3e71d2a4c18b479db1ae8f9e7a7 |
 | `pitts.glb` | Stunt biplane (Stearman-style) | "Airplane biplane" by BlueHour (KaramellGlass) | CC BY 4.0 | https://sketchfab.com/3d-models/airplane-biplane-be48f3f906ed431b98b1bf03ab7aadd6 |
+| `mig21.glb` | MiG-21bis Fishbed (an earlier MiG-21 airframe stands in) | "Mig21" by manilov.ap | CC BY 4.0 | https://sketchfab.com/3d-models/mig21-4e2b33b33fcb43948c78783867e3b166 |
+| `mig25.glb` | MiG-25 Foxbat | "Mig25" by manilov.ap | CC BY 4.0 | https://sketchfab.com/3d-models/mig25-afe67617c5294dce9056106a22f640ff |
+| `mig31.glb` | MiG-31 Foxhound | "Mig31" by manilov.ap | CC BY 4.0 | https://sketchfab.com/3d-models/mig31-61911bc14a1445359e2f1847717b4bb6 |
 | `cl415.glb`, `cl415_gear.glb` | Canadair CL-415 (airframe; its retractable landing gear) | "cl415" by helijah (Emmanuel Baranger) | CC BY 4.0 | https://sketchfab.com/3d-models/cl415-bf3eaa6a1f4f4fc18df9b05cf40de927 |
 
 ### Built for SKYWAR in Blender (CC0 1.0)
@@ -47,13 +50,10 @@ the models).
 
 | File | Aircraft | Reference |
 |---|---|---|
-| `mig31.glb` | MiG-31 Foxhound | https://commons.wikimedia.org/wiki/File:Mikoyan_MiG-31_3-view_line_drawing.png (public domain) and File:Mikoyan_MiG-31_3-view.svg |
-| `mig25.glb` | MiG-25P Foxbat | https://commons.wikimedia.org/wiki/File:Mikoyan-Gurevich_MiG-25_3-view_line_drawing.gif (public domain) |
 | `j20.glb` | Chengdu J-20 | https://commons.wikimedia.org/wiki/File:Chengdu_J-20.svg |
 | `j10.glb` | Chengdu J-10A | https://commons.wikimedia.org/wiki/File:Chengdu_J-10.svg |
 | `j8.glb` | Shenyang J-8II | published dimensions and photographs (no free three-view found) |
 | `f5.glb` | Northrop F-5E Tiger II | https://commons.wikimedia.org/wiki/File:Northrop_F-5E_Tiger_II_3-view.svg |
-| `mig21.glb` | MiG-21bis | https://commons.wikimedia.org/wiki/File:Mikoyan-Gurevich_MiG-21_3-view_line_drawing.png (public domain) |
 | `mirage.glb` | Dassault Mirage IIIE | https://commons.wikimedia.org/wiki/File:Dassault_Mirage_III_3-view_line_drawing.png (public domain) |
 | `jaguar.glb` | SEPECAT Jaguar | https://commons.wikimedia.org/wiki/File:SEPECAT_Jaguar_3-view_line_drawing.png (public domain) |
 
@@ -76,6 +76,7 @@ the models).
 - "F-4 Phantom II Recreation" (https://sketchfab.com/3d-models/f-4-phantom-ii-recreation-666403b893024c8c88409f9feb2277eb) by jpford63, CC BY 4.0. Changes: painted.
 - "MiG-29 Fulcrum Fighter Jet" (https://sketchfab.com/3d-models/mig-29-fulcrum-fighter-jet-ec6c1fcfe35f4cc8a638bd85463a34f2), "Su-47 Berkut" (https://sketchfab.com/3d-models/su-47-berkut-4a2b1cecf13c4c9db7933ffd7fd67339) and "B-2 Spirit Bomber" (https://sketchfab.com/3d-models/b-2-spirit-bomber-12244128967f4d93b9cac52b275c3d51) by Carlos.Maciel, CC BY 4.0. Changes: landing gear removed (MiG-29), textures downscaled, re-oriented.
 - "PAK FA" (https://sketchfab.com/3d-models/pak-fa-245cebbc76e34a9d8b77e81a54d9cdf1) by jratanatharathorn, CC BY 4.0. Changes: decimated, painted.
+- "Mig21" (https://sketchfab.com/3d-models/mig21-4e2b33b33fcb43948c78783867e3b166), "Mig25" (https://sketchfab.com/3d-models/mig25-afe67617c5294dce9056106a22f640ff) and "Mig31" (https://sketchfab.com/3d-models/mig31-61911bc14a1445359e2f1847717b4bb6) by manilov.ap, CC BY 4.0. Changes: landing gear removed (MiG-21, MiG-25), re-oriented, textures baked into one atlas with ambient occlusion, MiG-31 repainted grey.
 - "Eurofighter Typhoon Game Prop" (https://sketchfab.com/3d-models/eurofighter-typhoon-game-prop-01d9a26a89dc4a17a9fa4c4c1f7ac39f) by robnewman76, CC BY 4.0. Changes: textures downscaled.
 - "Dassault Rafale" (https://sketchfab.com/3d-models/dassault-rafale-d8bbfb0970ca4128b73e7e5364828fd3) by so_O, CC BY 4.0. Changes: stores removed, levelled, decimated, painted.
 - C-130 model courtesy of NASA (Airborne Science Program). Changes: NASA markings removed, repainted, decimated.

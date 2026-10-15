@@ -708,7 +708,11 @@ function buildCredits() {
         ['P-51 Mustang (racer)', 'UlissesVinicios', 'CC BY 4.0', 'https://sketchfab.com/3d-models/p-51-mustang-36f0f3e71d2a4c18b479db1ae8f9e7a7'],
         ['Airplane biplane (pitts)', 'BlueHour', 'CC BY 4.0', 'https://sketchfab.com/3d-models/airplane-biplane-be48f3f906ed431b98b1bf03ab7aadd6'],
         ['cl415 (Canadair CL-415, cl415)', 'helijah', 'CC BY 4.0', 'https://sketchfab.com/3d-models/cl415-bf3eaa6a1f4f4fc18df9b05cf40de927'],
-        ['MiG-31, MiG-25, J-20, J-10, J-8, F-5E, MiG-21, Mirage III, Jaguar', 'SKYWAR / Blender (tools/aircraft_kit.py)', 'CC0', 'tools/aircraft/'],
+        ['J-20, J-10, J-8, F-5E, Mirage III, Jaguar', 'SKYWAR / Blender (tools/aircraft_kit.py)', 'CC0', 'tools/aircraft/'],
+        // Soviet jets (models/aircraft/CREDITS.md)
+        ['Mig21 (mig21: MiG-21bis)', 'manilov.ap', 'CC BY 4.0', 'https://sketchfab.com/3d-models/mig21-4e2b33b33fcb43948c78783867e3b166'],
+        ['Mig25 (mig25: MiG-25 Foxbat)', 'manilov.ap', 'CC BY 4.0', 'https://sketchfab.com/3d-models/mig25-afe67617c5294dce9056106a22f640ff'],
+        ['Mig31 (mig31: MiG-31 Foxhound)', 'manilov.ap', 'CC BY 4.0', 'https://sketchfab.com/3d-models/mig31-61911bc14a1445359e2f1847717b4bb6'],
         // support aircraft, drones and bombers (models/aircraft/CREDITS.md, last section)
         ['KC135R (kc135; the e3 E-3G Sentry and rc135 RC-135W are derived from it)', 'Adastra', 'CC BY 4.0', 'https://sketchfab.com/3d-models/kc135r-95fedbaed45b492e8dfa9d1a8f76b25f'],
         ['Ilyushin Il-76 (a50: A-50U Mainstay)', 'helijah (Emmanuel Baranger)', 'CC BY 4.0', 'https://sketchfab.com/3d-models/ilyushin-il-76-ab71a5f790f940798cc755246a7a8a7f'],

@@ -4,6 +4,8 @@
 #   blender -b -P tools/aircraft/import_model.py -- SRC.glb --inspect RENDER_DIR
 # Options:
 #   --nose +X|-X|+Y|-Y     which Blender axis the nose points along after import (default +Y)
+#   --yaw DEG|auto         first turn the model about the vertical by DEG, or (auto) so its long axis lies along Y
+#                          (a model exported turned in plan); --nose then picks the end the nose is at
 #   --roll DEG / --pitch DEG  extra rotation about Y / X after the yaw fix (models lying on their side)
 #   --delete REGEX         delete objects whose (object, mesh or material) name matches
 #   --delete-mat REGEX     delete faces using materials whose name matches
@@ -32,6 +34,11 @@
 #   --tint '#hex'          multiply the colour of every textured material (darken a washed-out skin)
 #   --one-uv / --uv0       drop extra UV sets / put the panel texture on UV0
 #   --img JPEG             re-encode textures as JPEG on export
+#   --atlas N [--atlas-trim REGEX] [--atlas-ao F]   bake every opaque material into one N px texture atlas with
+#                          a fresh UV layout (tools/aircraft/atlas.py): one 'Skin' material (liveries repaint it),
+#                          materials matching REGEX into a separate 'Nozzle_Trim' atlas liveries leave alone, glass
+#                          untouched; F darkens creases with a baked ambient occlusion (0..1)
+#   --atlas-grey '#hex'    repaint the skin atlas's unsaturated pixels in this grey (markings kept)
 #   --list                 print every object with triangles, bbox and materials
 # Output is joined into one mesh (materials kept), nose toward +Y (three.js -Z), centred, metres
 # unchanged (the game rescales to the real length). Prints triangle count / size / bbox.
@@ -138,6 +145,22 @@ if rm:
         bmesh.ops.delete(bm, geom=[f for f in bm.faces if f.material_index in bad], context='FACES')
         bm.to_mesh(o.data); bm.free()
         print('deleted faces of materials', [o.data.materials[i].name for i in bad], 'in', o.name)
+
+# ── turned in plan: a yaw about the vertical first (auto: the long axis of the plan onto Y) ──
+yaw0 = opt('--yaw')
+if yaw0:
+    if yaw0 == 'auto':
+        pts = [v.co for o in meshes() for v in o.data.vertices]
+        mx_ = sum(p.x for p in pts) / len(pts); my_ = sum(p.y for p in pts) / len(pts)
+        sxx = sum((p.x - mx_) ** 2 for p in pts); syy = sum((p.y - my_) ** 2 for p in pts)
+        sxy = sum((p.x - mx_) * (p.y - my_) for p in pts)
+        ang = 0.5 * math.atan2(2 * sxy, sxx - syy)          # the principal axis' angle from +X
+        a0 = math.pi / 2 - ang
+    else:
+        a0 = math.radians(float(yaw0))
+    print('yaw by %.2f deg' % math.degrees(a0))
+    for o in meshes():
+        o.data.transform(Matrix.Rotation(a0, 4, 'Z'))
 
 # ── orientation: nose → +Y, up → +Z ──
 nose = opt('--nose', '+Y')
@@ -512,6 +535,14 @@ print('BBOX length(Y) %.3f span(X) %.3f height(Z) %.3f' % (mx.y - mn.y, mx.x - m
 print('TRIS', tris())
 print('MATERIALS', [m.name for m in ob.data.materials if m])
 print('IMAGES', [(im.name, tuple(im.size)) for im in bpy.data.images if im.size[0]])
+
+atl = opt('--atlas', None, int)
+if atl:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import atlas as A
+    A.bake_atlas(ob, atl, glass_rx=opt('--glass', None), trim_rx=opt('--atlas-trim', None), ao=opt('--atlas-ao', 0.0, float),
+                 grey=opt('--atlas-grey', None))
+    print('TRIS', tris(), 'MATERIALS', [m.name for m in ob.data.materials if m])
 
 insp = opt('--inspect')
 if insp:

@@ -32,7 +32,17 @@ Each was cleaned with
 | su57 | `245cebbc76e34a9d8b77e81a54d9cdf1.glb` | `--nose -Y --decimate 0.4 --paint 'Material_0=#7b8791,02_-_Default=#2b3238' --length 20.1 --uv0 --one-uv --img JPEG --weld 35` |
 | typhoon | `01d9a26a89dc4a17a9fa4c4c1f7ac39f.glb` | `--nose -Y --tex 1024 --img JPEG` |
 | rafale | `d8bbfb0970ca4128b73e7e5364828fd3.glb` | `--nose -Y --delete 'Cylindre00[3789]\|bombe' --level-roll --decimate 0.7 --glass 'Material__29' --strip-maps --paint 'Material__31=#8e969c,Material__32=#6d757b,Material__30=#6d757b' --length 15.27 --img JPEG --tex 512` |
+| mig25 | `afe67617c5294dce9056106a22f640ff.glb` (shard `000-108`) | `--yaw auto --nose -Y --delete '^(Torus0[2456]\|Cylinder(10\|12\|20\|23\|25\|26)-\|Line(1[6-9]\|2[1789]\|3[0-8]\|4[0-26-9]\|5[1-36])-\|Box04\|stv_r)' --atlas 2048 --atlas-trim 'ROKET\|soplo\|kabina_vn' --atlas-ao 0.45 --glass 'kab_-FACES_0' --img JPEG` (the file is turned in plan; the gear legs, wheels and doors go by name, the pitot stays) |
+| mig31 | `61911bc14a1445359e2f1847717b4bb6.glb` (shard `000-130`) | `--yaw auto --nose -Y --atlas 2048 --atlas-trim 'ROKET\|SOPLO\|TURB' --atlas-ao 0.45 --atlas-grey '#a1a8ac' --img JPEG` (its grey was mauve: repainted, markings kept) |
+| mig21 | `4e2b33b33fcb43948c78783867e3b166.glb` (shard `000-101`) | `--yaw auto --nose -Y --delete '^(Torus0[456]\|Cylinder(2[3478]\|3[2-8]\|4[1-4])-\|Line09-\|stv_gl\|Box0[78]-\|Object0[36]-)' --atlas 2048 --atlas-trim 'PILOT\|abdomen\|chest\|figure\|head_\|Collar\|ForeArm\|Hand_\|Shldr\|neck_\|Cylinder39\|Cylinder47\|Cone01' --atlas-ao 0.45 --img JPEG` |
 | cl415 | `cl415_airframe.glb`, split from `bf3eaa6a1f4f4fc18df9b05cf40de927.glb` (shard `000-129`) by `tools/aircraft/cl415_gear.py` (below) | `--nose -X --tex 1024 --img JPEG` |
+
+`--atlas` (tools/aircraft/atlas.py) is for models that come with a material and a small texture per part (the
+manilov.ap MiGs have 24 to 90): the game splits every mesh by material and damage section, so each would be its own
+draw call several times over for every jet of the type. The bake gives the airframe one 2048 px texture through a
+fresh UV layout ('Skin', which liveries repaint), the parts liveries must leave alone (missiles, nozzles, the pilot)
+a small one of their own ('Nozzle_Trim'), and keeps the glass; `--atlas-ao` darkens creases with a baked ambient
+occlusion. The vertex colours go (they are in the atlas now).
 
 The CL-415 keeps its own landing gear, which folds away in the game (`models/aircraft/cl415_gear.glb`, models.js
 MODEL_FILES `gear`). The model is split first, then the airframe goes through `import_model.py`, and a second run of
