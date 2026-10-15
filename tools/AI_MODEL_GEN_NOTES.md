@@ -3,7 +3,8 @@
 Status (2026-09-24): researched and priced, **nothing launched or installed yet**. Waiting on a go-ahead.
 
 ## Why
-The hand-scripted F-35A (`tools/f35a_model.py` → `models/f35a.glb`, hangar entry `f35n`) is decent but
+The hand-scripted F-35A (`tools/f35a_model.py` → `models/f35a.glb`, then hangar entry `f35n`; both since removed:
+`f35n` is now the F-35C, built from the licensed F-35A model by `tools/aircraft/f35c.py`) was decent but
 simplified. An image-to-3D model might capture the blended surfaces better (intakes, chines, canopy fairing)
 and can produce a texture.
 
@@ -63,9 +64,9 @@ Plan:
 5. Generate variants: single-image vs. 3-view input, and shape-only vs. textured. Copy the `.glb`s back with scp.
 6. **Terminate the instance, then delete the key pair and security group.** Verify with `aws ec2 describe-instances`.
 7. Locally: in Blender, decimate, apply symmetry if needed, fix orientation and scale, export to `models/`. Add a hangar entry
-   next to `f35n`/`f35` (see how `f35n` is wired: `src/config.js`, `src/models.js` `MODEL_FILES`,
+   next to `f35` (see how a type is wired: `src/config.js`, `src/models.js` `MODEL_FILES`,
    `MMAX` in `src/aircraft.js`, `AIRCRAFT_RANK` in `src/career.js`, credits in `src/main.js` + `models/CREDITS.md`).
-8. Compare in the browser. The side-by-side render snippet used for `f35n` imports `/src/models.js`,
+8. Compare in the browser. The side-by-side render snippet (tools/aircraft/preview.js) imports `/src/models.js`,
    calls `createAircraftModel(id)` for each, and renders 4 views into a canvas.
 
 Launching costs money on the AWS account, so **get explicit approval before step 3**.
