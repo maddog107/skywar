@@ -76,3 +76,55 @@ describe('segmentModel region bucketing', () => {
         assert.deepEqual(regionsOf(segmentModel(g, L)), { nose: 1 });
     });
 });
+
+// The Soviet and Chinese jets' model files (the manilov.ap MiG-21 / -25 / -31 imports, the kit-built J-8II / J-10A
+// / J-20), loaded and normalised as the game does (tests/helpers/aircraftmodel.mjs): their MODEL_FILES rig points,
+// textured paint, budget and real proportions, and how segmentModel cuts them up
+describe('models: the Soviet and Chinese jets', async () => {
+    const { loadAircraft, triangleCount } = await import('./helpers/aircraftmodel.mjs');
+    const IDS = ['mig21', 'mig25', 'mig31', 'j8', 'j10', 'j20'];
+    const engines = { mig21: 1, mig25: 2, mig31: 2, j8: 2, j10: 1, j20: 2 };
+    const ray = new THREE.Raycaster();
+    const hitWithin = (root, from, dir, dist) => { ray.set(from, dir); ray.far = dist; return ray.intersectObject(root, true).length > 0; };
+
+    for (const id of IDS) {
+        test(`${id}: one textured skin liveries repaint, a trim atlas they leave alone, glass; within the triangle budget`, async () => {
+            const { json, holder } = await loadAircraft(id);
+            const mats = json.materials.map(m => m.name);
+            const skin = json.materials.find(m => m.name === 'Skin');
+            assert.ok(skin && skin.pbrMetallicRoughness.baseColorTexture, 'a textured Skin material');
+            assert.ok(json.materials.find(m => /trim/i.test(m.name)), 'a Nozzle_Trim atlas (models.js applyLivery skips "nozzle")');
+            assert.ok(json.materials.some(m => m.alphaMode === 'BLEND'), 'see-through canopy glass');
+            assert.ok(mats.length <= 5, `few materials, few draw calls (${mats})`);
+            assert.ok((json.images || []).length <= 3, 'one or two atlases');
+            const tris = triangleCount(holder);
+            assert.ok(tris > 12000 && tris < 60000, `${tris} triangles`);
+        });
+
+        test(`${id}: real length and span, nozzles at the tail, the eye under the canopy`, async () => {
+            const { holder, info, spec } = await loadAircraft(id);
+            const L = spec.length;
+            const box = new THREE.Box3().setFromObject(holder), size = box.getSize(new THREE.Vector3());
+            assert.ok(Math.abs(size.z - L) < 1e-6, 'scaled to its real length');
+            assert.ok(Math.abs(size.x / spec.span - 1) < 0.05, `span ${size.x.toFixed(2)} m vs ${spec.span} m`);
+            assert.equal(info.nozzles.length, engines[id], 'one nozzle per engine');
+            for (const [x, y, z] of info.nozzles) {
+                assert.ok(z * L > box.max.z - 0.12 * L && z * L < box.max.z + 1e-6, `nozzle at the tail (z ${(z * L).toFixed(2)} of ${box.max.z.toFixed(2)})`);
+                assert.ok(Math.abs(x) < 0.06 && y * L > box.min.y && y * L < box.max.y, 'nozzle on the fuselage');
+                // the exhaust is open: looking forward from just behind it, the nozzle's own walls are there
+                assert.ok(hitWithin(holder, new THREE.Vector3(x * L, y * L, z * L + 0.5), new THREE.Vector3(0, 0, -1), 4), 'a nozzle there');
+            }
+            const eye = new THREE.Vector3(0, info.cockpit[0] * L, info.cockpit[1] * L);
+            assert.ok(eye.z < -0.15 * L && eye.z > -0.33 * L, 'the cockpit in the forward fuselage');
+            assert.ok(hitWithin(holder, eye, new THREE.Vector3(0, 1, 0), 1.2), 'the canopy just above the eye');
+            assert.ok(hitWithin(holder, eye, new THREE.Vector3(0, -1, 0), 2.0), 'the cockpit floor below it');
+        });
+
+        test(`${id}: segmentModel finds a nose, a tail, a centre and two matching wings`, async () => {
+            const { holder, spec } = await loadAircraft(id);
+            const r = regionsOf(segmentModel(holder, spec.length));
+            for (const k of REGIONS) assert.ok(r[k] > 50, `${k}: ${r[k]} triangles`);
+            assert.ok(Math.abs(r.wingL - r.wingR) <= 0.15 * Math.max(r.wingL, r.wingR), `wings alike (${r.wingL} / ${r.wingR})`);
+        });
+    }
+});

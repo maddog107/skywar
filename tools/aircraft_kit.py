@@ -18,6 +18,10 @@
 #   Paint* (panel texture × colour, recoloured by liveries), Dark (radomes/intakes, luminance < 0.06 so
 #   liveries keep it), Nozzle (burnt metal, dark), Canopy_Glass (alpha-blended, so liveries skip it).
 # finish() prints the MODEL_FILES entry (nozzles / nozzleR / cockpit as fractions of length).
+# Painted finish: decal() projects markings (tools/aircraft/markings/*.png: national insignia, bort numbers, panel
+# outlines) onto the paint, and finish(atlas=N, ao=F) bakes paint × panel lines × markings × ambient occlusion
+# into one texture atlas (tools/aircraft/atlas.py): a 'Skin' material liveries repaint, the stores / nozzles /
+# cockpit parts in a 'Nozzle_Trim' atlas they leave alone, the glass as it was.
 # ═══════════════════════════════════════════════════════════════
 import bpy, bmesh, math, sys, os, json, random
 from mathutils import Vector
@@ -132,7 +136,8 @@ def begin(name, length, paint='#8a939b', paint2=None, radome=None, glass='#2c3a4
           dark='#1c1e21', nozzle='#433f3b', panel=True, gold=False):
     """Reset the scene and create the standard material set."""
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    STATE.update(name=name, L=length, mats={}, nozzles=[], cockpit=None, nozzleR=None, objects=[], sections={}, factors={})
+    STATE.update(name=name, L=length, mats={}, nozzles=[], cockpit=None, nozzleR=None, objects=[], sections={}, factors={},
+                 decals=[])
     _PANEL_IMG.clear()
     pn = {'key': 'panel'} if panel is True else panel if panel else None
     material('Paint', paint, 0.12, 0.55, panel=pn)
@@ -713,6 +718,93 @@ def missile(name, s0, length, x, z, r, fins=True, mirror=True, material='Missile
 def lamp(name, s, x, z, r=0.06, material='Lamp', mirror=False):
     return ellipsoid(name, s, x, z, r, r, r, material, mirror, seg=8)
 
+# ───────────────────────── markings ─────────────────────────
+MARKINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'aircraft', 'markings')
+PAINTED = ('Paint', 'Paint2', 'Radome', 'Frame')
+
+def decal(image, at, size, normal, up=None, mirror=True, depth=0.6, facing=0.3, mats=None):
+    """Project a marking onto the painted skin (baked in by finish(atlas=...)).
+    image: a file in tools/aircraft/markings (or a path); at = (s, x, z) its centre in kit coordinates; size = (w, h)
+    metres; normal = the outward normal of the skin there and up = the image's up, both Blender (x, y, z) vectors
+    (y forward: the nose is +y; default up: +z, or forward for a decal facing up or down). Only skin facing within
+    acos(facing) of the normal and within `depth` metres of the decal's plane takes it. mirror: the same decal on
+    the left (x → −x), drawn unmirrored. mats: the materials it goes on (default the painted ones)."""
+    n = Vector(normal).normalized()
+    if up is None:
+        up = (0, 1, 0) if abs(n.z) > 0.7 else (0, 0, 1)
+    u = Vector(up)
+    r = u.cross(n).normalized()
+    u = n.cross(r).normalized()
+    path = image if os.path.isabs(image) else os.path.join(MARKINGS, image)
+    s_, x_, z_ = at
+    STATE['decals'].append(dict(path=path, c=Vector((x_, Y(s_), z_)), r=r, u=u, n=n, w=size[0], h=size[1], depth=depth,
+                                facing=facing, mats=mats or PAINTED))
+    if mirror and abs(x_) > 1e-6 or (mirror and abs(n.x) > 1e-3):
+        nm = Vector((-n.x, n.y, n.z)); um = Vector((-u.x, u.y, u.z))
+        rm = um.cross(nm).normalized()
+        STATE['decals'].append(dict(path=path, c=Vector((-x_, Y(s_), z_)), r=rm, u=nm.cross(rm).normalized(), n=nm, w=size[0],
+                                    h=size[1], depth=depth, facing=facing, mats=mats or PAINTED))
+
+def _decal_nodes(m):
+    """Rebuild a painted material for the bake: colour → markings → × panel texture → Base Color."""
+    nt = m.node_tree
+    b = nt.nodes['Principled BSDF']
+    tex = None
+    if b.inputs['Base Color'].links:
+        tex = b.inputs['Base Color'].links[0].from_node
+        nt.links.remove(b.inputs['Base Color'].links[0])
+    f = STATE['factors'].get(m.name)
+    col = nt.nodes.new('ShaderNodeRGB')
+    col.outputs[0].default_value = tuple(f) if f else tuple(b.inputs['Base Color'].default_value)
+    cur = col.outputs[0]
+    geo = nt.nodes.new('ShaderNodeNewGeometry')
+    def vm(op, a, bb=None, val=None):
+        n = nt.nodes.new('ShaderNodeVectorMath'); n.operation = op
+        nt.links.new(a, n.inputs[0])
+        if bb is not None:
+            if hasattr(bb, 'is_linked') or hasattr(bb, 'links'):
+                nt.links.new(bb, n.inputs[1])
+            else:
+                n.inputs[1].default_value = bb
+        return n.outputs['Value'] if op == 'DOT_PRODUCT' else n.outputs['Vector']
+    def mth(op, a, bb=None):
+        n = nt.nodes.new('ShaderNodeMath'); n.operation = op
+        if isinstance(a, (int, float)): n.inputs[0].default_value = a
+        else: nt.links.new(a, n.inputs[0])
+        if bb is not None:
+            if isinstance(bb, (int, float)): n.inputs[1].default_value = bb
+            else: nt.links.new(bb, n.inputs[1])
+        return n.outputs[0]
+    for d in STATE['decals']:
+        if m.name not in d['mats']:
+            continue
+        rel = vm('SUBTRACT', geo.outputs['Position'], tuple(d['c']))
+        a = mth('ADD', mth('DIVIDE', vm('DOT_PRODUCT', rel, tuple(d['r'])), d['w']), 0.5)
+        bv = mth('ADD', mth('DIVIDE', vm('DOT_PRODUCT', rel, tuple(d['u'])), d['h']), 0.5)
+        dist = mth('ABSOLUTE', vm('DOT_PRODUCT', rel, tuple(d['n'])))
+        in_slab = mth('LESS_THAN', dist, d['depth'])
+        facing = mth('GREATER_THAN', vm('DOT_PRODUCT', geo.outputs['Normal'], tuple(d['n'])), d['facing'])
+        cx = nt.nodes.new('ShaderNodeCombineXYZ')
+        nt.links.new(a, cx.inputs[0]); nt.links.new(bv, cx.inputs[1])
+        it = nt.nodes.new('ShaderNodeTexImage')
+        it.image = bpy.data.images.load(d['path'], check_existing=True)
+        it.extension = 'CLIP'
+        it.interpolation = 'Cubic'
+        nt.links.new(cx.outputs[0], it.inputs['Vector'])
+        fac = mth('MULTIPLY', mth('MULTIPLY', it.outputs['Alpha'], in_slab), facing)
+        mix = nt.nodes.new('ShaderNodeMix'); mix.data_type = 'RGBA'; mix.blend_type = 'MIX'
+        nt.links.new(fac, mix.inputs['Factor'])
+        nt.links.new(cur, mix.inputs[6])
+        nt.links.new(it.outputs['Color'], mix.inputs[7])
+        cur = mix.outputs[2]
+    if tex is not None:
+        mul = nt.nodes.new('ShaderNodeMix'); mul.data_type = 'RGBA'; mul.blend_type = 'MULTIPLY'
+        mul.inputs['Factor'].default_value = 1.0
+        nt.links.new(cur, mul.inputs[6])
+        nt.links.new(tex.outputs['Color'], mul.inputs[7])
+        cur = mul.outputs[2]
+    nt.links.new(cur, b.inputs['Base Color'])
+
 # ───────────────────────── finishing ─────────────────────────
 def _box_uv(ob, scale=8.0, layer=None):
     me = ob.data
@@ -757,14 +849,21 @@ def bbox():
             xs.append(w.x); ys.append(w.y); zs.append(w.z)
     return (min(xs), max(xs)), (min(ys), max(ys)), (min(zs), max(zs))
 
-def finish(out=None, shade_angle=34, uv_scale=8.0, join=True, extra_entry=None):
-    """Shade, UV, join per material group, export GLB, print the MODEL_FILES entry. Returns entry dict."""
+TRIM = r'^(Missile|Nozzle|NozzleInner|Seat|Helmet|Lamp|Intake|Dark|Trim.*)$'
+
+def finish(out=None, shade_angle=34, uv_scale=8.0, join=True, extra_entry=None, atlas=None, ao=0.0, trim=TRIM,
+           trim_size=None):
+    """Shade, UV, join per material group, export GLB, print the MODEL_FILES entry. Returns entry dict.
+    atlas = N: bake the paint (colour × panel texture), the decals and an ambient occlusion of strength `ao` into
+    one N px atlas (tools/aircraft/atlas.py); materials matching `trim` go to a small atlas liveries leave alone."""
     out = out or OUT
     name = STATE['name']
     for ob in list(bpy.data.objects):
         if ob.type == 'MESH':
             _shade(ob, shade_angle)
             _box_uv(ob, uv_scale)
+    if atlas:
+        join = True
     if join:
         # join everything into one mesh per top-level part family (keeps names readable, few draw calls)
         meshes = [o for o in bpy.data.objects if o.type == 'MESH']
@@ -776,6 +875,15 @@ def finish(out=None, shade_angle=34, uv_scale=8.0, join=True, extra_entry=None):
         ob = bpy.context.view_layer.objects.active
         ob.name = name
         ob.data.name = name
+    if atlas:
+        ob = [o for o in bpy.data.objects if o.type == 'MESH'][0]
+        for m in ob.data.materials:
+            if m and m.name in PAINTED:
+                _decal_nodes(m)
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'aircraft'))
+        import atlas as A
+        A.bake_atlas(ob, atlas, trim_size=trim_size, glass_rx=r'Canopy_Glass', trim_rx=trim, ao=ao)
+        STATE['factors'] = {}
     (x0, x1), (y0, y1), (z0, z1) = bbox()
     Lb = y1 - y0
     cx, cy, cz = (x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2

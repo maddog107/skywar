@@ -149,7 +149,7 @@ export const AIRCRAFT = {
         proc: { body: [0.08, 0.07], wing: { rc: 0.36, tc: 0.1, sweep: 42, z: 0.08 }, tail: 'twin', cant: 6, hstab: true, engines: 2, spacing: 0.1, intake: 'under', lerx: true, paint: 0x8c9aa0, accent: 0x6f7f86 },
     }),
     mig31: jet({
-        name: 'MiG-31 Foxhound', role: 'Interceptor', country: 'RUS', length: 22.7, span: 13.5,
+        name: 'MiG-31 Foxhound', role: 'Interceptor', country: 'RUS', length: 22.62, span: 13.46,
         desc: 'A missile with a cockpit. Blistering top speed, turns like a bus.',
         flight: { speed: 418, mach: 2.83, cd0: 0.0435, accel: 16, gLimit: 5, roll: 2.6, alpha: 18, lift: 0.85 },
         health: 140, missiles: 6,
@@ -184,14 +184,16 @@ export const AIRCRAFT = {
         proc: { body: [0.085, 0.08], wing: { rc: 0.5, tc: 0.08, sweep: 45, z: 0.2, delta: true }, canard: true, tail: 'single', hstab: false, engines: 1, intake: 'side', paint: 0x7e8a8f, accent: 0x69757a },
     }),
     mig21: jet({
-        name: 'MiG-21bis Fishbed', role: 'Interceptor', country: 'RUS', length: 14.5, span: 7.15,
+        // 14.7 m without the pitot boom; the model's boom is about half the real one's metre, so 15.0 m overall puts
+        // its airframe and span within ~1.5% of the real ones
+        name: 'MiG-21bis Fishbed', role: 'Interceptor', country: 'RUS', length: 15.0, span: 7.15,
         desc: 'The most-produced supersonic jet ever. Tiny delta, fast in a straight line.',
         flight: { speed: 360, mach: 2.05, cd0: 0.0597, accel: 13, gLimit: 7, roll: 3.8, alpha: 22, lift: 0.85 },
         health: 80, missiles: 4, gun: { damage: 10, rate: 15, ammo: 200, name: 'GSh-23L 23mm' },
         proc: { body: [0.07, 0.07], wing: { rc: 0.4, tc: 0.05, sweep: 57, z: 0.15, delta: true }, tail: 'single', hstab: true, engines: 1, intake: 'none', paint: 0x9aa3a8, accent: 0x7f878c },
     }),
     mig25: jet({
-        name: 'MiG-25 Foxbat', role: 'Interceptor', country: 'RUS', length: 19.8, span: 14.0,
+        name: 'MiG-25 Foxbat', role: 'Interceptor', country: 'RUS', length: 23.82, span: 14.01,
         desc: 'Mach 2.8 steel brick. Unmatched speed, poor turn, big missiles.',
         flight: { speed: 340, mach: 2.83, cd0: 0.0429, accel: 16, gLimit: 5, roll: 2.5, alpha: 18, lift: 0.8 },
         health: 140, missiles: 4, gun: null,

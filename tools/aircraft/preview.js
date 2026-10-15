@@ -181,6 +181,7 @@ export async function save(canvas, name, type = 'image/png') {
 // An orthographic view with a grid in fractions of the aircraft length (thin every 0.01, labelled every 0.05),
 // the surface outlines (cyan) and hinge lines (red) of SURFACE_DEFS[id] (or opts.defs) drawn on top.
 //   top: x across (right wing to the right), z down the page (nose up); win = [x0, x1, z0, z1]
+//   bottom: the top view's frame seen from below (mirrored back, so x and z read as in the top view)
 //   side: seen from the left, z across (nose to the left), y up; win = [z0, z1, y0, y1]
 // flap / brake (0..1) pose the surfaces first, to check how they move.
 export async function blueprint(id, opts = {}) {
@@ -201,7 +202,9 @@ export async function blueprint(id, opts = {}) {
     object.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(object);
     const view = opts.view ?? 'top';
-    const win = (opts.win ?? (view === 'top'
+    const top = view === 'top' || view === 'bottom';
+    if (view === 'bottom') { const lo = new THREE.DirectionalLight(0xffffff, 1.6); lo.position.set(-20, -60, -30); scene.add(lo); }
+    const win = (opts.win ?? (top
         ? [box.min.x / L - 0.02, box.max.x / L + 0.02, box.min.z / L - 0.02, box.max.z / L + 0.02]
         : view === 'front' ? [box.min.x / L - 0.02, box.max.x / L + 0.02, box.min.y / L - 0.03, box.max.y / L + 0.03]
         : [box.min.z / L - 0.02, box.max.z / L + 0.02, box.min.y / L - 0.03, box.max.y / L + 0.03])).map(v => v * L);
@@ -210,12 +213,19 @@ export async function blueprint(id, opts = {}) {
     if (view === 'top') {
         cam = new THREE.OrthographicCamera(win[0], win[1], -win[2], -win[3], 0.1, 400);
         cam.position.set(0, 200, 0); cam.up.set(0, 0, -1); cam.lookAt(0, 0, 0);
+    } else if (view === 'bottom') {
+        // seen from below, then mirrored back so it lines up with the top view (x across, right wing to the right)
+        cam = new THREE.OrthographicCamera(-win[1], -win[0], -win[2], -win[3], 0.1, 400);
+        cam.position.set(0, -200, 0); cam.up.set(0, 0, -1); cam.lookAt(0, 0, 0);
     } else if (view === 'front') {
         // seen from behind (x to the right, as in the top view); with opts.cut (z, fractions of L) only what
         // lies aft of it is drawn (e.g. just the trailing edge, to read the height band for a flap)
         cam = new THREE.OrthographicCamera(win[0], win[1], win[3], win[2], 0.1, 400);
         cam.position.set(0, 0, 200); cam.up.set(0, 1, 0); cam.lookAt(0, 0, 0);
         if (opts.cut != null) cam.far = 200 - opts.cut * L;
+        // opts.section (z): what lies forward of it instead, so the outline at z is the nearest thing (a fuselage
+        // section, e.g. the belly where a ventral brake sits)
+        if (opts.section != null) cam.near = 200 - opts.section * L;
         cam.updateProjectionMatrix();
     } else {
         cam = new THREE.OrthographicCamera(win[0], win[1], win[3], win[2], 0.1, 400);
@@ -226,10 +236,11 @@ export async function blueprint(id, opts = {}) {
     const c = document.createElement('canvas');
     c.width = w; c.height = h;
     const g = c.getContext('2d');
-    g.drawImage(r.domElement, 0, 0, w, h);
+    if (view === 'bottom') { g.save(); g.translate(w, 0); g.scale(-1, 1); g.drawImage(r.domElement, 0, 0, w, h); g.restore(); }
+    else g.drawImage(r.domElement, 0, 0, w, h);
     // model (metres) → pixels
     const px = (a) => (a - win[0]) / (win[1] - win[0]) * w;
-    const py = view === 'top' ? (b) => (b - win[2]) / (win[3] - win[2]) * h : (b) => (win[3] - b) / (win[3] - win[2]) * h;
+    const py = top ? (b) => (b - win[2]) / (win[3] - win[2]) * h : (b) => (win[3] - b) / (win[3] - win[2]) * h;
     const grid = (step, style, lw, label) => {
         g.strokeStyle = style; g.lineWidth = lw; g.fillStyle = '#10161c'; g.font = '11px monospace';
         for (let a = Math.ceil(win[0] / L / step) * step; a * L <= win[1]; a += step) {
@@ -245,13 +256,13 @@ export async function blueprint(id, opts = {}) {
     grid(span > 0.6 ? 0.02 : 0.01, 'rgba(0,0,0,0.13)', 1, false);
     grid(0.05, 'rgba(0,0,0,0.38)', 1, true);
     g.fillStyle = '#10161c'; g.font = 'bold 13px sans-serif';
-    g.fillText(`${id}  ${view}${opts.cut != null ? ' cut z=' + opts.cut : ''}  L=${L} m  (grid: fractions of L; ${view === 'top' ? 'x across, z down' : view === 'front' ? 'x across, y up, seen from behind' : 'z across, y up'})`, 8, h - 8);
+    g.fillText(`${id}  ${view}${opts.cut != null ? ' cut z=' + opts.cut : ''}${opts.section != null ? ' section z=' + opts.section : ''}  L=${L} m  (grid: fractions of L; ${view === 'top' ? 'x across, z down' : view === 'bottom' ? 'seen from below, mirrored: x across, z down' : view === 'front' ? 'x across, y up, seen from behind' : 'z across, y up'})`, 8, h - 8);
     const defs = opts.defs ?? D.SURFACE_DEFS[id];
     if (defs && opts.outline !== false) {
         for (const kind of ['flaps', 'brakes']) for (const d of defs[kind] || []) {
             for (const side of d.mirror === false ? [1] : [1, -1]) {
                 g.strokeStyle = kind === 'flaps' ? '#00e5ff' : '#ffd400'; g.lineWidth = 2;
-                const pts = view === 'top' && d.top ? d.top.map(([x, z]) => [x * side, z]) : view === 'side' && d.side ? d.side : null;
+                const pts = top && d.top ? d.top.map(([x, z]) => [x * side, z]) : view === 'side' && d.side ? d.side : null;
                 if (view === 'front') continue;
                 if (pts) {
                     g.beginPath();
@@ -259,7 +270,7 @@ export async function blueprint(id, opts = {}) {
                     g.closePath(); g.stroke();
                 }
                 g.strokeStyle = '#ff2a2a'; g.lineWidth = 2;
-                const hp = d.hinge.map(([x, y, z]) => view === 'top' ? [x * side, z] : [z, y]);
+                const hp = d.hinge.map(([x, y, z]) => top ? [x * side, z] : [z, y]);
                 g.beginPath(); g.moveTo(px(hp[0][0] * L), py(hp[0][1] * L)); g.lineTo(px(hp[1][0] * L), py(hp[1][1] * L)); g.stroke();
             }
         }

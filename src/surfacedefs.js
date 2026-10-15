@@ -179,48 +179,51 @@ export const SURFACE_DEFS = {
             { top: [[-0.019, 0.333], [0.019, 0.333], [0.019, 0.372], [-0.019, 0.372]], y: [-0.075, -0.0615], hinge: [[-0.019, -0.066, 0.333], [0.019, -0.066, 0.333]], angle: 60, skin: -1, mirror: false },
         ],
     },
-    // MiG-31: flaps on the inner half of the trailing edge (30°), hinged on the texture's spanwise panel line;
-    // the airbrakes on the belly under the intake trunks, ahead of the main gear, hinged at the front, opening 40°
+    // MiG-31 (manilov.ap model): the flaps between the fuselage and the aileron, behind the spanwise panel line under
+    // the wing, 30°; the two airbrakes under the intake ducts ahead of the main-gear bays (the texture's rounded
+    // panels), hinged at the front and opening 40°
     mig31: {
-        flaps: [{ top: [[0.075, 0.2508], [0.1822, 0.2508], [0.1822, 0.325], [0.075, 0.311]], y: [-0.047, -0.024], hinge: [[0.075, -0.0305, 0.2508], [0.1822, -0.0357, 0.2508]], angle: 30 }],
-        brakes: [{ top: [[0.034, 0.024], [0.054, 0.024], [0.054, 0.066], [0.034, 0.066]], y: [-0.0835, -0.0735], hinge: [[0.034, -0.0789, 0.024], [0.054, -0.0758, 0.024]], angle: 40, skin: -1 }],
+        flaps: [{ top: [[0.072, 0.268], [0.183, 0.2925], [0.183, 0.3165], [0.072, 0.2995]], y: [-0.033, -0.02], dihedral: -5, hinge: [[0.072, -0.0235, 0.268], [0.183, -0.033, 0.2925]], angle: 30 }],
+        brakes: [{ top: [[0.031, 0.012], [0.056, 0.012], [0.056, 0.07], [0.031, 0.07]], y: [-0.093, -0.079], hinge: [[0.031, -0.0865, 0.012], [0.056, -0.0845, 0.012]], angle: 40, skin: -1 }],
     },
-    // MiG-25: flaps inboard of the ailerons (25°, the same for takeoff and landing on the real one), on the
-    // texture's panel line behind the inner pylon; the upper speed brake between the fins, behind the end of the
-    // spine (43.5°), and the lower one under the rear fuselage between the ventral fins (45°)
+    // MiG-25 (manilov.ap model): the inboard flaps (a separate solid behind the swept hinge line, out to the aileron),
+    // 25° (the same for takeoff and landing on the real one); the airbrakes on the upper and lower rear fuselage
+    // between the engines (the texture's panels either side of the spine on top, and under each nacelle), hinged at
+    // the front, 45° up and down
     mig25: {
-        flaps: [{ top: [[0.077, 0.2704], [0.193, 0.2704], [0.193, 0.333], [0.077, 0.3125]], y: [-0.052, -0.034], dihedral: -5, hinge: [[0.077, -0.0428, 0.2704], [0.193, -0.0535, 0.2704]], angle: 25 }],
+        flaps: [{ top: [[0.0705, 0.2356], [0.1475, 0.2537], [0.1475, 0.2985], [0.0705, 0.2875]], y: [-0.039, -0.027], dihedral: -3.5, hinge: [[0.0705, -0.031, 0.2356], [0.1475, -0.0355, 0.2537]], angle: 25 }],
         brakes: [
-            { top: [[-0.024, 0.405], [0.024, 0.405], [0.024, 0.438], [-0.024, 0.438]], y: [-0.025, -0.008], hinge: [[-0.024, -0.0165, 0.405], [0.024, -0.0165, 0.405]], angle: -43.5, skin: 1, mirror: false },
-            { top: [[-0.028, 0.335], [0.028, 0.335], [0.028, 0.385], [-0.028, 0.385]], y: [-0.095, -0.082], hinge: [[-0.028, -0.0895, 0.335], [0.028, -0.0895, 0.335]], angle: 45, skin: -1, mirror: false },
+            { top: [[0.016, 0.355], [0.044, 0.355], [0.044, 0.393], [0.016, 0.393]], y: [-0.036, -0.012], hinge: [[0.016, -0.025, 0.355], [0.044, -0.025, 0.355]], angle: -45, skin: 1 },
+            { top: [[0.013, 0.35], [0.046, 0.35], [0.046, 0.383], [0.013, 0.383]], y: [-0.098, -0.078], hinge: [[0.013, -0.086, 0.35], [0.046, -0.087, 0.35]], angle: 45, skin: -1 },
         ],
     },
-    // MiG-21bis: plain (blown) flaps between the fuselage and the inner fence, 45° for landing; the two forward
-    // airbrakes on the lower sides of the fuselage under the wing root, opening down and out 35°. (Its third,
-    // ventral brake is locked out with a centreline tank, which this model always carries.)
+    // MiG-21 (manilov.ap model): plain (blown) flaps between the fuselage and the aileron, behind the texture's
+    // spanwise panel line, 45° for landing; the two forward airbrakes under the fuselage behind the nose-gear bay
+    // (the texture's rounded panels either side of the keel), opening down 35°. (Its third, ventral brake is locked
+    // out with a centreline tank.)
     mig21: {
-        flaps: [{ top: [[0.0425, 0.191], [0.107, 0.191], [0.107, 0.268], [0.0425, 0.265]], y: [-0.078, -0.058], hinge: [[0.0425, -0.0658, 0.191], [0.107, -0.0666, 0.191]], angle: 45 }],
-        brakes: [{ top: [[0.012, -0.145], [0.036, -0.145], [0.036, -0.095], [0.012, -0.095]], y: [-0.1, -0.062], hinge: [[0.012, -0.0921, -0.145], [0.036, -0.0741, -0.145]], angle: 35, skin: -1 }],
+        flaps: [{ top: [[0.049, 0.1775], [0.127, 0.1775], [0.127, 0.2115], [0.049, 0.2115]], y: [-0.058, -0.044], hinge: [[0.049, -0.0485, 0.1775], [0.127, -0.0505, 0.1775]], angle: 45 }],
+        brakes: [{ top: [[0.0145, -0.146], [0.032, -0.146], [0.032, -0.086], [0.0145, -0.086]], y: [-0.091, -0.075], dihedral: 19, hinge: [[0.0145, -0.0836, -0.146], [0.032, -0.077, -0.146]], angle: 35, skin: -1 }],
     },
-    // J-20: flaperons between the tail booms and the wing crank, drooping 25°. No speed brake: it brakes with
-    // its control surfaces
+    // J-20 (tools/aircraft/j20.py): the flaperons on the outer wing, from the tail boom out to mid-span, droop 25°.
+    // No speed brake: it brakes with its control surfaces
     j20: {
-        flaps: [{ top: [[0.119, 0.3125], [0.224, 0.3125], [0.224, 0.367], [0.119, 0.367]], y: [-0.036, -0.012], hinge: [[0.119, -0.0205, 0.3125], [0.224, -0.0232, 0.3125]], angle: 25 }],
+        flaps: [{ top: [[0.124, 0.345], [0.22, 0.345], [0.22, 0.40], [0.124, 0.40]], y: [-0.026, -0.006], dihedral: -3.1, hinge: [[0.124, -0.0145, 0.345], [0.22, -0.0197, 0.345]], angle: 25 }],
     },
-    // J-10A: the inboard elevons droop 20° as flaps; four petal airbrakes on the rear fuselage, two on top beside
-    // the fin and two underneath between the ventral fins, opening 50°
+    // J-10A (tools/aircraft/j10.py): the inboard elevons (outboard of the actuator fairings, out to mid-span) droop
+    // 20° as flaps; four airbrakes on the rear fuselage, two on top beside the fin and two underneath, opening 50°
     j10: {
-        flaps: [{ top: [[0.062, 0.23], [0.15, 0.23], [0.15, 0.312], [0.062, 0.318]], y: [-0.086, -0.06], hinge: [[0.062, -0.0705, 0.23], [0.15, -0.0745, 0.23]], angle: 20 }],
+        flaps: [{ top: [[0.066, 0.272], [0.16, 0.272], [0.16, 0.312], [0.066, 0.312]], y: [-0.097, -0.081], dihedral: -2.6, hinge: [[0.066, -0.0875, 0.272], [0.16, -0.0918, 0.272]], angle: 20 }],
         brakes: [
-            { top: [[0.007, 0.315], [0.042, 0.315], [0.042, 0.365], [0.007, 0.365]], y: [-0.048, -0.018], hinge: [[0.007, -0.0255, 0.315], [0.042, -0.0355, 0.315]], angle: -50, skin: 1 },
-            { top: [[0.004, 0.315], [0.03, 0.315], [0.03, 0.362], [0.004, 0.362]], y: [-0.115, -0.095], hinge: [[0.004, -0.1085, 0.315], [0.03, -0.107, 0.315]], angle: 50, skin: -1 },
+            { top: [[0.008, 0.29], [0.032, 0.29], [0.032, 0.333], [0.008, 0.333]], y: [-0.04, -0.012], hinge: [[0.008, -0.022, 0.29], [0.032, -0.029, 0.29]], angle: -50, skin: 1 },
+            { top: [[0.006, 0.292], [0.03, 0.292], [0.03, 0.33], [0.006, 0.33]], y: [-0.125, -0.103], hinge: [[0.006, -0.1165, 0.292], [0.03, -0.113, 0.292]], angle: 50, skin: -1 },
         ],
     },
-    // J-8II: flaps between the fuselage and the inner fence, 30°; two ventral airbrakes on the belly behind the
-    // nose gear, opening 45°
+    // J-8II (tools/aircraft/j8.py): flaps between the fuselage and the inner fence, 30°; two ventral airbrakes on the
+    // belly behind the nose gear, either side of the gun pod, opening 45°
     j8: {
-        flaps: [{ top: [[0.059, 0.241], [0.0995, 0.241], [0.0995, 0.296], [0.059, 0.297]], y: [-0.062, -0.042], hinge: [[0.059, -0.0502, 0.241], [0.0995, -0.051, 0.241]], angle: 30 }],
-        brakes: [{ top: [[0.003, -0.175], [0.024, -0.175], [0.024, -0.13], [0.003, -0.13]], y: [-0.085, -0.06], hinge: [[0.003, -0.0748, -0.175], [0.024, -0.0705, -0.175]], angle: 45, skin: -1 }],
+        flaps: [{ top: [[0.057, 0.248], [0.102, 0.248], [0.102, 0.30], [0.057, 0.30]], y: [-0.054, -0.037], dihedral: -2.4, hinge: [[0.057, -0.0435, 0.248], [0.102, -0.0455, 0.248]], angle: 30 }],
+        brakes: [{ top: [[0.011, -0.17], [0.026, -0.17], [0.026, -0.125], [0.011, -0.125]], y: [-0.075, -0.06], hinge: [[0.011, -0.0675, -0.17], [0.026, -0.067, -0.17]], angle: 45, skin: -1 }],
     },
 
     // ── European types, bombers, airliners, light aircraft ──
