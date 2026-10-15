@@ -266,3 +266,117 @@ describe('surfaces: cutting flaps and brakes out of a model', () => {
         assert.ok(fighter.brake <= 2 && civil.brake <= 2, 'speed brakes and spoilers come out in a second or two');
     });
 });
+
+// The flaps and airbrakes of the Soviet and Chinese jets (src/surfacedefs.js) cut from their real model files
+// (tests/helpers/aircraftmodel.mjs: loaded and normalised as the game does, textures stripped), segmented, cut
+describe('surfaces on the real models: MiG-21, MiG-25, MiG-31, J-8II, J-10A, J-20', () => {
+    const IDS = ['mig21', 'mig25', 'mig31', 'j8', 'j10', 'j20'];
+    let THREE, S, D, segmentModel, loadAircraft;
+    const skinArea = (obj) => {
+        let a = 0;
+        const p = [null, null, null].map(() => new THREE.Vector3());
+        obj.updateMatrixWorld(true);
+        obj.traverse(o => {
+            if (!o.isMesh || o.userData.surfaceWell) return;
+            const pos = o.geometry.attributes.position, idx = o.geometry.index;
+            const n = idx ? idx.count : pos.count;
+            for (let t = 0; t < n; t += 3) {
+                for (let k = 0; k < 3; k++) p[k].fromBufferAttribute(pos, idx ? idx.getX(t + k) : t + k).applyMatrix4(o.matrixWorld);
+                a += new THREE.Triangle(p[0], p[1], p[2]).getArea();
+            }
+        });
+        return a;
+    };
+    // a surface's own skin vertices, in model space
+    const skinVerts = (pivot, root) => {
+        const out = [];
+        root.updateMatrixWorld(true);
+        const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
+        pivot.traverse(m => {
+            if (!m.isMesh || m.userData.surfaceWell) return;
+            const pos = m.geometry.attributes.position;
+            for (let i = 0; i < pos.count; i++) out.push(new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld).applyMatrix4(inv));
+        });
+        return out;
+    };
+    const inPoly = (poly, x, z) => {   // a convex outline [[x, z], ...], either winding
+        let sgn = 0;
+        for (let i = 0; i < poly.length; i++) {
+            const [ax, az] = poly[i], [bx, bz] = poly[(i + 1) % poly.length];
+            const c = (bx - ax) * (z - az) - (bz - az) * (x - ax);
+            if (Math.abs(c) < 1e-9) continue;
+            if (sgn && Math.sign(c) !== sgn) return false;
+            sgn = Math.sign(c);
+        }
+        return true;
+    };
+    const pivotsOf = (obj) => { const out = []; obj.traverse(o => { if (o.userData.surface) out.push(o); }); return out; };
+    const models = {};
+    before(async () => {
+        THREE = await import('three');
+        S = await src('surfaces.js');
+        D = await src('surfacedefs.js');
+        ({ segmentModel } = await src('damage.js'));
+        ({ loadAircraft } = await import('./helpers/aircraftmodel.mjs'));
+        for (const id of IDS) models[id] = await loadAircraft(id);
+    });
+
+    for (const id of IDS) {
+        test(`${id}: every flap and airbrake is cut, the skin is all still there, each takes only what lies in its outline`, () => {
+            const { holder, spec } = models[id];
+            const L = spec.length, defs = D.SURFACE_DEFS[id];
+            assert.ok(defs && defs.flaps && defs.flaps.length, 'flaps defined');
+            const obj = segmentModel(holder.clone(true), L);
+            const before = skinArea(obj);
+            const want = ['flaps', 'brakes'].reduce((n, k) => n + (defs[k] || []).reduce((m, d) => m + (d.mirror === false ? 1 : 2), 0), 0);
+            assert.equal(S.cutSurfaces(obj, id, L), want, 'surfaces made');
+            const after = skinArea(obj);
+            assert.ok(Math.abs(after - before) < 2e-3 * before, `skin area ${after.toFixed(2)} vs ${before.toFixed(2)} m²`);
+            const pivots = pivotsOf(obj);
+            assert.equal(pivots.length, want);
+            for (const p of pivots) {
+                const vs = skinVerts(p, obj);
+                const kind = p.userData.surface.kind === 'flap' ? 'flaps' : 'brakes';
+                assert.ok(vs.length >= 24, `${kind}: a skin of its own (${vs.length / 3} triangles)`);
+                // its def: of those whose outline (mirrored for the left) holds the surface's centre, the one whose
+                // height band (tilted by its dihedral) is nearest it (an upper and a lower brake share an outline)
+                const c = vs.reduce((a, v) => a.add(v), new THREE.Vector3()).multiplyScalar(1 / vs.length);
+                const side = Math.sign(c.x) || 1;
+                const band = (d) => (d.y[0] + d.y[1]) / 2 + Math.tan((d.dihedral || 0) * Math.PI / 180) * (Math.abs(c.x) / L - d.hinge[0][0]);
+                const def = defs[kind].filter(d => inPoly(d.top.map(([x, z]) => [x * (d.mirror === false ? 1 : side) * L, z * L]), c.x, c.z))
+                    .sort((a, b) => Math.abs(band(a) - c.y / L) - Math.abs(band(b) - c.y / L))[0];
+                assert.ok(def, `${kind} centre (${c.x.toFixed(2)}, ${c.z.toFixed(2)}) inside an outline`);
+                const poly = def.top.map(([x, z]) => [x * (def.mirror === false ? 1 : side) * L, z * L]);
+                const xs = poly.map(q => q[0]), zs = poly.map(q => q[1]), tol = 0.004 * L;
+                for (const v of vs) {
+                    assert.ok(v.x > Math.min(...xs) - tol && v.x < Math.max(...xs) + tol && v.z > Math.min(...zs) - tol && v.z < Math.max(...zs) + tol,
+                        `${kind} vertex (${v.x.toFixed(2)}, ${v.z.toFixed(2)}) outside its outline`);
+                }
+            }
+        });
+
+        test(`${id}: deployed, the flaps' trailing edges go down and the brakes open the way their angle says; stowed, no well shows`, () => {
+            const { holder, spec } = models[id];
+            const L = spec.length;
+            const obj = segmentModel(holder.clone(true), L);
+            S.cutSurfaces(obj, id, L);
+            const pivots = pivotsOf(obj);
+            S.poseSurfaces(obj, 0, 0);
+            const rest = pivots.map(p => skinVerts(p, obj));
+            const shown = () => { let n = 0; obj.traverse(o => { if (o.userData.surfaceWell && o.visible) n++; }); return n; };
+            assert.equal(shown(), 0, 'stowed: every well hidden');
+            S.poseSurfaces(obj, 1, 1);
+            pivots.forEach((p, i) => {
+                const now = skinVerts(p, obj), s = p.userData.surface, r = rest[i];
+                // the aft-most tenth of its vertices: its trailing edge
+                const aft = r.map((v, k) => k).sort((a, b) => r[b].z - r[a].z).slice(0, Math.max(3, r.length / 10 | 0));
+                const dy = aft.reduce((a, k) => a + now[k].y - r[k].y, 0) / aft.length;
+                const move = aft.reduce((a, k) => a + now[k].distanceTo(r[k]), 0) / aft.length;
+                assert.ok(move > 0.12, `${s.kind}: the trailing edge moves (${move.toFixed(2)} m)`);
+                if (s.kind === 'flap') assert.ok(dy < -0.1, `flap trailing edge goes down (${dy.toFixed(2)} m)`);
+                else assert.ok(Math.sign(dy) === -Math.sign(s.angle) && Math.abs(dy) > 0.05, `brake (angle ${s.angle}) opens its way (dy ${dy.toFixed(2)} m)`);
+            });
+            assert.ok(shown() > 0, 'deployed: the wells show');
+        });
+    }
+});

@@ -184,7 +184,9 @@ export const AIRCRAFT = {
         proc: { body: [0.085, 0.08], wing: { rc: 0.5, tc: 0.08, sweep: 45, z: 0.2, delta: true }, canard: true, tail: 'single', hstab: false, engines: 1, intake: 'side', paint: 0x7e8a8f, accent: 0x69757a },
     }),
     mig21: jet({
-        name: 'MiG-21bis Fishbed', role: 'Interceptor', country: 'RUS', length: 15.76, span: 7.15,
+        // 14.7 m without the pitot boom; the model's boom is about half the real one's metre, so 15.0 m overall puts
+        // its airframe and span within ~1.5% of the real ones
+        name: 'MiG-21bis Fishbed', role: 'Interceptor', country: 'RUS', length: 15.0, span: 7.15,
         desc: 'The most-produced supersonic jet ever. Tiny delta, fast in a straight line.',
         flight: { speed: 360, mach: 2.05, cd0: 0.0597, accel: 13, gLimit: 7, roll: 3.8, alpha: 22, lift: 0.85 },
         health: 80, missiles: 4, gun: { damage: 10, rate: 15, ammo: 200, name: 'GSh-23L 23mm' },

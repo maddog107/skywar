@@ -47,13 +47,14 @@ K.ellipsoid('DSI', 4.95, 1.02, -0.28, 0.85, 0.17, 0.42, mirror=True)
 # big canards, a little anhedral
 K.surface('Canard', [(6.53, 9.02, 1.70, 0.20, 0.045), (7.60, 9.20, 2.90, 0.14, 0.04), (8.73, 9.36, 3.95, 0.08, 0.03)],
           material='Paint2', subdiv=2)
-# cranked delta: the LERX from the canard root out to the boom, then the outer wing to the tip
+# cranked delta: the LERX from the canard root out to the boom, then the outer wing to the tip (the drawing's
+# 13.7 m span brought to the published ~13 m: the tips are cut in along the leading-edge sweep)
 K.surface('Wing', [
     (9.20, 18.60, 1.60, 0.14, 0.04),
     (10.30, 18.60, 2.10, 0.13, 0.04),
     (11.56, 18.53, 2.48, 0.11, 0.038),
     (14.00, 17.98, 4.85, -0.01, 0.034),
-    (16.00, 17.55, 6.81, -0.12, 0.03),
+    (15.63, 17.63, 6.45, -0.10, 0.03),
 ], subdiv=3)
 # tail booms along the wing root, the canted all-moving fins on them, ventral fins under them
 for side in (1, -1):
@@ -73,13 +74,13 @@ K.canopy([(2.70, 0.05, 0.02), (3.20, 0.42, 0.34), (3.90, 0.56, 0.55), (4.60, 0.6
 K.ellipsoid('EOTS', 2.6, 0.0, -0.62, 0.30, 0.16, 0.10, material='Dark')
 K.box('AntDorsal', 9.6, 10.0, -0.012, 0.012, 0.76, 0.9, material='Paint2')
 K.box('AntVentral', 6.0, 6.3, -0.012, 0.012, -1.20, -1.06, material='Paint2')
-K.lamp('NavLight', 16.6, 6.82, -0.12, mirror=True, r=0.05)
+K.lamp('NavLight', 16.6, 6.46, -0.10, mirror=True, r=0.05)
 
 # ── markings (tools/aircraft/markings) ──
 fin_n = (math.cos(math.radians(28)), 0, -math.sin(math.radians(28)))          # the right fin's outer face
 K.decal('plaaf_bars.png', (18.6, 2.70, 1.05), (1.25, 0.50), fin_n, up=(math.sin(math.radians(28)), 0, math.cos(math.radians(28))), depth=0.3)
 for nz in (1, -1):
-    K.decal('plaaf_bars.png', (16.55, 5.6, -0.05), (1.55, 0.62), (0, 0, nz), depth=0.4)
+    K.decal('plaaf_bars.png', (16.45, 5.3, -0.03), (1.45, 0.58), (0, 0, nz), depth=0.4)
 K.decal('bort_j20.png', (1.95, 0.70, -0.20), (1.15, 0.35), (1, 0, 0.12), depth=0.4, facing=0.55)
 K.decal('warning.png', (2.85, 0.70, 0.30), (0.2, 0.2), (1, 0, 0.4), depth=0.3, facing=0.5)
 # lighter-grey sawtooth door outlines: side weapon bays behind the intakes, the ventral bays, the gear doors
