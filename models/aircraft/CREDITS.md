@@ -37,7 +37,7 @@ licence was re-checked against the live Sketchfab API (`api.sketchfab.com/v3/mod
 | `rafale.glb` | Dassault Rafale | "Dassault Rafale" by so_O (quick_loop) | CC BY 4.0 | https://sketchfab.com/3d-models/dassault-rafale-d8bbfb0970ca4128b73e7e5364828fd3 |
 | `racer.glb` | Unlimited air racer (P-51 airframe) | "P-51 Mustang" by UlissesVinicios | CC BY 4.0 | https://sketchfab.com/3d-models/p-51-mustang-36f0f3e71d2a4c18b479db1ae8f9e7a7 |
 | `pitts.glb` | Stunt biplane (Stearman-style) | "Airplane biplane" by BlueHour (KaramellGlass) | CC BY 4.0 | https://sketchfab.com/3d-models/airplane-biplane-be48f3f906ed431b98b1bf03ab7aadd6 |
-| `mig21.glb` | MiG-21bis Fishbed (an earlier MiG-21 airframe stands in) | "Mig21" by manilov.ap | CC BY 4.0 | https://sketchfab.com/3d-models/mig21-4e2b33b33fcb43948c78783867e3b166 |
+| `mig21.glb` | MiG-21bis Fishbed (an earlier MiG-21 with the narrow dorsal spine stands in for the bis) | "Mig21" by manilov.ap | CC BY 4.0 | https://sketchfab.com/3d-models/mig21-4e2b33b33fcb43948c78783867e3b166 |
 | `mig25.glb` | MiG-25 Foxbat | "Mig25" by manilov.ap | CC BY 4.0 | https://sketchfab.com/3d-models/mig25-afe67617c5294dce9056106a22f640ff |
 | `mig31.glb` | MiG-31 Foxhound | "Mig31" by manilov.ap | CC BY 4.0 | https://sketchfab.com/3d-models/mig31-61911bc14a1445359e2f1847717b4bb6 |
 | `cl415.glb`, `cl415_gear.glb` | Canadair CL-415 (airframe; its retractable landing gear) | "cl415" by helijah (Emmanuel Baranger) | CC BY 4.0 | https://sketchfab.com/3d-models/cl415-bf3eaa6a1f4f4fc18df9b05cf40de927 |

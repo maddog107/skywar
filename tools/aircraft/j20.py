@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 import aircraft_kit as K
 from aircraft_kit import S
 
-K.begin('j20', 20.4, paint='#636b73', paint2='#59616a', radome='#5c646c', gold=True,
+K.begin('j20', 20.4, paint='#4b525a', paint2='#454c54', radome='#484f57', gold=True,
         panel={'key': 'panel', 'line': 0.80, 'grime': 0.03})
 
 # chined forebody → wide flat centre body over the intake trunks → twin-engine rear end
