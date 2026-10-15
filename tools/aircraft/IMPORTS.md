@@ -58,7 +58,10 @@ in the frame `import_model.py --nose -X` gives the airframe; its header describe
 parts, shared materials).
 
 Kit-built aircraft (`tools/aircraft/<id>.py`, run as `blender -b -P tools/aircraft/<id>.py -- models/aircraft/<id>.glb`)
-are listed in `models/aircraft/CREDITS.md` with their reference drawings.
+are listed in `models/aircraft/CREDITS.md` with their reference drawings. The J-20, J-10 and J-8 get a painted
+finish: `python3 tools/aircraft/markings.py` draws their markings (PLAAF insignia, bort numbers, warning triangles,
+door outlines) into `tools/aircraft/markings/`, the spec projects them with `K.decal(...)`, and
+`K.finish(atlas=2048, ao=...)` bakes paint, panel lines, markings and ambient occlusion into one texture atlas.
 
 Previewing: `node server.mjs` (and `node tools/aircraft/upload.mjs` to save PNGs), then open `/tools/aircraft/preview.html` (see the comment at the top of
 `tools/aircraft/preview.js`). It renders models through the game's own loader/normaliser, with the nozzle

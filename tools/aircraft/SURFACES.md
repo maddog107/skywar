@@ -102,10 +102,10 @@ The F-15 (plain flaps, dorsal brake) and the 737 (Fowler flaps, spoilers, dihedr
 | f5 | TE flaps root to the kink, 20° | two ventral panels ahead of the main gear, 50° |
 | su35, su57, su47 | flaperons / TE flaps | Su-35: big dorsal brake behind the canopy; Su-57: none; Su-47: research |
 | mig29 | TE flaps | upper and lower split panels in the tail between the engines |
-| mig31, mig25 | TE flaps | ventral airbrakes (research where) |
-| mig21 | plain inboard flaps | ventral airbrakes behind the nose gear |
+| mig31, mig25 | TE flaps inboard of the ailerons | MiG-31: two ventral airbrakes under the intake ducts ahead of the main gear; MiG-25: upper and lower airbrakes on the rear fuselage between the engines |
+| mig21 | plain (blown) inboard flaps, 45° | the two forward airbrakes under the fuselage behind the nose gear (the ventral one is locked out with a centreline tank) |
 | j20 | flaperons | none dedicated: none |
-| j10 | flaperons / elevons | rear fuselage airbrakes (research) |
+| j10 | inboard elevons droop 20° | four airbrakes on the rear fuselage, two on top beside the fin, two underneath |
 | j8 | TE flaps | ventral airbrakes |
 | typhoon | inboard flaperons (droop for landing/takeoff) | dorsal brake behind the canopy |
 | rafale | inboard elevons droop | none dedicated: none |

@@ -50,9 +50,9 @@ the models).
 
 | File | Aircraft | Reference |
 |---|---|---|
-| `j20.glb` | Chengdu J-20 | https://commons.wikimedia.org/wiki/File:Chengdu_J-20.svg |
-| `j10.glb` | Chengdu J-10A | https://commons.wikimedia.org/wiki/File:Chengdu_J-10.svg |
-| `j8.glb` | Shenyang J-8II | published dimensions and photographs (no free three-view found) |
+| `j20.glb` | Chengdu J-20 (PLAAF dark grey, door outlines, insignia, bort number 62012; markings drawn by `tools/aircraft/markings.py` and baked into a texture atlas with panel lines and ambient occlusion) | https://commons.wikimedia.org/wiki/File:Chengdu_J-20.svg |
+| `j10.glb` | Chengdu J-10A (PLAAF light grey, insignia, bort number 41112, PL-8 / PL-12 missiles; markings as above) | https://commons.wikimedia.org/wiki/File:Chengdu_J-10.svg |
+| `j8.glb` | Shenyang J-8II (PLAAF light grey with a green radome, insignia, bort number 20412, PL-8 / PL-11 missiles, centreline tank; markings as above) | published dimensions and photographs of the J-8II and F-8II on Wikimedia Commons (no free three-view found) |
 | `f5.glb` | Northrop F-5E Tiger II | https://commons.wikimedia.org/wiki/File:Northrop_F-5E_Tiger_II_3-view.svg |
 | `mirage.glb` | Dassault Mirage IIIE | https://commons.wikimedia.org/wiki/File:Dassault_Mirage_III_3-view_line_drawing.png (public domain) |
 | `jaguar.glb` | SEPECAT Jaguar | https://commons.wikimedia.org/wiki/File:SEPECAT_Jaguar_3-view_line_drawing.png (public domain) |

@@ -205,25 +205,25 @@ export const SURFACE_DEFS = {
         flaps: [{ top: [[0.049, 0.1775], [0.127, 0.1775], [0.127, 0.2115], [0.049, 0.2115]], y: [-0.058, -0.044], hinge: [[0.049, -0.0485, 0.1775], [0.127, -0.0505, 0.1775]], angle: 45 }],
         brakes: [{ top: [[0.0145, -0.146], [0.032, -0.146], [0.032, -0.086], [0.0145, -0.086]], y: [-0.091, -0.075], dihedral: 19, hinge: [[0.0145, -0.0836, -0.146], [0.032, -0.077, -0.146]], angle: 35, skin: -1 }],
     },
-    // J-20: flaperons between the tail booms and the wing crank, drooping 25°. No speed brake: it brakes with
-    // its control surfaces
+    // J-20 (tools/aircraft/j20.py): the flaperons on the outer wing, from the tail boom out to mid-span, droop 25°.
+    // No speed brake: it brakes with its control surfaces
     j20: {
-        flaps: [{ top: [[0.119, 0.3125], [0.224, 0.3125], [0.224, 0.367], [0.119, 0.367]], y: [-0.036, -0.012], hinge: [[0.119, -0.0205, 0.3125], [0.224, -0.0232, 0.3125]], angle: 25 }],
+        flaps: [{ top: [[0.124, 0.345], [0.22, 0.345], [0.22, 0.40], [0.124, 0.40]], y: [-0.026, -0.006], dihedral: -3.1, hinge: [[0.124, -0.0145, 0.345], [0.22, -0.0197, 0.345]], angle: 25 }],
     },
-    // J-10A: the inboard elevons droop 20° as flaps; four petal airbrakes on the rear fuselage, two on top beside
-    // the fin and two underneath between the ventral fins, opening 50°
+    // J-10A (tools/aircraft/j10.py): the inboard elevons (outboard of the actuator fairings, out to mid-span) droop
+    // 20° as flaps; four airbrakes on the rear fuselage, two on top beside the fin and two underneath, opening 50°
     j10: {
-        flaps: [{ top: [[0.062, 0.23], [0.15, 0.23], [0.15, 0.312], [0.062, 0.318]], y: [-0.086, -0.06], hinge: [[0.062, -0.0705, 0.23], [0.15, -0.0745, 0.23]], angle: 20 }],
+        flaps: [{ top: [[0.066, 0.272], [0.16, 0.272], [0.16, 0.312], [0.066, 0.312]], y: [-0.097, -0.081], dihedral: -2.6, hinge: [[0.066, -0.0875, 0.272], [0.16, -0.0918, 0.272]], angle: 20 }],
         brakes: [
-            { top: [[0.007, 0.315], [0.042, 0.315], [0.042, 0.365], [0.007, 0.365]], y: [-0.048, -0.018], hinge: [[0.007, -0.0255, 0.315], [0.042, -0.0355, 0.315]], angle: -50, skin: 1 },
-            { top: [[0.004, 0.315], [0.03, 0.315], [0.03, 0.362], [0.004, 0.362]], y: [-0.115, -0.095], hinge: [[0.004, -0.1085, 0.315], [0.03, -0.107, 0.315]], angle: 50, skin: -1 },
+            { top: [[0.008, 0.29], [0.032, 0.29], [0.032, 0.333], [0.008, 0.333]], y: [-0.04, -0.012], hinge: [[0.008, -0.022, 0.29], [0.032, -0.029, 0.29]], angle: -50, skin: 1 },
+            { top: [[0.006, 0.292], [0.03, 0.292], [0.03, 0.33], [0.006, 0.33]], y: [-0.125, -0.103], hinge: [[0.006, -0.1165, 0.292], [0.03, -0.113, 0.292]], angle: 50, skin: -1 },
         ],
     },
-    // J-8II: flaps between the fuselage and the inner fence, 30°; two ventral airbrakes on the belly behind the
-    // nose gear, opening 45°
+    // J-8II (tools/aircraft/j8.py): flaps between the fuselage and the inner fence, 30°; two ventral airbrakes on the
+    // belly behind the nose gear, either side of the gun pod, opening 45°
     j8: {
-        flaps: [{ top: [[0.059, 0.241], [0.0995, 0.241], [0.0995, 0.296], [0.059, 0.297]], y: [-0.062, -0.042], hinge: [[0.059, -0.0502, 0.241], [0.0995, -0.051, 0.241]], angle: 30 }],
-        brakes: [{ top: [[0.003, -0.175], [0.024, -0.175], [0.024, -0.13], [0.003, -0.13]], y: [-0.085, -0.06], hinge: [[0.003, -0.0748, -0.175], [0.024, -0.0705, -0.175]], angle: 45, skin: -1 }],
+        flaps: [{ top: [[0.057, 0.248], [0.102, 0.248], [0.102, 0.30], [0.057, 0.30]], y: [-0.054, -0.037], dihedral: -2.4, hinge: [[0.057, -0.0435, 0.248], [0.102, -0.0455, 0.248]], angle: 30 }],
+        brakes: [{ top: [[0.011, -0.17], [0.026, -0.17], [0.026, -0.125], [0.011, -0.125]], y: [-0.075, -0.06], hinge: [[0.011, -0.0675, -0.17], [0.026, -0.067, -0.17]], angle: 45, skin: -1 }],
     },
 
     // ── European types, bombers, airliners, light aircraft ──
