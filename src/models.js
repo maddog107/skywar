@@ -19,14 +19,18 @@ export const MODEL_FILES = {
     f2: { file: 'f2.glb', rot: [0, Q, 0], cockpit: [0.07, -0.26] },
     f14: { file: 'aircraft/f14.glb', rot: [0, 0, 0], cockpit: [0.0225, -0.238] },
     f15: { file: 'aircraft/f15.glb', rot: [0, 0, 0], cockpit: [0.0135, -0.227] },
-    f4: { file: 'aircraft/f4.glb', rot: [0, 0, 0], cockpit: [-0.0087, -0.2584], nozzles: [[-0.034, -0.05, 0.36], [0.034, -0.05, 0.36]], nozzleR: 0.022 },
+    // F-4E Phantom II: manilov.ap's F4 (CC BY) in the USAF South-East Asia scheme, with its crew, centreline and wing
+    // tanks, AIM-7s and AIM-9s; the J79 nozzles under the tail, ahead of the stabilator
+    f4: { file: 'aircraft/f4.glb', rot: [0, 0, 0], cockpit: [0.0154, -0.2055], nozzles: [[-0.0301, -0.0519, 0.31], [0.0301, -0.0519, 0.31]], nozzleR: 0.024 },
     typhoon: { file: 'aircraft/typhoon.glb', rot: [0, 0, 0], cockpit: [-0.0225, -0.238] },
     rafale: { file: 'aircraft/rafale.glb', rot: [0, 0, 0], cockpit: [-0.067, -0.272] },
     j20: { file: 'aircraft/j20.glb', rot: [0, 0, 0], nozzles: [[0.0412, -0.0377, 0.4828], [-0.0412, -0.0377, 0.4828]], nozzleR: 0.0284, cockpit: [0.0345, -0.2721] },
     mig29: { file: 'aircraft/mig29.glb', rot: [0, 0, 0], cockpit: [0.021, -0.2198] },
     su57: { file: 'aircraft/su57.glb', rot: [0, 0, 0], cockpit: [0.016, -0.3] },
     f35: { file: 'aircraft/f35.glb', rot: [0, 0, 0], cockpit: [0.027, -0.295] },
-    f35n: { file: 'f35a.glb', rot: [0, 0, 0], nozzles: [[0, -0.056, 0.405]], nozzleR: 0.036, cockpit: [0.01, -0.29] },
+    // F-35C: the F-35A model (WTigerTw, CC BY) re-proportioned to the carrier variant's wing and tails, bays closed,
+    // US Navy markings (tools/aircraft/f35c.py, paint_f35c.py); nozzle found from the geometry as for the A
+    f35n: { file: 'aircraft/f35c.glb', rot: [0, 0, 0], cockpit: [0.0157, -0.295] },
     b747: { file: 'aircraft/b747.glb', rot: [0, 0, 0], cockpit: [-0.009, -0.459] },
     // four six-bladed Dowty R391 props, 4.11 m across, on the nacelles' own spinners (the model's blades are cut out)
     c130: {
@@ -37,9 +41,14 @@ export const MODEL_FILES = {
     mig25: { file: 'aircraft/mig25.glb', rot: [0, 0, 0], nozzles: [[0.0333, -0.0598, 0.4952], [-0.0333, -0.0598, 0.4952]], nozzleR: 0.0317, cockpit: [-0.0088, -0.2229] },
     j10: { file: 'aircraft/j10.glb', rot: [0, 0, 0], nozzles: [[0.0, -0.0635, 0.4675]], nozzleR: 0.0278, cockpit: [-0.0107, -0.2337] },
     j8: { file: 'aircraft/j8.glb', rot: [0, 0, 0], nozzles: [[0.0241, -0.0415, 0.5], [-0.0241, -0.0415, 0.5]], nozzleR: 0.0204, cockpit: [0.0066, -0.2429] },
-    f5: { file: 'aircraft/f5.glb', rot: [0, 0, 0], nozzles: [[0.0145, -0.0674, 0.5], [-0.0145, -0.0674, 0.5]], nozzleR: 0.0138, cockpit: [-0.029, -0.1263] },
-    mirage: { file: 'aircraft/mirage.glb', rot: [0, 0, 0], nozzles: [[0.0, -0.0482, 0.5]], nozzleR: 0.0319, cockpit: [0.0005, -0.1906] },
-    jaguar: { file: 'aircraft/jaguar.glb', rot: [0, 0, 0], nozzles: [[0.0238, -0.0758, 0.4834], [-0.0238, -0.0758, 0.4834]], nozzleR: 0.0196, cockpit: [0.0023, -0.2594] },
+    // F-5E Tiger II: manilov.ap's F5 (CC BY), a US Navy VFC-13 adversary in the blue-grey splinter scheme, with
+    // wingtip AIM-9s (tools/aircraft/f5_stores.py)
+    f5: { file: 'aircraft/f5.glb', rot: [0, 0, 0], nozzles: [[0.0185, -0.047, 0.4985], [-0.0185, -0.047, 0.4985]], nozzleR: 0.0155, cockpit: [0.0099, -0.15] },
+    // Mirage 5F: helijah's Dassault Mirage 5 (CC BY), repainted (tools/aircraft/paint_mirage.py)
+    mirage: { file: 'aircraft/mirage.glb', rot: [0, 0, 0], nozzles: [[0.0, -0.0481, 0.4985]], nozzleR: 0.0315, cockpit: [0.0, -0.183] },
+    // SEPECAT Jaguar GR1: manilov.ap's Jaguar (CC BY) with overwing AIM-9 launchers (tools/aircraft/jaguar_stores.py);
+    // the twin Adours exhaust under the rear fuselage, well ahead of the tail
+    jaguar: { file: 'aircraft/jaguar.glb', rot: [0, 0, 0], nozzles: [[0.0243, -0.0653, 0.3363], [-0.0243, -0.0653, 0.3363]], nozzleR: 0.0205, cockpit: [0.004, -0.184] },
     su47: { file: 'aircraft/su47.glb', rot: [0, 0, 0], cockpit: [-0.018, -0.205] },
     b2: { file: 'aircraft/b2.glb', rot: [0, 0, 0] },
     racer: { file: 'aircraft/racer.glb', rot: [0, 0, 0], nozzles: [], prop: { y: -0.028, r: 0.156, blades: 4 }, cockpit: [0.06, -0.08] },

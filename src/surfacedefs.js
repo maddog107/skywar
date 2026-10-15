@@ -82,9 +82,10 @@ export const SURFACE_DEFS = {
     f35: {
         flaps: [{ top: [[0.137, 0.2528], [0.3195, 0.209], [0.3195, 0.2506], [0.137, 0.2948]], y: [-0.034, -0.017], hinge: [[0.132, -0.0215, 0.254], [0.3199, -0.0254, 0.2089]], angle: 25 }],
     },
-    // F-35A, hand-built model: the same constant-chord flaperons, root to 90% span, 25°; no speed brake
+    // F-35C: the A's flaperons on the C's bigger wing (tools/aircraft/f35c.py moves them with it), inboard of the
+    // folding outer panel and its ailerons, drooping 30° for the deck approach. No speed brake
     f35n: {
-        flaps: [{ top: [[0.102, 0.2495], [0.315, 0.2125], [0.315, 0.26], [0.102, 0.29]], y: [-0.068, -0.04], hinge: [[0.1026, -0.0476, 0.2494], [0.3429, -0.0585, 0.2077]], angle: 25 }],
+        flaps: [{ top: [[0.1425, 0.2658], [0.2934, 0.2976], [0.2934, 0.3516], [0.1425, 0.3093]], y: [-0.046, -0.028], dihedral: -0.6, hinge: [[0.1358, -0.033, 0.2631], [0.2934, -0.037, 0.2976]], angle: 30 }],
     },
     // F/A-18E: the big single-slotted trailing-edge flaps inboard of the wing fold (a separate solid in the model)
     // go down 40° and run a little aft, opening a slot. The Super Hornet has no dorsal speed brake (the legacy
@@ -105,16 +106,15 @@ export const SURFACE_DEFS = {
             { top: [[0.0192, 0.383], [0.04, 0.383], [0.04, 0.421], [0.0192, 0.421]], y: [-0.05, -0.0405], skin: -1, depth: 0, hinge: [[0.0192, -0.046, 0.383], [0.04, -0.046, 0.383]], angle: 60 },
         ],
     },
-    // F-4E: the inboard trailing-edge flaps (root to the aileron, about a quarter of the chord) go down 60°, and
-    // the ailerons outboard of them, up to the wing fold, droop 16.5° with them. The speed brakes are the panels
-    // under each wing just aft of the main-gear wells (the texture's panel lines), hinged at the front and
-    // opening 50°
+    // F-4E: the inboard trailing-edge flaps (fuselage to the aileron, behind the texture's hinge line) go down 60°,
+    // and the ailerons outboard of them, up to the wing fold, droop 16.5° with them. The speed brakes are the panels
+    // under each wing just aft of the main-wheel wells, hinged at the front and opening 50°
     f4: {
         flaps: [
-            { top: [[0.059, 0.1591], [0.1134, 0.1832], [0.1134, 0.24], [0.059, 0.225]], y: [-0.08, -0.056], dihedral: -4.6, hinge: [[0.059, -0.0618, 0.1591], [0.1134, -0.0665, 0.1832]], angle: 60 },
-            { top: [[0.1134, 0.203], [0.232, 0.234], [0.232, 0.268], [0.1134, 0.24]], y: [-0.084, -0.062], dihedral: -4.6, hinge: [[0.1134, -0.069, 0.203], [0.232, -0.078, 0.234]], angle: 16.5 },
+            { top: [[0.061, 0.170], [0.133, 0.188], [0.133, 0.219], [0.061, 0.201]], y: [-0.064, -0.053], dihedral: -1.3, hinge: [[0.061, -0.0555, 0.170], [0.133, -0.0570, 0.188]], angle: 60 },
+            { top: [[0.133, 0.188], [0.200, 0.205], [0.200, 0.236], [0.133, 0.219]], y: [-0.0655, -0.0545], dihedral: -1.3, hinge: [[0.133, -0.0570, 0.188], [0.200, -0.0593, 0.205]], angle: 16.5 },
         ],
-        brakes: [{ top: [[0.061, 0.1085], [0.1115, 0.1085], [0.1115, 0.1595], [0.061, 0.1595]], y: [-0.081, -0.07], dihedral: -3, skin: -1, depth: 0.006, hinge: [[0.061, -0.0757, 0.1085], [0.1115, -0.0783, 0.1085]], angle: 50 }],
+        brakes: [{ top: [[0.066, 0.128], [0.113, 0.128], [0.113, 0.158], [0.066, 0.158]], y: [-0.066, -0.0585], skin: -1, depth: 0.004, hinge: [[0.066, -0.0628, 0.128], [0.113, -0.0642, 0.128]], angle: 50 }],
     },
     // A-10C: the flaps inboard of the decelerons, in two pieces each side (inboard and outboard of the fairing
     // at 0.176), go down 20° (the real jet's DN setting). The decelerons are the split ailerons on the outer
@@ -132,12 +132,12 @@ export const SURFACE_DEFS = {
             { top: [[0.3192, 0.0262], [0.5024, 0.0262], [0.5024, 0.085], [0.3192, 0.085]], y: [-0.0625, 0], clip: [[[0.42, -0.0235, 0.024], [0.092, -1, -0.75]]], depth: 0, hinge: [[0.3192, -0.0339, 0.0258], [0.5024, -0.017, 0.0258]], angle: 25 },
         ],
     },
-    // F-5E: the trailing-edge flaps (root to the kink in the trailing edge, aft of the texture's hinge line) go
-    // down 20°, the real jet's full setting. The speed brakes are the two panels side by side under the fuselage
-    // ahead of the main-gear bays (the texture's panel), hinged at the front and opening 50°
+    // F-5E: the trailing-edge flaps (fuselage to the aileron, aft of the texture's hinge line) go down 20°, the real
+    // jet's full setting. The speed brakes are the two panels side by side under the fuselage just ahead of the
+    // main-wheel bays (either side of the centreline tank's pylon), hinged at the front and opening 50°
     f5: {
-        flaps: [{ top: [[0.0495, 0.2], [0.178, 0.2], [0.178, 0.245], [0.0495, 0.245]], y: [-0.102, -0.086], dihedral: -2.2, hinge: [[0.0495, -0.0915, 0.2], [0.178, -0.0962, 0.2]], angle: 20 }],
-        brakes: [{ top: [[0.0012, 0.006], [0.0248, 0.006], [0.0248, 0.054], [0.0012, 0.054]], y: [-0.122, -0.1], skin: -1, depth: 0.006, hinge: [[0.0012, -0.1135, 0.006], [0.0248, -0.1115, 0.006]], angle: 50 }],
+        flaps: [{ top: [[0.068, 0.193], [0.198, 0.197], [0.198, 0.226], [0.068, 0.235]], y: [-0.0675, -0.0570], dihedral: -0.7, hinge: [[0.068, -0.0597, 0.193], [0.198, -0.0614, 0.197]], angle: 20 }],
+        brakes: [{ top: [[0.014, 0.084], [0.044, 0.084], [0.044, 0.111], [0.014, 0.111]], y: [-0.0705, -0.064], skin: -1, depth: 0.006, hinge: [[0.014, -0.0679, 0.084], [0.044, -0.0679, 0.084]], angle: 50 }],
     },
     // Mitsubishi F-2A: the model's own flaperon (root to the fixed outer trailing edge) droops 20°; the split
     // speed-brake petals at the end of the booms beside the nozzle (modelled with their ribs and actuators)
@@ -243,23 +243,25 @@ export const SURFACE_DEFS = {
         flaps: [{ top: [[0.060, 0.2790], [0.165, 0.2857], [0.165, 0.325], [0.060, 0.345]], y: [-0.0715, -0.060], hinge: [[0.060, -0.0622, 0.2790], [0.165, -0.0681, 0.2857]], angle: 20 }],
         brakes: [{ side: [[0.372, -0.0858], [0.415, -0.0858], [0.415, -0.096], [0.372, -0.096]], x: [0.008, 0.04], hinge: [[0.033, -0.0858, 0.372], [0.022, -0.096, 0.372]], angle: 45, skin: 1 }],
     },
-    // Dassault Mirage IIIE: no flaps (elevons only); a small airbrake panel in the upper and in the lower skin of
-    // each wing, on the texture's panel outline, hinged at the front, opening up and down
+    // Dassault Mirage 5F: no flaps (a tailless delta trims with its elevons). The airbrakes are the plates the model
+    // has in the upper and the lower skin of each wing near the root, taken whole on their outline (the links in
+    // front of them stay on the wing), hinged at the front edge, the upper rising 60° and the lower dropping 60°
     mirage: {
         brakes: [
-            { top: [[0.1015, 0.1437], [0.1218, 0.1437], [0.1218, 0.1593], [0.1015, 0.1593]], y: [-0.070, -0.058], hinge: [[0.1015, -0.0624, 0.1437], [0.1218, -0.0637, 0.1437]], angle: -60, skin: 1 },
-            { top: [[0.1015, 0.1437], [0.1218, 0.1437], [0.1218, 0.1593], [0.1015, 0.1593]], y: [-0.080, -0.070], hinge: [[0.1015, -0.0766, 0.1437], [0.1218, -0.0761, 0.1437]], angle: 60, skin: -1 },
+            { top: [[0.0660, 0.1146], [0.0660, 0.1244], [0.0667, 0.1260], [0.0678, 0.1269], [0.0943, 0.1364], [0.0973, 0.1359], [0.0985, 0.1341], [0.0985, 0.1170], [0.0977, 0.1156]], y: [-0.0796, -0.0748], whole: true, hinge: [[0.0660, -0.0754, 0.1146], [0.0985, -0.0754, 0.1170]], angle: -60 },
+            { top: [[0.0698, 0.0855], [0.0698, 0.0953], [0.0705, 0.0969], [0.0716, 0.0978], [0.0981, 0.1073], [0.1011, 0.1067], [0.1023, 0.1050], [0.1023, 0.0878], [0.1016, 0.0865]], y: [-0.0898, -0.0857], whole: true, hinge: [[0.0699, -0.0890, 0.0855], [0.1023, -0.0890, 0.0878]], angle: 60 },
         ],
     },
-    // SEPECAT Jaguar: double-slotted flaps along nearly the whole trailing edge (it has no ailerons), in two
-    // sections either side of the overwing missile pylon, running aft as they go down; the wing has anhedral.
-    // Two door-type airbrakes under the fuselage just behind the main-wheel wells, opening down.
+    // SEPECAT Jaguar GR1: double-slotted flaps along nearly the whole trailing edge (it rolls with spoilers and
+    // the tailplane, no ailerons), an inboard and an outboard section either side of the step in the trailing edge
+    // (the texture's panel lines), running aft as they go down 40°; the wing has anhedral. The two airbrakes are
+    // the door panels in the belly just aft of the main-wheel bays, hinged at the front, opening 60°.
     jaguar: {
         flaps: [
-            { top: [[0.050, 0.1275], [0.117, 0.161], [0.117, 0.212], [0.050, 0.178]], y: [-0.0150, -0.0060], dihedral: -3, hinge: [[0.050, -0.0086, 0.1275], [0.117, -0.0121, 0.161]], angle: 40, slide: [0, -0.002, 0.012] },
-            { top: [[0.1445, 0.1795], [0.235, 0.227], [0.235, 0.262], [0.1445, 0.225]], y: [-0.0200, -0.0105], dihedral: -4, hinge: [[0.1445, -0.0138, 0.1795], [0.235, -0.0208, 0.227]], angle: 40, slide: [0, -0.0015, 0.010] },
+            { top: [[0.055, 0.171], [0.121, 0.171], [0.121, 0.226], [0.055, 0.223]], y: [-0.0235, -0.0145], dihedral: -2.8, hinge: [[0.055, -0.0165, 0.171], [0.121, -0.0198, 0.171]], angle: 40, slide: [0, -0.002, 0.012] },
+            { top: [[0.124, 0.204], [0.235, 0.240], [0.235, 0.269], [0.124, 0.236]], y: [-0.0265, -0.0195], dihedral: -4.7, hinge: [[0.124, -0.0224, 0.204], [0.235, -0.0316, 0.240]], angle: 40, slide: [0, -0.0015, 0.010] },
         ],
-        brakes: [{ top: [[0.006, 0.16], [0.027, 0.16], [0.027, 0.21], [0.006, 0.21]], y: [-0.104, -0.094], hinge: [[0.006, -0.1004, 0.16], [0.027, -0.0991, 0.16]], angle: 60, skin: -1, depth: 0.006 }],
+        brakes: [{ top: [[0.022, 0.138], [0.044, 0.138], [0.044, 0.188], [0.022, 0.188]], y: [-0.0938, -0.0858], hinge: [[0.022, -0.0908, 0.138], [0.044, -0.0890, 0.138]], angle: 60, skin: -1, depth: 0.006 }],
     },
     // Northrop B-2 Spirit: no flaps. The split drag rudders at the outboard trailing edge are its speed brakes:
     // the model builds each as a body of two halves meeting face to face, which open up and down like a bill

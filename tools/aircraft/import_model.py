@@ -3,7 +3,8 @@
 #   blender -b -P tools/aircraft/import_model.py -- SRC.glb OUT.glb [options]
 #   blender -b -P tools/aircraft/import_model.py -- SRC.glb --inspect RENDER_DIR
 # Options:
-#   --nose +X|-X|+Y|-Y     which Blender axis the nose points along after import (default +Y)
+#   --nose +X|-X|+Y|-Y|DEG which Blender axis the nose points along after import (default +Y), or its heading in
+#                          degrees from +X toward +Y (a model exported yawed)
 #   --roll DEG / --pitch DEG  extra rotation about Y / X after the yaw fix (models lying on their side)
 #   --delete REGEX         delete objects whose (object, mesh or material) name matches
 #   --delete-mat REGEX     delete faces using materials whose name matches
@@ -22,6 +23,16 @@
 #                          parts for --box-delete & co., and --decimate no longer tears the surface open at seams
 #   --wires FRAC           delete antenna wires (loose parts of <= 16 vertices longer than FRAC of the length)
 #   --rotate-part REGEX:axis:fx,fy,fz:deg   rotate matching objects about a hinge (e.g. close a canopy)
+#   --delete-box x0,y0,z0,x1,y1,z1          delete loose parts lying entirely inside this box (file coordinates, as
+#                                           imported: metres, Z up; repeatable): landing gear, stores
+#   --rotate-box BOX:axis:px,py,pz:deg      turn the loose parts inside BOX about a hinge through P (file coordinates;
+#                                           axis X|Y|Z or ax,ay,az; repeatable): close an open canopy
+#   --fill-cavity BOX:u0,v0,u1,v1:fu,fv[:z] close a gear well left open: delete the faces in BOX mapped into the UV
+#                                           rectangle (the well's interior texture), fill the opening, map it to (fu, fv);
+#                                           with z (or when the rim doesn't close) cap it from below on the rim under z
+#   --add PARTS.glb                         merge extra parts modelled in the source's frame (stores_kit.py)
+#   --image 'REGEX=path.png'                new base-colour texture for the matching materials (a livery painted with
+#                                           tools/aircraft/bakemaps.py + livery.py on the same UV layout)
 #   --level-roll / --level-pitch   auto-level a model that was exported banked / nose-up
 #   --weld ANGLE           merge split vertices and re-smooth with sharp edges above ANGLE (smaller files)
 #   --strip-maps           drop normal / metal-rough / emissive maps (keep base colour)
@@ -33,6 +44,7 @@
 #   --one-uv / --uv0       drop extra UV sets / put the panel texture on UV0
 #   --img JPEG             re-encode textures as JPEG on export
 #   --list                 print every object with triangles, bbox and materials
+#   --no-centre            leave the model where it is (a staged intermediate keeps its source's frame)
 # Output is joined into one mesh (materials kept), nose toward +Y (three.js -Z), centred, metres
 # unchanged (the game rescales to the real length). Prints triangle count / size / bbox.
 # ═══════════════════════════════════════════════════════════════
@@ -64,6 +76,12 @@ elif ext == '.blend':
 
 def meshes():
     return [o for o in bpy.data.objects if o.type == 'MESH']
+
+# ── extra parts built in the source's own frame (stores, launchers: tools/aircraft/stores_kit.py) ──
+for path in [argv[i + 1] for i, a in enumerate(argv) if a == '--add']:
+    n0 = len(bpy.data.objects)
+    bpy.ops.import_scene.gltf(filepath=path)
+    print('add', path, len(bpy.data.objects) - n0, 'objects')
 
 # ── bake transforms / modifiers, drop helpers ──
 dg = bpy.context.evaluated_depsgraph_get()
@@ -139,9 +157,159 @@ if rm:
         bm.to_mesh(o.data); bm.free()
         print('deleted faces of materials', [o.data.materials[i].name for i in bad], 'in', o.name)
 
+# ── parts picked by a box in the file's own coordinates (as imported: metres, Z up; see --list): loose parts lying
+#    entirely inside it. --delete-box removes them (landing gear, stores); --rotate-box turns them about a hinge
+#    (close an open canopy): 'x0,y0,z0,x1,y1,z1:axis:px,py,pz:deg', axis X/Y/Z or 'ax,ay,az', hinge point absolute ──
+def parts_in_box(spec, fn):
+    b = [float(v) for v in spec.split(',')]
+    lo, hi = Vector(b[:3]), Vector(b[3:])
+    n_parts = 0
+    for o in meshes():
+        bm = bmesh.new(); bm.from_mesh(o.data)
+        bm.verts.ensure_lookup_table()
+        parent = list(range(len(bm.verts)))
+        def find(a):
+            while parent[a] != a:
+                parent[a] = parent[parent[a]]; a = parent[a]
+            return a
+        for e in bm.edges:
+            a, c = find(e.verts[0].index), find(e.verts[1].index)
+            if a != c: parent[a] = c
+        comps = {}
+        for v in bm.verts:
+            comps.setdefault(find(v.index), []).append(v)
+        hit = [vs for vs in comps.values() if all(lo[i] <= v.co[i] <= hi[i] for v in vs for i in range(3))]
+        if hit:
+            fn(bm, [v for vs in hit for v in vs])
+            bm.to_mesh(o.data)
+            n_parts += len(hit)
+        bm.free()
+    return n_parts
+
+for spec in [argv[i + 1] for i, a in enumerate(argv) if a == '--delete-box']:
+    print('delete-box', spec, 'parts:', parts_in_box(spec, lambda bm, vs: bmesh.ops.delete(bm, geom=vs, context='VERTS')))
+for spec in [argv[i + 1] for i, a in enumerate(argv) if a == '--rotate-box']:
+    box_, axis, pt, deg = spec.split(':')
+    ax = Vector({'X': (1, 0, 0), 'Y': (0, 1, 0), 'Z': (0, 0, 1)}[axis.upper()]) if axis.upper() in 'XYZ' else Vector([float(v) for v in axis.split(',')]).normalized()
+    P = Vector([float(v) for v in pt.split(',')])
+    M = Matrix.Translation(P) @ Matrix.Rotation(math.radians(float(deg)), 4, ax) @ Matrix.Translation(-P)
+    def turn(bm, vs, M=M):
+        for v in vs:
+            v.co = M @ v.co
+    print('rotate-box', spec, 'parts:', parts_in_box(box_, turn))
+
+# ── close an open cavity (a gear well whose doors went with the gear): 'BOX:u0,v0,u1,v1:fu,fv' deletes the faces
+#    whose centre lies in BOX (file coordinates) and whose UVs all lie in the rectangle (v from the top of the image:
+#    the well's own interior texture), then fills the openings left in the skin (boundary loops inside BOX) with flat
+#    doors, mapped to the texel (fu, fv) (a plain patch of the paint around them) ──
+def join_all():
+    ms = meshes()
+    if len(ms) > 1:
+        bpy.ops.object.select_all(action='DESELECT')
+        for o in ms:
+            o.select_set(True)
+        bpy.context.view_layer.objects.active = ms[0]
+        bpy.ops.object.join()
+
+if '--fill-cavity' in argv:
+    join_all()   # an opening's rim can run through several objects (the wing's skin and the fuselage's)
+for spec in [argv[i + 1] for i, a in enumerate(argv) if a == '--fill-cavity']:
+    box_, uvr, fuv = spec.split(':')[:3]
+    cap_z = float(spec.split(':')[3]) if len(spec.split(':')) > 3 else None   # force a cap on the rim below this height
+    b = [float(v) for v in box_.split(',')]
+    lo, hi = Vector(b[:3]), Vector(b[3:])
+    u0, v0, u1, v1 = [float(v) for v in uvr.split(',')]
+    fu, fv = [float(v) for v in fuv.split(',')]
+    inside = lambda co: all(lo[i] <= co[i] <= hi[i] for i in range(3))
+    n_del = n_fill = 0
+    for o in meshes():   # the well's walls and roof
+        bm = bmesh.new(); bm.from_mesh(o.data)
+        uvl = bm.loops.layers.uv.active
+        kill = [f for f in bm.faces if uvl is not None and inside(f.calc_center_median()) and
+                all(u0 <= l[uvl].uv.x <= u1 and v0 <= 1 - l[uvl].uv.y <= v1 for l in f.loops)]
+        if kill:
+            bmesh.ops.delete(bm, geom=kill, context='FACES_ONLY')
+            n_del += len(kill)
+            bm.to_mesh(o.data)
+        bm.free()
+    for o in meshes():   # the openings they leave, in whichever object holds the skin round them
+        bm = bmesh.new(); bm.from_mesh(o.data)
+        uvl = bm.loops.layers.uv.active
+        # glTF splits vertices along UV seams: weld inside the box so each opening is one closed loop
+        bmesh.ops.remove_doubles(bm, verts=[v for v in bm.verts if inside(v.co)], dist=1e-4)
+        for e in [e for e in bm.edges if not e.link_faces and inside(e.verts[0].co)]:
+            bm.edges.remove(e)
+        for v in [v for v in bm.verts if not v.link_edges and inside(v.co)]:
+            bm.verts.remove(v)
+        edges = [e for e in bm.edges if e.is_boundary and inside(e.verts[0].co) and inside(e.verts[1].co)]
+        new = bmesh.ops.holes_fill(bm, edges=edges, sides=0).get('faces', []) if edges and uvl is not None and cap_z is None else []
+        for f in new:
+            nb = [g for e in f.edges for g in e.link_faces if g is not f]
+            f.material_index = nb[0].material_index if nb else 0
+            f.smooth = False
+            for l in f.loops:
+                l[uvl].uv = (fu, 1 - fv)
+        if new:
+            bmesh.ops.triangulate(bm, faces=new)
+            n_fill += len(new)
+        elif edges and uvl is not None:
+            # the rim doesn't close (T-junctions, unwelded seams): cap the opening from below instead, with a flat
+            # door on the outline of the rim seen from below, a hair under the lowest part of the skin round it
+            rim = [v for e in edges for v in e.verts if cap_z is None or v.co.z <= cap_z]
+            pts = sorted({(round(v.co.x, 5), round(v.co.y, 5)) for v in rim})
+            zs = sorted(v.co.z for v in rim)
+            z = zs[max(0, len(zs) // 10)] - 0.004 * (hi.z - lo.z) if zs else 0
+            def cross(o_, a, b):
+                return (a[0] - o_[0]) * (b[1] - o_[1]) - (a[1] - o_[1]) * (b[0] - o_[0])
+            low, up = [], []
+            for q in pts:   # monotone-chain convex hull
+                while len(low) >= 2 and cross(low[-2], low[-1], q) <= 0: low.pop()
+                low.append(q)
+            for q in reversed(pts):
+                while len(up) >= 2 and cross(up[-2], up[-1], q) <= 0: up.pop()
+                up.append(q)
+            hull = low[:-1] + up[:-1]
+            if len(hull) >= 3:
+                vs = [bm.verts.new((x, y, z)) for x, y in reversed(hull)]   # clockwise from above: facing down
+                f = bm.faces.new(vs)
+                f.material_index = edges[0].link_faces[0].material_index if edges[0].link_faces else 0
+                f.smooth = False
+                for l in f.loops:
+                    l[uvl].uv = (fu, 1 - fv)
+                bmesh.ops.triangulate(bm, faces=[f])
+                n_fill += 1
+        bm.to_mesh(o.data); bm.free()
+    print('fill-cavity', spec, 'deleted', n_del, 'faces, filled', n_fill, 'openings')
+
+# ── replace textures: --image 'REGEX=path.png' gives every material whose name matches a new base-colour image
+#    (a repaint from tools/aircraft/livery.py, laid out like the texture it replaces) ──
+for spec in [argv[i + 1] for i, a in enumerate(argv) if a == '--image']:
+    rx_, path = spec.rsplit('=', 1)
+    r = re.compile(rx_)
+    new = bpy.data.images.load(os.path.abspath(path))
+    new.pack()
+    n_mat = 0
+    for m in bpy.data.materials:
+        if not (r.search(m.name) and m.use_nodes):
+            continue
+        b = next((n for n in m.node_tree.nodes if n.type == 'BSDF_PRINCIPLED'), None)
+        if not b or not b.inputs['Base Color'].links:
+            continue
+        n = b.inputs['Base Color'].links[0].from_node
+        while n and n.type != 'TEX_IMAGE' and n.inputs:
+            ls = [l for i in n.inputs for l in i.links]
+            n = ls[0].from_node if ls else None
+        if n and n.type == 'TEX_IMAGE':
+            n.image = new
+            n_mat += 1
+    print('image', path, '->', n_mat, 'materials')
+
 # ── orientation: nose → +Y, up → +Z ──
 nose = opt('--nose', '+Y')
-yaw = {'+Y': 0, '-Y': math.pi, '+X': math.pi / 2, '-X': -math.pi / 2}[nose]
+# (or a number: the nose's heading in degrees from +X toward +Y, for a model exported yawed off its axes)
+yaw = {'+Y': 0, '-Y': math.pi, '+X': math.pi / 2, '-X': -math.pi / 2}.get(nose)
+if yaw is None:
+    yaw = math.radians(90 - float(nose))
 R = Matrix.Rotation(yaw, 4, 'Z')
 if opt('--roll'):
     R = Matrix.Rotation(math.radians(float(opt('--roll'))), 4, 'Y') @ R
@@ -477,7 +645,7 @@ for im in bpy.data.images:
 
 # ── centre + join ──
 mn, mx = bbox()
-c = (mn + mx) / 2
+c = (mn + mx) / 2 if not flag('--no-centre') else Vector()   # (--no-centre: keep the frame, for a staged intermediate)
 for o in meshes():
     o.data.transform(Matrix.Translation(-c))
 ms = meshes()

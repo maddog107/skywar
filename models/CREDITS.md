@@ -8,7 +8,6 @@ All models are binary glTF 2.0 (`.glb`). CC BY models require the attribution be
 |---|---|---|---|---|
 | `f16.glb` | F-16C Fighting Falcon | Carlos.Maciel | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | https://sketchfab.com/3d-models/f16-c-falcon-4bc2ff75dc584af2afd0aa6bd8b79015 (GLB obtained from the redistribution in https://github.com/Void0312Aurora/Echelon-Forge) |
 | `f2.glb` | Mitsubishi F-2 | bohmerang | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | https://sketchfab.com/3d-models/mitsubishi-f-2-fighter-jet-free-d3d7244554974f499b106e6c11fe3aaf (GLB obtained from https://github.com/playcanvas/engine/tree/main/examples/assets/models) |
-| `f35a.glb` | F-35A Lightning II | SKYWAR (built in Blender by `tools/f35a_model.py`, shaped after the public-domain USAF 3-view) | CC0 1.0 | https://commons.wikimedia.org/wiki/File:Lockheed_Martin_F-35A_Lightning_II_3-view_drawing.png |
 | `heli_military.glb` | Military helicopter ("Helicopter") | Zsky | [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) | https://poly.pizza/m/hG2Qr0A3zR |
 | `heli_civil.glb` | Civil helicopter ("Helicopter") | jeremy | [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) | https://poly.pizza/m/eb7b31pjGtQ |
 | `humvee.glb` | Humvee | madtrollstudio | [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) | https://poly.pizza/m/Ebryot9iKM |

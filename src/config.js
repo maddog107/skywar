@@ -63,13 +63,15 @@ export const AIRCRAFT = {
         health: 110, missiles: 8,
         proc: { body: [0.09, 0.07], wing: { rc: 0.46, tc: 0.08, sweep: 42, z: 0.12 }, tail: 'twin', cant: 28, hstab: true, engines: 2, spacing: 0.065, intake: 'side', paint: 0x6d7682, accent: 0x5a626d },
     }),
-    // same jet as below, drawn with the new hand-built model (tools/f35a_model.py) for comparison
+    // F-35C Lightning II, the US Navy's carrier variant (id kept from the old comparison model, so saves stay valid):
+    // the bigger folding wing (13.1 m span, 62 m² against the A's 43) and tails for slow, controllable approaches to
+    // the deck; heavier, a little slower, 7.5 g; no internal gun (the 25 mm GAU-22 in a belly pod); more fuel
     f35n: jet({
-        name: 'F-35A Lightning II (Blender model)', role: 'Multirole Stealth', country: 'USA', length: 15.7, span: 10.7,
-        desc: 'Sensor-fused stealth multirole. Big missile load, decent in a knife fight. New Blender-built model.',
-        flight: { speed: 374, mach: 1.6, cd0: 0.0538, aoaLimiter: true, accel: 13.5, gLimit: 9, roll: 3.9, alpha: 28, lift: 0.98 },
-        health: 115, missiles: 8, gun: { damage: 10, rate: 14, ammo: 360, name: 'GAU-22 25mm' },
-        proc: { body: [0.11, 0.09], wing: { rc: 0.44, tc: 0.1, sweep: 36, z: 0.14 }, tail: 'twin', cant: 25, hstab: true, engines: 1, intake: 'side', paint: 0x5e666e, accent: 0x4c535b },
+        name: 'F-35C Lightning II', role: 'Carrier Multirole Stealth', country: 'USA', length: 15.7, span: 13.1,
+        desc: 'The Navy\'s carrier Lightning: a bigger wing and tail for slow, steady deck approaches, long legs, stealth.',
+        flight: { speed: 365, mach: 1.6, cd0: 0.0558, aoaLimiter: true, accel: 12.5, gLimit: 7.5, roll: 3.6, alpha: 30, lift: 1.12 },
+        health: 120, missiles: 8, gun: { damage: 10, rate: 14, ammo: 220, name: 'GAU-22 25mm pod' }, fuelTime: 1900,
+        proc: { body: [0.11, 0.09], wing: { rc: 0.46, tc: 0.14, sweep: 34, z: 0.14 }, tail: 'twin', cant: 25, hstab: true, engines: 1, intake: 'side', paint: 0x5e666e, accent: 0x4c535b },
     }),
     f35: jet({
         name: 'F-35A Lightning II', role: 'Multirole Stealth', country: 'USA', length: 15.7, span: 10.7,
@@ -218,8 +220,9 @@ export const AIRCRAFT = {
         health: 75, missiles: 2, gun: { damage: 9, rate: 18, ammo: 560, name: '2× M39 20mm' },
         proc: { body: [0.07, 0.07], wing: { rc: 0.3, tc: 0.1, sweep: 32, z: 0.1 }, tail: 'single', hstab: true, engines: 2, spacing: 0.04, intake: 'side', paint: 0xa89a7a, accent: 0x7e7058 },
     }),
+    // Mirage 5F: the Armée de l'Air's Mirage 5 (a Mirage IIIE airframe with a slimmer nose and simpler avionics)
     mirage: jet({
-        name: 'Mirage IIIE', role: 'Interceptor', country: 'FRA', length: 15.0, span: 8.2,
+        name: 'Mirage 5F', role: 'Fighter-Bomber', country: 'FRA', length: 15.55, span: 8.22,
         desc: 'Classic tailless delta. Fast and elegant, bleeds energy in turns.',
         flight: { speed: 388, mach: 2.2, cd0: 0.0485, accel: 13, gLimit: 7, roll: 4.0, alpha: 26, lift: 0.95 },
         health: 85, missiles: 4, gun: { damage: 11, rate: 16, ammo: 250, name: '2× DEFA 30mm' },

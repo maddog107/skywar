@@ -43,9 +43,13 @@ describe('dailyMission', () => {
         assert.ok(new Set(year.map(m => m.key)).size === 365);
     });
 
-    test('never picks the F-35 comparison model (f35n)', () => {
-        const hits = days.map(d => dailyMission(d)).filter(m => m.aircraft === 'f35n').map(m => m.key);
-        assert.deepEqual(hits, [], `f35n picked on ${hits.length} days, e.g. ${hits.slice(0, 5).join(', ')}`);
+    test('never picks a special-mission variant (a type listed under another heading: the EA-18G)', () => {
+        const hits = days.map(d => dailyMission(d)).filter(m => AIRCRAFT[m.aircraft].group).map(m => `${m.key} ${m.aircraft}`);
+        assert.deepEqual(hits, [], `picked on ${hits.length} days, e.g. ${hits.slice(0, 5).join(', ')}`);
+    });
+
+    test('the F-35C (f35n, once a comparison model) is in the rotation like any fighter', () => {
+        assert.ok(days.some(d => dailyMission(d).aircraft === 'f35n'));
     });
 
     test('air-to-air / non-strike missions never hand out a subsonic jet (e.g. the A-10)', () => {

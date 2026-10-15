@@ -1,3 +1,4 @@
 tests/.cache/
 .claude/
 tools/aircraft/shots/
+__pycache__/
