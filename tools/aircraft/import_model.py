@@ -31,6 +31,7 @@
 #                                           rectangle (the well's interior texture), fill the opening, map it to (fu, fv);
 #                                           with z (or when the rim doesn't close) cap it from below on the rim under z
 #   --add PARTS.glb                         merge extra parts modelled in the source's frame (stores_kit.py)
+#   --regrey 'REGEX=#hex'                   recolour the light neutral grey of the matching materials' textures
 #   --image 'REGEX=path.png'                new base-colour texture for the matching materials (a livery painted with
 #                                           tools/aircraft/bakemaps.py + livery.py on the same UV layout)
 #   --level-roll / --level-pitch   auto-level a model that was exported banked / nose-up
@@ -504,6 +505,41 @@ if mono:
         im.pixels.foreach_set(px.ravel())
         im.pack()
         print('mono', im.name)
+
+# ── recolour a texture's light neutral grey (a camouflage colour, an underside): --regrey 'REGEX=#hex' turns the
+#    pixels of the matching materials' base-colour textures that are a light neutral grey into #hex, keeping their
+#    shading and panel lines (scaled by their brightness against the grey's median); colours, white and dark trim stay ──
+for spec in [argv[i + 1] for i, a in enumerate(argv) if a == '--regrey']:
+    import numpy as np
+    rx_, col = spec.rsplit('=', 1)
+    r = re.compile(rx_)
+    h = int(col.lstrip('#'), 16)
+    target = np.array([((h >> 16) & 255) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255], np.float32)
+    done = set()
+    for m in bpy.data.materials:
+        if not (r.search(m.name) and m.use_nodes):
+            continue
+        b = next((x for x in m.node_tree.nodes if x.type == 'BSDF_PRINCIPLED'), None)
+        n = b.inputs['Base Color'].links[0].from_node if b and b.inputs['Base Color'].links else None
+        while n and n.type != 'TEX_IMAGE' and n.inputs:   # (through a mix node: a vertex-colour multiply)
+            ls = [l for i in n.inputs for l in i.links if l.from_node.type in ('TEX_IMAGE', 'MIX', 'MIX_RGB')]
+            n = ls[0].from_node if ls else None
+        for n in ([n] if n is not None and n.type == 'TEX_IMAGE' else []):
+            if not n.image or n.image.name in done:
+                continue
+            im = n.image; done.add(im.name)
+            px = np.empty(im.size[0] * im.size[1] * 4, np.float32); im.pixels.foreach_get(px); px = px.reshape(-1, 4)
+            rgb = px[:, :3]
+            mx_, mn_ = rgb.max(1), rgb.min(1)
+            sat = (mx_ - mn_) / np.maximum(mx_, 1e-4)
+            lum = rgb @ np.array([0.3, 0.59, 0.11], np.float32)
+            grey = (sat < 0.1) & (lum > 0.55) & (lum < 0.97)       # (8-bit images: sRGB values, a grey of 140–250)
+            if not grey.any():
+                continue
+            ref = np.median(lum[grey])
+            px[grey, :3] = np.clip(target[None, :] * np.clip(lum[grey] / ref, 0.5, 1.06)[:, None], 0, 1)
+            im.pixels.foreach_set(px.ravel()); im.pack()
+            print('regrey', im.name, 'in', m.name, int(grey.sum()), 'pixels ->', col)
 
 # ── repaint untextured materials: REGEX=#hex[,REGEX=#hex...] (+ SKYWAR panel-line texture, box UVs) ──
 paint_spec = opt('--paint')

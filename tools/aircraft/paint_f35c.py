@@ -15,20 +15,28 @@ import livery as LV
 D, OUT = sys.argv[1], sys.argv[2]
 P = LV.Painter(D)
 b = P.base
-grey = np.median(b[P.cover], 0)                      # the RAM grey
 lum = b @ np.array([0.3, 0.59, 0.11], np.float32)
 sat = (b.max(2) - b.min(2)) / np.maximum(b.max(2), 1e-4)
+# the A's texture is a near-black grey (lum 0.17): the real jet's radar-absorbent coating reads a medium dark grey
+# (about #5c6064), so the grey paint and its panel lines are lifted to that, a touch cooler; colours (the nozzle's
+# ceramic, the cockpit) stay as they are
+paintmask = (sat < 0.2) & P.cover
+lift = np.clip(b * np.array([1.55, 1.55, 1.68], np.float32), 0, 1)
+P.out[paintmask] = lift[paintmask]
+b = P.out.copy()
+grey = np.median(b[P.cover & paintmask], 0)          # the RAM grey
+lum = b @ np.array([0.3, 0.59, 0.11], np.float32)
 
 # paint out the fins' USAF markings (lettering, badge, stripe): everything on the fins brighter or more saturated than
 # the grey round it; the fins' own panel lines are lost with them (a bare fin reads the same at game distances)
-fin = P.box((1.3, -7.9, -0.1), (3.2, -3.6, 2.4)).astype(bool) & (np.abs(P.nx) > 0.45)
+fin = (np.abs(P.x) > 1.3) & (np.abs(P.x) < 3.2) & (P.y > -7.9) & (P.y < -3.6) & (P.z > -0.1) & (P.z < 2.4) & (np.abs(P.nx) > 0.45)
 mark = fin & ((np.abs(lum - grey @ np.array([0.3, 0.59, 0.11])) > 0.03) | (sat > 0.25))
 P.out[mark] = grey
 # the 33rd FW badge on the inner wing's upper skin
 badge = P.box((0.0, -1.0, -0.6), (6.6, 4.0, 0.2)).astype(bool) & (P.nz > 0.6) & (sat > 0.18)
 P.out[badge & P.cover] = grey
 
-LOVIS = '#62666a'
+LOVIS = '#8f9397'
 cant = math.radians(25)
 span = (math.sin(cant), 0, math.cos(cant))
 P.decal(LV.text('NE', LOVIS, px=220), (2.07, -5.95, 1.12), (0, 1, 0), span, 0.95, depth=0.3, mirror=0)
