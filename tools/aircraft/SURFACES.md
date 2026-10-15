@@ -94,12 +94,13 @@ The F-15 (plain flaps, dorsal brake) and the 737 (Fowler flaps, spoilers, dihedr
 |---|---|---|
 | f16, f2 | flaperons droop 20° (the F-16 model's `Aileron` parts, `whole`) | split petals beside the nozzle, 30° up and 30° down (F-16: the model's `Brake` parts, `whole`) |
 | f22 | flaperons droop 25° | none dedicated (uses control surfaces): none |
-| f35, f35n | flaperons droop 25° | none dedicated: none |
+| f35 | flaperons droop 25° | none dedicated: none |
+| f35n (F-35C) | flaperons on the bigger wing droop 30° (inboard of the folding panel) | none dedicated: none |
 | fa18 | E/F: big single-slotted TE flaps, 40° with a little aft travel | the E/F has no dorsal brake (that was the legacy Hornet): LEX spoilers rise 60° |
 | f14 | TE flaps, but this model's wings are fixed fully swept, where the real flaps are locked out: none | upper and lower beaver-tail panels, 60° each (`depth: 0`) |
 | f4 | inboard TE flaps 60°, the ailerons droop 16.5° with them | underwing panels aft of the gear wells, 50° down |
 | a10 | inboard flaps (two pieces a side) 20° | decelerons: upper half up 55°, lower half down 25° from the model's drooped pose (`clip`, `depth: 0`) |
-| f5 | TE flaps root to the kink, 20° | two ventral panels ahead of the main gear, 50° |
+| f5 | TE flaps root to the aileron, 20° | two ventral panels ahead of the main-wheel bays, 50° |
 | su35, su57, su47 | flaperons / TE flaps | Su-35: big dorsal brake behind the canopy; Su-57: none; Su-47: research |
 | mig29 | TE flaps | upper and lower split panels in the tail between the engines |
 | mig31, mig25 | TE flaps inboard of the ailerons | MiG-31: two ventral airbrakes under the intake ducts ahead of the main gear; MiG-25: upper and lower airbrakes on the rear fuselage between the engines |
@@ -110,8 +111,8 @@ The F-15 (plain flaps, dorsal brake) and the 737 (Fowler flaps, spoilers, dihedr
 | typhoon | inboard flaperons (droop for landing/takeoff) | dorsal brake behind the canopy |
 | rafale | inboard elevons droop | none dedicated: none |
 | gripen | elevons | rear fuselage side brakes, swinging outward |
-| mirage (IIIE) | none (elevons) | small panels above and below each wing |
-| jaguar | double-slotted flaps, nearly full span | ventral airbrakes under the rear fuselage |
+| mirage (5F) | none (elevons) | the plates above and below each wing near the root (`whole`), 60° up / down |
+| jaguar | double-slotted flaps, nearly full span, 40° with aft travel | belly door airbrakes aft of the main-wheel bays, 60° |
 | b2 | none | split drag rudders at the wing tips (upper and lower skin of the outboard trailing edge) |
 | b747 | triple-slotted Fowler flaps inboard and outboard | spoilers ahead of the flaps |
 | c130 | Fowler flaps across the trailing edge inside the ailerons | none |

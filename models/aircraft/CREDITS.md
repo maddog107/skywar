@@ -12,7 +12,8 @@ CC BY models require the attribution below to be shown to players (e.g. on the c
 The Sketchfab models were obtained without a login from the Objaverse mirror of Sketchfab
 (https://huggingface.co/datasets/allenai/objaverse, whose metadata lists each object's licence); every
 licence was re-checked against the live Sketchfab API (`api.sketchfab.com/v3/models/<uid>` →
-"CC Attribution") on 2026-09-25 (the CL-415's on 2026-09-26, the MiG-21's, MiG-25's and MiG-31's on 2026-10-15).
+"CC Attribution") on 2026-09-25 (the CL-415's on 2026-09-26; the MiG-21's, MiG-25's and MiG-31's, and the
+F-4, F-5, Mirage, Jaguar, F-35C and 747 sources' on 2026-10-15).
 
 | File | Aircraft | Title / Author | Licence | Source |
 |---|---|---|---|---|
@@ -28,7 +29,11 @@ licence was re-checked against the live Sketchfab API (`api.sketchfab.com/v3/mod
 | `f35.glb` | F-35A Lightning II | "Low poly 1:1 USAF F35A" by WTigerTw (Yi Tsung Lee) | CC BY 4.0 | https://sketchfab.com/3d-models/low-poly-11-usaf-f35a-dc727cb5c1404f26b3a29a7e2d50bb2b |
 | `f14.glb` | F-14 Tomcat | "F-14 Tomcat Top Gun (Gear UP) Downloadable" by dwsd | CC BY 4.0 | https://sketchfab.com/3d-models/f-14-tomcat-top-gun-gear-up-downloadable-9d2d0c87539046aa8c2198fcc47cdcf8 |
 | `f15.glb` | F-15 Eagle | "F-15 Eagle" by dashdu (Trouvaille) | CC BY 4.0 | https://sketchfab.com/3d-models/f-15-eagle-f874bffa8e314743b4a7cb9ad4b9f3a8 |
-| `f4.glb` | F-4 Phantom II | "F-4 Phantom II Recreation" by jpford63 | CC BY 4.0 | https://sketchfab.com/3d-models/f-4-phantom-ii-recreation-666403b893024c8c88409f9feb2277eb |
+| `f4.glb` | F-4E Phantom II | "F4" by manilov.ap | CC BY 4.0 | https://sketchfab.com/3d-models/f4-f7d8189af9fb40db9b4968830aabe29e |
+| `f5.glb` | F-5E Tiger II | "F5" by manilov.ap | CC BY 4.0 | https://sketchfab.com/3d-models/f5-8089d66a8a8748b2a4b049b3c06f6a02 |
+| `jaguar.glb` | SEPECAT Jaguar GR1 | "Jaguar" by manilov.ap | CC BY 4.0 | https://sketchfab.com/3d-models/jaguar-b09a0ee965bb424aaf14ebd06b698f96 |
+| `mirage.glb` | Dassault Mirage 5F | "Dassault Mirage 5" by helijah (Emmanuel Baranger) | CC BY 4.0 | https://sketchfab.com/3d-models/dassault-mirage-5-f0773e28da464309957c942543564305 |
+| `f35c.glb` | F-35C Lightning II, derived from the F-35A model | "Low poly 1:1 USAF F35A" by WTigerTw (Yi Tsung Lee) | CC BY 4.0 | https://sketchfab.com/3d-models/low-poly-11-usaf-f35a-dc727cb5c1404f26b3a29a7e2d50bb2b |
 | `mig29.glb` | MiG-29 Fulcrum | "MiG-29 Fulcrum Fighter Jet" by Carlos.Maciel | CC BY 4.0 | https://sketchfab.com/3d-models/mig-29-fulcrum-fighter-jet-ec6c1fcfe35f4cc8a638bd85463a34f2 |
 | `su47.glb` | Su-47 Berkut | "Su-47 Berkut" by Carlos.Maciel | CC BY 4.0 | https://sketchfab.com/3d-models/su-47-berkut-4a2b1cecf13c4c9db7933ffd7fd67339 |
 | `b2.glb` | B-2 Spirit | "B-2 Spirit Bomber" by Carlos.Maciel | CC BY 4.0 | https://sketchfab.com/3d-models/b-2-spirit-bomber-12244128967f4d93b9cac52b275c3d51 |
@@ -53,27 +58,25 @@ the models).
 | `j20.glb` | Chengdu J-20 (PLAAF dark grey, door outlines, insignia, bort number 62012; markings drawn by `tools/aircraft/markings.py` and baked into a texture atlas with panel lines and ambient occlusion) | https://commons.wikimedia.org/wiki/File:Chengdu_J-20.svg |
 | `j10.glb` | Chengdu J-10A (PLAAF light grey, insignia, bort number 41112, PL-8 / PL-12 missiles; markings as above) | https://commons.wikimedia.org/wiki/File:Chengdu_J-10.svg |
 | `j8.glb` | Shenyang J-8II (PLAAF light grey with a green radome, insignia, bort number 20412, PL-8 / PL-11 missiles, centreline tank; markings as above) | published dimensions and photographs of the J-8II and F-8II on Wikimedia Commons (no free three-view found) |
-| `f5.glb` | Northrop F-5E Tiger II | https://commons.wikimedia.org/wiki/File:Northrop_F-5E_Tiger_II_3-view.svg |
-| `mirage.glb` | Dassault Mirage IIIE | https://commons.wikimedia.org/wiki/File:Dassault_Mirage_III_3-view_line_drawing.png (public domain) |
-| `jaguar.glb` | SEPECAT Jaguar | https://commons.wikimedia.org/wiki/File:SEPECAT_Jaguar_3-view_line_drawing.png (public domain) |
 
 ## Attribution lines (for the in-game credits)
 
 - "F22 Raptor" (https://sketchfab.com/3d-models/f22-raptor-03a2651804344ebc930e01cc945bf07d) by Njan (Jan Esch), CC BY 4.0. Changes: decimated, re-coloured, re-oriented.
 - "Low poly 1:1 F/A-18F SuperHornet" (https://sketchfab.com/3d-models/low-poly-11-fa-18f-superhornet-635e68b7a0d24ac29c10f5fb9110129f) by WTigerTw (Yi Tsung Lee), CC BY 4.0. Changes: landing gear removed, re-oriented.
-- "Low poly 1:1 USAF F35A" (https://sketchfab.com/3d-models/low-poly-11-usaf-f35a-dc727cb5c1404f26b3a29a7e2d50bb2b) by WTigerTw (Yi Tsung Lee), CC BY 4.0. Changes: landing gear removed, re-oriented.
+- "Low poly 1:1 USAF F35A" (https://sketchfab.com/3d-models/low-poly-11-usaf-f35a-dc727cb5c1404f26b3a29a7e2d50bb2b) by WTigerTw (Yi Tsung Lee), CC BY 4.0. Changes: landing gear removed, re-oriented. Changes (f35c.glb, the F-35C): wing and tailplanes re-proportioned to the carrier variant's, weapons bays and gear doors closed, USAF markings replaced with US Navy squadron markings.
 - "A-10 Thunderbolt II" (https://sketchfab.com/3d-models/a-10-thunderbolt-ii-9521ff6ba5d448958ea45a89e94ab23d) by AIRMAN Magazine, CC BY 4.0. Changes: landing gear removed, textures downscaled, re-oriented.
 - "Su 30" (https://sketchfab.com/3d-models/su-30-fbcbe88be95e4bada5064f3f8f3893de) by akashritharan, CC BY 4.0. Changes: re-coloured, re-levelled, textures downscaled.
 - "JAS39 Gripen" (https://sketchfab.com/3d-models/jas39-gripen-a2b70c2f92af45d18d95f02b60621dbf) by helijah, CC BY 4.0. Changes: landing gear removed, textures downscaled.
 - "Cessna 172 Skyhawk - Stormworks" (https://sketchfab.com/3d-models/cessna-172-skyhawk-stormworks-49ac79d106934cb299f3c5ab645f9bda) by ThalesMML, CC BY 4.0. Changes: propeller removed, decimated.
 - "737 Max-8 (Free)" (https://sketchfab.com/3d-models/737-max-8-free-197ae72ceb5441efa91b8bdc2ee37050) by AMGP3D, CC BY 4.0. Changes: landing gear removed, painted, re-oriented.
-- "Boeing747" (https://sketchfab.com/3d-models/boeing747-4eadf04e705b41a2b272ee5aed4d01d5) by kaymanv, CC BY 4.0. Changes: painted, re-oriented.
+- "Boeing747" (https://sketchfab.com/3d-models/boeing747-4eadf04e705b41a2b272ee5aed4d01d5) by kaymanv, CC BY 4.0. Changes: split into materials and unwrapped, painted in the livery of a fictional airline ("Aurelia Pacific": titles, belly, cheatline, tail logo, registration; the model's own windows and doors coloured), re-oriented.
 - "P-51 Mustang" (https://sketchfab.com/3d-models/p-51-mustang-36f0f3e71d2a4c18b479db1ae8f9e7a7) by UlissesVinicios, CC BY 4.0. Changes: propeller, guns and tailwheel removed, textures downscaled, re-oriented.
 - "Airplane biplane" (https://sketchfab.com/3d-models/airplane-biplane-be48f3f906ed431b98b1bf03ab7aadd6) by BlueHour, CC BY 4.0. Changes: levelled, textures re-encoded, re-oriented.
 - "cl415" (https://sketchfab.com/3d-models/cl415-bf3eaa6a1f4f4fc18df9b05cf40de927) by helijah, CC BY 4.0. Changes: landing gear split into a separate file and rigged to retract (nose gear doors rebuilt), propeller blades and instrument gauges removed, materials renamed, textures re-encoded, re-oriented.
 - "F-14 Tomcat Top Gun (Gear UP) Downloadable" (https://sketchfab.com/3d-models/f-14-tomcat-top-gun-gear-up-downloadable-9d2d0c87539046aa8c2198fcc47cdcf8) by dwsd, CC BY 4.0. Changes: re-oriented.
 - "F-15 Eagle" (https://sketchfab.com/3d-models/f-15-eagle-f874bffa8e314743b4a7cb9ad4b9f3a8) by dashdu (Trouvaille), CC BY 4.0. Changes: landing gear removed, re-oriented.
-- "F-4 Phantom II Recreation" (https://sketchfab.com/3d-models/f-4-phantom-ii-recreation-666403b893024c8c88409f9feb2277eb) by jpford63, CC BY 4.0. Changes: painted.
+- "F4" (https://sketchfab.com/3d-models/f4-f7d8189af9fb40db9b4968830aabe29e), "F5" (https://sketchfab.com/3d-models/f5-8089d66a8a8748b2a4b049b3c06f6a02) and "Jaguar" (https://sketchfab.com/3d-models/jaguar-b09a0ee965bb424aaf14ebd06b698f96) by manilov.ap, CC BY 4.0. Changes: re-oriented, landing gear and gear doors removed, bays closed; wingtip AIM-9s added (F5), overwing AIM-9 launchers added and the seated figure removed (Jaguar).
+- "Dassault Mirage 5" (https://sketchfab.com/3d-models/dassault-mirage-5-f0773e28da464309957c942543564305) by helijah (Emmanuel Baranger), CC BY 4.0. Changes: repainted in the Armée de l'Air camouflage with new markings, landing gear removed and wells closed, canopy closed, cockpit gauges removed, re-oriented.
 - "MiG-29 Fulcrum Fighter Jet" (https://sketchfab.com/3d-models/mig-29-fulcrum-fighter-jet-ec6c1fcfe35f4cc8a638bd85463a34f2), "Su-47 Berkut" (https://sketchfab.com/3d-models/su-47-berkut-4a2b1cecf13c4c9db7933ffd7fd67339) and "B-2 Spirit Bomber" (https://sketchfab.com/3d-models/b-2-spirit-bomber-12244128967f4d93b9cac52b275c3d51) by Carlos.Maciel, CC BY 4.0. Changes: landing gear removed (MiG-29), textures downscaled, re-oriented.
 - "PAK FA" (https://sketchfab.com/3d-models/pak-fa-245cebbc76e34a9d8b77e81a54d9cdf1) by jratanatharathorn, CC BY 4.0. Changes: decimated, painted.
 - "Mig21" (https://sketchfab.com/3d-models/mig21-4e2b33b33fcb43948c78783867e3b166), "Mig25" (https://sketchfab.com/3d-models/mig25-afe67617c5294dce9056106a22f640ff) and "Mig31" (https://sketchfab.com/3d-models/mig31-61911bc14a1445359e2f1847717b4bb6) by manilov.ap, CC BY 4.0. Changes: landing gear removed (MiG-21, MiG-25), re-oriented, textures baked into one atlas with ambient occlusion, MiG-31 repainted grey.
