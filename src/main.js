@@ -9,7 +9,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { PostFX, ScenePass } from './postfx.js'; // [postfx] AO, water SSR, motion blur, DOF, flare, FXAA, adaptive resolution
 import { NightFX } from './nightfx.js'; // [night] glow in the air round lights, rain on the canopy, night-vision goggles
-import { AIRCRAFT, MODES, DIFFICULTY, TIMES } from './config.js';
+import { AIRCRAFT, MODES, DIFFICULTY, TIMES, hangarStats } from './config.js';
 import { World, BASES, terrainHeight } from './world.js';
 import { Effects } from './effects.js';
 import { Audio } from './audio.js';
@@ -462,18 +462,7 @@ function syncControlHint() {
 function openModal(id) { $(id).classList.add('show'); audio.uiClick(); }
 
 function statBars(s) {
-    const f = s.flight;
-    const rows = [
-        ['TOP SPEED', f.speed / 540],
-        ['AGILITY', (f.roll / 5) * 0.5 + (f.gLimit / 9.5) * 0.3 + (f.alpha / 40) * 0.2],
-        ['ACCEL', f.accel / 16],
-        ['ARMOUR', s.health / 260],
-        ['FIREPOWER', ((s.gun ? s.gun.damage * s.gun.rate : 0) / 572) * 0.6 + (s.missiles / 12) * 0.4],
-    ];
-    return rows.map(([n, v]) => {
-        const pct = Math.round(clamp(v, 0.03, 1) * 100);
-        return `<div class="stat"><span>${n}</span><div class="bar"><i style="width:${pct}%"></i></div><span class="v">${pct}</span></div>`;
-    }).join('');
+    return hangarStats(s).map(([n, pct]) => `<div class="stat"><span>${n}</span><div class="bar"><i style="width:${pct}%"></i></div><span class="v">${pct}</span></div>`).join('');
 }
 
 function selectAircraft(id) {

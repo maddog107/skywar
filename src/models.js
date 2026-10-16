@@ -601,6 +601,7 @@ export function createAircraftModel(id) {
         r.object = safeSegment(r.object, id);
         weldModel(r.object);
         splitTwoSidedAll(r.object);
+        r.surfacesCut = true; // (no surface definitions to cut from a procedural model: precutSurfaces passes it by)
         cache['proc_' + id] = r;
     }
     const src = cache['proc_' + id];

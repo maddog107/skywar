@@ -46,7 +46,13 @@ export const SLOTS = [
     { key: 'lrm', label: 'LRM', name: 'RADAR MISSILE', ammo: 'lrm' },
     { key: 'rkt', label: 'RKT', name: 'ROCKET POD', ammo: 'rockets' },
     { key: 'bomb', label: 'BMB', name: 'MK-82 BOMB', ammo: 'bombs' },
+    // only on a type that carries them (config.js `busters`: the X-100 test jet); selectSlot skips it on the rest
+    { key: 'buster', label: 'BBU', name: 'GBU-57X BUNKER BUSTER', ammo: 'busters' },
 ];
+// can this aircraft use the slot at all (not: has it any left)?
+export const slotFits = (spec, slot) => slot.key !== 'buster' || !!(spec && spec.busters);
+// a slot's name on this aircraft (the X-100's bombs are its own MK-84X)
+export const slotName = (spec, slot) => (slot.key === 'bomb' && spec && spec.bomb && spec.bomb.name) || slot.name;
 const LOADOUTS = {
     balanced: { label: 'BALANCED', srm: 1, lrm: 1 / 3, rkt: 38, bomb: 4 },
     air: { label: 'AIR SUPERIORITY', srm: 1.25, lrm: 0.5, rkt: 0, bomb: 0 },
@@ -617,12 +623,13 @@ export class Game {
         a.pilot = null; a.pilotAI = null; a.pilotDead = false; a.abandoned = false;
         a.ejected = false; a.ejectT = -1; a.ejectSeat = null;
         a.team = this.side; a.isPlayer = true; a.callsign = this.callsign;
-        a.lrm = a.lrm ?? 0; a.rockets = a.rockets ?? 0; a.bombs = a.bombs ?? 0;
+        a.lrm = a.lrm ?? 0; a.rockets = a.rockets ?? 0; a.bombs = a.bombs ?? 0; a.busters = a.busters ?? 0;
         if (!own) {
             a.fuel = Math.max(a.fuel ?? 1, 0.6); a.flameout = false;
             if (this.mission && this.mission.loadout) this.mission.loadout(a); // mission weapon rules still apply
         }
         this.player = a;
+        if (!slotFits(a.spec, this.slotDef)) this.slot = 0; // (the bunker busters were selected in the X-100)
         this.pilotMode = null;
         this.state = 'playing';
         this.aimDir.copy(a.vel.lengthSq() > 1 && !a.onGround ? a.vel : a.getForward(_v)).normalize();
@@ -972,7 +979,9 @@ export class Game {
         p.missiles = Math.round(m * L.srm);
         p.lrm = m ? Math.max(L.lrm > 0.3 ? 2 : 1, Math.round(m * L.lrm)) : 0;
         p.rockets = m ? L.rkt * (p.type === 'a10' ? 2 : 1) : 0;
-        p.bombs = m || p.spec.category === 'bomber' ? L.bomb * (p.spec.category === 'bomber' ? 4 : 1) : 0;
+        p.bombs = m || p.spec.category === 'bomber' ? L.bomb * (p.spec.category === 'bomber' ? 4 : 1) * (p.spec.bomb?.load || 1) : 0;
+        // bunker busters (the X-100): the type's load with any bombs in the loadout, twice that on a strike loadout
+        p.busters = p.spec.busters && L.bomb ? p.spec.busters * (L.bomb > 4 ? 2 : 1) : 0;
         p.flares = p.spec.flares;
         if (p.spec.gun) p.ammo = p.spec.gun.ammo;
         p.refuel(1);
@@ -989,12 +998,17 @@ export class Game {
     }
 
     get slotDef() { return SLOTS[this.slot || 0]; }
-    get slotW() { const k = this.slotDef.key; return k === 'lrm' ? WEAPONS.lrm : k === 'rkt' ? WEAPONS.rkt : k === 'bomb' ? WEAPONS.bomb : WEAPONS.missile; }
+    get slotW() { const k = this.slotDef.key; return k === 'lrm' ? WEAPONS.lrm : k === 'rkt' ? WEAPONS.rkt : k === 'bomb' ? WEAPONS.bomb : k === 'buster' ? WEAPONS.buster : WEAPONS.missile; }
 
+    // i: the slot wanted; a slot this aircraft can't carry (the bunker busters on anything but the X-100) is
+    // skipped for the next one round
     selectSlot(i) {
-        this.slot = (i + SLOTS.length) % SLOTS.length;
+        const spec = this.player && this.player.spec, n = SLOTS.length;
+        let k = (i + n) % n;
+        for (let t = 0; t < n && !slotFits(spec, SLOTS[k]); t++) k = (k + 1) % n;
+        this.slot = k;
         this.lockProgress = 0;
-        this.addFeed(this.slotDef.label + ' — ' + this.slotDef.name + ' (' + this.player[this.slotDef.ammo] + ')', '#5dffa0');
+        this.addFeed(this.slotDef.label + ' — ' + slotName(spec, this.slotDef) + ' (' + this.player[this.slotDef.ammo] + ')', '#5dffa0');
         this.audio.tick(900, 0.1, 0.05);
     }
 
@@ -1152,11 +1166,11 @@ export class Game {
         const p = this.player;
         const slot = this.slotDef;
         if (p[slot.ammo] <= 0) { this.audio.tick(200, 0.1, 0.1); this.addFeed('NO ' + slot.label + ' LEFT — X TO SWITCH', '#ffc23f'); return; }
-        if (slot.key === 'bomb') {
-            if (this.time - p.lastMissile < 0.25 || p.onGround) return;
+        if (slot.key === 'bomb' || slot.key === 'buster') {
+            if (this.time - p.lastMissile < (slot.key === 'buster' ? 0.6 : 0.25) || p.onGround) return;
             p.lastMissile = this.time;
-            this.weapons.dropBomb(p);
-            if (this.mode !== 'sandbox') p.bombs--;
+            this.weapons.dropBomb(p, slot.key);
+            if (this.mode !== 'sandbox') p[slot.ammo]--;
             return;
         }
         if (slot.key === 'rkt') {
@@ -1416,7 +1430,7 @@ export class Game {
             if (ap.override > 450) { ap.override = 0; ap.disengage('AUTOPILOT OFF — YOU HAVE CONTROL'); }
             else ap.update(dt, p);
         }
-        if (this.mode === 'sandbox') { if (p.spec.gun) p.ammo = p.spec.gun.ammo; p.fuel = 1; p.flameout = false; p.health = p.maxHealth; p.missiles = Math.max(p.missiles, 2); p.lrm = Math.max(p.lrm, 1); p.rockets = Math.max(p.rockets, 8); p.bombs = Math.max(p.bombs, 4); p.flares = Math.max(p.flares, 5); }
+        if (this.mode === 'sandbox') { if (p.spec.gun) p.ammo = p.spec.gun.ammo; p.fuel = 1; p.flameout = false; p.health = p.maxHealth; p.missiles = Math.max(p.missiles, 2); p.lrm = Math.max(p.lrm, 1); p.rockets = Math.max(p.rockets, 8); p.bombs = Math.max(p.bombs, 4); if (p.spec.busters) p.busters = Math.max(p.busters | 0, 1); p.flares = Math.max(p.flares, 5); }
         this.firing = s.fire;
         if (s.fire && p.spec.gun && p.ammo > 0) {
             this.shots += this.weapons.fireGun(p, this.time);

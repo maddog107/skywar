@@ -94,7 +94,7 @@ export class Career {
             this.data.groundKills++;
             if (t.isShip) this.award('ship_sunk');
             if (t.isBridge) this.award('bridge');
-            if (t.lastKind === 'bomb') this.award('bomber');
+            if (t.lastKind === 'bomb' || t.lastKind === 'penetrator') this.award('bomber');
         });
         ev.on('touchdown', (ac, { vs, onRunway, onDeck, trap, late }) => {
             if (!ac.isPlayer) return;

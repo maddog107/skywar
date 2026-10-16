@@ -563,7 +563,7 @@ export class Cockpit {
         if (!p) return;
         const tgt = game.lockTarget ? (Math.round(game.lockTarget.pos.distanceTo(p.pos) / 100) / 10).toFixed(1) + 'KM' : '---';
         ctx.fillText('TGT ' + tgt, 12, 38);
-        ctx.fillText('M' + p.mach.toFixed(2) + ' ' + p.gLoad.toFixed(1) + 'G ' + (['SRM', 'LRM', 'RKT', 'BMB'][game.slot || 0]), 12, 86);
+        ctx.fillText('M' + p.mach.toFixed(2) + ' ' + p.gLoad.toFixed(1) + 'G ' + (['SRM', 'LRM', 'RKT', 'BMB', 'BBU'][game.slot || 0]), 12, 86);
     }
 
     drawGauge(g, p) {

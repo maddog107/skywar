@@ -367,8 +367,9 @@ export class HUD {
     // ── Lead-computing gun pipper + missile seeker ──
     drawGunsight(game) {
         const ctx = this.ctx, p = game.player, cam = game.camera;
-        if (game.slotDef && game.slotDef.key === 'bomb' && !p.onGround) {
-            const hit = game.weapons.predictBomb(p, new THREE.Vector3());
+        const bombSlot = game.slotDef && (game.slotDef.key === 'bomb' || game.slotDef.key === 'buster');
+        if (bombSlot && !p.onGround) {
+            const hit = game.weapons.predictBomb(p, new THREE.Vector3(), game.weapons.bombW(p, game.slotDef.key));
             if (hit) {
                 const P = this.project(hit, cam, {});
                 if (P.front) {
@@ -611,8 +612,9 @@ export class HUD {
 
         // weapons: gun + selectable stores, bottom-right (compact: one line top-right, under the score)
         const rows = [['GUN', p.spec.gun ? p.ammo : '—', p.spec.gun ? p.spec.gun.name : 'NO GUN', false]];
-        const SL = [['SRM', 'missiles'], ['LRM', 'lrm'], ['RKT', 'rockets'], ['BMB', 'bombs']];
-        SL.forEach(([lab, key], i) => rows.push([lab, p[key] ?? 0, '', (game.slot || 0) === i]));
+        const SL = [['SRM', 'missiles'], ['LRM', 'lrm'], ['RKT', 'rockets'], ['BMB', 'bombs'], ['BBU', 'busters']];
+        // (BBU: bunker busters, only on a type that carries them: the X-100)
+        SL.forEach(([lab, key], i) => { if (key !== 'busters' || p.spec.busters) rows.push([lab, p[key] ?? 0, '', (game.slot || 0) === i]); });
         rows.push(['FLR', p.flares, '', false]);
         const rx = W - M;
         if (C) {

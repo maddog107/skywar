@@ -41,6 +41,19 @@
 // `maxBank` (rad) caps the AI's bank for the type, instead of its category's default (ai.js defaultMaxBank).
 export const hasEjectionSeat = (spec) => spec.eject ?? !(spec.category === 'civil' || spec.category === 'support' || spec.category === 'drone');
 
+// The hangar's stat bars (main.js), each 3..100: [label, value]. 100 is the top of each scale (the X-100 test jet
+// maxes them all)
+export function hangarStats(s) {
+    const f = s.flight;
+    return [
+        ['TOP SPEED', f.speed / 540],
+        ['AGILITY', (f.roll / 5) * 0.5 + (f.gLimit / 9.5) * 0.3 + (f.alpha / 40) * 0.2],
+        ['ACCEL', f.accel / 16],
+        ['ARMOUR', s.health / 260],
+        ['FIREPOWER', ((s.gun ? s.gun.damage * s.gun.rate : 0) / 572) * 0.6 + (s.missiles / 12) * 0.4],
+    ].map(([n, v]) => [n, Math.round(Math.min(1, Math.max(0.03, v)) * 100)]);
+}
+
 const FIGHTER = { speed: 400, mach: 1.8, cd0: 0.05, accel: 14, lift: 1.0, gLimit: 9, roll: 4.2, alpha: 24 };
 
 function jet(o) {
@@ -463,6 +476,11 @@ export const WEAPONS = {
     missile: { speed: 640, boost: 3.0, accelBoost: 140, turnG: 32, life: 14, lockTime: 1.1, lockCone: 0.906, range: 4200, prox: 16, damage: 92, navN: 4 },
     lrm: { speed: 800, boost: 4.5, accelBoost: 150, turnG: 24, life: 22, lockTime: 2.2, lockCone: 0.94, range: 9000, prox: 18, damage: 98, navN: 4, radar: true },
     bomb: { damage: 220, splash: 55, drag: 0.012, unguided: true, lockTime: 1, lockCone: 2, range: 0 },
+    // the X-100's GBU-57X bunker buster (its `busters`): a slim 6 m penetrator that falls fast (little drag), punches
+    // into the ground (or through a roof) and goes off `fuse` s later deep under it: on a hardened shelter, a tunnel
+    // portal or a command bunker it's a penetrator (weapons.js bombBurst), and the earth heaves up in a fountain.
+    // kg, fx: its column in the water (splash.js) and its fireball's size (effects.js explosion: a Mk 82's is 2.4)
+    buster: { name: 'GBU-57X BUNKER BUSTER', damage: 2600, splash: 60, drag: 0.004, fuse: 0.45, kg: 2400, fx: 4, unguided: true, lockTime: 1, lockCone: 2, range: 0 },
     rkt: { boost: 0.8, accelBoost: 420, turnG: 0, life: 5, prox: 11, damage: 38, splash: 32, unguided: true },
     sam: { speed: 820, boost: 4, accelBoost: 180, turnG: 24, life: 16, damage: 70, range: 7500, navN: 3.5 },
 };

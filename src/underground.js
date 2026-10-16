@@ -1060,8 +1060,9 @@ export class Underground {
         return Math.hypot(du, dv, dy);
     }
 
-    // Everything else that goes bang (weapons.js worldBlast): a heavy bomber's bombs are penetrators (GBU-57 class); a
-    // bomb that goes off in an open doorway wrecks the door and brings the portal down; the rest scars the facade
+    // Everything else that goes bang (weapons.js worldBlast): a heavy bomber's bombs and the X-100's bunker busters
+    // (kind 'penetrator') are penetrators (GBU-57 class); a bomb that goes off in an open doorway wrecks the door and
+    // brings the portal down; the rest scars the facade
     blast(at, o) {
         const owner = o.owner, kind = o.kind || 'blast';
         if (!owner) return; // (strategic impacts come through impact())
@@ -1072,10 +1073,14 @@ export class Underground {
                 const d = this.portalDist(e, at);
                 if (d > 45) continue;
                 if (kind === 'bomb' && owner.spec && owner.spec.category === 'bomber' && d < 18) { c.unitHit(e, 1300, owner, 'penetrator'); continue; }
+                // the X-100's bunker buster (weapons.js bombBurst): on or right in front of the portal it brings it down
+                if (kind === 'penetrator') { if (d < 24) c.unitHit(e, (o.amount || 2600) * clamp(1.3 - d / 30, 0.5, 1.2), owner, 'penetrator'); continue; }
                 if (kind === 'bomb' && this.inDoorway(c, e, at)) { c.unitHit(e, 2000, owner, 'door'); c.say('COMMAND', 'A BOMB THROUGH THE OPEN DOOR OF ' + e.portal.id + '!', { color: GREEN, say: false }); continue; }
                 c.unitHit(e, (o.amount || 200) * clamp(1 - d / 45, 0, 1), owner, kind);
             }
             for (const u of c.clues) if (u.alive && u.hp < 1e8 && u.pos.distanceTo(at) < (o.r || 20) + u.radius) c.unitHit(u, (o.amount || 200) * 0.6, owner, kind);
+            // (and on a ventilation shaft it collapses it, as a hardened strike's penetrator does: impact())
+            if (kind === 'penetrator') for (const u of c.clues) if (u.alive && u.kind === 'vent' && u.pos.distanceTo(at) < 14) c.unitHit(u, 5000, owner, 'penetrator');
         }
     }
 

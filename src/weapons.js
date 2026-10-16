@@ -18,6 +18,10 @@ const roundVs = (b, cls) => (b.small ? materielDamage(b.def, cls) : b.damage);
 
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _v4 = new THREE.Vector3();
 const _prev = new THREE.Vector3();
+// the X-100's mega bomb: its config.js `bomb` laid over WEAPONS.bomb (one merged table per type)
+const BOMB_W = new WeakMap();
+// a bunker buster's hole: narrow for its size and deep, the earth heaved up in a high rim
+const BUSTER_CRATER = { r: 7.5, depth: 7, rim: 1.8, scorch: 0.55, reach: 2.8, clods: 18 };
 const GUN_BLUE = [3.2, 2.6, 1.2], GUN_RED = [3.4, 1.0, 0.5], FLAK_COLOR = [3.6, 1.2, 0.5];
 
 const flareTex = makeRadialTexture(64, [[0, 'rgba(255,255,255,1)'], [0.15, 'rgba(255,240,200,0.9)'], [0.4, 'rgba(255,180,80,0.35)'], [1, 'rgba(255,120,40,0)']]);
@@ -61,14 +65,16 @@ export class Weapons {
 
     // ── Cannon ──
     // Returns the number of rounds fired this call (0 while the gun cycles). A held trigger fires every round
-    // it owes (up to 3 in one long frame), so the rate of fire doesn't drop at low frame rates; a fresh pull fires one.
+    // it owes (up to 3 in one long frame, more for a very fast gun), so the rate of fire doesn't drop at low frame
+    // rates; a fresh pull fires one.
     fireGun(ac, now) {
         const gun = ac.spec.gun;
         if (!gun || !ac.alive || ac.ammo <= 0) return 0;
         const iv = 1 / gun.rate, since = now - ac.lastGun;
         if (since < iv) return 0;
-        const held = since < iv * 4;
-        const n = held ? Math.min(3, Math.floor(since / iv), ac.ammo) : 1;
+        // (a 100-round-a-second gun, the X-100's, owes several rounds in every frame: its window and its cap are wider)
+        const held = since < Math.max(iv * 4, 0.12);
+        const n = held ? Math.min(Math.max(3, Math.ceil(gun.rate * 0.06)), Math.floor(since / iv), ac.ammo) : 1;
         ac.lastGun = held ? ac.lastGun + n * iv : now;
         const fwd = ac.getForward(_v1);
         const spread = ac.isPlayer || ac.team === 'blue' && !ac.pilot ? 0.0035 : 0.008 + (1 - (ac.pilot?.skill ?? 1)) * 0.02;
@@ -528,24 +534,57 @@ export class Weapons {
     }
 
     // ── Bombs (unguided, gravity) ──
-    dropBomb(ac) {
-        const mesh = this.bombGeo.clone();
-        const pos = ac.pos.clone().addScaledVector(ac.getUp(_v1), -2.2);
+    // kind 'bomb': the type's bomb (WEAPONS.bomb, or the X-100's MK-84X mega bomb: its config.js `bomb` over
+    // WEAPONS.bomb); 'buster': the X-100's GBU-57X bunker buster (WEAPONS.buster)
+    bombW(ac, kind = 'bomb') {
+        if (kind === 'buster') return WEAPONS.buster;
+        const sb = ac && ac.spec && ac.spec.bomb;
+        if (!sb) return WEAPONS.bomb;
+        let W = BOMB_W.get(sb);
+        if (!W) BOMB_W.set(sb, W = { ...WEAPONS.bomb, ...sb });
+        return W;
+    }
+
+    dropBomb(ac, kind = 'bomb') {
+        const W = this.bombW(ac, kind), buster = kind === 'buster';
+        const mesh = buster ? this.busterMesh() : this.bombGeo.clone();
+        if (!buster && W !== WEAPONS.bomb) mesh.scale.setScalar(1.9); // (the MK-84X: a 2,000-pounder and then some)
+        const pos = ac.pos.clone().addScaledVector(ac.getUp(_v1), buster ? -2.6 : -2.2);
         mesh.position.copy(pos);
         mesh.traverse(o => { if (o.isMesh) o.castShadow = true; });
         this.game.scene.add(mesh);
-        this.bombs.push({ mesh, pos: mesh.position, vel: ac.vel.clone().addScaledVector(ac.getUp(_v1), -4), owner: ac, team: ac.team, life: 60 });
-        this.game.events.emit('bomb', ac);
+        this.bombs.push({ mesh, pos: mesh.position, vel: ac.vel.clone().addScaledVector(ac.getUp(_v1), -4), owner: ac, team: ac.team, life: 60, W, kind });
+        this.game.events.emit('bomb', ac, { kind });
     }
 
-    // Predict where a bomb released now would land (for the CCIP pipper)
-    predictBomb(ac, out) {
+    // the GBU-57X: a slim 6 m case with an ogive nose, a yellow band and lattice fins (nose along -Z, like the bomb)
+    busterMesh() {
+        if (!this.busterGeo) {
+            const g = new THREE.Group();
+            const dark = new THREE.MeshStandardMaterial({ color: 0x3b4046, roughness: 0.5, metalness: 0.35 });
+            const band = new THREE.MeshStandardMaterial({ color: 0xd9ad2b, roughness: 0.55 });
+            const along = (m, z) => { m.rotation.x = Math.PI / 2; m.position.z = z; return m; };
+            const nose = new THREE.Mesh(new THREE.ConeGeometry(0.4, 1.3, 14), dark);
+            nose.rotation.x = -Math.PI / 2; nose.position.z = -2.95;
+            const fin = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.05, 0.7), dark);
+            fin.position.z = 2.3;
+            const fin2 = fin.clone(); fin2.rotation.z = Math.PI / 2;
+            g.add(along(new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 4.6, 14), dark), 0), nose,
+                along(new THREE.Mesh(new THREE.CylinderGeometry(0.41, 0.41, 0.25, 14), band), -1.6),
+                along(new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.4, 0.6, 14), dark), 2.6), fin, fin2);
+            this.busterGeo = g;
+        }
+        return this.busterGeo.clone();
+    }
+
+    // Predict where a bomb released now would land (for the CCIP pipper); W: which bomb (its drag)
+    predictBomb(ac, out, W = WEAPONS.bomb) {
         const up = ac.getUp(_v2);
         const p = _v3.copy(ac.pos).addScaledVector(up, -2.2), v = _v4.copy(ac.vel).addScaledVector(up, -4);
         const dt = 0.05;
         for (let t = 0; t < 40; t += dt) {
             v.y -= G * dt;
-            v.multiplyScalar(1 - WEAPONS.bomb.drag * dt);
+            v.multiplyScalar(1 - W.drag * dt);
             p.addScaledVector(v, dt);
             if (p.y > 2100) continue; // above every mountain: skip the terrain query
             const s = this.game.surfaceAt(p.x, p.z, p.y);
@@ -555,9 +594,17 @@ export class Weapons {
     }
 
     updateBombs(dt) {
-        const g = this.game, fx = g.effects, W = WEAPONS.bomb;
+        const g = this.game;
         for (let i = this.bombs.length - 1; i >= 0; i--) {
-            const b = this.bombs[i];
+            const b = this.bombs[i], W = b.W || WEAPONS.bomb;
+            // a bunker buster in the ground: its delay fuse, then it goes off deep under where it went in
+            if (b.buried) {
+                if ((b.fuseT -= dt) > 0) continue;
+                this.bombBurst(b, b.at, b.surf, false, null, b.onBuilding);
+                g.scene.remove(b.mesh);
+                this.bombs.splice(i, 1);
+                continue;
+            }
             b.life -= dt;
             b.vel.y -= G * dt;
             b.vel.multiplyScalar(1 - W.drag * dt);
@@ -573,36 +620,64 @@ export class Weapons {
             const at = b.pos.clone();
             if (!hitShip && !onBuilding) at.y = s.h;
             const wet = s.water && !hitShip;
-            if (wet) {
-                // a 500 lb bomb into the sea goes off a few metres down: the column, the base surge, the slick (splash.js)
-                if (fx.water) fx.water.blast(at, { kg: WARHEAD_KG.bomb, depth: 'shallow', vel: b.vel, agl: 0 });
-                else { fx.waterSplash(at, 2.2); fx.explosion(at, 0.8); }
-            } else {
-                fx.explosion(at, 2.4);
-                fx.debrisBurst(at, _v1.set(0, 40, 0), 5, 0.8);
-                for (let k = 0; k < 20; k++) fx.smoke.emit(at, _v1.set(rand(-25, 25), rand(15, 60), rand(-25, 25)), rand(2, 4), 6, 22, [0.35, 0.3, 0.24], [0.5, 0.45, 0.38], 0.8, 0, 1.2, -12);
-                if (!hitShip && !s.ship && !onBuilding && !s.bridge) this.addCrater(at, 'bomb', b.vel);
+            if (b.kind === 'buster' && !wet && !hitShip && b.life > 0) {
+                // it punches straight in (through a roof, into the ground): a spurt of dust, and the fuse runs
+                b.buried = true; b.fuseT = W.fuse; b.at = at; b.surf = s; b.onBuilding = !!onBuilding;
+                b.mesh.visible = false;
+                g.effects.dustBurst(at, 0.9, 0.7);
+                g.audio.boom(g.camera.position.distanceTo(at), 0.35);
+                continue;
             }
-            if (!wet || !fx.water) g.audio.boom(g.camera.position.distanceTo(at), 1.6); // (in the water: splash.js's own whoomp)
-            if (g.camera.position.distanceTo(at) < 800) g.shake = Math.min(1.5, g.shake + (wet ? 0.45 : 0.6));
-            g.events.emit('bombImpact', b, { at, water: wet, ship: hitShip }); // (bases.js: runway craters)
-            // splash damage
-            if (g.ground) for (const t of g.ground.targets) {
-                if (!t.alive || t.team === b.team) continue;
-                if (t === hitShip) { t.damage(W.damage * 1.6, b.owner, 'bomb'); continue; }
-                const d = t.distTo ? t.distTo(at) : t.pos.distanceTo(at);
-                if (d < W.splash + t.radius) t.damage(W.damage * clamp(1.2 - d / (W.splash + t.radius), 0.2, 1), b.owner, 'bomb');
-            }
-            g.world.towns?.traffic.blast(at, W.splash * 0.7, g);
-            this.worldBlast(at, W.splash, W.damage * 4, b.owner, 'bomb');
-            this.blastPeople(at, 75, 180, b.owner, b.team);
-            for (const a of g.aircraft) {
-                if (!a.alive || a.team === b.team) continue;
-                const d = a.pos.distanceTo(at);
-                if (d < 60) a.damage(W.damage * (1 - d / 60), b.owner, 'missile');
-            }
+            this.bombBurst(b, at, s, wet, hitShip, onBuilding);
             g.scene.remove(b.mesh);
             this.bombs.splice(i, 1);
+        }
+    }
+
+    // A bomb going off at `at` (s: the surface there): the blast, the crater, the damage. A Mk 82 is the yardstick
+    // (k = 1); the MK-84X's fireball is bigger (its `fx` size), and a bunker buster goes off deep in the ground: the
+    // earth heaves up in a fountain, a deep crater, and what it hits takes it as a penetrator (through hardened
+    // shelters, tunnel portals, command bunkers)
+    bombBurst(b, at, s, wet, hitShip, onBuilding) {
+        const g = this.game, fx = g.effects, W = b.W || WEAPONS.bomb;
+        const buster = b.kind === 'buster', size = W.fx || 2.4, k = size / 2.4;
+        const dmgKind = buster ? 'penetrator' : 'bomb';
+        if (wet) {
+            // into the sea it goes off a few metres down (a buster deeper): the column, the base surge, the slick (splash.js)
+            if (fx.water) fx.water.blast(at, { kg: W.kg ?? WARHEAD_KG.bomb, depth: buster ? 'optimal' : 'shallow', vel: b.vel, agl: 0 });
+            else { fx.waterSplash(at, 2.2 * k); fx.explosion(at, 0.8 * k); }
+        } else if (buster && !hitShip) {
+            // under the ground: a geyser of earth and rock, a deep hole (effects.js earthFountain)
+            if (fx.earthFountain) fx.earthFountain(at, 1.7); else fx.explosion(at, size);
+            fx.debrisBurst(at, _v1.set(0, 70, 0), 14, 1.6);
+            if (!onBuilding && !s.ship && !s.bridge) this.addCrater(at, BUSTER_CRATER, b.vel);
+        } else {
+            // the MK-84X: a mushroom cloud over a ring of dust (effects.js megaBlast)
+            if (k > 1.5 && fx.megaBlast) fx.megaBlast(at, k); else fx.explosion(at, size);
+            fx.debrisBurst(at, _v1.set(0, 40 * Math.sqrt(k), 0), Math.round(5 * k), 0.8 * Math.sqrt(k));
+            for (let n = 0; n < Math.round(20 * Math.min(k, 2)); n++) fx.smoke.emit(at, _v1.set(rand(-25, 25), rand(15, 60), rand(-25, 25)).multiplyScalar(Math.sqrt(k)), rand(2, 4), 6 * Math.sqrt(k), 22 * Math.sqrt(k), [0.35, 0.3, 0.24], [0.5, 0.45, 0.38], 0.8, 0, 1.2, -12);
+            if (!hitShip && !s.ship && !onBuilding && !s.bridge) this.addCrater(at, 'bomb', b.vel, W.crater ? { scale: W.crater } : undefined);
+        }
+        const camD = g.camera.position.distanceTo(at);
+        if (!wet || !fx.water) g.audio.boom(camD, 1.6 * Math.sqrt(k)); // (in the water: splash.js's own whoomp)
+        if (camD < 800 * Math.sqrt(k)) g.shake = Math.min(1.5 * Math.sqrt(k), g.shake + (wet ? 0.45 : 0.6) * Math.sqrt(k));
+        g.events.emit('bombImpact', b, { at, water: wet, ship: hitShip, W, kind: b.kind || 'bomb' }); // (bases.js: runway craters)
+        // splash damage
+        if (g.ground) for (const t of g.ground.targets) {
+            if (!t.alive || t.team === b.team) continue;
+            if (t === hitShip) { t.damage(W.damage * 1.6, b.owner, dmgKind); continue; }
+            const d = t.distTo ? t.distTo(at) : t.pos.distanceTo(at);
+            if (buster && d < 4) { t.damage(W.damage * 1.6, b.owner, dmgKind); continue; } // (went in right on it)
+            if (d < W.splash + t.radius) t.damage(W.damage * clamp(1.2 - d / (W.splash + t.radius), 0.2, 1), b.owner, dmgKind);
+        }
+        g.world.towns?.traffic.blast(at, W.splash * 0.7, g);
+        this.worldBlast(at, W.splash, W.damage * 4, b.owner, dmgKind);
+        this.blastPeople(at, Math.max(75, W.splash * 1.3), 180 * Math.max(1, k), b.owner, b.team);
+        const R = Math.max(60, W.splash * 0.8);
+        for (const a of g.aircraft) {
+            if (!a.alive || a.team === b.team) continue;
+            const d = a.pos.distanceTo(at);
+            if (d < R) a.damage(W.damage * (1 - d / R), b.owner, 'missile');
         }
     }
 

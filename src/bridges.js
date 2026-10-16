@@ -11,7 +11,7 @@ import { rand, clamp } from './util.js';
 const SEG = 24;          // segment length (m), matches the road texture repeat
 const HALF_W = 8.5;      // deck half width
 const HP = 520;
-const KIND_MULT = { bomb: 1, missile: 0.3, rocket: 0.4 };
+const KIND_MULT = { bomb: 1, penetrator: 1, missile: 0.3, rocket: 0.4 };
 
 const MAT = {
     concrete: new THREE.MeshStandardMaterial({ color: 0xa9a59c, roughness: 0.9 }),

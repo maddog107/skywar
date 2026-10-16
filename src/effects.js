@@ -734,6 +734,60 @@ export class Effects {
         }
     }
 
+    // The X-100's MK-84X going off on the ground (k: its size against a Mk 82's, ~2.5): a cluster of fireballs, a ring
+    // of dust blown out along the ground a couple of hundred metres, and a stem of fire turning to soot that climbs for
+    // a couple of seconds into a mushroom cap ~200 m up, then a smoke column that stands for half a minute
+    megaBlast(pos, k = 2.5) {
+        const V = this._tmpV, P = this._tmpP, q = Math.sqrt(k);
+        this.explosion(pos, 2.4 * k);
+        for (let i = 0; i < 5; i++) {
+            const a = (i / 5) * Math.PI * 2 + rand(-0.3, 0.3);
+            this.explosion(P.set(pos.x + Math.cos(a) * 9 * k, pos.y + rand(3, 10) * k, pos.z + Math.sin(a) * 9 * k).clone(), 1.3 * k);
+        }
+        this.sprite(this.ringTex, pos, 10 * k, 0.7, 160 * k, 0.45, [1, 0.95, 0.88]); // (the shock front)
+        this.light(pos, 120 * k, 1.2);
+        // the ground surge
+        for (let i = 0; i < 120; i++) {
+            const a = (i / 120) * Math.PI * 2 + rand(-0.05, 0.05);
+            V.set(Math.cos(a), rand(0.02, 0.1), Math.sin(a)).multiplyScalar(rand(50, 125) * q);
+            this.smoke.emit(P.set(pos.x, pos.y + 3, pos.z), V, rand(7, 11), 10 * k, rand(30, 42) * k, [0.5, 0.44, 0.35], [0.62, 0.57, 0.5], 0.9, 0, 0.85, 0.4, 0, 0.5, 0.6);
+        }
+        this.emitters.push({ kind: 'mushroom', pos: pos.clone(), life: 1.9, t: 0, acc: 0, size: k });
+        this.smokeColumn(pos, 1.6 * q, 30);
+    }
+
+    // The X-100's bunker buster going off deep under `pos`: little fire, the ground heaving up in a geyser of earth
+    // and rock well over 100 m high that falls back, clods arcing out, a surge of dust round its foot
+    earthFountain(pos, k = 1) {
+        const V = this._tmpV, P = this._tmpP;
+        this.explosion(P.set(pos.x, pos.y + 2, pos.z).clone(), 2.2 * k);
+        this.light(pos, 50 * k, 0.5);
+        for (let i = 0; i < 150; i++) {
+            const c = rand(0.12, 0.24), up = rand(50, 180);
+            V.set(rand(-1, 1) * (34 - up * 0.12), up, rand(-1, 1) * (34 - up * 0.12)).multiplyScalar(Math.sqrt(k));
+            P.set(pos.x + rand(-7, 7), pos.y + 1, pos.z + rand(-7, 7));
+            this.smoke.emit(P, V, rand(5, 8.5), rand(8, 13) * k, rand(30, 46) * k, [c, c * 0.82, c * 0.62], [0.46, 0.41, 0.34], 0.97, 0, 0.8, -9.8, 0, 0.5, 0.6);
+        }
+        // and the heaved-up earth billowing out round the jets: a wide, slow brown cloud that settles for seconds
+        for (let i = 0; i < 60; i++) {
+            const a = Math.random() * Math.PI * 2, out = rand(8, 30), c = rand(0.2, 0.3);
+            V.set(Math.cos(a) * out, rand(15, 60), Math.sin(a) * out).multiplyScalar(Math.sqrt(k));
+            P.set(pos.x + Math.cos(a) * rand(0, 8), pos.y + 2, pos.z + Math.sin(a) * rand(0, 8));
+            this.smoke.emit(P, V, rand(7, 10), rand(16, 24) * k, rand(45, 60) * k, [c, c * 0.84, c * 0.64], [0.5, 0.45, 0.37], 0.9, 0, 1.0, -2, 0, 0.5, 0.5);
+        }
+        this.ejecta(pos, 14 * k);
+        for (let i = 0; i < 45; i++) {
+            const c = rand(0.07, 0.12);
+            V.set(rand(-30, 30), rand(40, 120), rand(-30, 30)).multiplyScalar(Math.sqrt(k));
+            this.smoke.emit(P.set(pos.x, pos.y + 2, pos.z), V, rand(3, 5.5), rand(0.8, 1.6) * k, rand(0.6, 1.2) * k, [c, c * 0.8, c * 0.6], [c * 1.3, c * 1.05, c * 0.8], 1, 0.8, 0.12, -9.8, 0, 0.5, 3);
+        }
+        for (let i = 0; i < 40; i++) {
+            const a = (i / 40) * Math.PI * 2;
+            V.set(Math.cos(a), rand(0.05, 0.2), Math.sin(a)).multiplyScalar(rand(35, 75) * Math.sqrt(k));
+            this.smoke.emit(P.set(pos.x, pos.y + 1.5, pos.z), V, rand(4, 7), 6 * k, rand(18, 26) * k, [0.42, 0.36, 0.28], [0.54, 0.49, 0.42], 0.7, 0, 1.0, 0, 0, 0.5, 0.6);
+        }
+    }
+
     // a column of smoke that keeps rising from a burning spot for `duration` seconds
     smokeColumn(pos, size = 1, duration = 10) {
         this.emitters.push({ kind: 'column', pos: pos.clone(), life: duration, t: 0, acc: 0, size });
@@ -911,6 +965,19 @@ export class Effects {
                 // the burning fragment at its head
                 if (k < 0.7) this.sparks.emit(e.pos, e.vel, 0.05, 0.9 * e.size, 0.7 * e.size, [2.2, 1.2, 0.4], [1.4, 0.5, 0.1], 1, 0, 0, 0, 0, 0.5, 0, 0.06);
                 if (e.pos.y < this.heightAt(e.pos.x, e.pos.z)) e.t = e.life;
+            } else if (e.kind === 'mushroom') {
+                // megaBlast: the stem (fire cooling to soot, climbing on its own heat), and from ~0.8 s the cap: puffs
+                // thrown higher and outward that pile up and spread round the top of it
+                const k = e.size, q = Math.sqrt(k);
+                e.acc += dt * 80;
+                while (e.acc > 1) {
+                    e.acc -= 1;
+                    const cap = e.t > 0.7 && Math.random() < 0.65;
+                    const a = Math.random() * Math.PI * 2, out = cap ? rand(30, 62) : rand(2, 9);
+                    P.set(e.pos.x + rand(-9, 9) * k, e.pos.y + rand(0, 10), e.pos.z + rand(-9, 9) * k);
+                    V.set(Math.cos(a) * out * q, (cap ? rand(100, 128) : rand(50, 90)) * q, Math.sin(a) * out * q);
+                    this.flame.emit(P, V, rand(7, 11), rand(14, 20) * k, (cap ? rand(48, 64) : rand(34, 46)) * k, [0.1, 0.085, 0.075], SOOT_C, 0.95, 0, cap ? 0.62 : 0.55, 2.5, cap ? 0.35 : rand(0.7, 1), rand(0.15, 0.3), 0.8);
+                }
             } else if (e.kind === 'column') {
                 const k = e.t / e.life;
                 e.acc += dt * (1 - k * 0.6) * 6; // puffs per second, thinning out as it burns down

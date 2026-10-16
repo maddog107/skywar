@@ -247,6 +247,16 @@ describe('components', () => {
         // slower scrambles without ground power
         assert.ok(S.scrambleTimeline({ power: false }).airborne > S.scrambleTimeline({ power: true }).airborne);
     });
+    test('a hardened shelter shrugs off a Mk 82; the X-100\'s bunker buster goes through it', () => {
+        const g = basesGame(), F = g.bases.field('enemy');
+        const sh = [...F.units.shelters.values()].find(u => u.sid.startsWith('has'));
+        const hp0 = sh.hp;
+        sh.damage(config.WEAPONS.bomb.damage * 1.6, null, 'bomb'); // (a direct hit: weapons.js bombBurst)
+        assert.ok(sh.alive && sh.hp > hp0 * 0.85, 'a Mk 82 dents it: ' + Math.round(sh.hp) + ' / ' + hp0);
+        sh.damage(config.WEAPONS.buster.damage * 1.6, null, 'penetrator');
+        assert.ok(!sh.alive, 'the buster: ' + Math.round(sh.hp));
+        for (const u of F.units.igloos) assert.equal(u.scale('penetrator'), 1);
+    });
     test('shelters take their jets with them; fuel and munitions losses slow the sortie rate', () => {
         const g = basesGame(), F = g.bases.field('enemy');
         const aw = F.airwing, n = aw.jets.length;

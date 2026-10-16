@@ -74,8 +74,9 @@ class Installation {
         const y = p.y - this.field.base.h, dy = y > this.ht ? y - this.ht : y < 0 ? -y : 0;
         return Math.hypot(u, v, dy);
     }
-    // what each kind of weapon does to it (hardness): overridden per kind
-    scale(kind) { return kind === 'strike' ? 1 : kind === 'gun' || kind === 'rifle' ? 0.05 : 1; }
+    // what each kind of weapon does to it (hardness): overridden per kind. A 'penetrator' (the X-100's bunker
+    // buster, weapons.js bombBurst) goes through anything, like a hardened strike
+    scale(kind) { return kind === 'strike' || kind === 'penetrator' ? 1 : kind === 'gun' || kind === 'rifle' ? 0.05 : 1; }
     damage(amount, source, kind) {
         if (!this.alive || !(amount > 0)) return;
         const a = amount * this.scale(kind);
@@ -105,6 +106,7 @@ class Shelter extends Installation {
     }
     scale(kind) {
         if (kind === 'strike') return 1; // (strikes.js already weighs the warhead against `hardened`)
+        if (kind === 'penetrator') return 1; // (a bunker buster: through the arch)
         if (kind === 'bomb') return 0.32;
         if (kind === 'missile') return 0.22;
         if (kind === 'rocket') return 0.08;
@@ -119,7 +121,7 @@ class Igloo extends Installation {
         this.idx = i;
         this.cook = 0;
     }
-    scale(kind) { return kind === 'strike' ? 1 : kind === 'bomb' ? 0.6 : kind === 'missile' ? 0.45 : kind === 'rocket' ? 0.2 : 0.02; }
+    scale(kind) { return kind === 'strike' || kind === 'penetrator' ? 1 : kind === 'bomb' ? 0.6 : kind === 'missile' ? 0.45 : kind === 'rocket' ? 0.2 : 0.02; }
     update(dt) {
         if (this.alive || this.cook <= 0) return;
         // cook-off: rounds and bombs inside going off at random for minutes, fewer as it burns out
@@ -145,7 +147,7 @@ class PowerPlant extends Installation {
         super(field, { kind: 'power', cls: 'power', name: 'POWER PLANT', lx: spot.lx, lz: spot.lz, radius: 16, hp: 700, hardened: 0.3, hw: 15, hd: 11, ht: 9 });
         this.def = { name: 'POWER PLANT', score: 400, boom: 2 };
     }
-    scale(kind) { return kind === 'strike' ? 1 : kind === 'bomb' ? 0.9 : kind === 'missile' ? 0.8 : kind === 'rocket' ? 0.5 : 0.04; }
+    scale(kind) { return kind === 'strike' || kind === 'penetrator' ? 1 : kind === 'bomb' ? 0.9 : kind === 'missile' ? 0.8 : kind === 'rocket' ? 0.5 : 0.04; }
 }
 // A structure airbase.js already builds (the control tower, the surveillance radar): a buildings.js record takes
 // the blasts; this is its face in the war layer (damage from abstract raids goes to the record)
@@ -467,6 +469,10 @@ export class Bases {
         const { lx, lz } = F.local(at);
         if (at.y - F.base.h > 12) return; // an airburst over the field
         let r = 4.3, depth = 2.1;
+        // a bigger bomb (the X-100's: d.W, weapons.js bombBurst): the MK-84X's crater scaled up, a bunker buster's
+        // narrower and deep
+        if (d.W && d.kind === 'buster') { r = 3.8; depth = 4.6; }
+        else if (d.W && d.W.crater) { r *= d.W.crater; depth *= Math.sqrt(d.W.crater); }
         const m = d.missile;
         if (m && m.spec) {
             const wh = m.spec.warhead || 300;
