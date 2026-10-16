@@ -58,6 +58,7 @@ the models).
 | `j20.glb` | Chengdu J-20 (PLAAF dark grey, door outlines, insignia, bort number 62012; markings drawn by `tools/aircraft/markings.py` and baked into a texture atlas with panel lines and ambient occlusion) | https://commons.wikimedia.org/wiki/File:Chengdu_J-20.svg |
 | `j10.glb` | Chengdu J-10A (PLAAF light grey, insignia, bort number 41112, PL-8 / PL-12 missiles; markings as above) | https://commons.wikimedia.org/wiki/File:Chengdu_J-10.svg |
 | `j8.glb` | Shenyang J-8II (PLAAF light grey with a green radome, insignia, bort number 20412, PL-8 / PL-11 missiles, centreline tank; markings as above) | published dimensions and photographs of the J-8II and F-8II on Wikimedia Commons (no free three-view found) |
+| `x100.glb`, `x100_gear.glb` | X-100 Overkill, SKYWAR's own fictional test jet (`tools/aircraft/x100.py`): satin black with gold leading and chine edges, "X-100" / "OVERKILL" lettering, a made-up SKYWAR test-squadron badge and stencils (all drawn by `tools/aircraft/markings.py`; no real insignia or branding), baked into a texture atlas with panel lines and ambient occlusion; its own retractable gear (`tools/aircraft/x100_gear.py`) | an original design (no reference drawing) |
 
 ## Attribution lines (for the in-game credits)
 

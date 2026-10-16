@@ -108,6 +108,7 @@ The F-15 (plain flaps, dorsal brake) and the 737 (Fowler flaps, spoilers, dihedr
 | j20 | flaperons | none dedicated: none |
 | j10 | inboard elevons droop 20° | four airbrakes on the rear fuselage, two on top beside the fin, two underneath |
 | j8 | TE flaps | ventral airbrakes |
+| x100 | (fictional) elevons on the inner and the anhedral outer panel, both 25° | one big dorsal airbrake on the spine, 55° |
 | typhoon | inboard flaperons (droop for landing/takeoff) | dorsal brake behind the canopy |
 | rafale | inboard elevons droop | none dedicated: none |
 | gripen | elevons | rear fuselage side brakes, swinging outward |
