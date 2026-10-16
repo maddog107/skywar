@@ -49,6 +49,11 @@ export const MODEL_FILES = {
     // SEPECAT Jaguar GR1: manilov.ap's Jaguar (CC BY) with overwing AIM-9 launchers (tools/aircraft/jaguar_stores.py);
     // the twin Adours exhaust under the rear fuselage, well ahead of the tail
     jaguar: { file: 'aircraft/jaguar.glb', rot: [0, 0, 0], nozzles: [[0.0243, -0.0653, 0.3363], [-0.0243, -0.0653, 0.3363]], nozzleR: 0.0205, cockpit: [0.004, -0.184] },
+    // X-100 Overkill: SKYWAR's own test jet, built with the kit (tools/aircraft/x100.py): black with gold; the flame
+    // points at the exits of its 2-D paddle nozzles; its own retractable gear (tools/aircraft/x100_gear.py: the
+    // generic struts would hang far below its shallow needle nose). livery 'regrey': a livery repaints the black, not
+    // the gold
+    x100: { file: 'aircraft/x100.glb', gear: 'aircraft/x100_gear.glb', rot: [0, 0, 0], nozzles: [[0.0467, -0.0316, 0.4723], [-0.0467, -0.0316, 0.4723]], nozzleR: 0.019, cockpit: [0.0166, -0.281], livery: 'regrey' },
     su47: { file: 'aircraft/su47.glb', rot: [0, 0, 0], cockpit: [-0.018, -0.205] },
     b2: { file: 'aircraft/b2.glb', rot: [0, 0, 0] },
     racer: { file: 'aircraft/racer.glb', rot: [0, 0, 0], nozzles: [], prop: { y: -0.028, r: 0.156, blades: 4 }, cockpit: [0.06, -0.08] },
@@ -174,6 +179,8 @@ function normaliseGLTF(root, id, info) {
                 // KHR_materials_transmission makes three.js re-render every opaque object into a
                 // transmission target each frame: plain transparency looks the same on a canopy
                 const glass = m.transmission > 0 || (m.transparent && m.opacity < 1) || /glass|canopy|cockpit|window/i.test(m.name || '');
+                // a dark painted skin with markings that must survive a livery (MODEL_FILES livery: 'regrey')
+                if (info.livery === 'regrey' && m.map && !glass) m.userData.liveryRegrey = true;
                 if (m.transmission > 0) {
                     m.transmission = 0;
                     m.transparent = true;
@@ -645,7 +652,11 @@ export function applyLivery(model, key) {
         if (o.material !== base) o.material.dispose();
         const m = base.clone();
         const c = new THREE.Color(liv.color);
-        if (base.map) {
+        if (base.map && base.userData.liveryRegrey) {
+            // black (or any dark) paint can't be multiplied into a colour: the texture itself is repainted instead
+            // (the paint in the livery's colour, the markings kept), and the material colour stays
+            m.map = regreyTexture(base.map, key, c);
+        } else if (base.map) {
             // textured skins are dark grey, and colour multiplies the texture: compensate so paint reads bright
             const texLum = base.map.userData.avgLum ?? (base.map.userData.avgLum = textureLuminance(base.map));
             m.color.copy(c).multiplyScalar(clamp01(0.55 / Math.max(texLum, 0.08), 1, 3.2));
@@ -657,6 +668,64 @@ export function applyLivery(model, key) {
     });
 }
 function clamp01(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+// A livery on a 'regrey' skin (MODEL_FILES livery): the texture's unsaturated pixels (the paint with its panel lines,
+// stencils and baked shading) are repainted in the livery colour, keeping their brightness relative to the paint's
+// own (the median of the unsaturated pixels), while saturated ones (gold, red stencils, a badge) stay as they are;
+// the same rule as tools/aircraft/atlas.py regrey(). Saturation is measured against a floor of 64: the JPEG's
+// subsampled colour leaves tinted near-black pixels round bright markings, and dark paint must be repainted however
+// tinted it looks. d: RGBA bytes (sRGB), repainted in place; hex: the livery colour (sRGB).
+export function regreyPixels(d, hex) {
+    const hist = new Uint32Array(256);
+    for (let i = 0; i < d.length; i += 4) {
+        const r = d[i], g = d[i + 1], b = d[i + 2], mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+        const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        if ((mx - mn) < 0.22 * Math.max(mx, 64) && lum > 4) hist[lum | 0]++;
+    }
+    let n = 0, ref = 40;
+    const half = hist.reduce((a, b) => a + b, 0) / 2;
+    for (let v = 0; v < 256; v++) { n += hist[v]; if (n >= half) { ref = Math.max(v, 4); break; } }
+    const tr = (hex >> 16) & 255, tg = (hex >> 8) & 255, tb = hex & 255;
+    for (let i = 0; i < d.length; i += 4) {
+        const r = d[i], g = d[i + 1], b = d[i + 2], mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+        const k = clamp01(((mx - mn) / Math.max(mx, 64) - 0.22) / 0.12, 0, 1);
+        if (k >= 1) continue;
+        const f = (0.2126 * r + 0.7152 * g + 0.0722 * b) / ref;
+        d[i] = Math.min(255, tr * f) * (1 - k) + r * k;
+        d[i + 1] = Math.min(255, tg * f) * (1 - k) + g * k;
+        d[i + 2] = Math.min(255, tb * f) * (1 - k) + b * k;
+    }
+    return d;
+}
+// The repainted texture: a canvas copy per livery, the last two kept per texture (an older one is disposed: three.js
+// uploads it again if anything still draws with it).
+const _regrey = new WeakMap();
+function regreyTexture(map, key, color) {
+    let cache = _regrey.get(map);
+    if (!cache) _regrey.set(map, cache = new Map());
+    if (cache.has(key)) { const t = cache.get(key); cache.delete(key); cache.set(key, t); return t; }
+    let tex = map;
+    try {
+        const img = map.image, w = img.width, h = img.height;
+        const cv = document.createElement('canvas');
+        cv.width = w; cv.height = h;
+        const ctx = cv.getContext('2d', { willReadFrequently: true });
+        ctx.drawImage(img, 0, 0);
+        const id = ctx.getImageData(0, 0, w, h);
+        regreyPixels(id.data, color.getHex());
+        ctx.putImageData(id, 0, 0);
+        tex = new THREE.CanvasTexture(cv);
+        for (const p of ['flipY', 'colorSpace', 'wrapS', 'wrapT', 'anisotropy', 'channel', 'minFilter', 'magFilter', 'generateMipmaps']) tex[p] = map[p];
+        tex.needsUpdate = true;
+    } catch (e) { tex = map; }
+    cache.set(key, tex);
+    while (cache.size > 2) {
+        const [k0, t0] = cache.entries().next().value;
+        cache.delete(k0);
+        if (t0 !== map) t0.dispose();
+    }
+    return tex;
+}
 
 // Low-saturation paints (greys, grey-blues) are pulled toward neutral; bright liveries are left alone.
 // A textured skin gets a faint warm tint instead (its colour multiplies the texture).

@@ -22,6 +22,12 @@
 # outlines) onto the paint, and finish(atlas=N, ao=F) bakes paint × panel lines × markings × ambient occlusion
 # into one texture atlas (tools/aircraft/atlas.py): a 'Skin' material liveries repaint, the stores / nozzles /
 # cockpit parts in a 'Nozzle_Trim' atlas they leave alone, the glass as it was.
+# Also (first used by the X-100, tools/aircraft/x100.py): S(ch=...) chined sections (top and bottom meeting at a sharp
+# edge); loft(edge=...) a fixed-width band of another material along a chined body's edges; surface(le=...) / fin(le=...)
+# a fixed-width leading-edge band (a material whose name matches TRIM, e.g. 'TrimGold', goes to the trim atlas, so its
+# edges stay crisp geometry rather than texels); paddle_nozzle() 2-D vectoring nozzles with paddles (optionally
+# serrated); plate() / slab() / tube() thin parts; heat_tint() a colour ramp along s (baked); finish(skin_metal=,
+# skin_rough=). None of these change what the existing specs build.
 # ═══════════════════════════════════════════════════════════════
 import bpy, bmesh, math, sys, os, json, random
 from mathutils import Vector
@@ -219,27 +225,68 @@ def linear(xs, ys):
 #   w = half-width, ht/hb = height above/below the widest line at z, nt/nb = superellipse exponents
 #   (<2 → pointed/chined, 2 → ellipse, >2 → boxy); crown squeezes the top toward the centre (0..1)
 #   tw = extra flat top half-width (adds a flat deck, e.g. airliner floors / Flanker centre-section)
-SEC_KEYS = ('w', 'ht', 'hb', 'z', 'x', 'nt', 'nb', 'crown', 'tw', 'bw')
-def S(s, w, ht, hb=None, z=0.0, nt=2.0, nb=None, x=0.0, crown=0.0, tw=0.0, bw=0.0):
+#   ch = chine sharpness (0..1): 0 the plain superellipse; > 0 the sides become an edge where the upper and lower
+#   surfaces meet at an angle (an SR-71-style chine: 1 = the sharpest; the top/bottom fullness still from nt/nb)
+SEC_KEYS = ('w', 'ht', 'hb', 'z', 'x', 'nt', 'nb', 'crown', 'tw', 'bw', 'ch')
+def S(s, w, ht, hb=None, z=0.0, nt=2.0, nb=None, x=0.0, crown=0.0, tw=0.0, bw=0.0, ch=0.0):
     return dict(s=s, w=w, ht=ht, hb=ht if hb is None else hb, z=z, x=x, nt=nt, nb=nt if nb is None else nb,
-                crown=crown, tw=tw, bw=bw)
+                crown=crown, tw=tw, bw=bw, ch=ch)
 
 def section_points(p, ring):
     pts = []
+    chine = p.get('ch', 0.0)
     for i in range(ring):
         a = 2 * math.pi * i / ring
         c, sn = math.cos(a), math.sin(a)
         up = sn >= 0
         n = p['nt'] if up else p['nb']
         n = max(n, 0.3)
-        xx = p['w'] * math.copysign(abs(c) ** (2 / n), c)
-        zz = (p['ht'] if up else p['hb']) * math.copysign(abs(sn) ** (2 / n), sn)
+        if chine > 0:
+            # chined: x = w cos a and z = h (1 - |cos a|^n)^e, e running from 1/n (the superellipse: a round side)
+            # to 1 (a finite slope where top and bottom meet: a sharp edge)
+            e = (1.0 / n) * (1 - min(chine, 1.0)) + min(chine, 1.0)
+            xx = p['w'] * c
+            zz = (p['ht'] if up else p['hb']) * math.copysign(max(0.0, 1 - abs(c) ** n) ** e, sn)
+        else:
+            xx = p['w'] * math.copysign(abs(c) ** (2 / n), c)
+            zz = (p['ht'] if up else p['hb']) * math.copysign(abs(sn) ** (2 / n), sn)
         if up and p['crown']:
             zz *= 1 - p['crown'] * (xx / max(p['w'], 1e-6)) ** 2
         flat = p['tw'] if up else p['bw']
         if flat:
             xx += math.copysign(flat, c) * (abs(sn) ** 0.5 if abs(c) > 1e-6 else 0)
         pts.append((p['x'] + xx, p['z'] + zz))
+    return pts
+
+def _edge_respace(p, ring, wt, wb, j=3, frac=0.3):
+    """section_points(p, ring) with the points beside each side edge (ring index 0, the right chine, and ring/2,
+    the left) moved along the section's own curve so that index j lies wt metres from the edge on the upper skin and
+    wb metres on the lower (by arc length, at most `frac` of the quarter's length): the faces between are a band of
+    fixed width (a gold chine edge) whose border is a ring line. The shape is unchanged."""
+    pts = section_points(p, ring)
+    if ring % 4:
+        return pts
+    M, q = 24, ring // 4
+    dense = section_points(p, ring * M)
+    N = ring * M
+    for c, step, width in ((0, 1, wt), (0, -1, wb), (2 * q, -1, wt), (2 * q, 1, wb)):
+        if not width:
+            continue
+        di = [(c * M + step * k) % N for k in range(q * M + 1)]
+        cum = [0.0]
+        for a, b in zip(di, di[1:]):
+            cum.append(cum[-1] + math.hypot(dense[b][0] - dense[a][0], dense[b][1] - dense[a][1]))
+        Lq = cum[-1]
+        if Lq <= 1e-6:
+            continue
+        band = min(width, frac * Lq)
+        Lj = cum[j * M]
+        for t in range(1, q):
+            T = band * t / j if t <= j else band + (cum[t * M] - Lj) * (Lq - band) / max(Lq - Lj, 1e-9)
+            k = next((m for m in range(1, len(cum)) if cum[m] >= T), len(cum) - 1)
+            u = (T - cum[k - 1]) / max(cum[k] - cum[k - 1], 1e-12)
+            (xa, za), (xb, zb) = dense[di[k - 1]], dense[di[k]]
+            pts[(c + step * t) % ring] = (xa + (xb - xa) * u, za + (zb - za) * u)
     return pts
 
 def spacing(s0, s1, max_step, dense_front=True):
@@ -253,13 +300,15 @@ def spacing(s0, s1, max_step, dense_front=True):
     return out
 
 def loft(name, stations, material='Paint', ring=40, step=None, cap_front=True, cap_back=True,
-         mirror=False, mat_ranges=(), smooth_interp=True, extra_s=(), register=None, nose_dense=True):
+         mirror=False, mat_ranges=(), smooth_interp=True, extra_s=(), register=None, nose_dense=True, edge=None):
     """Loft a body through cross-sections S(...). mat_ranges: [(s0, s1, 'Material')] per-face material override.
-    mirror=True builds a copy at -x as well (for off-centre nacelles/ducts). Returns object(s)."""
+    mirror=True builds a copy at -x as well (for off-centre nacelles/ducts). Returns object(s).
+    edge = dict(mat, top, bottom, s0, s1, j=3): a band of that material along both side edges (a chined body's
+    chines) from station s0 to s1, `top` metres wide on the upper skin and `bottom` on the lower (_edge_respace)."""
     L = STATE['L']
     stations = sorted(stations, key=lambda d: d['s'])
     ss = [d['s'] for d in stations]
-    interp = {k: (pchip if smooth_interp else linear)(ss, [d[k] for d in stations]) for k in SEC_KEYS}
+    interp = {k: (pchip if smooth_interp else linear)(ss, [d.get(k, 0.0) for d in stations]) for k in SEC_KEYS}
     step = step or L / 70
     s0, s1 = ss[0], ss[-1]
     samples = set(ss) | set(extra_s)
@@ -279,11 +328,18 @@ def loft(name, stations, material='Paint', ring=40, step=None, cap_front=True, c
     secs = []
     for s in uniq:
         p = {k: interp[k](s) for k in SEC_KEYS}
-        secs.append((s, section_points(p, ring)))
+        secs.append((s, _edge_respace(p, ring, edge['top'], edge['bottom'], edge.get('j', 3)) if edge else section_points(p, ring)))
     if register:
         STATE['sections'][register] = (interp, s0, s1)
-    mats = ['Paint' if material is None else material] + [m for _, _, m in mat_ranges]
+    mats = ['Paint' if material is None else material] + [m for _, _, m in mat_ranges] + ([edge['mat']] if edge else [])
     mats = list(dict.fromkeys(mats))
+    band = set()
+    if edge:
+        j, q = edge.get('j', 3), ring // 4
+        if edge['top']:
+            band |= set(range(0, j)) | set(range(2 * q - j, 2 * q))
+        if edge['bottom']:
+            band |= set(range(2 * q, 2 * q + j)) | set(range(ring - j, ring))
     objs = []
     for side in ([1, -1] if mirror else [1]):
         bm = bmesh.new()
@@ -295,10 +351,11 @@ def loft(name, stations, material='Paint', ring=40, step=None, cap_front=True, c
             for (r0, r1, mname) in mat_ranges:
                 if r0 <= smid <= r1:
                     mi = mats.index(mname)
+            on_edge = edge and edge['s0'] <= smid <= edge['s1']
             for i in range(ring):
                 f = bm.faces.new((a[i], a[(i + 1) % ring], b[(i + 1) % ring], b[i]) if side > 0 else
                                  (a[i], b[i], b[(i + 1) % ring], a[(i + 1) % ring]))
-                f.material_index = mi
+                f.material_index = mats.index(edge['mat']) if on_edge and i in band else mi
         if cap_front:
             f = bm.faces.new(list(reversed(rings[0])) if side > 0 else rings[0])
             f.material_index = mats.index(mat_ranges[0][2]) if mat_ranges and mat_ranges[0][0] <= secs[0][0] else 0
@@ -337,11 +394,17 @@ def _airfoil(K=12, t=0.05):
         out.append((u, yt))
     return out
 
+def _yt(u, t):
+    return 5 * t * (0.2969 * math.sqrt(u) - 0.1260 * u - 0.3516 * u * u + 0.2843 * u ** 3 - 0.1036 * u ** 4)
+
 def surface(name, sections, material='Paint', mirror=True, subdiv=3, K=12, cap_root=True, cap_tip=True,
-            blunt_te=0.0, flat=False):
+            blunt_te=0.0, flat=False, le=None):
     """Lifting surface through planform sections [(le_s, te_s, x, z, t/c), ...] from root to tip.
     Works for wings (x grows), fins (z grows), canted fins (both). subdiv = extra interpolated sections
-    between consecutive given ones (keeps the damage segmentation's wing split clean)."""
+    between consecutive given ones (keeps the damage segmentation's wing split clean).
+    le = (material, width): a band of that material along the leading edge, `width` metres back from it on both
+    skins whatever the chord (a gold leading-edge stripe, a de-icing boot); its edge is a ring line, so it stays
+    crisp at any texture resolution."""
     secs = []
     for i in range(len(sections) - 1):
         a, b = sections[i], sections[i + 1]
@@ -349,6 +412,7 @@ def surface(name, sections, material='Paint', mirror=True, subdiv=3, K=12, cap_r
             u = k / (subdiv + 1)
             secs.append(tuple(a[j] + (b[j] - a[j]) * u for j in range(5)))
     secs.append(tuple(sections[-1]))
+    band = le
     objs = []
     for side in ([1, -1] if mirror else [1]):
         bm = bmesh.new()
@@ -362,7 +426,14 @@ def surface(name, sections, material='Paint', mirror=True, subdiv=3, K=12, cap_r
             if nz < 0 or (abs(nz) < 1e-6 and nx < 0):
                 nx, nz = -nx, -nz
             chord = te - le
-            af = _airfoil(K, t)
+            if band:
+                # the band's back edge at a fixed distance aft of the leading edge (and a point inside it to round
+                # the nose a little), the rest of the chord cosine-spaced behind it
+                lw = min(0.3, band[1] / max(chord, 1e-3))
+                us = [0.0, lw * 0.3, lw] + [lw + (1 - lw) * (1 - math.cos(math.pi * k / (K - 1))) / 2 for k in range(1, K)]
+                af = [(u, _yt(u, t)) for u in us]
+            else:
+                af = _airfoil(K, t)
             up = [(le + chord * u, yt * chord + blunt_te * u) for u, yt in af]
             ring = up + [(s, -h) for s, h in reversed(up[1:-1])]
             if flat:
@@ -372,27 +443,30 @@ def surface(name, sections, material='Paint', mirror=True, subdiv=3, K=12, cap_r
         for a, b in zip(rings, rings[1:]):
             for i in range(n):
                 q = (a[i], a[(i + 1) % n], b[(i + 1) % n], b[i])
-                bm.faces.new(q if side > 0 else tuple(reversed(q)))
+                f = bm.faces.new(q if side > 0 else tuple(reversed(q)))
+                if band and i in (0, 1, n - 2, n - 1):
+                    f.material_index = 1
         if cap_tip:
             bm.faces.new(rings[-1])
         if cap_root:
             bm.faces.new(list(reversed(rings[0])))
         bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-6)
         bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
-        objs.append(_obj(f'{name}{"_L" if side < 0 else "_R" if mirror else ""}', bm, [material]))
+        objs.append(_obj(f'{name}{"_L" if side < 0 else "_R" if mirror else ""}', bm, [material] + ([band[0]] if band else [])))
     return objs
 
 def fin(name, root, tip, t=0.045, t_tip=None, cant=0.0, x=0.0, z=0.0, mirror=False, material='Paint', subdiv=3,
-        mid=None):
+        mid=None, le=None):
     """Vertical tail: root/tip = (le_s, te_s) chord stations, height from (x, z) root point, cant in degrees
     (outward lean from vertical, per side). mid = optional [(le, te, frac_height)] kinks."""
     h = tip[2] if len(tip) > 2 else 1.0
     c = math.radians(cant)
     secs = [(root[0], root[1], x, z, t)]
+    band = le
     for (le, te, fr) in (mid or []):
         secs.append((le, te, x + math.sin(c) * h * fr, z + math.cos(c) * h * fr, t + ((t_tip or t) - t) * fr))
     secs.append((tip[0], tip[1], x + math.sin(c) * h, z + math.cos(c) * h, t_tip or t))
-    return surface(name, secs, material, mirror=mirror, subdiv=subdiv)
+    return surface(name, secs, material, mirror=mirror, subdiv=subdiv, le=band)
 
 # ───────────────────────── engines ─────────────────────────
 def ring_verts(bm, s, x, z, rx, rz, N, side=1, ang0=0.0, sfun=None):
@@ -468,13 +542,129 @@ def box_nozzle(name, s0, s1, x, z, w0, h0, w1, h1, mirror=False, depth=0.7, n=5.
             STATE['nozzleR'] = min(w1, h1)
     return objs
 
+def plate(name, quad, t=0.02, material='Nozzle', mirror=False):
+    """A thin slab: quad = four (s, x, z) corners in order, given thickness t along the quad's normal (a nozzle's
+    vectoring paddle or side wall, a splitter plate, a door)."""
+    objs = []
+    for side in ([1, -1] if mirror else [1]):
+        bm = bmesh.new()
+        P = [Vector((side * x, Y(s_), z)) for (s_, x, z) in quad]
+        nrm = (P[1] - P[0]).cross(P[3] - P[0]).normalized() * (t / 2)
+        vs = [bm.verts.new(p + nrm) for p in P] + [bm.verts.new(p - nrm) for p in P]
+        bm.faces.new(vs[0:4])
+        bm.faces.new(list(reversed(vs[4:8])))
+        for i in range(4):
+            j = (i + 1) % 4
+            bm.faces.new((vs[i], vs[i + 4], vs[j + 4], vs[j]))
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+        objs.append(_obj(f'{name}{"_L" if side < 0 else ""}', bm, [material]))
+    return objs
+
+def slab(name, poly, t=0.02, material='Nozzle', mirror=False):
+    """A thin slab over a convex polygon of (s, x, z) corners, t thick along its normal (a sawtooth's tooth, a fairing
+    plate); plate() is the four-cornered one."""
+    objs = []
+    for side in ([1, -1] if mirror else [1]):
+        bm = bmesh.new()
+        P = [Vector((side * x, Y(s_), z)) for (s_, x, z) in poly]
+        nrm = (P[1] - P[0]).cross(P[-1] - P[0]).normalized() * (t / 2)
+        top = [bm.verts.new(q + nrm) for q in P]
+        bot = [bm.verts.new(q - nrm) for q in P]
+        bm.faces.new(top)
+        bm.faces.new(list(reversed(bot)))
+        n = len(P)
+        for i in range(n):
+            j = (i + 1) % n
+            bm.faces.new((top[i], bot[i], bot[j], top[j]))
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+        objs.append(_obj(f'{name}{"_L" if side < 0 else ""}', bm, [material]))
+    return objs
+
+def tube(name, pts, r, material='Paint', N=8, mirror=False):
+    """A thin tube swept along a polyline of (s, x, z) points (a canopy sill rail, a pipe, an aerial wire), its
+    section turned with the path (no twist about it)."""
+    objs = []
+    for side in ([1, -1] if mirror else [1]):
+        bm = bmesh.new()
+        P = [Vector((side * x, Y(s_), z)) for (s_, x, z) in pts]
+        rings = []
+        ref = Vector((0, 0, 1))
+        for i, q in enumerate(P):
+            t_ = (P[min(i + 1, len(P) - 1)] - P[max(i - 1, 0)]).normalized()
+            if abs(t_.dot(ref)) > 0.95:
+                ref = Vector((1, 0, 0))
+            u = t_.cross(ref).normalized()
+            v = u.cross(t_).normalized()
+            ref = v
+            rings.append([bm.verts.new(q + (u * math.cos(2 * math.pi * k / N) + v * math.sin(2 * math.pi * k / N)) * r) for k in range(N)])
+        for a, b in zip(rings, rings[1:]):
+            _bridge(bm, a, b)
+        bm.faces.new(list(reversed(rings[0])))
+        bm.faces.new(rings[-1])
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+        objs.append(_obj(f'{name}{"_L" if side < 0 else ""}', bm, [material]))
+    return objs
+
+def paddle_nozzle(name, s0, s1, x, z, w0, h0, w1, h1, paddle=0.6, converge=7.0, mirror=False, depth=0.8, n=5.0,
+                  t=0.035, register=True, teeth=0, tooth=0.12):
+    """A 2-D thrust-vectoring nozzle (F-22 style): the box_nozzle() shell s0 → s1 (half-width w, half-height h), with
+    an upper and a lower paddle running `paddle` metres aft of its exit, converging by `converge` degrees, and the
+    side walls between them (wedges that shorten toward the paddles' trailing edges). teeth: a sawtooth trailing edge
+    on the paddles, that many teeth `tooth` metres deep. The nozzle point (flame) is the shell's exit."""
+    objs = box_nozzle(name, s0, s1, x, z, w0, h0, w1, h1, mirror=mirror, depth=depth, n=n, register=register)
+    k = math.tan(math.radians(converge))
+    for side in ([1, -1] if mirror else [1]):
+        sx = 'L' if side < 0 else ''
+        xc = side * x
+        a, b = s1 - 0.08, s1 + paddle
+        for zs, nm in ((1, 'Up'), (-1, 'Lo')):
+            z0 = z + zs * (h1 * 0.92)
+            z1 = z0 - zs * paddle * k
+            bt = b - (tooth if teeth else 0.0)
+            zt = z0 - zs * (bt - a) * k
+            wb = w1 * (0.93 - 0.13 * (bt - a) / paddle)
+            objs += plate(f'{name}Paddle{nm}{sx}', [(a, xc - w1 * 0.93, z0), (a, xc + w1 * 0.93, z0),
+                                                   (bt, xc + wb, zt), (bt, xc - wb, zt)], t=t)
+            for i in range(teeth):
+                xa, xb = xc - wb + 2 * wb * i / teeth, xc - wb + 2 * wb * (i + 1) / teeth
+                objs += slab(f'{name}Tooth{nm}{sx}', [(bt, xa, zt), (bt, xb, zt), (b, (xa + xb) / 2, z1)], t=t)
+        for xs in (1, -1):
+            xw = xc + xs * w1 * 0.95
+            zt, zb = z + h1 * 0.9, z - h1 * 0.9
+            objs += plate(f'{name}Wall{sx}', [(a, xw, zt), (b - paddle * 0.45, xw - xs * 0.03, zt - paddle * 0.55 * k),
+                                              (b - paddle * 0.45, xw - xs * 0.03, zb + paddle * 0.55 * k), (a, xw, zb)], t=t)
+    return objs
+
+def heat_tint(material, s0, s1, stops):
+    """Colour a material by station: stops = [(fraction 0..1 of s0 -> s1, '#rrggbb'), ...] (a titanium nozzle's
+    heat tint: straw, bronze, purple-blue toward the hot end); baked into the trim atlas by finish(atlas=...)."""
+    m = mat(material)
+    nt = m.node_tree
+    b = nt.nodes['Principled BSDF']
+    geo = nt.nodes.new('ShaderNodeNewGeometry')
+    sep = nt.nodes.new('ShaderNodeSeparateXYZ')
+    nt.links.new(geo.outputs['Position'], sep.inputs[0])
+    mr = nt.nodes.new('ShaderNodeMapRange')
+    nt.links.new(sep.outputs['Y'], mr.inputs['Value'])
+    mr.inputs['From Min'].default_value = Y(s0)
+    mr.inputs['From Max'].default_value = Y(s1)
+    ramp = nt.nodes.new('ShaderNodeValToRGB')
+    el = ramp.color_ramp.elements
+    for i, (f, col) in enumerate(stops):
+        e = el[i] if i < len(el) else el.new(f)
+        e.position = f
+        e.color = (*srgb(col), 1)
+    nt.links.new(mr.outputs['Result'], ramp.inputs['Fac'])
+    nt.links.new(ramp.outputs['Color'], b.inputs['Base Color'])
+    return m
+
 def duct(name, stations, rake=(0.0, 0.0), lip=0.08, throat=1.2, material='Paint', mirror=True, ring=32,
          cap_back=False, inner_scale=0.84):
     """Hollow intake: outer loft through S(...) sections (use x/z to position it), open mouth at the first
     station (raked: s += rake[0]*(x-x0) + rake[1]*(z-z0)), dark throat going `throat` metres inside."""
     stations = sorted(stations, key=lambda d: d['s'])
     ss = [d['s'] for d in stations]
-    interp = {k: pchip(ss, [d[k] for d in stations]) for k in SEC_KEYS}
+    interp = {k: pchip(ss, [d.get(k, 0.0) for d in stations]) for k in SEC_KEYS}
     L = STATE['L']
     n = max(3, int((ss[-1] - ss[0]) / (L / 60)) + 1)
     samples = sorted(set(ss) | {ss[0] + (ss[-1] - ss[0]) * i / n for i in range(n + 1)})
@@ -852,10 +1042,11 @@ def bbox():
 TRIM = r'^(Missile|Nozzle|NozzleInner|Seat|Helmet|Lamp|Intake|Dark|Trim.*)$'
 
 def finish(out=None, shade_angle=34, uv_scale=8.0, join=True, extra_entry=None, atlas=None, ao=0.0, trim=TRIM,
-           trim_size=None):
+           trim_size=None, skin_metal=None, skin_rough=None):
     """Shade, UV, join per material group, export GLB, print the MODEL_FILES entry. Returns entry dict.
     atlas = N: bake the paint (colour × panel texture), the decals and an ambient occlusion of strength `ao` into
-    one N px atlas (tools/aircraft/atlas.py); materials matching `trim` go to a small atlas liveries leave alone."""
+    one N px atlas (tools/aircraft/atlas.py); materials matching `trim` go to a small atlas liveries leave alone.
+    skin_metal / skin_rough: the baked skin's metallic / roughness (default the atlas's 0.15 / 0.55)."""
     out = out or OUT
     name = STATE['name']
     for ob in list(bpy.data.objects):
@@ -882,7 +1073,8 @@ def finish(out=None, shade_angle=34, uv_scale=8.0, join=True, extra_entry=None, 
                 _decal_nodes(m)
         sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'aircraft'))
         import atlas as A
-        A.bake_atlas(ob, atlas, trim_size=trim_size, glass_rx=r'Canopy_Glass', trim_rx=trim, ao=ao)
+        kw = {k: v for k, v in (('metal', skin_metal), ('rough', skin_rough)) if v is not None}
+        A.bake_atlas(ob, atlas, trim_size=trim_size, glass_rx=r'Canopy_Glass', trim_rx=trim, ao=ao, **kw)
         STATE['factors'] = {}
     (x0, x1), (y0, y1), (z0, z1) = bbox()
     Lb = y1 - y0

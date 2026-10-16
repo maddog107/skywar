@@ -226,6 +226,19 @@ export const SURFACE_DEFS = {
         brakes: [{ top: [[0.011, -0.17], [0.026, -0.17], [0.026, -0.125], [0.011, -0.125]], y: [-0.075, -0.06], hinge: [[0.011, -0.0675, -0.17], [0.026, -0.067, -0.17]], angle: 45, skin: -1 }],
     },
 
+    // ── SKYWAR's own ──
+
+    // X-100 Overkill (tools/aircraft/x100.py): elevons across the inner panel (outboard of the nacelles and fins) and
+    // the anhedral outer panel droop 25° as flaps; one big dorsal airbrake on the back behind the spine chevrons,
+    // hinged at its front, rising 55°
+    x100: {
+        flaps: [
+            { top: [[0.0929, 0.3552], [0.1833, 0.3643], [0.1833, 0.4143], [0.0929, 0.4052]], y: [-0.0252, -0.0175], dihedral: -1.9, hinge: [[0.0929, -0.0196, 0.3552], [0.1833, -0.0234, 0.3643]], angle: 25 },
+            { top: [[0.1881, 0.3695], [0.281, 0.3947], [0.281, 0.44], [0.1881, 0.4147]], y: [-0.0287, -0.0211], dihedral: -11.5, hinge: [[0.1881, -0.0235, 0.3695], [0.281, -0.0432, 0.3947]], angle: 25 },
+        ],
+        brakes: [{ top: [[-0.0262, 0.0238], [0.0262, 0.0238], [0.0262, 0.1381], [-0.0262, 0.1381]], y: [0.0, 0.022], hinge: [[-0.0262, 0.0115, 0.0238], [0.0262, 0.0115, 0.0238]], angle: -55, skin: 1, depth: 0.01, mirror: false }],
+    },
+
     // ── European types, bombers, airliners, light aircraft ──
 
     // Eurofighter Typhoon: the inboard flaperons (root to mid-span, behind the pylons) droop for lift; the

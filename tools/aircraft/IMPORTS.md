@@ -63,6 +63,20 @@ finish: `python3 tools/aircraft/markings.py` draws their markings (PLAAF insigni
 door outlines) into `tools/aircraft/markings/`, the spec projects them with `K.decal(...)`, and
 `K.finish(atlas=2048, ao=...)` bakes paint, panel lines, markings and ambient occlusion into one texture atlas.
 
+The X-100 Overkill (`x100.py`, SKYWAR's own fictional test jet, no reference drawing) is built the same way, with
+the kit features added for it (chined sections, fixed-width gold bands on the chines and leading edges in the trim
+atlas so their borders are polygon edges, 2-D paddle nozzles, thin tubes and plates, a baked heat tint), and its own
+retractable gear from a second script, which projects the airframe atlas's UVs onto the gear doors and checks that
+every folded part lies inside the airframe:
+
+    python3 tools/aircraft/markings.py
+    /opt/homebrew/bin/blender -b -P tools/aircraft/x100.py -- models/aircraft/x100.glb
+    /opt/homebrew/bin/blender -b -P tools/aircraft/x100_gear.py -- models/aircraft/x100.glb models/aircraft/x100_gear.glb
+
+Its skin is black with gold markings, which a livery can't multiply into a colour: MODEL_FILES `livery: 'regrey'`
+makes `applyLivery` repaint the texture itself (models.js `regreyPixels`: the unsaturated paint in the livery's
+colour, shading kept, the gold and the red stencils left alone).
+
 Previewing: `node server.mjs` (and `node tools/aircraft/upload.mjs` to save PNGs), then open `/tools/aircraft/preview.html` (see the comment at the top of
 `tools/aircraft/preview.js`). It renders models through the game's own loader/normaliser, with the nozzle
 (red), wingtip (blue) and cockpit (green) rig points as markers.
