@@ -233,7 +233,7 @@ async function boot() {
 }
 
 // ═════════════ Menu ═════════════
-const COUNTRY = { USA: 'US', RUS: 'RU', CHN: 'CN', EU: 'EU', FRA: 'FR', SWE: 'SE', JPN: 'JP' };
+const COUNTRY = { USA: 'US', RUS: 'RU', CHN: 'CN', EU: 'EU', FRA: 'FR', SWE: 'SE', JPN: 'JP', SKYWAR: 'SW' };
 let showcase = null;
 let orbit = 0;
 
@@ -241,6 +241,7 @@ function buildMenu() {
     // aircraft list (a type's `group` overrides its category's heading: the EA-18G is a fighter listed with support)
     const grp = (k) => AIRCRAFT[k].group || AIRCRAFT[k].category;
     const groups = [
+        ['TEST AIRCRAFT', k => grp(k) === 'test'],
         ['FIGHTERS', k => grp(k) === 'fighter'],
         ['BOMBERS', k => grp(k) === 'bomber'],
         ['AWACS, TANKERS, RECON & EW', k => grp(k) === 'support'],

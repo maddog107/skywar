@@ -56,6 +56,20 @@ function jet(o) {
 }
 
 export const AIRCRAFT = {
+    // SKYWAR's own test jet, just for fun: every hangar bar maxed (main.js statBars), a 100-round-a-second cannon,
+    // and stores no other type carries: MK-84X mega bombs (`bomb`: WEAPONS.bomb with these numbers) and GBU-57X
+    // bunker busters (`busters`: the BBU slot, WEAPONS.buster). The player's only: in no enemy or ally pool, and
+    // `group` keeps it out of the daily missions and lists it under its own heading in the hangar.
+    x100: jet({
+        name: 'X-100 Overkill', role: 'Experimental Test Jet', country: 'SKYWAR', group: 'test', length: 21.0, span: 12.6,
+        desc: 'SKYWAR\'s own test jet. Every stat maxed, a 100-round-a-second cannon, mega bombs and bunker busters. Not remotely fair.',
+        flight: { speed: 560, mach: 3.3, cd0: 0.034, aoaLimiter: true, accel: 22, gLimit: 12, roll: 6.2, alpha: 45, lift: 1.25 },
+        health: 300, missiles: 16, flares: 90,
+        gun: { damage: 14, rate: 100, ammo: 6000, name: 'GAU-X 30mm ×4', cal: 30 },
+        bomb: { name: 'MK-84X MEGA BOMB', damage: 1700, splash: 150, kg: 4000, fx: 6, crater: 2.2, load: 2 },
+        busters: 4,
+        proc: { body: [0.08, 0.07], wing: { rc: 0.5, tc: 0.05, sweep: 58, z: 0.12, delta: true }, tail: 'twin', cant: 30, hstab: false, engines: 2, spacing: 0.07, intake: 'side', lerx: true, paint: 0x17181b, accent: 0xd8a02a },
+    }),
     f22: jet({
         name: 'F-22 Raptor', role: 'Air Superiority', country: 'USA', length: 18.9, span: 13.6,
         desc: 'Stealth air-dominance fighter with thrust vectoring. The king of the dogfight.',

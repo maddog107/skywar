@@ -52,10 +52,11 @@ export function roundCalibre(b) {
     return 12.7;
 }
 // The real guns' rates of fire (rounds/s): config.js fires fewer, heavier rounds, so each of those stands for a few
-// real ones in the water (a burst from an M61 is a 100-round-a-second sheet of spouts)
+// real ones in the water (a burst from an M61 is a 100-round-a-second sheet of spouts; the X-100 test jet's made-up
+// GAU-X fires all of its 100 a second in the game)
 export function gunRealRate(name) {
     const n = String(name || '');
-    return /M61/.test(n) ? 100 : /GAU-8/.test(n) ? 65 : /GAU-22/.test(n) ? 55 : /GSh-30/.test(n) ? 30 : /BK-27/.test(n) ? 28
+    return /M61|GAU-X/.test(n) ? 100 : /GAU-8/.test(n) ? 65 : /GAU-22/.test(n) ? 55 : /GSh-30/.test(n) ? 30 : /BK-27/.test(n) ? 28
         : /GIAT/.test(n) ? 40 : /GSh-23|Type 23/.test(n) ? 55 : /M39/.test(n) ? 50 : /DEFA|ADEN/.test(n) ? 42 : 0;
 }
 // How high (m) a round's spout stands: about 0.2 cal^1.1 for a round going in steeply at ~900 m/s, less than that for

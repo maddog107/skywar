@@ -128,7 +128,9 @@ describe('flight envelope', () => {
             if (isJet(AIRCRAFT[id]) && AIRCRAFT[id].flight.afterburner !== false) {
                 test('military power (no afterburner) at 11 km is well below the afterburner top speed', () => {
                     const { milHigh, high } = r();
-                    assert.ok(milHigh.mach < high.mach - 0.3 && milHigh.mach < 1.3, `mil M${milHigh.mach.toFixed(2)} vs AB M${high.mach.toFixed(2)}`);
+                    // (the X-100 test jet, `group: 'test'`, is allowed to supercruise)
+                    const supercruise = AIRCRAFT[id].group === 'test';
+                    assert.ok(milHigh.mach < high.mach - 0.3 && (supercruise || milHigh.mach < 1.3), `mil M${milHigh.mach.toFixed(2)} vs AB M${high.mach.toFixed(2)}`);
                 });
             }
 
@@ -141,7 +143,8 @@ describe('flight envelope', () => {
                 const { climb } = r();
                 const s = AIRCRAFT[id];
                 const floor = s.category === 'fighter' ? (s.flight.afterburner === false ? 25 : 100) : s.category === 'bomber' ? 15 : s.category === 'racer' ? 12 : 3;
-                assert.ok(climb.rate > floor && climb.rate < 400, `best climb ${climb.rate.toFixed(1)} m/s at ${climb.V.toFixed(0)} m/s (floor ${floor})`);
+                const ceil = s.group === 'test' ? 900 : 400; // (the X-100 test jet climbs like a rocket on purpose)
+                assert.ok(climb.rate > floor && climb.rate < ceil, `best climb ${climb.rate.toFixed(1)} m/s at ${climb.V.toFixed(0)} m/s (floor ${floor})`);
             });
 
             test('approach speed is below the touchdown speed limit (0.6 x speed)', () => {
