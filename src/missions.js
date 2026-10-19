@@ -222,6 +222,7 @@ class TownTarget {
     get alive() { return this.b.alive; }
     get health() { return Math.max(0, this.b.hp); }
     get maxHealth() { return this.b.maxHp; }
+    get hitReach() { return Math.hypot(this.b.w / 2 + 1, this.b.d / 2 + 1); } // (weapons.js's grid of targets)
     hitTest(p) { const b = this.b; return b.alive && p.y > b.y - 1 && p.y < b.top + 1 && this.bl.inside(b, p.x, p.z, 1); }
     distTo(p) { return this.pos.distanceTo(p); }
     damage(amount, source, kind) { this.lastKind = kind; this.bl.damage(this.b, amount, this.game, source); }

@@ -861,6 +861,7 @@ export class Ship {
         return d > 0 ? d : 0;
     }
 
+    get hitReach() { return Math.hypot(this.def.B, this.def.L) / 2; } // (the hull's corners from pos: weapons.js's grid of targets)
     hitTest(p) {
         const { lx, lz } = this.toLocal(p.x, p.z);
         const y = p.y - this.mesh.position.y;

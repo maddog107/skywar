@@ -21,6 +21,9 @@ const roundVs = (b, cls) => (b.small ? materielDamage(b.def, cls) : b.damage);
 
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _v4 = new THREE.Vector3();
 const _prev = new THREE.Vector3();
+// the ground targets' grid for rounds (binTargets): cell size (m) and a cell's key
+const CELL = 250;
+const cellKey = (ix, iz) => ix * 65536 + iz;
 const _s1 = new THREE.Vector3(), _s2 = new THREE.Vector3(), _s3 = new THREE.Vector3(), _s4 = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0);
 // a bunker buster's hole: narrow for its size and deep, the earth heaved up in a high rim
@@ -148,34 +151,48 @@ export class Weapons {
     // ── Cannon ──
     // Returns the number of rounds fired this call (0 while the gun cycles). A held trigger fires every round
     // it owes (up to 3 in one long frame, more for a very fast gun), so the rate of fire doesn't drop at low frame
-    // rates; a fresh pull fires one.
+    // rates; a fresh pull fires one. A shotgun cannon (the X-100's GAU-X: `pellets`, `cone`) fires blasts instead:
+    // `pellets` rounds at once, rate / pellets times a second, spread evenly over a cone `cone` rad wide each side.
     fireGun(ac, now) {
         const gun = ac.spec.gun;
         if (!gun || !ac.alive || ac.ammo <= 0) return 0;
-        const iv = 1 / gun.rate, since = now - ac.lastGun;
+        const P = gun.pellets || 1;
+        const iv = P / gun.rate, since = now - ac.lastGun;
         if (since < iv) return 0;
-        // (a 100-round-a-second gun, the X-100's, owes several rounds in every frame: its window and its cap are wider)
+        // (a 100-round-a-second gun owes several rounds in every frame: its window and its cap are wider)
         const held = since < Math.max(iv * 4, 0.12);
-        const n = held ? Math.min(Math.max(3, Math.ceil(gun.rate * 0.06)), Math.floor(since / iv), ac.ammo) : 1;
+        const n = held ? Math.min(Math.max(3, Math.ceil(gun.rate / P * 0.06)), Math.floor(since / iv), Math.ceil(ac.ammo / P)) : 1;
         ac.lastGun = held ? ac.lastGun + n * iv : now;
         const fwd = ac.getForward(_v1);
         const spread = ac.isPlayer || ac.team === 'blue' && !ac.pilot ? 0.0035 : 0.008 + (1 - (ac.pilot?.skill ?? 1)) * 0.02;
+        const cone = gun.cone || 0, right = cone && ac.getRight(_s1), up = cone && ac.getUp(_s2);
+        let shot = 0;
         for (let k = 0; k < n; k++) {
-            ac.ammo--;
-            const dir = _v2.copy(fwd).add(_v3.set(rand(-spread, spread), rand(-spread, spread), rand(-spread, spread))).normalize();
-            // a catch-up round left the muzzle a moment ago: start it that much further down range
-            const muzzle = _v3.copy(ac.pos).addScaledVector(fwd, ac.spec.length * 0.5 + (n - 1 - k) * iv * WEAPONS.bulletSpeed);
-            const vel = dir.multiplyScalar(WEAPONS.bulletSpeed).add(ac.vel);
-            const b = this.newBullet(muzzle, vel, ac, gun.damage, WEAPONS.bulletLife, ac.ammo % 3 !== 0, ac.team === 'blue' ? GUN_BLUE : GUN_RED);
-            b.flak = false;
-            // (its splash in the water, splash.js: the calibre, and how many real rounds this one stands for)
-            b.cal = gun.cal || (gun.cal = gunCalibre(gun.name));
-            b.rep = gun.rep || (gun.rep = clamp(Math.round(gunRealRate(gun.name) / gun.rate), 1, 6));
+            // a catch-up round (or blast) left the muzzle a moment ago: start it that much further down range
+            const ahead = ac.spec.length * 0.5 + (n - 1 - k) * iv * WEAPONS.bulletSpeed;
+            for (let j = 0; j < P && ac.ammo > 0; j++, shot++) {
+                ac.ammo--;
+                const dir = _v2.copy(fwd);
+                if (cone) {
+                    // uniform over the cone's disc (√ of the radius), so the pattern is as dense at the rim as in the middle
+                    const r = cone * Math.sqrt(Math.random()), a = Math.random() * Math.PI * 2;
+                    dir.addScaledVector(right, r * Math.cos(a)).addScaledVector(up, r * Math.sin(a)).normalize();
+                } else dir.add(_v3.set(rand(-spread, spread), rand(-spread, spread), rand(-spread, spread))).normalize();
+                const muzzle = _v3.copy(ac.pos).addScaledVector(fwd, ahead);
+                const vel = dir.multiplyScalar(WEAPONS.bulletSpeed).add(ac.vel);
+                // (two rounds in three a tracer; a shotgun blast's one in four, or its sheet of fire would be a white blur)
+                const tracer = P > 1 ? ac.ammo % 4 === 0 : ac.ammo % 3 !== 0;
+                const b = this.newBullet(muzzle, vel, ac, gun.damage, WEAPONS.bulletLife, tracer, ac.team === 'blue' ? GUN_BLUE : GUN_RED);
+                b.flak = false;
+                // (its splash in the water, splash.js: the calibre, and how many real rounds this one stands for)
+                b.cal = gun.cal || (gun.cal = gunCalibre(gun.name));
+                b.rep = gun.rep || (gun.rep = clamp(Math.round(gunRealRate(gun.name) / gun.rate), 1, 6));
+            }
         }
         this.game.events.emit('gunfire', ac);
-        // muzzle flash
-        this.game.effects.fire.emit(_v3.copy(ac.pos).addScaledVector(fwd, ac.spec.length * 0.5), ac.vel, 0.05, 1.8, 0.6, [6, 5, 3], [3, 1.5, 0.5], 1, 0, 0, 0);
-        return n;
+        // muzzle flash (a shotgun blast's is a ball of fire)
+        this.game.effects.fire.emit(_v3.copy(ac.pos).addScaledVector(fwd, ac.spec.length * 0.5), ac.vel, 0.05, P > 1 ? 3 : 1.8, 0.6, [6, 5, 3], [3, 1.5, 0.5], 1, 0, 0, 0);
+        return shot;
     }
 
     // Flak / AAA rounds from ground units (cal: mm, for the splash a round makes in the water: 23 mm AAA, a CIWS's
@@ -196,9 +213,53 @@ export class Weapons {
         return b;
     }
 
+    // The ground targets binned on a CELL m grid once a frame, so a round tests only the few near it (the X-100's
+    // shotgun keeps ~1000 rounds in the air over a war's 200-odd targets). A target with a hitTest bins by how far its
+    // test reaches from pos (hitReach), one without by its sphere (center, radius); `pad` covers a round's step in a
+    // frame. One with a hitTest but no hitReach, or too big to bin, goes in `always`: every round tests it.
+    binTargets(targets, pad) {
+        const T = this.tgrid || (this.tgrid = { cells: new Map(), used: [], always: [] });
+        for (const a of T.used) a.length = 0;
+        T.used.length = 0; T.always.length = 0;
+        for (const t of targets) {
+            if (!t.alive) continue;
+            const c = t.hitTest ? t.pos : t.center, r = (t.hitTest ? t.hitReach : t.radius) + pad;
+            if (!c || !(r < CELL * 4)) { T.always.push(t); continue; }
+            const x1 = Math.floor((c.x + r) / CELL), z0 = Math.floor((c.z - r) / CELL), z1 = Math.floor((c.z + r) / CELL);
+            for (let ix = Math.floor((c.x - r) / CELL); ix <= x1; ix++) {
+                for (let iz = z0; iz <= z1; iz++) {
+                    const k = cellKey(ix, iz);
+                    let a = T.cells.get(k);
+                    if (a === undefined) T.cells.set(k, a = []);
+                    if (a.length === 0) T.used.push(a);
+                    a.push(t);
+                }
+            }
+        }
+        return T;
+    }
+
+    // a round against these ground targets (it moved from _prev to b.pos this frame); true when it hit one
+    groundBulletHit(b, targets) {
+        const g = this.game;
+        for (const t of targets) {
+            if (!t.alive || t.team === b.team) continue;
+            if (t.hitTest ? t.hitTest(b.pos) : segPointDistSq(_prev, b.pos, t.center) < t.radius * t.radius) {
+                const dmg = roundVs(b, targetClass(t));
+                if (dmg > 0) t.damage(dmg, b.owner, b.small ? 'rifle' : undefined);
+                if (b.small && dmg > 0 && b.owner === g.pilotMode) g.hitmarkerT = g.time;
+                g.effects.impact(b.pos, null);
+                g.events.emit('bulletHit', b.owner, { target: t });
+                return true;
+            }
+        }
+        return false;
+    }
+
     updateBullets(dt) {
         const g = this.game;
         const list = this.bullets;
+        const grid = g.ground && list.length ? this.binTargets(g.ground.targets, 40 + 1800 * dt) : null;
         for (let i = list.length - 1; i >= 0; i--) {
             const b = list[i];
             b.life -= dt;
@@ -224,19 +285,10 @@ export class Weapons {
                     }
                 }
             }
-            if (!dead && g.ground) {
-                for (const t of g.ground.targets) {
-                    if (!t.alive || t.team === b.team || b.damage <= 0) continue;
-                    if (t.hitTest ? t.hitTest(b.pos) : segPointDistSq(_prev, b.pos, t.center) < t.radius * t.radius) {
-                        const dmg = roundVs(b, targetClass(t));
-                        if (dmg > 0) t.damage(dmg, b.owner, b.small ? 'rifle' : undefined);
-                        if (b.small && dmg > 0 && b.owner === g.pilotMode) g.hitmarkerT = g.time;
-                        g.effects.impact(b.pos, null);
-                        g.events.emit('bulletHit', b.owner, { target: t });
-                        dead = true;
-                        break;
-                    }
-                }
+            if (!dead && grid && b.damage > 0) {
+                // (only the targets binned in this round's cell, and any too big or odd to bin)
+                const cell = grid.cells.get(cellKey(Math.floor(b.pos.x / CELL), Math.floor(b.pos.z / CELL)));
+                dead = (cell !== undefined && this.groundBulletHit(b, cell)) || (grid.always.length > 0 && this.groundBulletHit(b, grid.always));
             }
             if (!dead && b.damage > 0) dead = this.worldBulletHit(b, _prev); // (walls first: cover works)
             if (!dead && b.damage > 0) dead = this.peopleBulletHit(b, _prev);

@@ -221,6 +221,7 @@ class CrewVehicle {
         this.mover = null;
         this.noHud = true; // (ours: no HUD box — the enemy's still get theirs)
     }
+    get hitReach() { return 5; } // (weapons.js's grid of targets)
     hitTest(p) { return Math.abs(p.x - this.pos.x) < 3.5 && Math.abs(p.z - this.pos.z) < 3.5 && p.y > this.pos.y - 2 && p.y < this.pos.y + 2.5; }
     distTo(p) { return Math.max(0, this.pos.distanceTo(p) - 3); }
     damage(amount, source) {

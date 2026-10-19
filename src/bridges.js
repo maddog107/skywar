@@ -247,6 +247,8 @@ export class Bridge {
     }
     standing(s) { return s >= 0 && s <= this.len && !this.fallen[Math.min(this.n - 1, Math.floor(s / this.segLen))]; }
 
+    // (how far from pos, the span's middle, it reaches: weapons.js's grid of targets)
+    get hitReach() { return Math.hypot(this.bbox.x1 - this.bbox.x0, this.bbox.z1 - this.bbox.z0) / 2; }
     hitTest(p) {
         if (p.x < this.bbox.x0 || p.x > this.bbox.x1 || p.z < this.bbox.z0 || p.z > this.bbox.z1) return false;
         const { s, l } = this.local(p);

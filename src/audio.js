@@ -19,6 +19,8 @@ import { AIRCRAFT } from './config.js';
 function gunProfile(gun) {
     const n = (gun && gun.name) || '';
     if (/M61/.test(n)) return { rotary: true, rps: 100, band: 1100, thump: 70 };
+    // (the X-100's made-up GAU-X: 25 shotgun blasts a second, a deep ripping roar rather than a 500 Hz whine)
+    if (/GAU-X/.test(n)) return { rotary: true, rps: 75, band: 520, thump: 38 };
     if (/GAU-8/.test(n)) return { rotary: true, rps: 65, band: 700, thump: 50 };
     if (/GAU-22/.test(n)) return { rotary: true, rps: 55, band: 900, thump: 60 };
     if (/GSh-30/.test(n)) return { rps: 30, band: 650, thump: 55 };

@@ -1,5 +1,6 @@
 // The X-100 Overkill test jet (config.js x100): every hangar bar at 100, the player's own (no enemy, ally or daily
-// pool flies it), its 100-round-a-second cannon (weapons.js fireGun keeps the rate at low frame rates too), and the
+// pool flies it), its 500-round-a-second shotgun cannon (blasts of 20 rounds over a wide cone; weapons.js fireGun keeps
+// the rate at low frame rates too), and the
 // stores only it carries: the MK-84X mega bomb (its `bomb` over WEAPONS.bomb) and the GBU-57X bunker buster (the BBU
 // slot: it buries itself, goes off on its fuse, and what it hits takes it as a penetrator: underground.js, bases.js).
 import { src } from './helpers/setup.mjs';
@@ -53,14 +54,14 @@ describe('X-100 Overkill: the test jet', () => {
         for (let d = 0; d < 400; d++) assert.notEqual(dailyMission(new Date(2026, 0, 1 + d)).aircraft, 'x100');
     });
 
-    test('its cannon fires 100 rounds a second, and still does at 20 fps', () => {
+    test('its cannon fires 500 rounds a second, and still does at 20 fps', () => {
         for (const fps of [60, 30, 20]) {
             const g = arenaGame();
             const ac = g.spawn('x100', { team: 'blue', pos: { x: 0, y: 3000, z: 0 }, isPlayer: true });
             ac.ammo = 1e5;
             let shots = 0;
             for (let i = 0; i < fps * 2; i++) { g.time += 1 / fps; shots += g.weapons.fireGun(ac, g.time); }
-            assert.ok(shots > 190 && shots <= 202, `${fps} fps: ${shots} rounds in 2 s`);
+            assert.ok(shots > 970 && shots <= 1020, `${fps} fps: ${shots} rounds in 2 s`);
         }
         // an ordinary gun's rate is unchanged
         const g = arenaGame();
@@ -68,6 +69,75 @@ describe('X-100 Overkill: the test jet', () => {
         let shots = 0;
         for (let i = 0; i < 120; i++) { g.time += 1 / 60; shots += g.weapons.fireGun(f16, g.time); }
         assert.ok(Math.abs(shots - AIRCRAFT.f16.gun.rate * 2) <= 2, 'F-16: ' + shots);
+    });
+
+    test('it fires like a shotgun: blasts of 20 rounds spread evenly over a wide cone (an F-16\'s stream stays tight)', () => {
+        seeded(5, () => {
+            const blast = (type) => {
+                const g = arenaGame();
+                const ac = g.spawn(type, { team: 'blue', pos: { x: 0, y: 3000, z: 0 }, isPlayer: true });
+                ac.vel.set(0, 0, 0); // (the rounds' own directions, not the jet's speed added in)
+                g.time += 1;
+                const n = g.weapons.fireGun(ac, g.time);
+                const fwd = ac.getForward(new THREE.Vector3());
+                return { n, off: g.weapons.bullets.map(b => b.vel.clone().normalize().angleTo(fwd)), at: g.weapons.bullets.map(b => b.pos.clone()) };
+            };
+            const x = blast('x100'), f = blast('f16');
+            assert.equal(x.n, 20, 'one pull: one blast of 20');
+            assert.equal(f.n, 1);
+            const cone = X.gun.cone;
+            assert.ok(x.off.every(a => a <= cone + 1e-6), 'inside the cone');
+            // even over the disc: about a quarter inside half the cone's radius, and many out near the rim
+            const inner = x.off.filter(a => a < cone / 2).length, rim = x.off.filter(a => a > cone * 0.7).length;
+            assert.ok(inner >= 1 && inner <= 10, 'inner: ' + inner);
+            assert.ok(rim >= 6, 'rim: ' + rim);
+            assert.ok(Math.max(...x.off) > cone * 0.8, 'the pattern is wide: ' + Math.max(...x.off).toFixed(3));
+            assert.ok(Math.max(...f.off) < 0.01, 'the F-16\'s rounds stay tight');
+            // a blast leaves the muzzle all at once
+            assert.ok(x.at.every(p => p.distanceTo(x.at[0]) < 0.01));
+            // 500 m out the pattern is about 80 m across
+            const r500 = Math.max(...x.off) * 500;
+            assert.ok(r500 > 34 && r500 < 41, 'radius at 500 m: ' + r500.toFixed(1));
+        });
+    });
+
+    test('its rounds hit ground targets through the grid (weapons.js binTargets): every kind, as a scan of all would', () => {
+        seeded(6, () => {
+            // a box with a hitTest and its reach (an installation), a sphere (a vehicle), a hitTest with no reach, a long
+            // box too big to bin (a bridge-sized span): the last two go in `always`. (All 3.5 km up, clear of the hills.)
+            const H = 3500;
+            const box = (x, z, hw, hd, yaw, reach) => ({ pos: V(x, H, z), team: 'red', alive: true, hits: 0, ...(reach ? { get hitReach() { return Math.hypot(hw, hd); } } : {}),
+                hitTest(p) { const dx = p.x - this.pos.x, dz = p.z - this.pos.z, c = Math.cos(yaw), s = Math.sin(yaw); return Math.abs(dx * c - dz * s) < hw && Math.abs(dx * s + dz * c) < hd && p.y > H - 1 && p.y < H + 12; },
+                damage() { this.hits++; } });
+            const sphere = (x, z, r) => ({ center: V(x, H + 4, z), pos: V(x, H + 4, z), radius: r, team: 'red', alive: true, hits: 0, damage() { this.hits++; } });
+            const inst = box(300, 0, 20, 10, 0.6, true), veh = sphere(0, 300, 6), odd = box(-300, 0, 8, 8, 0, false), span = box(0, -400, 1100, 8, 0, true);
+            const g = range([inst, veh, odd, span]);
+            const W = g.weapons, owner = { team: 'blue' };
+            const T = W.binTargets(g.ground.targets, 40);
+            assert.deepEqual(T.always, [odd, span]);
+            // a round at each from 150 m off, level 4 m up
+            for (const t of [inst, veh, odd, span]) {
+                const at = (t.center || t.pos).clone().setY(H + 4), from = at.clone().add(V(150, 0, 90).normalize().multiplyScalar(-150));
+                const vel = at.clone().sub(from).normalize().multiplyScalar(WEAPONS.bulletSpeed);
+                W.newBullet(from, vel, owner, 10, 2, false, [1, 1, 1]);
+                for (let i = 0; i < 30; i++) W.updateBullets(1 / 60);
+            }
+            assert.deepEqual([inst, veh, odd, span].map(t => t.hits), [1, 1, 1, 1]);
+            // 200 boxes and spheres scattered over 3 km: anywhere a round would hit one, that one is in the round's cell
+            const many = [];
+            for (let i = 0; i < 200; i++) many.push(i % 2 ? sphere(Math.random() * 3000, Math.random() * 3000, 3 + Math.random() * 30) : box(Math.random() * 3000, Math.random() * 3000, 3 + Math.random() * 200, 3 + Math.random() * 40, Math.random() * 6, true));
+            const G = W.binTargets(many, 40);
+            let checked = 0;
+            for (let k = 0; k < 20000; k++) {
+                const p = V(Math.random() * 3000, H + 4, Math.random() * 3000);
+                const cell = G.cells.get(Math.floor(p.x / 250) * 65536 + Math.floor(p.z / 250)) || [];
+                for (const t of many) {
+                    const hit = t.hitTest ? t.hitTest(p) : p.distanceTo(t.center) < t.radius;
+                    if (hit) { checked++; assert.ok(cell.includes(t) || G.always.includes(t), `a target ${p.x.toFixed(0)},${p.z.toFixed(0)} misses its cell`); }
+                }
+            }
+            assert.ok(checked > 500, 'hits checked: ' + checked);
+        });
     });
 
     test('the bunker-buster slot is the X-100\'s only; its bombs are MK-84Xs', () => {

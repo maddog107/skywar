@@ -359,6 +359,7 @@ export class Boat {
             this.game.events.emit('boatLost', this);
         }
     }
+    get hitReach() { return Math.hypot(this.spec.B, this.spec.L) / 2; } // (weapons.js's grid of targets)
     hitTest(p) {
         const dx = p.x - this.phys.x, dz = p.z - this.phys.z, c = Math.cos(this.phys.h), s = Math.sin(this.phys.h);
         const lx = dx * c - dz * s, lz = dx * s + dz * c;

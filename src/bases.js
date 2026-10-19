@@ -62,7 +62,8 @@ class Installation {
         this.mesh = new THREE.Object3D(); this.mesh.position.set(w.x, field.base.h, w.z); // (weapons.js settles small targets into craters)
         this.incoming = []; this.vel = new THREE.Vector3();
     }
-    // box test in the installation's frame
+    // box test in the installation's frame (hitReach: how far from pos it reaches, for weapons.js's grid of targets)
+    get hitReach() { return Math.hypot(this.hw, this.hd); }
     hitTest(p) {
         const dx = p.x - this.pos.x, dz = p.z - this.pos.z, c = Math.cos(this.yaw), s = Math.sin(this.yaw);
         const u = dx * c - dz * s, v = dx * s + dz * c, y = p.y - this.field.base.h;
