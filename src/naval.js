@@ -1019,7 +1019,10 @@ export class Ship {
                     aim.x += rand(-0.012, 0.012); aim.y += rand(-0.012, 0.012); aim.z += rand(-0.012, 0.012);
                     g.weapons.fireFlak(mp, aim.normalize(), this, isMissile ? 0 : 3 + diff.skill * 3, 1100, Infinity, this.team === 'red' ? 30 : 20, 4); // (Phalanx 20 mm, AK-630 30 mm: ~75–80 rounds/s for the 20 here)
                     m.engagedT = g.time; m.target = tgt; // (navalops.js: "CIWS ENGAGING")
-                    if (isMissile && Math.random() < (this.team === 'red' ? 0.028 : 0.05)) {
+                    // (an anti-ship missile is a small, hard target — a sea-skimmer seen late, a supersonic one barely in
+                    // the envelope: its store's `ciws`, stores.js)
+                    const hard = (tgt.W && tgt.W.ciws ? tgt.W.ciws : 1) * (tgt.pos.y < 25 && !tgt.isStrategic ? 0.6 : 1);
+                    if (isMissile && Math.random() < (this.team === 'red' ? 0.028 : 0.05) * hard) {
                         // CIWS kill
                         g.events.emit('ciwsKill', this, { missile: tgt });
                         if (tgt.isStrategic) tgt.damage(1e3, this); // (strikes.js intercepted(): its own explosion)

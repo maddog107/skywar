@@ -84,7 +84,8 @@ export class SupportFlight {
         ac.spawnAir(pos, heading, clamp(speed / ac.spec.flight.speed, 0.3, 1));
         ac.vel.setLength(speed); ac.speed = speed;
         ac.throttle = ac.controls.throttle = 0.72;
-        ac.missiles = role === 'ew' ? 2 : 0; ac.lrm = 0; ac.bombs = 0; ac.rockets = 0;
+        // (a Growler: AMRAAMs and HARMs — no Sidewinders, its wingtips carry the ALQ-218: stores.js)
+        ac.missiles = 0; ac.lrm = role === 'ew' ? 2 : 0; ac.bombs = 0; ac.rockets = 0;
         if (role === 'ew') ac.harms = 2;
         ac.support = this;
         const pl = new Pilot(g, ac, skill);
@@ -875,9 +876,8 @@ export class AirSupport {
         const g = this.game, p = g.player;
         if (!p || !p.alive) return;
         if (p.type === 'ea18g') {
-            if (p.harms == null) p.harms = 2;
+            if (p.harms == null) p.harms = 2; // (game.js rearm loads its loadout's: stores.js)
             if (!this.jammers.some(j => j.ac === p)) { const j = new Jammer(p, 'alq99', p.team, false); j.brg = headingOf(p); this.jammers.push(j); }
-            if (p.onGround && g.rearmT > 4) p.harms = 2;
         }
     }
 
@@ -969,7 +969,7 @@ export class AirSupport {
         if (!e) { g.addFeed('HARM: NO EMITTER SELECTED ( [ / ] )', AMBER); return; }
         const shot = harmShot(p.pos, p.getForward(_v), e.u.pos, emitterOf(e.u, g.war.rec(e.u)));
         if (!shot.ok) { g.addFeed('HARM: ' + shot.why, AMBER); g.audio.tick(250, 0.1, 0.08); return; }
-        g.weapons.fireMissile(p, e.u, 'arm');
+        g.weapons.fireMissile(p, e.u, 'arm', null, { viaEW: true }); // (it makes its own MAGNUM call: game.js leaves it out)
         p.harms--;
         this.say((g.callsign || 'VIPER') + ' 1', 'MAGNUM, ' + e.em.name, { color: '#8fd0ff', say: 'magnum', priority: true });
     }
@@ -983,7 +983,7 @@ export class AirSupport {
             const T = this.track('ew', 'blue');
             const st = this.trackStart(T, 0.3);
             f = this.spawnSupport({ type: 'ea18g', team: war.side, role: 'ew', callsign: 'ZAPPER 1', pos: st.pos, heading: st.heading, speed: T.speed, alt: T.alt, skill: 0.8 });
-            f.ac.harms = 2; f.ac.missiles = 2;
+            f.ac.harms = 2; f.ac.missiles = 0; f.ac.lrm = 2;
             f.jammer = new Jammer(f.ac, 'alq99', f.team, true);
             this.jammers.push(f.jammer);
             this.onTrack(f, T);

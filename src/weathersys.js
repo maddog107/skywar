@@ -296,7 +296,8 @@ export class WeatherSystem {
         const eye = p.pos;
         const T = this.transmittance(eye, t.pos, 'eye');
         const W = g.slotW;
-        const ir = W && !W.radar && !W.unguided && W !== undefined && g.slotDef && g.slotDef.key === 'srm';
+        // (an IR, TV or laser seeker; a radar, a GPS weapon or a HARM sees through it)
+        const ir = !!W && !W.unguided && g.slotDef && (W.seeker ? W.seeker === 'ir' || W.seeker === 'tv' || W.seeker === 'laser' : g.slotDef.key === 'srm');
         const irOk = !ir || this.irClear(eye, t.pos);
         g.irBlocked = !irOk;
         if (T < 0.12 || !irOk) this.obscured = { unit: t, T, why: this.obstruction(eye, t.pos), ir: !irOk };

@@ -10,6 +10,7 @@
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
 import { AIRCRAFT, hasEjectionSeat } from './config.js';
+import { armAircraft } from './stores.js';
 import { createAircraftModel } from './models.js';
 import { updateRigParts } from './rigparts.js';
 import { clamp, damp, lerp, rand, G, DEG, makeRadialTexture } from './util.js';
@@ -190,7 +191,9 @@ export class Aircraft {
         this.health = this.spec.health;
         this.maxHealth = this.spec.health;
         this.ammo = this.spec.gun ? this.spec.gun.ammo : 0;
-        this.missiles = this.spec.missiles;
+        // the AI's air-to-air load: its type's own missiles (stores.js; the player's jet is rearmed with the chosen
+        // loadout, game.js rearm)
+        armAircraft(this, 'air', { ai: true });
         this.flares = this.spec.flares;
         this.alive = true;
         this.falling = false;

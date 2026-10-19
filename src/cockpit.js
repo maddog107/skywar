@@ -8,6 +8,7 @@
 // Eye point is the origin; forward is -Z.
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
+import { CLASSES } from './stores.js';
 import { ViewModel } from './viewmodel.js';
 import { clamp, damp, MS_TO_KTS, M_TO_FT, DEG } from './util.js';
 import { terrainHeight } from './world.js';
@@ -491,13 +492,19 @@ export class Cockpit {
         ctx.lineWidth = 1.8; ctx.stroke();
         ctx.restore();
         if (!p) return;
-        const n = p.spec.missiles;
-        for (let i = 0; i < n; i++) {
+        // the stations: every missile it went up with (stores.js loadout), lit while it's still on its rail
+        const rails = [];
+        for (const c of CLASSES) {
+            if (!c.kind || c.key === 'rkt') continue;
+            const n0 = (p.loadCounts && p.loadCounts[c.key]) || 0, left = p[c.ammo] || 0;
+            for (let i = 0; i < Math.max(n0, left); i++) rails.push(i < left);
+        }
+        rails.slice(0, 16).forEach((on, i) => {
             const side = i % 2 ? 1 : -1, k = Math.floor(i / 2);
             const x = 192 + side * (45 + k * 26), y = 222 - k * 9;
-            ctx.fillStyle = i < p.missiles ? '#4dff94' : '#0f3a22';
+            ctx.fillStyle = on ? '#4dff94' : '#0f3a22';
             ctx.fillRect(x - 4, y - 16, 8, 30);
-        }
+        });
         ctx.font = 'bold 20px monospace';
         ctx.fillStyle = '#4dff94';
         ctx.fillText('GUN ' + p.ammo, 30, W - 40);
@@ -563,7 +570,7 @@ export class Cockpit {
         if (!p) return;
         const tgt = game.lockTarget ? (Math.round(game.lockTarget.pos.distanceTo(p.pos) / 100) / 10).toFixed(1) + 'KM' : '---';
         ctx.fillText('TGT ' + tgt, 12, 38);
-        ctx.fillText('M' + p.mach.toFixed(2) + ' ' + p.gLoad.toFixed(1) + 'G ' + (['SRM', 'LRM', 'RKT', 'BMB', 'BBU'][game.slot || 0]), 12, 86);
+        ctx.fillText('M' + p.mach.toFixed(2) + ' ' + p.gLoad.toFixed(1) + 'G ' + (game.slotDef ? game.slotDef.label : 'SRM'), 12, 86);
     }
 
     drawGauge(g, p) {

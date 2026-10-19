@@ -2,7 +2,10 @@
 // Weapons: cannon rounds, guided missiles (proportional navigation), flares
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { WEAPONS } from './config.js';
+import { storeOfKind, storeFor, radiating, flareChance, chaffChance, notchChance } from './stores.js';
+import { emitterOf } from './ew.js';
 import { rand, clamp, segPointDistSq, G, makeRadialTexture } from './util.js';
 import { terrainHeight, isOnRunway } from './world.js';
 import { outsideBases } from './roads.js';
@@ -18,11 +21,88 @@ const roundVs = (b, cls) => (b.small ? materielDamage(b.def, cls) : b.damage);
 
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _v4 = new THREE.Vector3();
 const _prev = new THREE.Vector3();
-// the X-100's mega bomb: its config.js `bomb` laid over WEAPONS.bomb (one merged table per type)
-const BOMB_W = new WeakMap();
+const _s1 = new THREE.Vector3(), _s2 = new THREE.Vector3(), _s3 = new THREE.Vector3(), _s4 = new THREE.Vector3();
+const UP = new THREE.Vector3(0, 1, 0);
 // a bunker buster's hole: narrow for its size and deep, the earth heaved up in a high rim
 const BUSTER_CRATER = { r: 7.5, depth: 7, rim: 1.8, scorch: 0.55, reach: 2.8, clods: 18 };
 const GUN_BLUE = [3.2, 2.6, 1.2], GUN_RED = [3.4, 1.0, 0.5], FLAK_COLOR = [3.6, 1.2, 0.5];
+// terrain looked at ahead of a sea-skimmer or a cruise missile (m)
+const AHEAD = [100, 200, 350, 500, 700, 900, 1150, 1400, 1700, 2100, 2600, 3200, 4000];
+
+// ── Store meshes (stores.js sizes): an ogive or a seeker dome on a body of revolution, the fin sets of its shape
+// (at: from the nose, 0 … 1 of the length; chord: of the length; span: of the radius, out from the body; n: 2 for
+// a pair of wings; grid: lattice fins), nose toward −Z. One geometry per store, shared. ──
+const FINS = {
+    aim9: [{ at: 0.1, chord: 0.07, span: 3.0 }, { at: 0.93, chord: 0.1, span: 4.0 }],
+    stub: [{ at: 0.4, chord: 0.18, span: 0.6 }, { at: 0.93, chord: 0.07, span: 2.0 }],
+    r73: [{ at: 0.08, chord: 0.05, span: 2.4 }, { at: 0.9, chord: 0.1, span: 3.2 }],
+    aam: [{ at: 0.48, chord: 0.16, span: 1.6 }, { at: 0.93, chord: 0.08, span: 2.2 }],
+    sparrow: [{ at: 0.45, chord: 0.12, span: 2.4 }, { at: 0.93, chord: 0.09, span: 2.4 }],
+    grid: [{ at: 0.5, chord: 0.12, span: 1.2 }, { at: 0.965, chord: 0.035, span: 2.0, grid: true }],
+    big: [{ at: 0.6, chord: 0.3, span: 1.4 }, { at: 0.93, chord: 0.1, span: 1.5 }],
+    agm: [{ at: 0.55, chord: 0.45, span: 1.3 }, { at: 0.95, chord: 0.08, span: 1.0 }],
+    cruise: [{ at: 0.45, chord: 0.12, span: 6, n: 2 }, { at: 0.94, chord: 0.08, span: 1.6 }],
+    rocket: [{ at: 0.95, chord: 0.06, span: 1.6 }],
+    // bombs: low-drag fins; a Paveway's canards and big tail wings; a KAB's; a JDAM's tail kit and strakes; the
+    // SDB's wings; a cluster canister's
+    mk: [{ at: 0.86, chord: 0.24, span: 1.5 }],
+    fab: [{ at: 0.86, chord: 0.22, span: 1.3 }],
+    pave: [{ at: 0.1, chord: 0.08, span: 1.4 }, { at: 0.88, chord: 0.2, span: 2.6 }],
+    kab: [{ at: 0.12, chord: 0.1, span: 1.6 }, { at: 0.88, chord: 0.2, span: 2.2 }],
+    jdam: [{ at: 0.5, chord: 0.3, span: 0.5 }, { at: 0.9, chord: 0.15, span: 1.6 }],
+    sdb: [{ at: 0.42, chord: 0.12, span: 7, n: 2 }, { at: 0.92, chord: 0.1, span: 1.8 }],
+    cbu: [{ at: 0.88, chord: 0.2, span: 1.4 }],
+};
+const NOSE = { dome: 1, glass: 1, ogive: 4, blunt: 1.6, bomb: 2.2 };
+// IR seekers: a dark glass dome; TV / laser ones a glass window; radars, cruise and bombs an ogive
+const noseOf = (W) => W.cls === 'srm' ? 'dome' : W.seeker === 'tv' || W.seeker === 'laser' || W.seeker === 'mmw' ? 'glass' : W.drop || W.cls === 'gbu' || W.cls === 'bomb' ? 'bomb' : W.cls === 'rkt' ? 'blunt' : 'ogive';
+const STORE_GEO = new Map(), STORE_MAT = new Map();
+function storeMat(color, glass) {
+    const k = glass ? 'glass' : color;
+    if (!STORE_MAT.has(k)) STORE_MAT.set(k, glass ? new THREE.MeshStandardMaterial({ color: 0x1b1f24, roughness: 0.15, metalness: 0.6 }) : new THREE.MeshStandardMaterial({ color, roughness: 0.5, metalness: 0.3 }));
+    return STORE_MAT.get(k);
+}
+function storeGeo(W) {
+    let e = STORE_GEO.get(W.id);
+    if (e) return e;
+    const L = W.len || 3, R = (W.dia || 0.15) / 2, nose = noseOf(W), nl = Math.min(L * 0.35, R * NOSE[nose]);
+    const bomb = nose === 'bomb', tailL = bomb ? L * 0.3 : L * 0.04, tailR = bomb ? R * (W.shape === 'cbu' ? 0.8 : 0.42) : R * 0.85;
+    // lathe profiles from the tail (−Y) up to the tip (+Y), rotated so the nose points along −Z
+    const top = L / 2, shoulder = top - nl;
+    const curve = nose === 'dome' || nose === 'glass' ? (t) => R * Math.sqrt(1 - t * t) : (t) => R * (1 - t * t);
+    const nosePts = [];
+    for (let i = 0; i <= 8; i++) { const t = i / 8; nosePts.push(new THREE.Vector2(Math.max(curve(t), 0.001), shoulder + nl * t)); }
+    const noseG = new THREE.LatheGeometry(nosePts, 12);
+    const body = new THREE.LatheGeometry([new THREE.Vector2(0.001, -top), new THREE.Vector2(tailR, -top), new THREE.Vector2(R, -top + tailL), new THREE.Vector2(R, shoulder)], 12);
+    const parts = [body];
+    if (nose !== 'dome' && nose !== 'glass') parts.push(noseG);
+    for (const f of FINS[W.shape] || FINS.aam) {
+        const n = f.n || 4, span = f.span * R, chord = Math.max(0.03, f.chord * L), th = f.grid ? Math.max(0.02, R * 0.5) : Math.max(0.008, R * 0.07);
+        const y = top - f.at * L;
+        for (let k = 0; k < n; k++) {
+            const b = new THREE.BoxGeometry(th, chord, n === 2 ? span * 2 + R * 2 : span);
+            if (n !== 2) b.translate(0, y, R + span / 2); else b.translate(0, y, 0);
+            b.rotateY(n === 2 ? Math.PI / 2 : k * Math.PI / 2 + Math.PI / 4);
+            parts.push(b);
+            if (n === 2) break;
+        }
+    }
+    const geo = mergeGeometries(parts);
+    geo.rotateX(-Math.PI / 2);
+    noseG.rotateX(-Math.PI / 2);
+    e = { geo, nose: nose === 'dome' || nose === 'glass' ? noseG : null };
+    STORE_GEO.set(W.id, e);
+    return e;
+}
+export function storeMesh(W) {
+    const e = storeGeo(W);
+    const root = new THREE.Group();
+    const body = new THREE.Mesh(e.geo, storeMat(W.color ?? 0xd8d8d2));
+    body.castShadow = true;
+    root.add(body);
+    if (e.nose) root.add(new THREE.Mesh(e.nose, storeMat(0, true)));
+    return root;
+}
 
 const flareTex = makeRadialTexture(64, [[0, 'rgba(255,255,255,1)'], [0.15, 'rgba(255,240,200,0.9)'], [0.4, 'rgba(255,180,80,0.35)'], [1, 'rgba(255,120,40,0)']]);
 
@@ -61,6 +141,8 @@ export class Weapons {
             return g;
         })();
         this.flareMat = new THREE.SpriteMaterial({ map: flareTex, color: new THREE.Color(6, 4.5, 2.5), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true });
+        this.chaff = [];     // chaff clouds (dropFlares): radar decoys
+        this.bomblets = [];  // a cluster bomb's submunitions on their way down
     }
 
     // ── Cannon ──
@@ -200,10 +282,13 @@ export class Weapons {
     }
 
     // ── Missiles ──
-    fireMissile(ac, target, kind = 'aam') {
+    // kind: 'aam' (IR), 'lrm' (radar), 'xlr', 'arm', 'agm', 'ashm', 'alcm', 'rkt' (stores.js classes) or 'sam'. An
+    // aircraft fires its type's own store for the kind (an F-16's AIM-9X, a Su-35's R-73: stores.js storeFor);
+    // a ground launcher the plain table (WEAPONS.sam; 'arm': the HARM of airsupport.js). Wo: a store to fire instead;
+    // tag: fields for the missile ({ viaEW: true }: the EW page's HARM)
+    fireMissile(ac, target, kind = 'aam', Wo = null, tag = null) {
         if (ac.alive === false) return null;
-        // (a kind of its own — 'arm', the HARM of airsupport.js — is WEAPONS[kind])
-        const W = WEAPONS[kind === 'aam' ? 'missile' : kind] || WEAPONS.missile;
+        const W = Wo || storeOfKind(ac, kind) || WEAPONS[kind === 'aam' ? 'missile' : kind] || WEAPONS.missile;
         const fwd = ac.getForward ? ac.getForward(_v1) : _v1.copy(ac.launchDir);
         const pos = _v2.copy(ac.pos);
         if (ac.getUp) {
@@ -212,20 +297,28 @@ export class Weapons {
             pos.addScaledVector(ac.getRight(_v3), side * ac.rig.halfSpan * (kind === 'rkt' ? 0.25 : 0.35)).addScaledVector(ac.getUp(_v4), -1.5);
             if (kind === 'rkt') fwd.add(_v3.set(rand(-0.012, 0.012), rand(-0.012, 0.012), rand(-0.012, 0.012))).normalize();
         }
-        const mesh = new THREE.Mesh(kind === 'sam' ? this.samGeo : kind === 'rkt' ? this.rocketGeo : this.missileGeo, this.missileMat);
-        if (kind === 'lrm') mesh.scale.set(1.25, 1.25, 1.25);
-        else if (W.scale) mesh.scale.setScalar(W.scale);
+        let mesh;
+        if (W.id) mesh = storeMesh(W);
+        else {
+            mesh = new THREE.Mesh(kind === 'sam' ? this.samGeo : kind === 'rkt' ? this.rocketGeo : this.missileGeo, this.missileMat);
+            if (kind === 'lrm') mesh.scale.set(1.25, 1.25, 1.25);
+            else if (W.scale) mesh.scale.setScalar(W.scale);
+            mesh.castShadow = true;
+        }
         mesh.position.copy(pos);
-        mesh.castShadow = true;
         this.game.scene.add(mesh);
         const vel = (ac.vel ? ac.vel.clone() : new THREE.Vector3()).addScaledVector(fwd, kind === 'sam' ? 60 : kind === 'rkt' ? 120 : 15);
         if (ac.getUp && kind !== 'rkt') vel.addScaledVector(ac.getUp(_v4), -6);
+        const big = W.cls === 'alcm' || W.cls === 'ashm' || W.cls === 'xlr';
         const m = {
             mesh, pos: mesh.position, vel, target, owner: ac, team: ac.team, kind, W,
             life: W.life, age: 0, armed: false, lost: false,
-            trail: this.game.effects.addTrail({ max: 220, width: kind === 'sam' ? 1.0 : kind === 'rkt' ? 0.6 : 1.1, life: kind === 'sam' ? 7 : kind === 'rkt' ? 2 : 5.5, color: [0.92, 0.92, 0.9], alpha: 0.5, minDist: 10, widthGrow: 2.2 }),
+            trail: this.game.effects.addTrail({ max: 220, width: kind === 'sam' ? 1.0 : kind === 'rkt' ? 0.6 : big ? 1.4 : 1.1, life: kind === 'sam' ? 7 : kind === 'rkt' ? 2 : 5.5, color: [0.92, 0.92, 0.9], alpha: 0.5, minDist: 10, widthGrow: 2.2 }),
             fireT: 0,
         };
+        // a GPS weapon flies to where the target is now (a cruise missile: JASSM, Storm Shadow)
+        if (target && W.seeker === 'gps') m.aim = target.pos.clone();
+        if (tag) Object.assign(m, tag);
         this.missiles.push(m);
         if (target && target.incoming) target.incoming.push(m);
         this.game.events.emit('missileLaunch', ac, { missile: m, target });
@@ -252,8 +345,12 @@ export class Weapons {
             m.age += dt;
             const speed = m.vel.length();
             const dir = _v1.copy(m.vel).divideScalar(Math.max(speed, 1));
-            // motor
-            if ((W.unguided || m.age > 0.25) && m.age < W.boost + 0.25) m.vel.addScaledVector(dir, W.accelBoost * dt);
+            // motor; then a sustainer for the ones that have one: a ramjet (Meteor, Kh-31) or a turbojet holding its
+            // cruise speed (Harpoon, JASSM)
+            const boosting = (W.unguided || m.age > 0.25) && m.age < W.boost + 0.25;
+            const sustaining = !boosting && W.sustain && m.age > 0.25 && m.age < W.boost + 0.25 + (W.sustainT ?? Infinity) && speed < (W.cruise || W.vmax || Infinity);
+            if (boosting) m.vel.addScaledVector(dir, W.accelBoost * dt);
+            else if (sustaining) m.vel.addScaledVector(dir, W.sustain * dt);
             // drag (thinner up high)
             const rho = Math.exp(-Math.max(m.pos.y, 0) / 9000);
             m.vel.addScaledVector(dir, -speed * speed * 0.00018 * (W.drag ?? 1) * rho * dt);
@@ -261,53 +358,10 @@ export class Weapons {
             if (W.unguided) m.vel.y -= G * dt * 0.5;
             m.armed = m.age > 0.5;
 
-            // guidance
+            // guidance (the seeker, the flight profile, the proximity fuse: guide())
             const t = m.target;
             const tgtAlive = t && (t.alive !== false) && !(t.exploded);
-            if (m.age > 0.3 && tgtAlive && !m.lost && !W.unguided) {
-                const tp = t.pos, tv = t.vel || _v4.set(0, 0, 0);
-                const r = _v2.subVectors(tp, m.pos);
-                const dist = r.length();
-                const rhat = _v3.copy(r).divideScalar(dist);
-                // seeker gimbal limit
-                if (rhat.dot(dir) < 0.35 && dist > 120) {
-                    m.lost = true;
-                    const k = t.incoming ? t.incoming.indexOf(m) : -1;
-                    if (k >= 0) t.incoming.splice(k, 1);
-                }
-                // decoyed by flares?
-                if (t.isFlare !== true && m.kind !== 'sam' && !W.radar) this.checkFlares(m, rhat, dist); // seeker line of sight
-                // [weather] a heat seeker loses a target that stays hidden in cloud or fog (weathersys.js irClear)
-                if (m.kind === 'aam' && !W.radar && g.weather && g.weather.irClear && !m.lost) {
-                    m.irT = (m.irT || 0) - dt;
-                    if (m.irT <= 0) {
-                        m.irT = 0.2;
-                        m.blindT = g.weather.irClear(m.pos, tp) ? 0 : (m.blindT || 0) + 0.2;
-                        if (m.blindT > 0.6) {
-                            m.lost = true;
-                            const k = t.incoming ? t.incoming.indexOf(m) : -1;
-                            if (k >= 0) t.incoming.splice(k, 1);
-                            g.events.emit('missileLostInCloud', m.owner, { missile: m, target: t });
-                        }
-                    }
-                }
-                const vr = _v4.subVectors(tv, m.vel);
-                // Proportional navigation: a = N * Vc * LOS_rate
-                const losRate = _v2.crossVectors(r, vr).divideScalar(Math.max(dist * dist, 1));
-                const Vc = -vr.dot(rhat);
-                const acc = _v4.crossVectors(losRate, rhat).multiplyScalar(W.navN * Math.max(Vc, 150));
-                // plus a small pure-pursuit bias so tail-chases still converge
-                acc.addScaledVector(rhat.sub(_v2.copy(dir).multiplyScalar(rhat.dot(dir))), 60);
-                const maxA = W.turnG * G * clamp(speed / 500, 0.3, 1.2);
-                if (acc.length() > maxA) acc.setLength(maxA);
-                m.vel.addScaledVector(acc, dt);
-                // proximity fuse
-                if (m.armed && dist < W.prox + (t.hitRadius || 0) * 0.5) {
-                    this.detonate(m, t);
-                    this.removeMissile(i);
-                    continue;
-                }
-            }
+            if (m.age > 0.3 && !m.lost && !W.unguided && this.guide(m, dt, speed, dir)) { this.removeMissile(i); continue; }
             // unguided rounds: proximity-fuse on anything hostile
             if (W.unguided && m.age > 0.15) {
                 let hitT = null;
@@ -324,7 +378,7 @@ export class Weapons {
                 continue;
             }
             m.mesh.quaternion.setFromUnitVectors(_v2.set(0, 0, -1), _v3.copy(m.vel).normalize());
-            // exhaust
+            // exhaust (a ramjet or a turbojet sustainer burns clean: no smoke after the booster)
             if (m.age > 0.25 && m.age < W.boost + 0.25) {
                 m.trail.push(m.pos, fx.now);
                 fx.fire.emit(m.pos, _v2.copy(m.vel).multiplyScalar(0.7), 0.06, 2.2, 0.8, [6, 4.5, 2.2], [3, 1, 0.2], 1, 0, 0, 0);
@@ -344,30 +398,260 @@ export class Weapons {
                 continue;
             }
             const h = terrainHeight(m.pos.x, m.pos.z);
-            if (m.pos.y < Math.max(h, 0) || m.life <= 0 || (m.age > W.boost + 2 && speed < 170)) {
+            if (m.pos.y < Math.max(h, 0) || m.life <= 0 || (m.age > W.boost + 2 && !sustaining && speed < (W.minSpeed ?? 170))) {
                 // into the sea: its warhead throws a column up (splash.js), a fireball on the surface inside it
-                if (m.pos.y < 0 && h < 0) { if (fx.water) fx.water.blast(m.pos, { kg: WARHEAD_KG[m.kind] ?? 8, depth: 'contact', vel: m.vel, agl: 0 }); else fx.waterSplash(m.pos, 0.6); }
+                if (m.pos.y < 0 && h < 0) { if (fx.water) fx.water.blast(m.pos, { kg: W.kg ?? WARHEAD_KG[m.kind] ?? 8, depth: 'contact', vel: m.vel, agl: 0 }); else fx.waterSplash(m.pos, 0.6); }
                 else {
-                    fx.explosion(m.pos, m.pos.y < h + 3 ? 0.8 : 0.5); this.splash(m);
-                    if (m.pos.y < h + 2.5) this.addCrater(_v2.set(m.pos.x, h, m.pos.z), m.kind === 'aam' ? 'missile' : m.kind, m.vel);
+                    fx.explosion(m.pos, m.pos.y < h + 3 ? (W.boom || 0.8) : 0.5); this.splash(m);
+                    if (m.pos.y < h + 2.5) this.addCrater(_v2.set(m.pos.x, h, m.pos.z), m.kind === 'aam' ? 'missile' : m.kind, m.vel, W.crater ? { scale: W.crater } : undefined);
                 }
                 this.removeMissile(i);
                 continue;
             }
         }
+        if (this.chaff.length) this.updateChaff(dt);
+    }
+
+    // ── Guidance: what the seeker sees, then where to steer (the flight profile) and the fuse. Returns true when
+    // the missile went off (the caller removes it). ──
+    guide(m, dt, speed, dir) {
+        const g = this.game, W = m.W;
+        let t = m.target;
+        if (t && (t.alive === false || t.exploded)) t = null;
+        // fired without a lock: an anti-ship or anti-radiation missile searches ahead for something to home on
+        if (!t && !m.aim && (W.cls === 'ashm' || W.cls === 'arm')) {
+            m.searchT = (m.searchT || 0) - dt;
+            if (m.searchT <= 0) { m.searchT = 0.5; t = this.acquire(m, dir); }
+        }
+        if (!t && !m.aim) return false;
+        // where it's steering: the target; an ARM's last fix on a radar that went quiet; a GPS weapon's point
+        // (a cruise missile's terminal seeker takes the target itself in the last couple of km)
+        let tp = t ? t.pos : m.aim, tv = t && t.vel ? t.vel : _s4.set(0, 0, 0);
+        if (m.aim) {
+            const near = t && t.pos.distanceToSquared(m.aim) < 300 * 300 && m.pos.distanceToSquared(m.aim) < 2500 * 2500;
+            if (!near) { tp = m.aim; tv = _s4.set(0, 0, 0); }
+        }
+        if (t && W.seeker === 'arm' && !this.emits(t)) {
+            if (!m.memory) m.memory = t.pos.clone().add(_s1.set(rand(-35, 35), 0, rand(-35, 35)));
+            tp = m.memory; tv = _s4.set(0, 0, 0);
+        }
+        const r = _v2.subVectors(tp, m.pos);
+        const dist = r.length();
+        const rhat = _v3.copy(r).divideScalar(Math.max(dist, 1e-3));
+        const prof = W.profile;
+        const midcourse = (prof === 'skim' || prof === 'cruise') && Math.hypot(r.x, r.z) > W.terminal;
+        // seeker gimbal limit (not in the inertial midcourse of a sea-skimmer or a cruise missile)
+        if (t && !midcourse && rhat.dot(dir) < 0.35 && dist > 120) { this.loseLock(m); return false; }
+        if (t && !this.seekerHolds(m, t, rhat, dist, dt)) return false;
+        if (m.lost) return false;
+        const maxA = W.turnG * G * clamp(speed / 500, W.tvc ? 0.6 : 0.3, 1.2);
+        if (prof === 'skim' || prof === 'cruise') this.flyLow(m, tp, tv, r, rhat, dist, speed, dir, maxA, dt);
+        else if (prof === 'loft' && dist > 7000) {
+            // a lofted shot: up into the thin air toward where he'll be, then down onto him
+            const tgo = dist / Math.max(speed, 300);
+            _s1.copy(tp).addScaledVector(tv, tgo); _s1.y += dist * W.loft;
+            this.steerTo(m, _s1, speed, maxA * 0.5, 1.0, dt);
+        } else if (prof === 'top' && Math.hypot(r.x, r.z) > 1100) {
+            // top attack: over the target, then down onto its roof
+            _s1.copy(tp); _s1.y += Math.hypot(r.x, r.z) * 0.25;
+            this.steerTo(m, _s1, speed, maxA, 1.5, dt);
+        } else this.pn(m, r, rhat, dist, tv, dir, maxA, dt);
+        // proximity fuse
+        if (m.armed && t && dist < W.prox + (t.hitRadius || 0) * 0.5 && tp === t.pos) { this.detonate(m, t); return true; }
+        return false;
+    }
+
+    // proportional navigation: a = N · Vc · LOS rate, plus a small pure-pursuit bias so tail chases still converge
+    pn(m, r, rhat, dist, tv, dir, maxA, dt) {
+        const vr = _s2.subVectors(tv, m.vel);
+        const losRate = _s3.crossVectors(r, vr).divideScalar(Math.max(dist * dist, 1));
+        const Vc = -vr.dot(rhat);
+        const acc = _s1.crossVectors(losRate, rhat).multiplyScalar(m.W.navN * Math.max(Vc, 150));
+        acc.addScaledVector(_s2.copy(rhat).addScaledVector(dir, -rhat.dot(dir)), 60);
+        if (acc.length() > maxA) acc.setLength(maxA);
+        m.vel.addScaledVector(acc, dt);
+    }
+
+    // turn the velocity toward a point (gain: 1 / time constant, s⁻¹), at most maxA
+    steerTo(m, point, speed, maxA, gain, dt) {
+        const want = _s2.subVectors(point, m.pos);
+        const d = want.length();
+        if (d < 1) return;
+        const acc = want.multiplyScalar(speed / d).sub(m.vel).multiplyScalar(gain);
+        if (acc.length() > maxA) acc.setLength(maxA);
+        m.vel.addScaledVector(acc, dt);
+    }
+
+    // Sea-skimming / terrain following (anti-ship and cruise missiles): `alt` over the sea (0) or the ground, climbing
+    // early for what's ahead (each ridge in the next 4 km is cleared on a 20° slope: the terrain-following radar's
+    // "ski toe"); in the last few km a pop-up to see the target and a bunt down onto it (Harpoon, the cruise
+    // missiles), or straight in at wave height (Exocet)
+    flyLow(m, tp, tv, r, rhat, dist, speed, dir, maxA, dt) {
+        const W = m.W, hd = Math.max(1, Math.hypot(r.x, r.z)), ux = r.x / hd, uz = r.z / hd;
+        const L = Math.max(400, speed * 2.5);
+        if (hd > W.terminal) {
+            // (down to it on a 15° glide from the drop, up at no more than 40°)
+            const y = clamp(this.terrainFollow(m, ux, uz, W.alt, dt, L), m.pos.y - L * 0.27, m.pos.y + L * 0.84);
+            _s1.set(m.pos.x + ux * L, y, m.pos.z + uz * L);
+            this.steerTo(m, _s1, speed, maxA, 1.5, dt);
+            return;
+        }
+        if (W.popup && !m.dive) {
+            // up at ~25° to the apex (still clear of the ground), until the target's 24° below with nothing in the way
+            // (a target behind a ridge: higher, for a steeper dive)
+            const sees = this.lineClear(m.pos, tp);
+            if ((m.pos.y - tp.y >= hd * 0.45 && sees) || m.pos.y - tp.y >= hd || hd < 250) m.dive = true;
+            else {
+                const apex = Math.max(tp.y + (W.popAlt || 320) + (sees ? 0 : 400), this.terrainFollow(m, ux, uz, W.alt, dt, L));
+                _s1.set(m.pos.x + ux * L, Math.min(apex, m.pos.y + L * 0.47), m.pos.z + uz * L);
+                this.steerTo(m, _s1, speed, maxA * 1.5, 1.5, dt);
+                return;
+            }
+        }
+        // the dive (a bunt: it pulls harder now), or the run in at wave height: onto the target
+        this.pn(m, r, rhat, dist, tv, dir, maxA * 2, dt);
+    }
+    // nothing but air on the straight line from a to b (the terrain, sampled; not the last 15%: the target's own ground)
+    lineClear(a, b) {
+        for (let k = 1; k < 12; k++) {
+            const t = k / 12 * 0.85;
+            const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t, z = a.z + (b.z - a.z) * t;
+            if (y < terrainHeight(x, z) + 4) return false;
+        }
+        return true;
+    }
+
+    // the height for the carrot L m ahead: high enough that the straight line to it clears everything between (alt
+    // over it), and over every ridge beyond it less a 20° climb to it (10 Hz)
+    terrainFollow(m, ux, uz, alt, dt, L) {
+        m.tfT = (m.tfT || 0) - dt;
+        if (m.tfT > 0 && m.tfNeed != null) return m.tfNeed;
+        m.tfT = 0.1;
+        const y = m.pos.y;
+        let need = Math.max(terrainHeight(m.pos.x, m.pos.z), 0) + alt;
+        for (const a of AHEAD) {
+            const h = Math.max(terrainHeight(m.pos.x + ux * a, m.pos.z + uz * a), 0) + alt;
+            need = Math.max(need, a <= L ? y + (h - y) * L / a : h - (a - L) * 0.36);
+        }
+        return (m.tfNeed = need);
+    }
+
+    // Does the seeker still have it? Flares and cloud (IR, TV), the launcher's radar (semi-active), its laser,
+    // chaff and the notch (radar). Sets m.lost (or a new target: a decoy) and returns false when it's gone.
+    seekerHolds(m, t, rhat, dist, dt) {
+        const g = this.game, W = m.W, s = W.seeker || (W.radar ? 'arh' : m.kind === 'sam' ? 'sam' : 'ir');
+        if (t.isFlare) return true;
+        if (s === 'ir' && m.kind !== 'sam') this.checkFlares(m, rhat, dist);
+        // [weather] a heat seeker or a TV seeker loses a target that stays hidden in cloud or fog (weathersys.js)
+        if ((s === 'ir' || s === 'tv') && m.kind !== 'sam' && g.weather && g.weather.irClear && !m.lost) {
+            m.irT = (m.irT || 0) - dt;
+            if (m.irT <= 0) {
+                m.irT = 0.2;
+                m.blindT = g.weather.irClear(m.pos, t.pos) ? 0 : (m.blindT || 0) + 0.2;
+                if (m.blindT > 0.6) { this.loseLock(m); g.events.emit('missileLostInCloud', m.owner, { missile: m, target: t }); return false; }
+            }
+        }
+        // a semi-active missile rides the launcher's radar: its nose within 60° of the target and in range, or a
+        // laser seeker the launcher's spot — lose it for over half a second and the missile goes dumb
+        if (s === 'sarh' || s === 'laser') {
+            m.supT = (m.supT || 0) - dt;
+            if (m.supT <= 0) {
+                m.supT = 0.2;
+                const ok = s === 'laser' ? this.laserOK(m.owner, t) : this.illuminated(m.owner, t, W);
+                m.unsupT = ok ? 0 : (m.unsupT || 0) + 0.2;
+                if (m.unsupT > 0.6) { this.loseLock(m); g.events.emit('missileTrashed', m.owner, { missile: m, target: t, why: s === 'laser' ? 'laser' : 'support' }); return false; }
+            }
+        }
+        // radar seekers against an aircraft: chaff, and the notch (it flying across our line of sight, below us)
+        if ((s === 'arh' || s === 'sarh') && t.getForward && m.kind !== 'sam') {
+            this.checkChaff(m, t, rhat, dist);
+            if (m.target !== t) return false;
+            m.notchT = (m.notchT || 0) - dt;
+            if (m.notchT <= 0) {
+                m.notchT = 0.5;
+                const v = t.vel.length();
+                const beam = v > 60 ? 1 - Math.abs(t.vel.dot(rhat)) / v : 0;
+                if (Math.random() < notchChance(W, beam, m.pos.y > t.pos.y + 100)) {
+                    this.loseLock(m);
+                    g.events.emit('notched', m.owner, { missile: m, victim: t });
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    // the missile stops guiding (gimbal limit, decoy, cloud, the launcher's radar or laser gone)
+    loseLock(m) {
+        m.lost = true;
+        const t = m.target;
+        const k = t && t.incoming ? t.incoming.indexOf(m) : -1;
+        if (k >= 0) t.incoming.splice(k, 1);
+    }
+
+    // is the launcher still painting it (a semi-active missile)? its radar's ±60° and a little past the missile's range
+    illuminated(o, t, W) {
+        if (!o || o.alive === false || !o.getForward) return !o || !o.getForward; // (a ground launcher: its own radar)
+        const d = _s2.subVectors(t.pos, o.pos), L = d.length();
+        return L < W.range * 1.6 && o.getForward(_s3).dot(d.divideScalar(Math.max(L, 1))) > 0.5;
+    }
+
+    // can the launcher keep its laser on t? alive, within 20 km, the pod able to look there (below the wings, not
+    // behind the tail) and no cloud in between
+    laserOK(o, t) {
+        if (!o || o.alive === false || o.falling) return false;
+        if (!o.getForward) return true;
+        const d = _s2.subVectors(t.pos, o.pos), L = d.length();
+        if (L > 20000) return false;
+        d.divideScalar(Math.max(L, 1));
+        if (o.getForward(_s3).dot(d) < -0.6 || o.getUp(_s3).dot(d) > 0.35) return false;
+        const wx = this.game.weather;
+        return !(wx && wx.irClear && !wx.irClear(o.pos, t.pos));
+    }
+
+    // is t transmitting (an ARM's target)? ew.js knows the war's emitters; the plain ones by type (stores.js)
+    emits(t) {
+        const war = this.game.war;
+        return radiating(t, war && war.rec ? emitterOf(t, war.rec(t)) : null);
+    }
+
+    // a seeker looking for its own target ahead (an anti-ship missile or a HARM fired without a lock): the nearest
+    // hostile ship / radar within 35° of its flight path and 15 km (25 km for a HARM)
+    acquire(m, dir) {
+        const g = this.game;
+        if (!g.ground) return null;
+        const W = m.W, R = W.cls === 'arm' ? 25000 : 15000;
+        let best = null, bd = R * R;
+        for (const u of g.ground.targets) {
+            if (!u.alive || u.hidden || u.team === m.team || u.team === 'neutral') continue;
+            if (W.cls === 'ashm' ? !u.isShip : !this.emits(u)) continue;
+            const r = _s2.subVectors(u.pos, m.pos), d2 = r.lengthSq();
+            if (d2 > bd || r.normalize().dot(dir) < 0.82) continue;
+            bd = d2; best = u;
+        }
+        if (best) { m.target = best; if (best.incoming) best.incoming.push(m); }
+        return best;
     }
 
     detonate(m, t) {
-        const g = this.game;
-        g.effects.explosion(m.pos, 0.9, m.vel);
+        const g = this.game, W = m.W;
+        g.effects.explosion(m.pos, W.boom || 0.9, m.vel);
         if (t.isFlare) return;
         this.blastPeople(m.pos, 30, 90, m.owner, m.team);
-        // splash damage scaled by miss distance
+        // an air-to-air warhead's fragments: damage by how close it went off; a ground-attack one hits (and a
+        // Maverick does less to a ship than an anti-ship missile: vsShip)
         const d = m.pos.distanceTo(t.pos);
-        let dmg = m.W.damage * clamp(1.5 - d / 40, 0.6, 1.3);
+        let dmg = W.ground ? W.damage : W.damage * clamp(1.5 - d / 40, 0.6, 1.3);
+        if (t.isShip && W.vsShip) dmg *= W.vsShip;
         if (t.isPlayer) dmg *= 0.8;
         if (AIR_TARGETS.includes(t)) this.hitAir(t, dmg, m.owner); // a helicopter or airliner locked with T
         else if (t.damage) t.damage(dmg, m.owner, m.kind === 'rkt' ? 'rocket' : 'missile');
+        // and what's round it (the rest of a SAM site, the convoy, the buildings)
+        if (W.ground) {
+            this.splash(m, t);
+            const h = terrainHeight(m.pos.x, m.pos.z);
+            if (!t.isShip && m.pos.y < h + 4 && h > 0) this.addCrater(_v2.set(m.pos.x, h, m.pos.z), 'missile', m.vel, W.crater ? { scale: W.crater } : undefined);
+        }
         g.events.emit('missileHit', m.owner, { target: t, missile: m });
     }
 
@@ -520,7 +804,8 @@ export class Weapons {
             const salvos = m.salvos || (m.salvos = new Set());
             if (salvos.has(f.salvo)) continue;
             salvos.add(f.salvo);
-            const chance = f.owner?.isPlayer ? 0.35 : 0.08 + (f.owner?.pilot?.skill ?? 0.5) * 0.25; // a good pilot times his flares better
+            // a good pilot times his flares better; a modern seeker (IRCCM) sees through more of them (stores.js)
+            const chance = flareChance(m.W, f.owner?.isPlayer ? 0.35 : 0.08 + (f.owner?.pilot?.skill ?? 0.5) * 0.25);
             if (Math.random() < chance) {
                 if (m.target.incoming) {
                     const k = m.target.incoming.indexOf(m);
@@ -533,28 +818,155 @@ export class Weapons {
         }
     }
 
-    // ── Bombs (unguided, gravity) ──
-    // kind 'bomb': the type's bomb (WEAPONS.bomb, or the X-100's MK-84X mega bomb: its config.js `bomb` over
-    // WEAPONS.bomb); 'buster': the X-100's GBU-57X bunker buster (WEAPONS.buster)
-    bombW(ac, kind = 'bomb') {
-        if (kind === 'buster') return WEAPONS.buster;
-        const sb = ac && ac.spec && ac.spec.bomb;
-        if (!sb) return WEAPONS.bomb;
-        let W = BOMB_W.get(sb);
-        if (!W) BOMB_W.set(sb, W = { ...WEAPONS.bomb, ...sb });
-        return W;
+    // Chaff against a radar missile: a cloud the seeker sees beside the target (within ~12° and 400 m of its range)
+    // can steal it — once per salvo. Head-on it rarely works; with the target beaming the missile it often does.
+    checkChaff(m, t, los, distToTarget) {
+        for (const c of this.chaff) {
+            if (c.owner && c.owner.team === m.team) continue;
+            const r = _s2.subVectors(c.pos, m.pos);
+            const d = r.length();
+            if (Math.abs(d - distToTarget) > 400 || r.divideScalar(Math.max(d, 1)).dot(los) < 0.978) continue;
+            const salvos = m.salvos || (m.salvos = new Set());
+            if (salvos.has(c.salvo)) continue;
+            salvos.add(c.salvo);
+            const v = t.vel.length();
+            const beam = v > 60 ? 1 - Math.abs(t.vel.dot(los)) / v : 0;
+            const base = c.owner?.isPlayer ? 0.45 : 0.1 + (c.owner?.pilot?.skill ?? 0.5) * 0.3;
+            if (Math.random() < chaffChance(m.W, base, beam)) {
+                this.loseLock(m);
+                m.lost = false;
+                m.target = c;
+                this.game.events.emit('decoyed', m.owner, { missile: m, victim: c.owner, chaff: true });
+                return;
+            }
+        }
     }
 
-    dropBomb(ac, kind = 'bomb') {
+    updateChaff(dt) {
+        for (let i = this.chaff.length - 1; i >= 0; i--) {
+            const c = this.chaff[i];
+            c.life -= dt;
+            c.vel.multiplyScalar(Math.exp(-2.5 * dt));
+            c.vel.y -= 1.5 * dt;
+            c.pos.addScaledVector(c.vel, dt);
+            if (c.life <= 0) { c.alive = false; this.chaff.splice(i, 1); }
+        }
+    }
+
+    // ── Bombs (gravity; a guided one flies itself onto its target) ──
+    // kind 'bomb': the type's bomb (stores.js: a Mk 82, a FAB-500, a cluster bomb, the X-100's MK-84X); 'gbu': its
+    // guided bomb (a Paveway, a JDAM, a KAB-500); 'buster': the X-100's GBU-57X bunker buster
+    bombW(ac, kind = 'bomb') {
+        return storeFor(ac, kind === 'buster' ? 'buster' : kind === 'gbu' ? 'gbu' : 'bomb') || (kind === 'buster' ? WEAPONS.buster : WEAPONS.bomb);
+    }
+
+    // target: a guided bomb's (the laser's spot, or the GPS point: where the target is now)
+    dropBomb(ac, kind = 'bomb', target = null) {
         const W = this.bombW(ac, kind), buster = kind === 'buster';
-        const mesh = buster ? this.busterMesh() : this.bombGeo.clone();
-        if (!buster && W !== WEAPONS.bomb) mesh.scale.setScalar(1.9); // (the MK-84X: a 2,000-pounder and then some)
+        const mesh = buster ? this.busterMesh() : W.id ? storeMesh(W) : this.bombGeo.clone();
         const pos = ac.pos.clone().addScaledVector(ac.getUp(_v1), buster ? -2.6 : -2.2);
         mesh.position.copy(pos);
         mesh.traverse(o => { if (o.isMesh) o.castShadow = true; });
         this.game.scene.add(mesh);
-        this.bombs.push({ mesh, pos: mesh.position, vel: ac.vel.clone().addScaledVector(ac.getUp(_v1), -4), owner: ac, team: ac.team, life: 60, W, kind });
-        this.game.events.emit('bomb', ac, { kind });
+        const b = { mesh, pos: mesh.position, vel: ac.vel.clone().addScaledVector(ac.getUp(_v1), -4), owner: ac, team: ac.team, life: W.guided ? 300 : 90, W, kind, age: 0 }; // (a glide bomb can be minutes in the air)
+        if (W.guided && target) { b.target = target; if (W.seeker === 'gps') b.aim = target.pos.clone(); }
+        this.bombs.push(b);
+        this.game.events.emit('bomb', ac, { kind, bomb: b });
+        return b;
+    }
+
+    // A guided bomb's fins: turn the flight path onto the line to the aim point (holding it against gravity), with
+    // only the lift its fins make (perpendicular to the flight path; less slow and in thin air) and the drag that
+    // lift costs — so it glides only so far (ld). A laser bomb needs the spot (laserOK: the jet in sight of the
+    // target, no cloud between); without it it falls (a Paveway IV on GPS to where the spot last was). A GPS bomb
+    // goes to the point it was given, in any weather — a moving target won't be there.
+    guideBomb(b, dt) {
+        const W = b.W;
+        if (b.age < 0.5) return; // (clear of the jet)
+        let aim = null;
+        if (W.seeker === 'laser') {
+            b.laseT = (b.laseT || 0) - dt;
+            if (b.laseT <= 0) { b.laseT = 0.2; b.spot = !!b.target && b.target.alive !== false && this.laserOK(b.owner, b.target); }
+            if (b.spot) { aim = b.target.pos; (b.lastSpot || (b.lastSpot = new THREE.Vector3())).copy(aim); }
+            else if (W.gpsBackup && b.lastSpot) aim = b.lastSpot;
+        } else if (W.seeker === 'gps') aim = b.aim;
+        if (aim) this.steerBomb(b.pos, b.vel, W, aim, dt);
+    }
+    steerBomb(pos, vel, W, aim, dt) {
+        const v = vel.length();
+        if (v < 1) return;
+        const vhat = _s1.copy(vel).divideScalar(v);
+        const acc = _s2.subVectors(aim, pos).normalize().multiplyScalar(v).sub(vel).multiplyScalar(1.6);
+        acc.y += G;
+        acc.addScaledVector(vhat, -acc.dot(vhat));
+        const maxA = W.lift * G * (v / 250) ** 2 * Math.exp(-Math.max(pos.y, 0) / 9000);
+        const a = acc.length();
+        if (a > maxA) acc.multiplyScalar(maxA / a);
+        vel.addScaledVector(acc, dt);
+        vel.addScaledVector(vhat, -Math.min(a, maxA) * W.ld * dt);
+    }
+
+    // Could a guided bomb released now reach `aim`? Its flight simulated at 10 Hz (the HUD's IN RANGE cue):
+    // { ok, miss (m), tof (s) }
+    bombReach(ac, W, aim) {
+        const up = ac.getUp(_s3);
+        const pos = (this._rp || (this._rp = new THREE.Vector3())).copy(ac.pos).addScaledVector(up, -2.2);
+        const vel = (this._rv || (this._rv = new THREE.Vector3())).copy(ac.vel).addScaledVector(up, -4);
+        const dt = 0.1;
+        let t = 0;
+        for (; t < 150; t += dt) {
+            vel.y -= G * dt;
+            vel.multiplyScalar(1 - W.drag * dt);
+            if (t > 0.5) this.steerBomb(pos, vel, W, aim, dt);
+            if (W.thrust && t > 0.5 && t < 0.5 + W.boost) vel.addScaledVector(_s4.copy(vel).normalize(), W.thrust * dt);
+            pos.addScaledVector(vel, dt);
+            if (pos.y < aim.y + 2 || pos.y < Math.max(terrainHeight(pos.x, pos.z), 0)) break;
+        }
+        const miss = Math.hypot(pos.x - aim.x, pos.z - aim.z);
+        return { ok: miss < Math.max(12, (W.splash || 30) * 0.35), miss, tof: t };
+    }
+
+    // a cluster bomb opens: the case splits and its bomblets scatter over a circle `spread` m across on the ground
+    openCluster(b) {
+        const C = b.W.cluster, fx = this.game.effects;
+        const h = Math.max(1, b.pos.y - this.game.surfaceAt(b.pos.x, b.pos.z, b.pos.y).h);
+        const vy = Math.max(0, -b.vel.y), tFall = Math.max(0.5, (Math.sqrt(vy * vy + 2 * G * h) - vy) / G);
+        for (let k = 0; k < C.n; k++) {
+            const a = rand(0, Math.PI * 2), s = C.spread * Math.sqrt(Math.random()) / tFall;
+            this.bomblets.push({ pos: b.pos.clone(), vel: b.vel.clone().add(_v1.set(Math.cos(a) * s, rand(-4, 4), Math.sin(a) * s)), owner: b.owner, team: b.team, C, n: k });
+        }
+        fx.smoke.emit(b.pos, _v1.set(0, 0, 0), 2.5, 3, 12, [0.55, 0.55, 0.52], [0.7, 0.7, 0.68], 0.5, 0, 1.5, 0);
+        fx.sparks && fx.sparks.emit && fx.sparks.emit(b.pos, b.vel, 0.4, 1.2, 0.4, [4, 3, 2], [2, 1, 0.4], 1, 0, 0, 0);
+    }
+
+    updateBomblets(dt) {
+        const g = this.game, fx = g.effects;
+        for (let i = this.bomblets.length - 1; i >= 0; i--) {
+            const q = this.bomblets[i];
+            q.vel.y -= G * dt;
+            q.vel.multiplyScalar(1 - 0.08 * dt); // (a little ribbon / chute on each)
+            q.pos.addScaledVector(q.vel, dt);
+            const s = g.surfaceAt(q.pos.x, q.pos.z, q.pos.y + 2);
+            let hitShip = null;
+            if (g.ground) for (const t of g.ground.targets) if (t.alive && t.hitTest && t.team !== q.team && t.hitTest(q.pos)) { hitShip = t; break; }
+            if (q.pos.y > s.h && !hitShip) continue;
+            this.bomblets[i] = this.bomblets[this.bomblets.length - 1]; this.bomblets.pop();
+            const at = q.pos.clone();
+            if (!hitShip) at.y = s.h;
+            const C = q.C;
+            if (s.water && !hitShip) { fx.waterSplash ? fx.waterSplash(at, 0.4) : null; continue; }
+            fx.explosion(at, 0.75);
+            if (q.n % 6 === 0) g.audio.boom(g.camera.position.distanceTo(at), 0.5);
+            if (g.ground) for (const t of g.ground.targets) {
+                if (!t.alive || t.team === q.team) continue;
+                if (t === hitShip) { t.damage(C.dmg, q.owner, 'bomb'); continue; }
+                const d = t.distTo ? t.distTo(at) : t.pos.distanceTo(at);
+                if (d < C.r + t.radius) t.damage(C.dmg * clamp(1.2 - d / (C.r + t.radius), 0.25, 1), q.owner, 'bomb');
+            }
+            g.world.towns?.traffic.blast(at, C.r * 0.8, g);
+            this.worldBlast(at, C.r, C.dmg * 2, q.owner, 'bomb');
+            this.blastPeople(at, C.r * 1.6, 110, q.owner, q.team);
+        }
     }
 
     // the GBU-57X: a slim 6 m case with an ogive nose, a yellow band and lattice fins (nose along -Z, like the bomb)
@@ -606,11 +1018,22 @@ export class Weapons {
                 continue;
             }
             b.life -= dt;
+            b.age = (b.age || 0) + dt;
             b.vel.y -= G * dt;
             b.vel.multiplyScalar(1 - W.drag * dt);
+            if (W.guided) this.guideBomb(b, dt);
+            // (a rocket in the tail of the AASM: further still)
+            if (W.thrust && b.age > 0.5 && b.age < 0.5 + W.boost) b.vel.addScaledVector(_v1.copy(b.vel).normalize(), W.thrust * dt);
             b.pos.addScaledVector(b.vel, dt);
             b.mesh.quaternion.setFromUnitVectors(_v1.set(0, 0, -1), _v2.copy(b.vel).normalize());
             const s = g.surfaceAt(b.pos.x, b.pos.z, b.pos.y + 2);
+            // a cluster bomb opens at its height (or as it's about to hit, dropped low)
+            if (W.cluster && b.age > 0.6 && (b.pos.y - s.h < W.cluster.agl || b.pos.y + b.vel.y * 0.25 < s.h)) {
+                this.openCluster(b);
+                g.scene.remove(b.mesh);
+                this.bombs.splice(i, 1);
+                continue;
+            }
             const blds = g.world.towns && g.world.towns.buildings;
             const onBuilding = blds && blds.at(b.pos.x, b.pos.y, b.pos.z);
             let hitShip = null;
@@ -746,6 +1169,12 @@ export class Weapons {
                 .addScaledVector(up, rand(-30, -8));
             this.flares.push({ sprite: s, pos: s.position, vel, life: rand(3, 4), owner: ac, isFlare: true, alive: true, hitRadius: 0, checked: new Set(), salvo, smokeT: 0, trail: null });
         }
+        // and a bundle of chaff (the dispenser runs a program: flares for the heat seekers, chaff for the radars) —
+        // a glittering cloud that stops dead in the air while the jet flies on
+        const cpos = ac.pos.clone().addScaledVector(up, -1.5);
+        this.chaff.push({ pos: cpos, vel: ac.vel.clone().multiplyScalar(0.25), life: 4.5, owner: ac, isFlare: true, isChaff: true, alive: true, hitRadius: 0, salvo: {} });
+        const fx = this.game.effects;
+        for (let k = 0; k < 5; k++) fx.smoke.emit(cpos, _v3.copy(ac.vel).multiplyScalar(0.12).add(_v4.set(rand(-6, 6), rand(-6, 6), rand(-6, 6))), rand(2.5, 3.5), 2, rand(10, 16), [0.78, 0.8, 0.84], [0.72, 0.74, 0.78], 0.22, 0, 2.2, -0.5);
         this.game.events.emit('flares', ac);
         return true;
     }
@@ -775,6 +1204,7 @@ export class Weapons {
     update(dt) {
         this.updateBullets(dt);
         this.updateBombs(dt);
+        if (this.bomblets.length) this.updateBomblets(dt);
         this.updateMissiles(dt);
         this.updateFlares(dt);
     }
@@ -785,8 +1215,10 @@ export class Weapons {
         for (let i = this.missiles.length - 1; i >= 0; i--) this.removeMissile(i);
         this.flares.forEach(f => this.game.scene.remove(f.sprite));
         this.flares.length = 0;
+        this.chaff.length = 0;
         this.bombs.forEach(b => this.game.scene.remove(b.mesh));
         this.bombs.length = 0;
+        this.bomblets.length = 0;
         if (this.game.world && this.game.world.craters) this.game.world.craters.clear();
     }
 }

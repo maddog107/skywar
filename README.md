@@ -22,8 +22,19 @@ You need a local server because the game uses ES modules and loads `.glb` models
   handling with per-aircraft G limits. Takeoff, landing (gear, brakes) and rearming on the home runway.
 - **3D cockpit** in the style of GeoFS: live MFDs (radar, stores), attitude indicator, gauges,
   warning lights, moving stick and throttle, sun shadows sweeping the panel, and head motion under G.
-- **Combat**: lead-computing gunsight, IR missiles (flares decoy them), radar missiles (9 km,
-  flare-proof), rocket pods, flares, missile warnings, SAM sites and AAA flak.
+- **Combat**: lead-computing gunsight, flares and chaff, missile warnings, SAM sites and AAA flak.
+- **Real weapons per aircraft** (src/stores.js): every combat type carries its own air force's stores on an
+  air-superiority / balanced / strike loadout — AIM-9X and AIM-120D on the F-22, Phoenix and Sparrow on the
+  F-14, R-73 / R-77-1 / Kh-29T / Kh-35U on the Su-35, R-37M on the MiG-31, Meteor on the Rafale, Typhoon and
+  Gripen, HARMs on the Growler, Harpoons on the Super Hornet, ASM-2s on the F-2, Mavericks and CBU-87s on the
+  A-10, JASSMs on the B-52, Kh-101s on the Tu-95, and old jets (F-5E, Mirage 5F, MiG-21, Jaguar) with no radar
+  missile at all. Each behaves like itself: heat seekers that modern IRCCM keeps on target through flares;
+  semi-active radar missiles (AIM-7, R-27, R-40) that go dumb if the launcher turns away; fire-and-forget active
+  ones that chaff and the notch (beaming) can still break; the Meteor's ramjet; lofted Phoenix and R-37M shots;
+  HARMs homing on radars that are transmitting; Mavericks and Hellfires; sea-skimming Harpoons and Exocets;
+  terrain-following cruise missiles with a pop-up attack; laser bombs that need the jet's laser spot (and clear
+  air), GPS bombs and gliders (JDAM, SDB, Hammer) that hit where the target was; cluster bombs. The enemy AI
+  fires its own type's missiles, beyond visual range too.
 - **Battle damage**: every airframe is cut into sections. Missiles can shear off a wing, damaged
   wings burn and trail smoke, killed jets break apart, and pilots eject under parachutes.
 - **AI pilots**: they turn to fight, lead their gun shots, beam incoming missiles, drop flares,
@@ -97,7 +108,7 @@ You need a local server because the game uses ES modules and loads `.glb` models
 | Z / Shift, mouse wheel | Throttle up / down |
 | LMB / Space | Cannon (Space means wheel brakes on the ground) |
 | RMB / M | Fire selected weapon |
-| X | Cycle weapon: SRM, LRM, rockets, bombs |
+| X | Cycle weapon: the jet's own stores (SRM, LRM, XLR, ARM, AGM, ASM, ALCM, rockets, guided bombs, bombs) |
 | R | Flares |
 | F | Flaps |
 | Y / U | Autopilot: auto-land (nearest friendly runway or carrier) / auto-takeoff |

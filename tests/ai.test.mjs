@@ -133,7 +133,7 @@ describe('skill and difficulty', () => {
                     const T = g.spawn('f5', { team: 'blue', pos: { x: 0, y: 3000, z: 20000 }, heading: 0, speedFrac: 0.6 });
                     T.maxHealth = T.health = 1e9; // a target that doesn't die
                     const S = g.spawn('f16', { team: 'red', pos: { x: 30, y: 3020, z: 20600 }, heading: 0, skill, speedFrac: 0.62 });
-                    S.missiles = 0;
+                    S.missiles = 0; S.lrm = 0; // (guns only)
                     g.player = T;
                     for (let i = 0; i < 25 * 30; i++) {
                         // gentle weave
@@ -162,7 +162,7 @@ describe('skill and difficulty', () => {
                     P.maxHealth = P.health = 1e6;
                     g.player = P;
                     const E = g.spawn('mig29', { team: 'red', pos: { x: 800, y: 3200, z: -17000 }, heading: 0, skill, speedFrac: 0.6 });
-                    E.missiles = 0;
+                    E.missiles = 0; E.lrm = 0; // (guns only)
                     const emit = g.events.emit;
                     g.events.emit = (n, w, d) => { if (n === 'hit' && w === P && d.kind === 'gun') dmg += d.amount * 0.45 * g.difficulty.dmgTaken; emit(n, w, d); };
                     const dir = new THREE.Vector3();

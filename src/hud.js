@@ -7,6 +7,7 @@ import { WEAPONS } from './config.js';
 import { terrainHeight } from './world.js';
 import { refSpeeds } from './aircraft.js';
 import { AIR_TARGETS } from './softtargets.js';
+import { CLASSES, storeFor } from './stores.js';
 import { drawWeaponHud } from './weaponhud.js';
 
 const GREEN = '#5dffa0';
@@ -367,7 +368,7 @@ export class HUD {
     // ── Lead-computing gun pipper + missile seeker ──
     drawGunsight(game) {
         const ctx = this.ctx, p = game.player, cam = game.camera;
-        const bombSlot = game.slotDef && (game.slotDef.key === 'bomb' || game.slotDef.key === 'buster');
+        const bombSlot = game.slotDef && game.slotDef.drop;
         if (bombSlot && !p.onGround) {
             const hit = game.weapons.predictBomb(p, new THREE.Vector3(), game.weapons.bombW(p, game.slotDef.key));
             if (hit) {
@@ -383,6 +384,9 @@ export class HUD {
                 }
             }
         }
+        // a guided bomb: whether it can get there from here, and the time it would take (game.js dropCue); and the
+        // ones in the air — a laser bomb's spot, a semi-active missile's radar
+        this.drawGuidanceCues(game);
         const t = game.lockTarget;
         if (!t || !t.alive) { this.pipperOnTarget = false; return; }
         const dist = t.pos.distanceTo(p.pos);
@@ -415,6 +419,25 @@ export class HUD {
                 }
             }
         }
+    }
+
+    drawGuidanceCues(game) {
+        const ctx = this.ctx, p = game.player;
+        const lines = [];
+        const cue = game.dropCue;
+        if (cue && game.slotDef && game.slotDef.key === 'gbu') lines.push([game.slotW.short + (cue.ok ? ' IN RANGE · TOF ' + Math.round(cue.tof) + 's' : ' OUT OF RANGE'), cue.ok ? GREEN : AMBER]);
+        // our own guided weapons in flight that still need us: a laser bomb's spot, a semi-active missile's radar
+        let lasing = 0, laseLost = 0, sarh = 0;
+        for (const b of game.weapons.bombs) if (b.owner === p && b.W && b.W.seeker === 'laser' && b.target) { if (b.spot !== false) lasing++; else laseLost++; }
+        for (const m of game.weapons.missiles) if (m.owner === p && !m.lost && m.target && m.W) { if (m.W.seeker === 'sarh') sarh++; else if (m.W.seeker === 'laser') lasing++; }
+        if (lasing) lines.push(['LASING ×' + lasing, GREEN]);
+        if (laseLost) lines.push(['LASER SPOT LOST', AMBER]);
+        if (sarh) lines.push(['SARH SUPPORT ×' + sarh + ' — KEEP HIM IN FRONT', GREEN]);
+        if (!lines.length) return;
+        ctx.font = '600 12px "Share Tech Mono", ui-monospace, monospace';
+        ctx.textAlign = 'center';
+        let y = this.h * 0.5 + 118;
+        for (const [txt, col] of lines) { ctx.fillStyle = col; ctx.fillText(txt, this.w / 2, y); y += 15; }
     }
 
     // ── Target boxes (helmet-mounted, not clipped) ──
@@ -583,7 +606,7 @@ export class HUD {
                 ctx.strokeStyle = RED; ctx.lineWidth = 2;
                 ctx.beginPath(); ctx.moveTo(P.x, P.y - 14); ctx.lineTo(P.x + 12, P.y + 9); ctx.lineTo(P.x - 12, P.y + 9); ctx.closePath(); ctx.stroke();
                 ctx.fillStyle = RED; ctx.textAlign = 'center';
-                ctx.fillText('MSL ' + (dist / 1000).toFixed(1), P.x, P.y + 24);
+                ctx.fillText((m.W && m.W.short || 'MSL') + ' ' + (dist / 1000).toFixed(1), P.x, P.y + 24);
             } else if (blink) {
                 this.edgeArrow(P, RED, dist);
             }
@@ -612,9 +635,8 @@ export class HUD {
 
         // weapons: gun + selectable stores, bottom-right (compact: one line top-right, under the score)
         const rows = [['GUN', p.spec.gun ? p.ammo : '—', p.spec.gun ? p.spec.gun.name : 'NO GUN', false]];
-        const SL = [['SRM', 'missiles'], ['LRM', 'lrm'], ['RKT', 'rockets'], ['BMB', 'bombs'], ['BBU', 'busters']];
-        // (BBU: bunker busters, only on a type that carries them: the X-100)
-        SL.forEach(([lab, key], i) => { if (key !== 'busters' || p.spec.busters) rows.push([lab, p[key] ?? 0, '', (game.slot || 0) === i]); });
+        // the jet's own stores (stores.js): the slot, how many are left, the weapon ("LRM  AIM-120C")
+        CLASSES.forEach((c, i) => { if (p[c.ammo] > 0 || (p.stores && p.stores[c.key])) rows.push([c.label, p[c.ammo] ?? 0, (storeFor(p, c.key) || {}).short || '', (game.slot || 0) === i]); });
         rows.push(['FLR', p.flares, '', false]);
         const rx = W - M;
         if (C) {

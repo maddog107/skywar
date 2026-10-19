@@ -17,6 +17,7 @@ import { Input } from './input.js';
 import { HUD } from './hud.js';
 import { Cockpit } from './cockpit.js';
 import { Game, LOADOUT_LABELS } from './game.js';
+import { loadoutOf } from './stores.js';
 import { applyLivery, LIVERIES } from './models.js';
 import { MISSIONS, dailyMission } from './missions.js';
 import { Career, RANKS, MEDALS } from './career.js';
@@ -301,7 +302,7 @@ function buildMenu() {
     seg('segWingmen', [[0, 'SOLO'], [1, '1'], [2, '2']], 'wingmen');
     seg('segWeather', [['clear', 'CLEAR'], ['cloudy', 'CLOUDY'], ['rain', 'RAIN'], ['storm', 'STORM'], ['fog', 'FOG'], ['overcast', 'LOW']], 'weather', () => world.setWeather(settings.weather));
     seg('segStart', [['auto', 'AUTO'], ['air', 'AIR'], ['runway', 'RWY'], ['apron', 'TAXI'], ['carrier', 'CVN'], ['water', 'WATER'], ['barracks', 'BARRACKS']], 'start'); // WATER: seaplanes afloat by a jetty
-    seg('segLoadout', Object.entries(LOADOUT_LABELS).map(([k, v]) => [k, v.label.split(' ')[0]]), 'loadout');
+    seg('segLoadout', Object.entries(LOADOUT_LABELS).map(([k, v]) => [k, v.label.split(' ')[0]]), 'loadout', () => { const el = $('acLoadout'); if (el) el.innerHTML = loadoutLine(settings.aircraft); });
     seg('segLivery', Object.entries(LIVERIES).map(([k, v]) => [k, v.label]), 'livery', () => { if (showcase) applyLivery(showcase.model, settings.livery, showcase.type); });
     seg('setFuel', [[true, 'ON'], [false, 'OFF']], 'fuel');
     const controlOpts = [['mouseaim', 'MOUSE-AIM'], ['mousestick', 'MOUSE STICK'], ['keyboard', 'KEYS/PAD']];
@@ -461,6 +462,13 @@ function syncControlHint() {
 
 function openModal(id) { $(id).classList.add('show'); audio.uiClick(); }
 
+// what it carries on the chosen loadout (stores.js): each weapon by name and count
+function loadoutLine(id) {
+    const l = loadoutOf(AIRCRAFT[id], settings.loadout);
+    const label = (LOADOUT_LABELS[settings.loadout] || LOADOUT_LABELS.balanced).label;
+    return label + ': ' + (l.length ? l.map(e => `<b>${e.store.short.replace(/[&<>]/g, '')} ×${e.n}</b>`).join(' · ') : '<b>NO WEAPONS</b>');
+}
+
 function statBars(s) {
     return hangarStats(s).map(([n, pct]) => `<div class="stat"><span>${n}</span><div class="bar"><i style="width:${pct}%"></i></div><span class="v">${pct}</span></div>`).join('');
 }
@@ -477,8 +485,9 @@ function selectAircraft(id) {
         <div class="desc">${esc(s.desc)}</div>
         ${statBars(s)}
         <div class="spec-line">LENGTH <b>${s.length} m</b> · SPAN <b>${s.span} m</b> · G-LIMIT <b>${s.flight.gLimit}</b><br>
-        GUN <b>${s.gun ? esc(s.gun.name) : 'NONE'}</b> · MISSILES <b>${s.missiles}</b> · FLARES <b>${s.flares}</b><br>
-        TAKEOFF <b>~${Math.round(refSpeeds(s).takeoff * 1.944)} KT</b> · LANDING <b>~${Math.round(refSpeeds(s).approach * 1.944)} KT</b> · STALL <b>${Math.round(refSpeeds(s).stall * 1.944)} KT</b></div>`;
+        GUN <b>${s.gun ? esc(s.gun.name) : 'NONE'}</b> · FLARES <b>${s.flares}</b><br>
+        TAKEOFF <b>~${Math.round(refSpeeds(s).takeoff * 1.944)} KT</b> · LANDING <b>~${Math.round(refSpeeds(s).approach * 1.944)} KT</b> · STALL <b>${Math.round(refSpeeds(s).stall * 1.944)} KT</b></div>
+        <div class="spec-line" id="acLoadout">${loadoutLine(id)}</div>`;
     spawnShowcase(id);
     updateBest();
     updateLaunch();

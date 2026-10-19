@@ -7,6 +7,7 @@
 import * as THREE from 'three';
 import { clamp, rand, lerp, G } from './util.js';
 import { WEAPONS } from './config.js';
+import { storeOfKind } from './stores.js';
 import { terrainHeight } from './world.js';
 import { thrustLapse } from './aircraft.js';
 
@@ -621,19 +622,20 @@ export class Pilot {
         if (closingFast) throttle = 0.4;
         else if (V > Vc * 1.35 && dist < 1200) throttle = 0.75;
 
-        // missiles
+        // missiles: its type's own (stores.js)
         const boresightOff = Math.acos(clamp(fwd.dot(los), -1, 1));
         const maxPerTarget = t.isPlayer ? Math.max(1, Math.round(1 + g.difficulty.enemyMissileRate * 1.5)) : 3;
-        if (ac.missiles > 0 && !t.isChute && boresightOff < 0.45 && dist > 500 && dist < WEAPONS.missile.range && this.irOk(t)) {
+        const shot = t.isChute ? null : this.missileShot(dist, boresightOff, t);
+        if (shot) {
             this.lockT += dt;
             t.lockedBy = t.lockedBy || new Set();
             t.lockedBy.add(ac);
-            const need = WEAPONS.missile.lockTime * lerp(2.2, 1.1, sk);
+            const need = shot.W.lockTime * lerp(2.2, 1.1, sk);
             if (this.lockT > need && this.missileCD <= 0 && t.incoming.length < maxPerTarget) {
                 const rate = ac.team !== (g.war ? g.war.side : 'blue') ? g.difficulty.enemyMissileRate : 0.8; // (the difficulty is the enemy's: the sandbox can swap sides)
                 if (Math.random() < rate) {
-                    g.weapons.fireMissile(ac, t);
-                    ac.missiles--;
+                    g.weapons.fireMissile(ac, t, shot.kind);
+                    ac[shot.ammo]--;
                 }
                 this.missileCD = rand(6, 12) / Math.max(rate, 0.3);
                 this.lockT = 0;
@@ -648,6 +650,28 @@ export class Pilot {
             guns = false;
         }
         return { dir, throttle, guns, gCap };
+    }
+
+    // Which missile, if any, for a target dist m away, off the nose by `off` rad: the IR missile inside its range and
+    // its seeker's cone (an off-boresight one — an R-73, an AIM-9X — wider, the better the pilot); beyond it the
+    // radar missile, and further still a very long range one (R-37M, Phoenix): a skilled pilot waits until he's
+    // well inside their range. → { kind, ammo, W } or null
+    missileShot(dist, off, t) {
+        const ac = this.ac, sk = this.skill;
+        if (ac.missiles > 0) {
+            const W = storeOfKind(ac, 'aam') || WEAPONS.missile;
+            const cone = lerp(0.45, Math.max(0.45, Math.acos(clamp(W.lockCone, -1, 1)) * 0.85), sk);
+            if (dist > 500 && dist < W.range && off < cone && this.irOk(t)) return { kind: 'aam', ammo: 'missiles', W };
+        }
+        if (ac.lrm > 0) {
+            const W = storeOfKind(ac, 'lrm');
+            if (W && dist > 1500 && dist < W.range * lerp(0.55, 0.8, sk) && off < 0.35) return { kind: 'lrm', ammo: 'lrm', W };
+        }
+        if (ac.xlrm > 0) {
+            const W = storeOfKind(ac, 'xlr');
+            if (W && dist > 5000 && dist < W.range * lerp(0.5, 0.75, sk) && off < 0.3) return { kind: 'xlr', ammo: 'xlrm', W };
+        }
+        return null;
     }
 
     // Gun runs on a slow target near the ground (the ejected player, under the canopy or on foot): extend out
@@ -741,7 +765,7 @@ export class Pilot {
         const ac = this.ac, g = this.game, sk = this.skill;
         if (ac.flares <= 0 || !ac.incoming.length) return;
         for (const m of ac.incoming) {
-            if (!m.W || m.W.radar || m.kind === 'sam') continue; // flares only fool heat seekers
+            if (!m.W || m.kind === 'sam') continue; // (the dispenser: flares for a heat seeker, chaff for a radar missile)
             m.flaredBy = m.flaredBy || new Map();
             const st = m.flaredBy.get(ac) || 0; // salvos dropped (or passed up) for this missile
             if (st >= 1) continue;

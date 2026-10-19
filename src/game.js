@@ -6,6 +6,8 @@ import { AIRCRAFT, ENEMY_POOL, ENEMY_EARLY, ALLY_POOL, DIFFICULTY, WEAPONS, hasE
 import { Aircraft } from './aircraft.js';
 import { Pilot, steerToward } from './ai.js';
 import { Weapons } from './weapons.js';
+import { CLASSES, CLASS, storeFor, armAircraft, carries, canEngage, brevity, seekerLabel } from './stores.js';
+import { emitterOf } from './ew.js';
 import { GroundForces } from './ground.js';
 import { Wreckage } from './damage.js';
 import { Naval } from './naval.js';
@@ -41,22 +43,21 @@ class Events {
 }
 
 const CAMERA_MODES = ['chase', 'cockpit', 'far', 'cinematic'];
-export const SLOTS = [
-    { key: 'srm', label: 'SRM', name: 'IR MISSILE', ammo: 'missiles' },
-    { key: 'lrm', label: 'LRM', name: 'RADAR MISSILE', ammo: 'lrm' },
-    { key: 'rkt', label: 'RKT', name: 'ROCKET POD', ammo: 'rockets' },
-    { key: 'bomb', label: 'BMB', name: 'MK-82 BOMB', ammo: 'bombs' },
-    // only on a type that carries them (config.js `busters`: the X-100 test jet); selectSlot skips it on the rest
-    { key: 'buster', label: 'BBU', name: 'GBU-57X BUNKER BUSTER', ammo: 'busters' },
-];
-// can this aircraft use the slot at all (not: has it any left)?
-export const slotFits = (spec, slot) => slot.key !== 'buster' || !!(spec && spec.busters);
-// a slot's name on this aircraft (the X-100's bombs are its own MK-84X)
-export const slotName = (spec, slot) => (slot.key === 'bomb' && spec && spec.bomb && spec.bomb.name) || slot.name;
+// The weapon slots (stores.js classes): X steps through the ones the jet carries — its type's own weapons on the
+// chosen loadout (an F-16's AIM-9X / AIM-120C / Maverick / GBU-12, a Growler's HARMs, an F-14's Phoenixes)
+export const SLOTS = CLASSES;
+// does this type carry the slot on any loadout (the bunker busters: the X-100 only)?
+export const slotFits = (spec, slot) => carries(spec, slot.key);
+// can this jet use the slot now: it has some, or its loadout has the class (and it's run out)
+export const slotAvail = (ac, slot) => !!ac && (ac[slot.ammo] > 0 || !!(ac.stores && ac.stores[slot.key]));
+// a slot's weapon on this aircraft ("AIM-9X SIDEWINDER", the X-100's "MK-84X MEGA BOMB")
+export const slotName = (x, slot) => (storeFor(x, slot.key) || slot).name;
+// the sandbox keeps at least this many of a store (or the loadout's count, if fewer)
+const SANDBOX_KEEP = { rkt: 8, bomb: 4, gbu: 2, buster: 1 };
 const LOADOUTS = {
-    balanced: { label: 'BALANCED', srm: 1, lrm: 1 / 3, rkt: 38, bomb: 4 },
-    air: { label: 'AIR SUPERIORITY', srm: 1.25, lrm: 0.5, rkt: 0, bomb: 0 },
-    strike: { label: 'STRIKE', srm: 0.5, lrm: 0.17, rkt: 76, bomb: 12 },
+    balanced: { label: 'BALANCED' },
+    air: { label: 'AIR SUPERIORITY' },
+    strike: { label: 'STRIKE' },
 };
 export const LOADOUT_KEYS = Object.keys(LOADOUTS);
 export const LOADOUT_LABELS = LOADOUTS;
@@ -623,13 +624,13 @@ export class Game {
         a.pilot = null; a.pilotAI = null; a.pilotDead = false; a.abandoned = false;
         a.ejected = false; a.ejectT = -1; a.ejectSeat = null;
         a.team = this.side; a.isPlayer = true; a.callsign = this.callsign;
-        a.lrm = a.lrm ?? 0; a.rockets = a.rockets ?? 0; a.bombs = a.bombs ?? 0; a.busters = a.busters ?? 0;
+        for (const c of CLASSES) a[c.ammo] = a[c.ammo] ?? 0;
         if (!own) {
             a.fuel = Math.max(a.fuel ?? 1, 0.6); a.flameout = false;
             if (this.mission && this.mission.loadout) this.mission.loadout(a); // mission weapon rules still apply
         }
         this.player = a;
-        if (!slotFits(a.spec, this.slotDef)) this.slot = 0; // (the bunker busters were selected in the X-100)
+        this.fixSlot(); // (the bunker busters were selected in the X-100)
         this.pilotMode = null;
         this.state = 'playing';
         this.aimDir.copy(a.vel.lengthSq() > 1 && !a.onGround ? a.vel : a.getForward(_v)).normalize();
@@ -873,25 +874,36 @@ export class Game {
             }
         });
         ev.on('missileLaunch', (ac, { target, missile }) => {
+            const W = missile && missile.W;
             if (ac === this.player) {
                 if (missile && missile.kind === 'rkt') return; // rockets aren't missiles: no count, no "Fox two"
-                if (missile && missile.kind === 'arm') { this.missilesFired++; this.audio.whoosh(0.6); return; } // a HARM: "MAGNUM" (airsupport.js)
                 this.missilesFired++;
-                this.audio.whoosh(0.5);
-                this.audio.say(pick(['Fox two!', 'Fox two.', 'Missile away!']));
+                this.audio.whoosh(missile && missile.kind === 'arm' ? 0.6 : 0.5);
+                // the brevity call for its seeker: FOX ONE (semi-active), TWO (IR), THREE (active), MAGNUM (HARM),
+                // RIFLE (air-to-ground), BRUISER (anti-ship) — the EW page's HARM makes its own MAGNUM call
+                if (!(missile && missile.kind === 'arm' && missile.viaEW)) this.audio.say(brevity(W));
             } else {
                 const d = this.camera.position.distanceTo(ac.pos);
                 if (d < 1500) this.audio.whoosh(0.4 * (1 - d / 1500));
                 if (target === this.player) {
-                    this.addFeed(ac.kind === 'sam' || ac.isGround ? 'SAM LAUNCH' : 'MISSILE LAUNCH', '#ff4a3d');
+                    // what it is and how it sees you (flares for the heat seekers; beam it and chaff for the radars)
+                    const what = W && W.short ? ' — ' + W.short + ' (' + seekerLabel(W) + ')' : '';
+                    this.addFeed((ac.kind === 'sam' || ac.isGround ? 'SAM LAUNCH' : 'MISSILE LAUNCH') + what, '#ff4a3d');
                     this.audio.say(ac.isGround ? 'SAM launch! SAM launch!' : 'Missile, missile! Break!', true);
                 }
             }
         });
+        ev.on('notched', (owner, { victim }) => {
+            if (victim === this.player) { this.addFeed('MISSILE TRASHED — NOTCHED', '#5dffa0'); this.audio.say('Missile trashed!'); }
+            if (owner === this.player) this.addFeed('MISSILE LOST — HE NOTCHED IT', '#ffc23f');
+        });
+        ev.on('missileTrashed', (owner, { missile, why }) => {
+            if (owner === this.player) this.addFeed((missile.W.short || 'MISSILE') + ' LOST — ' + (why === 'laser' ? 'NO LASER SPOT' : 'NO RADAR SUPPORT'), '#ffc23f');
+        });
         ev.on('missileHit', (owner, { target, missile }) => { if (owner === this.player && !target.isFlare && !(missile && missile.kind === 'rkt')) this.missileHits++; });
-        ev.on('decoyed', (owner, { victim }) => {
-            if (victim === this.player) { this.addFeed('MISSILE DEFEATED', '#5dffa0'); this.audio.say('Missile defeated!'); }
-            if (owner === this.player) this.addFeed('MISSILE DECOYED', '#ffc23f');
+        ev.on('decoyed', (owner, { victim, chaff }) => {
+            if (victim === this.player) { this.addFeed(chaff ? 'MISSILE DEFEATED — CHAFF' : 'MISSILE DEFEATED', '#5dffa0'); this.audio.say('Missile defeated!'); }
+            if (owner === this.player) this.addFeed(chaff ? 'MISSILE DECOYED — CHAFF' : 'MISSILE DECOYED', '#ffc23f');
         });
         ev.on('eject', (ac, { seat }) => {
             if (ac.isPlayer) { this.addFeed('EJECTED', '#ffc23f'); this.enterPilotMode(ac, seat); return; }
@@ -973,20 +985,15 @@ export class Game {
         });
     }
 
+    // the type's own stores on the chosen loadout (stores.js LOADOUTS), the gun, the flares, the fuel
     rearm(p) {
-        const L = LOADOUTS[this.settings.loadout] || LOADOUTS.balanced;
-        const m = p.spec.missiles;
-        p.missiles = Math.round(m * L.srm);
-        p.lrm = m ? Math.max(L.lrm > 0.3 ? 2 : 1, Math.round(m * L.lrm)) : 0;
-        p.rockets = m ? L.rkt * (p.type === 'a10' ? 2 : 1) : 0;
-        p.bombs = m || p.spec.category === 'bomber' ? L.bomb * (p.spec.category === 'bomber' ? 4 : 1) * (p.spec.bomb?.load || 1) : 0;
-        // bunker busters (the X-100): the type's load with any bombs in the loadout, twice that on a strike loadout
-        p.busters = p.spec.busters && L.bomb ? p.spec.busters * (L.bomb > 4 ? 2 : 1) : 0;
+        armAircraft(p, LOADOUTS[this.settings.loadout] ? this.settings.loadout : 'balanced');
         p.flares = p.spec.flares;
         if (p.spec.gun) p.ammo = p.spec.gun.ammo;
         p.refuel(1);
         if (this.mission && this.mission.loadout) this.mission.loadout(p);
-        p.maxMissiles = Math.max(p.missiles, p.spec.missiles); // survival's kill reward tops up to this
+        p.maxMissiles = Math.max(p.missiles, p.loadCounts.srm || 0); // survival's kill reward tops up to this
+        if (p === this.player) this.fixSlot();
     }
 
     cycleLoadout() {
@@ -998,17 +1005,32 @@ export class Game {
     }
 
     get slotDef() { return SLOTS[this.slot || 0]; }
-    get slotW() { const k = this.slotDef.key; return k === 'lrm' ? WEAPONS.lrm : k === 'rkt' ? WEAPONS.rkt : k === 'bomb' ? WEAPONS.bomb : k === 'buster' ? WEAPONS.buster : WEAPONS.missile; }
+    // the selected slot's weapon on this jet (stores.js)
+    get slotW() {
+        const k = this.slotDef.key;
+        return storeFor(this.player, k) || (k === 'lrm' ? WEAPONS.lrm : k === 'rkt' ? WEAPONS.rkt : k === 'bomb' || k === 'gbu' ? WEAPONS.bomb : k === 'buster' ? WEAPONS.buster : WEAPONS.missile);
+    }
+    // the slot index the step from i lands on: i, or the next one round this jet can use
+    nextSlot(i) {
+        const n = SLOTS.length;
+        let k = ((i % n) + n) % n;
+        for (let t = 0; t < n && !slotAvail(this.player, SLOTS[k]); t++) k = (k + 1) % n;
+        return k;
+    }
+    // the n-th slot this jet can use
+    selectNth(n) {
+        const own = SLOTS.map((c, i) => i).filter(i => slotAvail(this.player, SLOTS[i]));
+        if (own.length) this.selectSlot(own[Math.min(n, own.length - 1)]);
+    }
+    // after a rearm or a change of jet: keep the slot if it's still there, else the first one that is
+    fixSlot() { if (!slotAvail(this.player, this.slotDef)) this.slot = this.nextSlot(0); }
 
-    // i: the slot wanted; a slot this aircraft can't carry (the bunker busters on anything but the X-100) is
-    // skipped for the next one round
+    // i: the slot wanted; one this jet doesn't carry is skipped for the next one round
     selectSlot(i) {
-        const spec = this.player && this.player.spec, n = SLOTS.length;
-        let k = (i + n) % n;
-        for (let t = 0; t < n && !slotFits(spec, SLOTS[k]); t++) k = (k + 1) % n;
-        this.slot = k;
+        this.slot = this.nextSlot(i);
         this.lockProgress = 0;
-        this.addFeed(this.slotDef.label + ' — ' + slotName(spec, this.slotDef) + ' (' + this.player[this.slotDef.ammo] + ')', '#5dffa0');
+        if (this.lockAuto) this.lockTarget = null; // (an auto-picked target: pick again for this weapon)
+        this.addFeed(this.slotDef.label + ' — ' + slotName(this.player, this.slotDef) + ' (' + this.player[this.slotDef.ammo] + ')', '#5dffa0');
         this.audio.tick(900, 0.1, 0.05);
     }
 
@@ -1067,10 +1089,11 @@ export class Game {
             }
             case 'target': this.cycleTarget(); break;
             case 'weapon': this.selectSlot(this.slot + 1); break;
-            case 'slot1': this.selectSlot(0); break;
-            case 'slot2': this.selectSlot(1); break;
-            case 'slot3': this.selectSlot(2); break;
-            case 'slot4': this.selectSlot(3); break;
+            // (the jet's 1st … 4th weapon, whatever its loadout makes them)
+            case 'slot1': this.selectNth(0); break;
+            case 'slot2': this.selectNth(1); break;
+            case 'slot3': this.selectNth(2); break;
+            case 'slot4': this.selectNth(3); break;
             case 'thr1': case 'thr2': case 'thr3': case 'thr4': case 'thr5':
             case 'thr6': case 'thr7': case 'thr8': case 'thr9': case 'thr10': {
                 // 1 = idle … 9 = full military power, 0 (10) = afterburner
@@ -1164,19 +1187,22 @@ export class Game {
 
     firePlayerMissile() {
         const p = this.player;
-        const slot = this.slotDef;
-        if (p[slot.ammo] <= 0) { this.audio.tick(200, 0.1, 0.1); this.addFeed('NO ' + slot.label + ' LEFT — X TO SWITCH', '#ffc23f'); return; }
-        if (slot.key === 'bomb' || slot.key === 'buster') {
+        const slot = this.slotDef, W = this.slotW;
+        if (!(p[slot.ammo] > 0)) { this.audio.tick(200, 0.1, 0.1); this.addFeed('NO ' + slot.label + ' LEFT — X TO SWITCH', '#ffc23f'); return; }
+        const locked = this.lockProgress >= 1 && this.lockTarget && this.engageable(this.lockTarget) ? this.lockTarget : null;
+        if (slot.drop) {
             if (this.time - p.lastMissile < (slot.key === 'buster' ? 0.6 : 0.25) || p.onGround) return;
             p.lastMissile = this.time;
-            this.weapons.dropBomb(p, slot.key);
+            // a guided bomb takes the lock: the laser's spot, or the GPS point
+            this.weapons.dropBomb(p, slot.key, slot.key === 'gbu' ? locked : null);
             if (this.mode !== 'sandbox') p[slot.ammo]--;
+            if (slot.key === 'gbu' && !locked) this.addFeed(W.short + ' — NO TARGET: FALLING FREE', '#ffc23f');
             return;
         }
         if (slot.key === 'rkt') {
             if (this.time - p.lastMissile < 0.35) return;
             p.lastMissile = this.time;
-            const n = Math.min(4, p.rockets);
+            const n = Math.min(W.salvo || 4, p.rockets);
             for (let i = 0; i < n; i++) this.weapons.fireMissile(p, null, 'rkt');
             p.rockets -= n;
             this.audio.whoosh(0.35);
@@ -1185,11 +1211,20 @@ export class Game {
         }
         if (this.time - p.lastMissile < 0.6) return;
         p.lastMissile = this.time;
-        const t = this.lockProgress >= 1 ? this.lockTarget : null;
-        this.weapons.fireMissile(p, t, slot.key === 'lrm' ? 'lrm' : 'aam');
+        this.weapons.fireMissile(p, locked, slot.kind);
         p[slot.ammo]--;
-        if (!t) this.addFeed('NO LOCK — UNGUIDED', '#ffc23f');
+        // (an anti-ship missile or a HARM without a lock looks for its own target ahead of it)
+        if (!locked) this.addFeed(slot.vs === 'ship' || slot.vs === 'emitter' ? W.short + ' — NO LOCK: SEARCHING AHEAD' : 'NO LOCK — UNGUIDED', '#ffc23f');
+        else if (W.seeker === 'sarh') this.addFeed(W.short + ' — SEMI-ACTIVE: KEEP HIM IN FRONT', '#9fd4ff');
+        else if (W.seeker === 'laser') this.addFeed(W.short + ' — LASING: KEEP IT IN SIGHT', '#9fd4ff');
         if (p[slot.ammo] === 0) this.addFeed(slot.label + ' EMPTY — PRESS X', '#ffc23f');
+    }
+
+    // can the selected weapon lock t (an AAM: aircraft; a Maverick or a bomb: the ground; a Harpoon: ships; a HARM:
+    // a radar that's on)?
+    engageable(t, key = this.slotDef.key) {
+        const war = this.war;
+        return canEngage(key, t, war && war.rec && t.isGround ? emitterOf(t, war.rec(t)) : null);
     }
 
     atFriendlyPad(p) {
@@ -1229,6 +1264,8 @@ export class Game {
 
     isNeutral(t) { return !!t && AIR_TARGETS.includes(t); }
 
+    // T: the next target — the ones the selected weapon can take first (out to its range: a Harpoon's ships 28 km
+    // off), then the other hostiles, then neutral air traffic
     cycleTarget() {
         const p = this.player;
         const fwd = p.getForward(_v);
@@ -1236,10 +1273,13 @@ export class Game {
             .map(t => ({ t, d: t.pos.distanceTo(p.pos), dot: _v2.subVectors(t.pos, p.pos).normalize().dot(fwd) }))
             .filter(o => o.d < maxD)
             .sort((a, b) => b.dot - a.dot);
-        const list = [...rank(this.candidates(), 15000), ...rank(this.neutralCandidates(), 10000)];
+        const all = this.candidates(), slot = this.slotDef, reach = Math.max(15000, this.slotW.range || 0);
+        const fit = slot.vs ? all.filter(t => this.engageable(t)) : all;
+        const list = [...rank(fit, reach), ...(slot.vs ? rank(all.filter(t => !fit.includes(t)), 15000) : []), ...rank(this.neutralCandidates(), 10000)];
         if (!list.length) { this.lockTarget = null; this.addFeed('NO TARGETS IN RANGE', '#9fb2c4'); return; }
         const i = list.findIndex(o => o.t === this.lockTarget);
         const t = this.lockTarget = list[(i + 1) % list.length].t;
+        this.lockAuto = false;
         this.lockProgress = 0;
         this.audio.tick(1200, 0.08, 0.04);
         if (this.isNeutral(t)) this.addFeed('TARGET: ' + t.name.toUpperCase() + ' — NEUTRAL', '#cfd8e0');
@@ -1248,30 +1288,42 @@ export class Game {
     updateTargeting(dt) {
         const p = this.player;
         const fwd = p.getForward(_v);
+        const slot = this.slotDef, W = this.slotW, wr = W.range || 0;
         let t = this.lockTarget;
-        if (t && (!t.alive || t.done || t.exploded || t.pos.distanceTo(p.pos) > 16000)) { t = this.lockTarget = null; this.lockProgress = 0; }
+        if (t && (!t.alive || t.done || t.exploded || t.pos.distanceTo(p.pos) > Math.max(16000, wr * 1.1))) { t = this.lockTarget = null; this.lockProgress = 0; }
+        // a target picked for us that this weapon can't take (a SAM site with the AIM-9 selected): pick again
+        if (t && this.lockAuto && slot.vs && !this.engageable(t)) { t = this.lockTarget = null; this.lockProgress = 0; }
         if (!t) {
-            // auto-select the target nearest the nose
+            // auto-select the target nearest the nose — one the selected weapon can lock, out to its range; for the
+            // gun, rockets and bombs anything (rockets and bombs: the ground first)
             let best = null, bestS = -Infinity;
+            const reach = slot.vs ? Math.max(12000, wr) : 12000, scale = Math.max(8000, slot.vs ? wr * 0.8 : 0);
+            const groundFirst = slot.key === 'rkt' || slot.key === 'bomb';
             for (const c of this.candidates()) {
                 const d = c.pos.distanceTo(p.pos);
-                if (d > 12000) continue;
+                if (d > reach) continue;
+                if (slot.vs && !this.engageable(c)) continue;
                 const dot = _v2.subVectors(c.pos, p.pos).normalize().dot(fwd);
-                const s = dot * 2 - d / 8000 - (c.isGround ? 0.4 : 0);
+                const s = dot * 2 - d / scale + (slot.vs ? 0 : c.isGround ? (groundFirst ? 0.3 : -0.4) : 0);
                 if (s > bestS) { bestS = s; best = c; }
             }
             t = this.lockTarget = best;
+            this.lockAuto = true;
         }
         this.seeker.visible = false;
-        if (!t) { this.lockProgress = 0; return; }
+        if (!t) { this.lockProgress = 0; this.dropCue = null; return; }
         const rel = _v2.subVectors(t.pos, p.pos);
         const dist = rel.length();
         const dot = rel.divideScalar(dist).dot(fwd);
-        const W = this.slotW;
-        const ammoOk = p[this.slotDef.ammo] > 0 && !W.unguided;
-        const range = t.isGround ? Math.max(6000, W.range * 0.7) : W.range;
-        // (a heat seeker can't lock through cloud or fog: weathersys.js checks its line of sight)
-        const inCone = ammoOk && dot > W.lockCone && dist < range && !this.irBlocked;
+        const ammoOk = p[slot.ammo] > 0 && !W.unguided && !!slot.vs && this.engageable(t);
+        // (a heat seeker or a TV / laser seeker can't lock through cloud or fog: weathersys.js checks its line of
+        // sight; a bomb's target must be below the jet; a cruise missile takes one in any direction)
+        const inCone = ammoOk && (W.lockCone < -0.99 || dot > W.lockCone) && dist < wr && !this.irBlocked && (!slot.drop || t.pos.y < p.pos.y - 50);
+        // a guided bomb's cue: can it get there from here (weapons.js reach), 4 times a second
+        if (slot.key === 'gbu' && ammoOk) {
+            this.dropCueT = (this.dropCueT || 0) - dt;
+            if (this.dropCueT <= 0 || !this.dropCue || this.dropCue.t !== t) { this.dropCueT = 0.25; this.dropCue = { t, ...this.weapons.bombReach(p, W, t.pos) }; }
+        } else this.dropCue = null;
         if (inCone) this.lockProgress = Math.min(1, this.lockProgress + dt / W.lockTime);
         else this.lockProgress = Math.max(0, this.lockProgress - dt * 2);
         if (inCone || this.lockProgress > 0) {
@@ -1430,7 +1482,11 @@ export class Game {
             if (ap.override > 450) { ap.override = 0; ap.disengage('AUTOPILOT OFF — YOU HAVE CONTROL'); }
             else ap.update(dt, p);
         }
-        if (this.mode === 'sandbox') { if (p.spec.gun) p.ammo = p.spec.gun.ammo; p.fuel = 1; p.flameout = false; p.health = p.maxHealth; p.missiles = Math.max(p.missiles, 2); p.lrm = Math.max(p.lrm, 1); p.rockets = Math.max(p.rockets, 8); p.bombs = Math.max(p.bombs, 4); if (p.spec.busters) p.busters = Math.max(p.busters | 0, 1); p.flares = Math.max(p.flares, 5); }
+        if (this.mode === 'sandbox') {
+            // (the sandbox never runs dry: every store the jet carries stays topped up a little)
+            if (p.spec.gun) p.ammo = p.spec.gun.ammo; p.fuel = 1; p.flameout = false; p.health = p.maxHealth; p.flares = Math.max(p.flares, 5);
+            for (const k in p.stores) { const c = CLASS[k]; p[c.ammo] = Math.max(p[c.ammo] | 0, Math.min((p.loadCounts && p.loadCounts[k]) || 1, SANDBOX_KEEP[k] ?? 2)); }
+        }
         this.firing = s.fire;
         if (s.fire && p.spec.gun && p.ammo > 0) {
             this.shots += this.weapons.fireGun(p, this.time);
