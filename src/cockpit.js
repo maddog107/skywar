@@ -5,9 +5,11 @@
 // frame's shadows sweep across the panel as you manoeuvre. Instruments are live
 // canvas textures; stick and throttle follow the pilot's inputs; legends are
 // backlit at night; the canopy glass catches sky reflections and sun glints.
-// Eye point is the origin; forward is -Z.
+// Eye point is the origin; forward is -Z. Types with a real cockpit model (COCKPIT_MODELS) fly with it instead of
+// the procedural one: the same live displays on its screens, its HUD combiner and canopy as the cockpit's glass.
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { CLASSES } from './stores.js';
 import { ViewModel } from './viewmodel.js';
 import { clamp, damp, MS_TO_KTS, M_TO_FT, DEG } from './util.js';
@@ -15,6 +17,20 @@ import { terrainHeight } from './world.js';
 
 const _v = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler(0, 0, 0, 'YXZ'), _m = new THREE.Matrix4();
 const _up = new THREE.Vector3();
+
+// Real cockpits (models/cockpits/<type>.glb, cut out of licensed models with tools/cockpits/import_cockpit.py;
+// credits in models/cockpits/CREDITS.md): metres, the pilot's design eye at the origin, the nose toward -Z.
+// SCREEN_<n> (numbered top to bottom, then left to right; UV 0..1 across each, as the pilot sees it) take the live
+// displays listed in `screens`; HUD_GLASS is the combiner the HUD is drawn on; CANOPY_GLASS the canopy.
+// Display kinds: radar, stores, adi, ufdL / ufdR (the up-front text displays), tsd (the tactical situation display:
+// the picture from above), off. eye: where the pilot's eye sits from the file's origin (m: right, up, back), to fit
+// the view (the panel low in the frame, the HUD on the horizon) without cutting the model again. paint: material
+// name → a colour for parts the model left plain white
+export const COCKPIT_MODELS = {
+    // F-22: two up-front displays over three MFDs and the 8-inch primary display (the tactical picture), the
+    // standby flight display under it (two faces in the model)
+    f22: { file: 'models/cockpits/f22.glb', screens: ['ufdL', 'ufdR', 'radar', 'tsd', 'stores', 'adi', 'adi'], eye: [0, -0.11, -0.2], paint: { F2266Mtl: 0x34383c } },
+};
 
 function canvasTex(w, h) {
     const c = document.createElement('canvas');
@@ -156,6 +172,12 @@ export class Cockpit {
         this.consoleLight.position.set(0, -0.3, 0.05);
         this.root.add(this.consoleLight);
 
+        // the procedural cockpit (every type without a model); a model cockpit replaces it while it's flown
+        this.proc = new THREE.Group();
+        this.root.add(this.proc);
+        this.models = {};    // type → its loaded cockpit (or a promise of it)
+        this.model = null;   // the model cockpit in use
+        this.type = null;
         this.build();
         this.scene.add(this.camera);
         this.buildRifle();
@@ -179,7 +201,7 @@ export class Cockpit {
     }
 
     build() {
-        const R = this.root;
+        const R = this.proc;
         // Dark gull grey panels (FS 36231-ish), flat black glareshield, satin frame
         const panelTex = paintedPanel(512, 256, '#686e74', (p) => {
             p.seam(6, 6, 500, 244);
@@ -414,6 +436,154 @@ export class Cockpit {
         this.root.traverse(o => { if (o.isMesh && !o.material.isShaderMaterial && !o.material.isMeshBasicMaterial) o.receiveShadow = true; });
     }
 
+    // The player's type: its model cockpit once it has loaded (the procedural one until then, and for types without one)
+    useType(type) {
+        if (type === this.type) return;
+        this.type = type;
+        if (this.model) { this.model.root.visible = false; this.model = null; }
+        this.proc.visible = true;
+        const def = COCKPIT_MODELS[type];
+        if (!def) return;
+        const m = this.models[type] || (this.models[type] = this.loadModel(def));
+        Promise.resolve(m).then(mc => {
+            this.models[type] = mc;
+            if (!mc || this.type !== type) return;
+            this.model = mc;
+            mc.root.visible = true;
+            this.proc.visible = false;
+        });
+    }
+
+    loadModel(def) {
+        return new Promise(resolve => new GLTFLoader().load(def.file, (gltf) => {
+            const root = gltf.scene, mc = { root, def, screens: [], glassMats: [], hud: null, canvases: {} };
+            root.visible = false;
+            if (def.eye) root.position.set(-def.eye[0], -def.eye[1], -def.eye[2]);
+            const screens = [];
+            root.traverse(o => {
+                if (!o.isMesh) return;
+                if (/^SCREEN_\d+/.test(o.name)) {
+                    // (glTF's v runs down the image; the canvases are drawn with v up)
+                    const uv = o.geometry.attributes.uv;
+                    for (let i = 0; i < uv.count; i++) uv.setY(i, 1 - uv.getY(i));
+                    screens.push(o);
+                    return;
+                }
+                if (o.name.startsWith('HUD_GLASS')) {
+                    o.material = makeGlassMaterial(0x9fffd0, 0.9); o.renderOrder = 10; mc.hud = o;
+                    mc.glassMats.push(o.material);
+                    return;
+                }
+                if (o.name.startsWith('CANOPY_GLASS')) {
+                    o.material = makeGlassMaterial(0xc8dcff, 1); o.renderOrder = 11;
+                    mc.glassMats.push(o.material);
+                    return;
+                }
+                o.castShadow = o.receiveShadow = true;
+                for (const mat of [].concat(o.material)) {
+                    mat.envMapIntensity = 0.45;
+                    if (mat.map) mat.map.anisotropy = 8;
+                    if (def.paint && def.paint[mat.name] !== undefined) mat.color.setHex(def.paint[mat.name]);
+                }
+            });
+            // the live displays: a canvas per kind, shared by the screens that show it
+            const night = Math.max(this.night, 0);
+            screens.sort((a, b) => +a.name.slice(7) - +b.name.slice(7));
+            screens.forEach((o, i) => {
+                const kind = def.screens[i] || 'off';
+                const ct = this.displayFor(mc, kind, o);
+                o.material = new THREE.MeshBasicMaterial({ map: ct ? ct.tex : null, color: ct ? 0xffffff : 0x050807, toneMapped: false });
+                o.userData.glow = ct ? 1 : 0.04;
+                o.material.color.setScalar(o.userData.glow * (1 - night * 0.45));
+                mc.screens.push(o);
+                this.screens.push(o);
+            });
+            this.root.add(root);
+            resolve(mc);
+        }, undefined, () => resolve(null)));
+    }
+
+    // the canvas a model screen of `kind` shows (the procedural cockpit's own for the kinds it has)
+    displayFor(mc, kind, mesh) {
+        if (kind === 'radar') return this.mfdL;
+        if (kind === 'stores') return this.mfdR;
+        if (kind === 'adi') return this.adi;
+        if (!['ufdL', 'ufdR', 'tsd'].includes(kind)) return null;
+        if (mc.canvases[kind]) return mc.canvases[kind];
+        // sized to the face (its UV corners), so text and the map aren't stretched
+        const g = mesh.geometry, P = g.attributes.position, U = g.attributes.uv;
+        let i00 = 0, i10 = 0, i01 = 0;
+        const d = (i, u, v) => (U.getX(i) - u) ** 2 + (U.getY(i) - v) ** 2;
+        for (let i = 0; i < U.count; i++) {
+            if (d(i, 0, 0) < d(i00, 0, 0)) i00 = i;
+            if (d(i, 1, 0) < d(i10, 1, 0)) i10 = i;
+            if (d(i, 0, 1) < d(i01, 0, 1)) i01 = i;
+        }
+        const a = new THREE.Vector3().fromBufferAttribute(P, i00);
+        const w = a.distanceTo(new THREE.Vector3().fromBufferAttribute(P, i10)), h = a.distanceTo(new THREE.Vector3().fromBufferAttribute(P, i01));
+        const W = kind === 'tsd' ? 448 : 256, H = Math.round(W * clamp(h / Math.max(w, 1e-4), 0.4, 2.5));
+        return (mc.canvases[kind] = canvasTex(W, H));
+    }
+
+    // Up-front displays: the left one the fight (target, Mach / G, the weapon), the right one the jet (fuel, thrust,
+    // gear, hull)
+    drawUFD(ct, p, game, right) {
+        const ctx = ct.ctx, W = ct.c.width, H = ct.c.height;
+        ctx.fillStyle = '#020a06'; ctx.fillRect(0, 0, W, H);
+        if (!p) return;
+        ctx.font = 'bold ' + Math.round(H / 7) + 'px monospace'; ctx.fillStyle = '#4dff94';
+        const lines = right
+            ? ['FUEL ' + Math.round(p.fuel * 100) + '%', 'THR  ' + Math.round(p.throttle * 100) + (p.afterburner ? ' AB' : '%'), 'GEAR ' + (p.gear ? 'DN' : 'UP'), 'HULL ' + Math.round(p.health / p.maxHealth * 100) + '%']
+            : ['TGT  ' + (game.lockTarget ? (game.lockTarget.pos.distanceTo(p.pos) / 1000).toFixed(1) + 'KM' : '---'), 'M' + p.mach.toFixed(2) + ' ' + p.gLoad.toFixed(1) + 'G',
+                (game.slotDef ? game.slotDef.label : 'GUN') + ' ' + (game.slotDef ? p[game.slotDef.ammo] ?? '' : p.ammo), 'GUN  ' + p.ammo];
+        lines.forEach((t, i) => ctx.fillText(t, W * 0.07, H * (0.22 + i * 0.2)));
+        if (!right && p.incoming.length && (game.time * 3) % 1 < 0.5) { ctx.fillStyle = '#ff4040'; ctx.fillText('MISSILE', W * 0.5, H * 0.22); }
+        ct.tex.needsUpdate = true;
+    }
+
+    // Tactical situation display: the picture from above, heading up, the jet low in the frame, 40 km to the top:
+    // range rings, aircraft (friendly blue, hostile yellow, the locked one red), ground and naval targets
+    drawTSD(ct, game) {
+        const ctx = ct.ctx, W = ct.c.width, H = ct.c.height, p = game.player;
+        ctx.fillStyle = '#010805'; ctx.fillRect(0, 0, W, H);
+        if (!p) return;
+        const range = 40000, cx = W / 2, cy = H * 0.78, R = H * 0.7, k = R / range;
+        const fwd = p.getForward(_v), hdg = Math.atan2(-fwd.x, -fwd.z);
+        ctx.strokeStyle = '#1b6b3e'; ctx.lineWidth = 1.5;
+        for (let r = 1; r <= 4; r++) { ctx.beginPath(); ctx.arc(cx, cy, R * r / 4, 0, Math.PI * 2); ctx.stroke(); }
+        ctx.fillStyle = '#2f9a5e'; ctx.font = 'bold 14px monospace';
+        ctx.fillText('40', cx + 4, cy - R + 14); ctx.fillText('20', cx + 4, cy - R / 2 + 14);
+        // (world → display: the bearing off the nose, + to the left, as the radar page has it; ahead is up the screen)
+        const at = (q) => {
+            const dx = q.x - p.pos.x, dz = q.z - p.pos.z, d = Math.hypot(dx, dz) * k, brg = Math.atan2(-dx, -dz) - hdg;
+            return [cx - Math.sin(brg) * d, cy - Math.cos(brg) * d];
+        };
+        const own = game.war ? game.war.side : 'blue';
+        if (game.ground) for (const t of game.ground.targets) {
+            if (!t.alive || !t.pos || t.noHud) continue;
+            const [x, y] = at(t.pos);
+            if (x < 0 || x > W || y < 0 || y > H) continue;
+            ctx.fillStyle = t.team === own ? '#3a7fd0' : (t.isShip ? '#ff9a3c' : '#c89a2c');
+            ctx.fillRect(x - 3, y - 3, 6, 6);
+        }
+        for (const a of game.aircraft) {
+            if (a === p || !a.alive) continue;
+            const [x, y] = at(a.pos);
+            if (x < 0 || x > W || y < 0 || y > H) continue;
+            const locked = a === game.lockTarget;
+            ctx.fillStyle = a.team === own ? '#4fb4ff' : (locked ? '#ff4040' : '#ffd23f');
+            ctx.beginPath(); ctx.arc(x, y, 5.5, 0, Math.PI * 2); ctx.fill();
+            if (locked) { ctx.strokeStyle = '#ff4040'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2); ctx.stroke(); }
+        }
+        // own ship
+        ctx.fillStyle = '#e8fff0';
+        ctx.beginPath(); ctx.moveTo(cx, cy - 12); ctx.lineTo(cx + 9, cy + 9); ctx.lineTo(cx, cy + 4); ctx.lineTo(cx - 9, cy + 9); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#4dff94'; ctx.font = 'bold 18px monospace';
+        ctx.fillText('TSD', 12, 24);
+        ctx.fillText(String(Math.round(((-hdg / DEG) % 360 + 360) % 360)).padStart(3, '0'), cx - 18, 24);
+        ct.tex.needsUpdate = true;
+    }
+
     drawConsole(p, side) {
         const c = p.ctx;
         const names = side < 0 ? ['FUEL', 'ENG', 'COMM', 'IFF', 'LIGHTS', 'EXT', 'AUX', 'O2'] : ['NAV', 'SENSOR', 'ECS', 'ELEC', 'HYD', 'ANTI-ICE', 'RDR', 'ECM'];
@@ -643,7 +813,7 @@ export class Cockpit {
         const up = _up.set(0, 1, 0).transformDirection(inv);
         const pal = world.palette;
         const sunUp = world.timeKey === 'night' ? 0.15 : 1;
-        for (const m of this.glassMats) {
+        for (const m of this.model ? this.model.glassMats : this.glassMats) {
             if (!m) continue;
             const u = m.uniforms;
             u.sunDirV.value.copy(sd); u.upV.value.copy(up);
@@ -656,6 +826,7 @@ export class Cockpit {
     update(dt, game, mainCamera, world, freeLook) {
         const p = game.player;
         if (!p) return;
+        this.useType(p.type);
         this.t += dt;
         this.root.visible = true;
         this.rifle.visible = false;
@@ -712,16 +883,29 @@ export class Cockpit {
         if (f === 0) { this.drawADI(this.adi.ctx, p); this.adi.tex.needsUpdate = true; this.drawUFC(this.ufc.ctx, p, game); this.ufc.tex.needsUpdate = true; }
         if (f === 1) { this.drawMFDRadar(this.mfdL.ctx, game); this.mfdL.tex.needsUpdate = true; }
         if (f === 2) { this.drawMFDStores(this.mfdR.ctx, game); this.mfdR.tex.needsUpdate = true; this.gauges.forEach(g => this.drawGauge(g, p)); }
+        // a model cockpit's own displays
+        const mc = this.model && this.model.canvases;
+        if (mc && f === 0 && mc.tsd) this.drawTSD(mc.tsd, game);
+        if (mc && f === 1) { if (mc.ufdL) this.drawUFD(mc.ufdL, p, game, false); if (mc.ufdR) this.drawUFD(mc.ufdR, p, game, true); }
         void freeLook;
     }
 
     // Projected screen rect of the HUD combiner (so the 2D HUD can be clipped to it)
     hudRect(w, h) {
-        const pts = [[-0.1, -0.085], [0.1, -0.085], [-0.1, 0.085], [0.1, 0.085]];
+        const hud = this.model && this.model.hud;
+        let pts = [[-0.1, -0.085, 0], [0.1, -0.085, 0], [-0.1, 0.085, 0], [0.1, 0.085, 0]];
+        if (hud) {
+            // (a model's combiner: the corners of its box)
+            if (!hud.geometry.boundingBox) hud.geometry.computeBoundingBox();
+            const b = hud.geometry.boundingBox;
+            pts = [];
+            for (let i = 0; i < 8; i++) pts.push([i & 1 ? b.max.x : b.min.x, i & 2 ? b.max.y : b.min.y, i & 4 ? b.max.z : b.min.z]);
+        }
+        const g = hud || this.hudGlass;
         let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-        this.hudGlass.updateMatrixWorld();
-        for (const [x, y] of pts) {
-            _v.set(x, y, 0).applyMatrix4(this.hudGlass.matrixWorld).project(this.camera);
+        g.updateMatrixWorld();
+        for (const [x, y, z] of pts) {
+            _v.set(x, y, z).applyMatrix4(g.matrixWorld).project(this.camera);
             const sx = (_v.x * 0.5 + 0.5) * w, sy = (-_v.y * 0.5 + 0.5) * h;
             x0 = Math.min(x0, sx); x1 = Math.max(x1, sx); y0 = Math.min(y0, sy); y1 = Math.max(y1, sy);
         }
