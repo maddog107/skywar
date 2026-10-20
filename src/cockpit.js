@@ -29,16 +29,39 @@ const _up = new THREE.Vector3();
 // has GAUGE_<kind> faces (the standby instruments), ANN_<key> lamps (the annunciators), STICK and THROTTLE to move. eye: where the pilot's eye sits from the file's origin (m: right, up, back), to fit
 // the view (the panel low in the frame, the HUD on the horizon) without cutting the model again. paint: material
 // name → a colour for parts the model left plain white
+// the kit's families (tools/cockpits/cockpit_kit.py <layout>): the displays in the order the kit numbers them
+const kit = (layout, screens, extra = {}) => ({ file: 'models/cockpits/kit_' + layout + '.glb', kit: true, layout, screens, ...extra });
+// F/A-18 (EA-18G): the left and right DDIs, the UFC's display, the AMPCD between the knees
+const HORNET = kit('hornet', ['radar', 'stores', 'ufdL', 'tsd']);
+// F-16 (F-2): the two MFDs, the DED over the ICP, the RWR scope; the side-stick
+const VIPER = kit('viper', ['radar', 'stores', 'ufdL', 'tsd'], { sideStick: true });
+// F-15: the VSD, the TEWS scope, the MPCD
+const EAGLE = kit('eagle', ['radar', 'tsd', 'stores']);
+// F-14 front: the VDI (the attitude picture) over the HSD (the tactical one)
+const TOMCAT = kit('tomcat', ['adi', 'tsd']);
+// F-4E, F-5E, A-10A, Mirage 5, Jaguar: the round dials and the radar scope (or TV monitor)
+const ANALOG = kit('analog', ['radar']);
+// Su-35 (the Su-27 family, MiG-29, J-10, Su-47): two MFDs and a small one, on the blue-green panel
+const FLANKER = kit('flanker', ['radar', 'stores', 'tsd']);
+// MiG-21, MiG-25, MiG-31, J-8: the radar scope under its hood, the round dials
+const FISHBED = kit('fishbed', ['radar']);
+// F-35: the panoramic display's two portals and the standby display; the helmet display, no HUD; the side-stick
+const PCD = kit('pcd', ['tsd', 'radar', 'adi'], { hmd: true, sideStick: true });
+// Typhoon, Gripen, Su-57, J-20, X-100 (and the Rafale, with its side-stick): three big displays across
+const GLASS = kit('glass3', ['radar', 'tsd', 'stores']);
+const GLASS_S = kit('glass3s', ['radar', 'tsd', 'stores'], { sideStick: true });
 export const COCKPIT_MODELS = {
+    fa18: HORNET, ea18g: HORNET,
+    f16: VIPER, f2: VIPER,
+    f15: EAGLE,
+    f14: TOMCAT,
+    f4: ANALOG, f5: ANALOG, a10: ANALOG, mirage: ANALOG, jaguar: ANALOG,
+    su35: FLANKER, mig29: FLANKER, j10: FLANKER, su47: FLANKER,
+    mig21: FISHBED, mig25: FISHBED, mig31: FISHBED, j8: FISHBED,
+    f35: PCD, f35n: PCD,
+    typhoon: GLASS, gripen: GLASS, su57: GLASS, j20: GLASS, x100: GLASS, rafale: GLASS_S,
     // F-22: two up-front displays over three MFDs and the 8-inch primary display (the tactical picture), the
-    // standby flight display under it (two faces in the model)
-    // the kit's (tools/cockpits/cockpit_kit.py): F/A-18 (and the EA-18G): the left and right DDIs, the UFC's
-    // display, the AMPCD between the knees
-    fa18: { file: 'models/cockpits/kit_hornet.glb', kit: true, screens: ['radar', 'stores', 'ufdL', 'tsd'] },
-    ea18g: { file: 'models/cockpits/kit_hornet.glb', kit: true, screens: ['radar', 'stores', 'ufdL', 'tsd'] },
-    // F-16 (and the F-2, its Japanese derivative): the two MFDs, the DED over the ICP, the RWR scope; the side-stick
-    f16: { file: 'models/cockpits/kit_viper.glb', kit: true, sideStick: true, screens: ['radar', 'stores', 'ufdL', 'tsd'] },
-    f2: { file: 'models/cockpits/kit_viper.glb', kit: true, sideStick: true, screens: ['radar', 'stores', 'ufdL', 'tsd'] },
+    // standby flight display under it (two faces in the model): the licensed model (models/cockpits/CREDITS.md)
     f22: { file: 'models/cockpits/f22.glb', screens: ['ufdL', 'ufdR', 'radar', 'tsd', 'stores', 'adi', 'adi'], eye: [0, -0.11, -0.2], paint: { F2266Mtl: 0x34383c } },
 };
 
@@ -524,7 +547,9 @@ export class Cockpit {
             for (const o of faces) {
                 const [k, key] = o.name.split('_');
                 if (k === 'GAUGE') {
-                    const ct = key === 'adi' ? this.adi : (this.gauges.find(g => g.kind === key) || null);
+                    // (a kind the procedural cockpit has no gauge of gets its own, drawn with the others)
+                    let ct = key === 'adi' ? this.adi : key === 'hsi' ? (mc.canvases.hsi = mc.canvases.hsi || canvasTex(256, 256)) : (this.gauges.find(g => g.kind === key) || null);
+                    if (!ct && ['asi', 'alt', 'vvi', 'g', 'rpm', 'egt', 'fuel', 'aoa'].includes(key)) { ct = { kind: key, ...canvasTex(160, 160) }; this.gauges.push(ct); }
                     o.material = new THREE.MeshBasicMaterial({ map: ct ? ct.tex : null, color: ct ? 0xd9d9d9 : 0x111111, toneMapped: false });
                     o.userData.glow = 0.85;
                     this.screens.push(o);
@@ -566,6 +591,7 @@ export class Cockpit {
         if (kind === 'radar') return this.mfdL;
         if (kind === 'stores') return this.mfdR;
         if (kind === 'adi') return this.adi;
+        if (kind === 'hsi') return (mc.canvases.hsi = mc.canvases.hsi || canvasTex(256, 256));
         if (!['ufdL', 'ufdR', 'tsd'].includes(kind)) return null;
         if (mc.canvases[kind]) return mc.canvases[kind];
         // sized to the face (its UV corners), so text and the map aren't stretched
@@ -596,6 +622,42 @@ export class Cockpit {
                 (game.slotDef ? game.slotDef.label : 'GUN') + ' ' + (game.slotDef ? p[game.slotDef.ammo] ?? '' : p.ammo), 'GUN  ' + p.ammo];
         lines.forEach((t, i) => ctx.fillText(t, W * 0.07, H * (0.22 + i * 0.2)));
         if (!right && p.incoming.length && (game.time * 3) % 1 < 0.5) { ctx.fillStyle = '#ff4040'; ctx.fillText('MISSILE', W * 0.5, H * 0.22); }
+        ct.tex.needsUpdate = true;
+    }
+
+    // Horizontal situation indicator: the compass card turning with the heading, the lubber line, the bearing to the
+    // locked target (or home) as a needle, the heading in figures
+    drawHSI(ct, p, game) {
+        const ctx = ct.ctx, W = ct.c.width, c = W / 2, R = W * 0.42;
+        ctx.fillStyle = '#0b0c0d'; ctx.fillRect(0, 0, W, W);
+        if (!p) return;
+        const fwd = p.getForward(_v), hdg = ((-Math.atan2(-fwd.x, -fwd.z) / DEG) % 360 + 360) % 360;
+        ctx.save(); ctx.translate(c, c); ctx.rotate(-hdg * DEG);
+        ctx.strokeStyle = '#e8e8e0'; ctx.fillStyle = '#e8e8e0'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        for (let d = 0; d < 360; d += 5) {
+            const a = d * DEG - Math.PI / 2, l = d % 30 === 0 ? 16 : d % 10 === 0 ? 10 : 6;
+            ctx.lineWidth = d % 10 === 0 ? 2.5 : 1.5;
+            ctx.beginPath(); ctx.moveTo(Math.cos(a) * R, Math.sin(a) * R); ctx.lineTo(Math.cos(a) * (R - l), Math.sin(a) * (R - l)); ctx.stroke();
+            if (d % 30 === 0) {
+                ctx.save(); ctx.rotate(d * DEG); ctx.font = 'bold ' + (d % 90 === 0 ? 24 : 18) + 'px Arial';
+                ctx.fillText(d % 90 === 0 ? 'NESW'[d / 90] : String(d / 10), 0, -R + 32); ctx.restore();
+            }
+        }
+        // the bearing needle: the locked target, else home
+        const T = game.lockTarget ? game.lockTarget.pos : { x: 0, z: 0 };
+        const brg = ((Math.atan2(T.x - p.pos.x, -(T.z - p.pos.z)) / DEG) % 360 + 360) % 360;
+        ctx.rotate(brg * DEG);
+        ctx.strokeStyle = game.lockTarget ? '#ffd23f' : '#4dff94'; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(0, R * 0.62); ctx.lineTo(0, -R * 0.62); ctx.moveTo(-10, -R * 0.5); ctx.lineTo(0, -R * 0.64); ctx.lineTo(10, -R * 0.5); ctx.stroke();
+        ctx.restore();
+        // the aircraft symbol and lubber line, the heading box
+        ctx.strokeStyle = '#ffb020'; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(c, c - 18); ctx.lineTo(c, c + 18); ctx.moveTo(c - 16, c - 2); ctx.lineTo(c + 16, c - 2); ctx.moveTo(c - 7, c + 14); ctx.lineTo(c + 7, c + 14); ctx.stroke();
+        ctx.fillStyle = '#ffb020'; ctx.beginPath(); ctx.moveTo(c, c - R - 2); ctx.lineTo(c - 8, c - R - 14); ctx.lineTo(c + 8, c - R - 14); ctx.fill();
+        ctx.fillStyle = '#000'; ctx.fillRect(c - 30, W - 34, 60, 26); ctx.strokeStyle = '#e8e8e0'; ctx.lineWidth = 1.5; ctx.strokeRect(c - 30, W - 34, 60, 26);
+        ctx.fillStyle = '#e8e8e0'; ctx.font = 'bold 20px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(String(Math.round(hdg) % 360).padStart(3, '0'), c, W - 21);
+        ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
         ct.tex.needsUpdate = true;
     }
 
@@ -811,6 +873,11 @@ export class Cockpit {
         if (g.kind === 'alt') { val = (p.pos.y * M_TO_FT) % 10000; max = 10000; label = 'ALT'; }
         if (g.kind === 'vvi') { val = clamp(p.vel.y * 196.85, -6000, 6000) + 6000; max = 12000; label = 'VVI'; ticks = 12; }
         if (g.kind === 'g') { val = clamp(p.gLoad, -3, 10) + 3; max = 13; label = 'G'; ticks = 13; }
+        // (the engine's: RPM from the spool, the turbine temperature with it, the reheat on top)
+        if (g.kind === 'rpm') { val = p.flameout ? 14 : 62 + p.throttle * 36 + (p.afterburner ? 4 : 0); max = 110; label = 'RPM'; ticks = 11; }
+        if (g.kind === 'egt') { val = p.flameout ? 90 : 430 + p.throttle * 400 + (p.afterburner ? 80 : 0); max = 1000; label = 'EGT'; }
+        if (g.kind === 'fuel') { val = clamp(p.fuel, 0, 1) * 100; max = 100; label = 'FUEL'; }
+        if (g.kind === 'aoa') { val = clamp((p.alpha || 0) / DEG, -5, 35) + 5; max = 40; label = 'AOA'; ticks = 8; }
         const full = g.kind === 'alt' ? 1 : 0.85;
         for (let i = 0; i <= ticks * 2; i++) {
             if (full === 1 && i === ticks * 2) break;
@@ -954,12 +1021,18 @@ export class Cockpit {
         // a model cockpit's own displays
         const mc = this.model && this.model.canvases;
         if (mc && f === 0 && mc.tsd) this.drawTSD(mc.tsd, game);
+        if (mc && f === 0 && mc.hsi) this.drawHSI(mc.hsi, p, game);
         if (mc && f === 1) { if (mc.ufdL) this.drawUFD(mc.ufdL, p, game, false); if (mc.ufdR) this.drawUFD(mc.ufdR, p, game, true); }
         void freeLook;
     }
 
     // Projected screen rect of the HUD combiner (so the 2D HUD can be clipped to it)
     hudRect(w, h) {
+        // (a helmet display, the F-35's: the symbology where the head looks, as the HUD stands in the outside views)
+        if (this.model && this.model.def.hmd) {
+            const W = Math.min(w * 0.46, 620), H = Math.min(h * 0.62, 520);
+            return { x: w / 2 - W / 2, y: h / 2 - H / 2, w: W, h: H };
+        }
         const hud = this.model && this.model.hud;
         let pts = [[-0.1, -0.085, 0], [0.1, -0.085, 0], [-0.1, 0.085, 0], [0.1, 0.085, 0]];
         if (hud) {

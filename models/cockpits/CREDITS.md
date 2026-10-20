@@ -12,12 +12,21 @@ CC BY models require the attribution below to be shown to players (the in-game c
 |---|---|---|---|---|
 | `kit_hornet.glb` | F/A-18 family (fa18, ea18g): centre stick, two DDIs over the AMPCD, the UFC, a windscreen bow with three mirrors, a Martin-Baker seat | SKYWAR, built in Blender by `tools/cockpits/cockpit_kit.py hornet` | CC0 | (built from the real cockpit's layout) |
 | `kit_viper.glb` | F-16 family (f16, f2): side-stick and throttle on the consoles, two MFDs, the DED over the ICP, the RWR scope, a one-piece canopy, an ACES II seat | SKYWAR, built in Blender by `tools/cockpits/cockpit_kit.py viper` | CC0 | (built from the real cockpit's layout) |
+| `kit_eagle.glb` | F-15 (f15): the VSD and TEWS scope, the big ADI and the standby air data round it, the MPCD and HSI on the pedestal, the engine instruments, ACES II | SKYWAR, built in Blender by `tools/cockpits/cockpit_kit.py eagle` | CC0 | (built from the real cockpit's layout) |
+| `kit_tomcat.glb` | F-14 front cockpit (f14): the VDI over the HSD, analogue flight and engine instruments, the windscreen bow | SKYWAR, built in Blender by `tools/cockpits/cockpit_kit.py tomcat` | CC0 | (built from the real cockpit's layout) |
+| `kit_analog.glb` | the second-generation layout (f4, f5, a10, mirage, jaguar): the basic T of round dials, the radar scope, engine gauges down the right | SKYWAR, built in Blender by `tools/cockpits/cockpit_kit.py analog` | CC0 | (built from the real cockpit's layout) |
+| `kit_flanker.glb` | Su-35S (su35, mig29, j10, su47): two MFDs and a small one, standby and engine dials, on the Soviet blue-green panel, the K-36 seat | SKYWAR, built in Blender by `tools/cockpits/cockpit_kit.py flanker` | CC0 | (built from the real cockpit's layout) |
+| `kit_fishbed.glb` | MiG-21 (mig21, mig25, mig31, j8): the radar scope under its hood, the round dials, blue-green, the K-36 seat | SKYWAR, built in Blender by `tools/cockpits/cockpit_kit.py fishbed` | CC0 | (built from the real cockpit's layout) |
+| `kit_pcd.glb` | F-35 (f35, f35n): the 20 x 8 inch panoramic display as two portals, the standby display, side-stick, no HUD (the helmet display) | SKYWAR, built in Blender by `tools/cockpits/cockpit_kit.py pcd` | CC0 | (built from the real cockpit's layout) |
+| `kit_glass3.glb` | three big displays across (typhoon, gripen, su57, j20, x100), centre stick | SKYWAR, built in Blender by `tools/cockpits/cockpit_kit.py glass3` | CC0 | (built from the real cockpit's layout) |
+| `kit_glass3s.glb` | the same with a side-stick (rafale) | SKYWAR, built in Blender by `tools/cockpits/cockpit_kit.py glass3s` | CC0 | (built from the real cockpit's layout) |
 | `f22.glb` | F-22 Raptor | "F22 Raptor" by weeadamp | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) (live Sketchfab API "CC Attribution", checked 2026-10-20) | https://sketchfab.com/3d-models/f22-raptor-1a58a540041242218cb99b46fa8c39a7 (GLB from the Objaverse mirror: `glbs/000-106/1a58a540041242218cb99b46fa8c39a7.glb`) |
 
 ## Commands
 
     /opt/homebrew/bin/blender -b -P tools/cockpits/cockpit_kit.py -- hornet models/cockpits/kit_hornet.glb --ao 2048 --samples 32
     /opt/homebrew/bin/blender -b -P tools/cockpits/cockpit_kit.py -- viper models/cockpits/kit_viper.glb --ao 2048 --samples 32
+    (and the same for eagle, tomcat, analog, flanker, fishbed, pcd, glass3, glass3s: models/cockpits/kit_<layout>.glb)
 
 (the kit's cockpits: real proportions round the design eye, the tiled shared textures by material name, placards drawn
 by the game, an ambient-occlusion bake on a second UV set as the glTF occlusion texture; `--preview DIR` renders five

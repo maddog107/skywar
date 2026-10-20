@@ -41,11 +41,24 @@ SAMPLES = int(opt('--samples', '48'))
 PREVIEW = opt('--preview')
 
 # ── layouts ──
+# (stick: centre / side; bow: a windscreen bow; displays: the panel's layout (PANELS); seat: mk14 (handle between the
+# knees), aces2 (on the seat sides), k36 (the Zvezda seat: orange handles between the knees); palette: west (dark gull
+# grey) or russ (the Soviet blue-green); hmd: no HUD (the F-35's helmet display: the game keeps its HUD full screen))
 LAYOUTS = {
     'hornet': dict(stick='centre', bow=True, displays='ddi3', seat='mk14', mirrors=3, glare_lip=-0.68),
     'viper': dict(stick='side', bow=False, displays='mfd2', seat='aces2', mirrors=3, glare_lip=-0.68),
+    'eagle': dict(stick='centre', bow=True, displays='eagle', seat='aces2', mirrors=3, glare_lip=-0.68),
+    'tomcat': dict(stick='centre', bow=True, displays='tomcat', seat='mk14', mirrors=3, glare_lip=-0.7),
+    'analog': dict(stick='centre', bow=True, displays='analog', seat='mk14', mirrors=1, glare_lip=-0.66),
+    'flanker': dict(stick='centre', bow=True, displays='flanker', seat='k36', mirrors=3, glare_lip=-0.68, palette='russ'),
+    'fishbed': dict(stick='centre', bow=True, displays='fishbed', seat='k36', mirrors=1, glare_lip=-0.64, palette='russ'),
+    'pcd': dict(stick='side', bow=False, displays='pcd', seat='mk14', mirrors=0, glare_lip=-0.7, hmd=True),
+    'glass3': dict(stick='centre', bow=True, displays='glass3', seat='mk14', mirrors=3, glare_lip=-0.68),
+    'glass3s': dict(stick='side', bow=True, displays='glass3', seat='mk14', mirrors=3, glare_lip=-0.68),
 }
 L = LAYOUTS[LAYOUT]
+RUSS = L.get('palette') == 'russ'
+PAINT = 'CkTurq' if RUSS else 'CkGrey'
 
 R.begin()
 for name, col, metal, rough in [
@@ -57,6 +70,8 @@ for name, col, metal, rough in [
     ('CkCushion', 0x23251f, 0.0, 0.95),    # cushions
     ('CkStrap', 0x5c5a40, 0.0, 0.9),       # harness
     ('CkBtn', 0x62676c, 0.2, 0.5),         # push buttons
+    ('CkTurq', 0x4a9a98, 0.12, 0.6),       # the Soviet cockpit's blue-green (Su-27, MiG-29, MiG-21)
+    ('CkSeatK', 0x5a5f58, 0.0, 0.85),      # the K-36's grey
 ]:
     material(name, srgb(col), metal, rough)
 S = R.static('cockpit')
@@ -100,9 +115,9 @@ def pushbutton(F, x, y, w=0.012, h=0.01, mat='CkBtn'):
     box(mat, F, x - w / 2, x + w / 2, y - h / 2, y + h / 2, 0.002, 0.007)
 def screw(F, x, y, r=0.0028):
     cyl('Metal', F, (x, y, 0), r, r * 0.8, 0.0, 0.0012, 8)
-def plate(F, x0, x1, y0, y1, mat='CkGrey', d=0.004):
+def plate(F, x0, x1, y0, y1, mat=None, d=0.004):
     """a module plate, raised a few mm, with its four screws"""
-    box(mat, F, x0, x1, y0, y1, 0.0, d, skip=('nz',))
+    box(mat or PAINT, F, x0, x1, y0, y1, 0.0, d, skip=('nz',))
     G = (F[0], at(F, 0, 0, d), F[2], F[3], F[4])
     for x in (x0 + 0.006, x1 - 0.006):
         for y in (y0 + 0.006, y1 - 0.006):
@@ -234,7 +249,7 @@ def consoles():
         x0, x1 = (0.235, 0.44) if s > 0 else (-0.44, -0.235)
         # the console body: top, inboard face down to the floor
         F = frame((0, CONS_Y, 0), tilt=PI / 2)                      # local x right, y forward (-z), +z up
-        box('CkGrey', F, x0, x1, -0.5, 0.62, -0.13, 0.0)
+        box(PAINT, F, x0, x1, -0.5, 0.62, -0.13, 0.0)
         # its modules (the left console: engines, fuel, comms; the right: lights, sensors, environment)
         mods = ([('FUEL', [[('t', 'PROBE'), ('t', 'DUMP')], [('k', 'BINGO'), ('t', 'X-FEED')]]),
                  ('COMM', [[('k', 'VOL 1'), ('k', 'VOL 2')], [('t', 'IFF'), ('t', 'ILS')]]),
@@ -264,63 +279,185 @@ PANEL_O, PANEL_TILT = (0.0, -0.45, -0.69), 0.24
 def panel():
     F = frame(PANEL_O, tilt=PANEL_TILT)
     # the panel: a wide upper part and the centre pedestal between the knees, its edges sweeping back to the sills
-    box('CkGrey', F, -0.43, 0.43, -0.03, 0.2, -0.05, 0.0)
-    box('CkGrey', F, -0.2, 0.2, -0.26, -0.03, -0.05, 0.0)
+    box(PAINT, F, -0.43, 0.43, -0.03, 0.2, -0.05, 0.0)
+    box(PAINT, F, -0.2, 0.2, -0.26, -0.03, -0.05, 0.0)
     for s in (-1, 1):
-        box('CkGrey', F, s * 0.43 - 0.02, s * 0.43 + 0.02, -0.03, 0.2, -0.05, 0.22)
+        box(PAINT, F, s * 0.43 - 0.02, s * 0.43 + 0.02, -0.03, 0.2, -0.05, 0.22)
     # the pedestal down to the floor
-    box('CkGrey', frame((0, 0, 0)), -0.17, 0.17, FLOOR_Y, PANEL_O[1] - 0.24, -0.86, -0.7)
-    if L['displays'] == 'ddi3':
-        # F/A-18: left and right DDIs, the AMPCD between the knees, the UFC on top, the standby instruments
-        dL = display(F, -0.255, 0.065, 0.145, 0.145)
-        dR = display(F, 0.255, 0.065, 0.145, 0.145)
-        ufc(F, 0.0, 0.11)
-        dC = display(F, 0.0, -0.145, 0.15, 0.15)
-        gauge(F, 'adi', -0.115, -0.065, 0.032)
-        gauge(F, 'asi', 0.115, -0.03, 0.026)
-        gauge(F, 'alt', 0.115, -0.1, 0.026)
-        annunciators(F, -0.255, 0.18, ['master', 'stall', 'ab', 'brake'])
-        annunciators(F, 0.255, 0.18, ['launch', 'lock', 'gear', 'fuel'])
-        landing_gear(F, -0.39, -0.0)
-        G = plate(F, 0.33, 0.42, -0.02, 0.06)
-        label('MASTER ARM', G, 0.375, 0.05, h=0.006)
-        guarded(G, 0.36, 0.02)
-        pushbutton(G, 0.395, 0.02, 0.014, 0.014, 'Red')
-        label('A/A', G, 0.355, -0.005, h=0.005); label('A/G', G, 0.395, -0.005, h=0.005)
-    else:
-        # F-16: the two MFDs low, the ICP and DED up in the middle, standby instruments, the RWR scope
-        dL = display(F, -0.255, 0.02, 0.135, 0.135)
-        dR = display(F, 0.255, 0.02, 0.135, 0.135)
-        ufc(F, 0.0, 0.12, ded=True)
-        gauge(F, 'adi', 0.0, -0.06, 0.036)
-        gauge(F, 'asi', -0.1, -0.02, 0.025)
-        gauge(F, 'alt', 0.1, -0.02, 0.025)
-        dC = display(F, 0.0, -0.17, 0.08, 0.08, osb=False, bezel=0.018)   # the RWR / TSD scope
-        annunciators(F, -0.255, 0.155, ['master', 'stall', 'ab', 'brake'])
-        annunciators(F, 0.255, 0.155, ['launch', 'lock', 'gear', 'fuel'])
-        landing_gear(F, -0.39, -0.02)
-        G = plate(F, 0.33, 0.42, 0.08, 0.17)
-        label('MASTER ARM', G, 0.375, 0.16, h=0.006)
-        guarded(G, 0.36, 0.125)
-        label('LASER', G, 0.395, 0.1, h=0.005); toggle(G, 0.395, 0.125)
-    # switch rows on the pedestal and down the panel edges
-    for s in (-1, 1):
-        G = plate(F, s * 0.355 - 0.035, s * 0.355 + 0.035, 0.08 if L['displays'] == 'ddi3' else -0.1, 0.15 if L['displays'] == 'ddi3' else -0.02)
-        cx = s * 0.355
-        y = 0.115 if L['displays'] == 'ddi3' else -0.06
-        toggle(G, cx - 0.016, y); toggle(G, cx + 0.016, y, False)
-        label('HOOK' if s < 0 else 'SPIN', G, cx, y - 0.025, h=0.005)
-    G = plate(F, -0.19, 0.19, -0.255, -0.235 if L['displays'] == 'ddi3' else -0.225)
-    for k in range(9):
-        pushbutton(G, -0.17 + k * 0.0425, -0.245 if L['displays'] == 'ddi3' else -0.24, 0.02, 0.008)
+    box(PAINT, frame((0, 0, 0)), -0.17, 0.17, FLOOR_Y, PANEL_O[1] - 0.24, -0.86, -0.7)
+    PANELS[L['displays']](F)
     # panel seams and screws round the edge
     for x in [-0.42 + i * 0.105 for i in range(9)]:
         screw(F, x, 0.19); screw(F, x, -0.02)
     return F
 
+def master_arm(F, x, y):
+    G = plate(F, x - 0.045, x + 0.045, y - 0.04, y + 0.04)
+    label('MASTER ARM', G, x, y + 0.03, h=0.006)
+    guarded(G, x - 0.015, y)
+    pushbutton(G, x + 0.02, y, 0.014, 0.014, 'Red')
+
+def switch_row(F, x0, x1, y, n, title=None, guard_at=None):
+    G = plate(F, x0, x1, y - 0.02, y + 0.022)
+    for i in range(n):
+        x = x0 + (x1 - x0) * (i + 0.5) / n
+        if i == guard_at:
+            guarded(G, x, y + 0.002)
+        else:
+            toggle(G, x, y + 0.002, i % 2 == 0)
+    if title:
+        label(title, G, (x0 + x1) / 2, y - 0.013, h=0.0055)
+
+def p_ddi3(F):
+    # F/A-18: left and right DDIs, the AMPCD between the knees, the UFC on top, the standby instruments
+    display(F, -0.255, 0.065, 0.145, 0.145)
+    display(F, 0.255, 0.065, 0.145, 0.145)
+    ufc(F, 0.0, 0.11)
+    display(F, 0.0, -0.145, 0.15, 0.15)
+    gauge(F, 'adi', -0.115, -0.065, 0.032)
+    gauge(F, 'asi', 0.115, -0.03, 0.026)
+    gauge(F, 'alt', 0.115, -0.1, 0.026)
+    annunciators(F, -0.255, 0.18, ['master', 'stall', 'ab', 'brake'])
+    annunciators(F, 0.255, 0.18, ['launch', 'lock', 'gear', 'fuel'])
+    landing_gear(F, -0.39, -0.0)
+    master_arm(F, 0.375, 0.02)
+    for s in (-1, 1):
+        switch_row(F, s * 0.355 - 0.035, s * 0.355 + 0.035, 0.115, 2, 'HOOK' if s < 0 else 'SPIN')
+    switch_row(F, -0.19, 0.19, -0.235, 9)
+
+def p_mfd2(F):
+    # F-16: the two MFDs low, the ICP and DED up in the middle, standby instruments, the RWR scope
+    display(F, -0.255, 0.02, 0.135, 0.135)
+    display(F, 0.255, 0.02, 0.135, 0.135)
+    ufc(F, 0.0, 0.12, ded=True)
+    gauge(F, 'adi', 0.0, -0.06, 0.036)
+    gauge(F, 'asi', -0.1, -0.02, 0.025)
+    gauge(F, 'alt', 0.1, -0.02, 0.025)
+    display(F, 0.0, -0.17, 0.08, 0.08, osb=False, bezel=0.018)   # the RWR / TSD scope
+    annunciators(F, -0.255, 0.155, ['master', 'stall', 'ab', 'brake'])
+    annunciators(F, 0.255, 0.155, ['launch', 'lock', 'gear', 'fuel'])
+    landing_gear(F, -0.39, -0.02)
+    master_arm(F, 0.375, 0.125)
+    for s in (-1, 1):
+        switch_row(F, s * 0.355 - 0.035, s * 0.355 + 0.035, -0.06, 2, 'HOOK' if s < 0 else 'SPIN')
+    switch_row(F, -0.19, 0.19, -0.235, 9)
+
+def p_eagle(F):
+    # F-15C: the VSD (radar) top left and the TEWS threat scope top right, the big ADI in the middle with the
+    # standby air data round it, the MPCD and the HSI on the pedestal, the engine instruments on the right
+    display(F, -0.29, 0.1, 0.11, 0.11)                    # VSD
+    display(F, 0.31, 0.135, 0.075, 0.075, osb=False, bezel=0.016)   # TEWS
+    display(F, -0.1, -0.15, 0.11, 0.11)                   # MPCD
+    gauge(F, 'adi', 0.0, 0.07, 0.048)
+    gauge(F, 'hsi', 0.1, -0.15, 0.045)
+    gauge(F, 'asi', -0.135, 0.12, 0.026); gauge(F, 'aoa', -0.135, 0.045, 0.022)
+    gauge(F, 'alt', 0.135, 0.12, 0.026); gauge(F, 'vvi', 0.135, 0.045, 0.022)
+    for i, k in enumerate(['rpm', 'rpm', 'egt', 'egt']):
+        gauge(F, k + '_%d' % i, 0.255 + (i % 2) * 0.075, 0.055 - (i // 2) * 0.055, 0.02)
+    gauge(F, 'fuel', 0.38, 0.03, 0.022)
+    annunciators(F, -0.25, 0.185, ['master', 'stall', 'ab', 'brake'], w=0.024)
+    annunciators(F, 0.0, 0.185, ['launch', 'lock', 'gear', 'fuel'], w=0.024)
+    landing_gear(F, -0.39, 0.07)
+    switch_row(F, -0.43 + 0.01, -0.2 - 0.01, -0.01, 5, 'ARMT', guard_at=0)
+
+def p_tomcat(F):
+    # F-14 front cockpit: the VDI (the attitude picture) over the HSD (the tactical picture), analogue flight and
+    # engine instruments either side, the armament panel low on the left
+    display(F, 0.0, 0.1, 0.13, 0.13, osb=False, bezel=0.02)        # VDI
+    display(F, 0.0, -0.13, 0.12, 0.12, osb=False, bezel=0.02)      # HSD
+    gauge(F, 'asi', -0.16, 0.13, 0.027); gauge(F, 'aoa', -0.16, 0.055, 0.024); gauge(F, 'adi', -0.27, 0.1, 0.036)
+    gauge(F, 'alt', 0.16, 0.13, 0.027); gauge(F, 'vvi', 0.16, 0.055, 0.024)
+    for i, k in enumerate(['rpm', 'rpm', 'egt', 'egt']):
+        gauge(F, k + '_%d' % i, 0.27 + (i % 2) * 0.07, 0.13 - (i // 2) * 0.06, 0.021)
+    gauge(F, 'fuel', 0.305, 0.0, 0.024); gauge(F, 'hsi', -0.13, -0.13, 0.04)
+    annunciators(F, -0.22, 0.185, ['master', 'stall', 'ab', 'brake'], w=0.024)
+    annunciators(F, 0.22, 0.185, ['launch', 'lock', 'gear', 'fuel'], w=0.024)
+    landing_gear(F, -0.39, 0.06)
+    switch_row(F, -0.43 + 0.01, -0.21, -0.005, 4, 'WPN SEL', guard_at=3)
+
+def p_analog(F):
+    # the second-generation layout (F-4E, F-5E, A-10A, Mirage 5, Jaguar): the ADI over the HSI in the middle (the
+    # basic T), air data round them, the radar scope top left, the engine instruments down the right
+    display(F, -0.29, 0.1, 0.095, 0.095, osb=False, bezel=0.022)   # radar scope / TV monitor
+    gauge(F, 'adi', 0.0, 0.085, 0.045)
+    gauge(F, 'hsi', 0.0, -0.11, 0.045)
+    gauge(F, 'asi', -0.13, 0.12, 0.027); gauge(F, 'aoa', -0.13, 0.045, 0.022)
+    gauge(F, 'alt', 0.13, 0.12, 0.027); gauge(F, 'vvi', 0.13, 0.045, 0.022)
+    gauge(F, 'g', -0.13, -0.08, 0.022)
+    for i, k in enumerate(['rpm', 'egt', 'fuel', 'rpm']):
+        gauge(F, k + '_%d' % i, 0.255 + (i % 2) * 0.075, 0.12 - (i // 2) * 0.065, 0.024)
+    annunciators(F, -0.23, 0.185, ['master', 'stall', 'ab', 'brake'], w=0.024)
+    annunciators(F, 0.23, 0.185, ['launch', 'lock', 'gear', 'fuel'], w=0.024)
+    landing_gear(F, -0.39, 0.0)
+    switch_row(F, 0.215, 0.425, -0.005, 5, 'ARMAMENT', guard_at=4)
+    switch_row(F, 0.06, 0.19, -0.2, 3)
+
+def p_flanker(F):
+    # Su-35S (and the Su-27 family, MiG-29, J-10): two big MFDs side by side, a small one under them, the standby
+    # instruments down the left, the engine gauges down the right, on the blue-green panel
+    display(F, -0.105, 0.07, 0.15, 0.15)
+    display(F, 0.105, 0.07, 0.15, 0.15)
+    display(F, 0.0, -0.15, 0.1, 0.1, osb=False, bezel=0.02)
+    gauge(F, 'adi', -0.31, 0.1, 0.036); gauge(F, 'asi', -0.31, 0.015, 0.024); gauge(F, 'alt', -0.37, 0.155, 0.02)
+    gauge(F, 'vvi', -0.25, 0.155, 0.02)
+    for i, k in enumerate(['rpm', 'rpm', 'egt', 'egt']):
+        gauge(F, k + '_%d' % i, 0.28 + (i % 2) * 0.07, 0.13 - (i // 2) * 0.06, 0.021)
+    gauge(F, 'fuel', 0.315, 0.01, 0.024); gauge(F, 'g', -0.13, -0.13, 0.022); gauge(F, 'aoa', 0.13, -0.13, 0.022)
+    annunciators(F, -0.105, 0.183, ['master', 'stall', 'ab', 'brake'], w=0.026)
+    annunciators(F, 0.105, 0.183, ['launch', 'lock', 'gear', 'fuel'], w=0.026)
+    landing_gear(F, -0.395, -0.0)
+    switch_row(F, 0.215, 0.425, -0.008, 5, None, guard_at=0)
+
+def p_fishbed(F):
+    # MiG-21 (and the MiG-25 / MiG-31, J-8): the radar scope under its rubber hood at the top of the panel, the ADI
+    # under it, the HSI on the pedestal, round instruments either side, on the blue-green panel
+    display(F, 0.0, 0.11, 0.1, 0.1, osb=False, bezel=0.018)
+    G = (F[0], at(F, 0, 0, 0.016), F[2], F[3], F[4])
+    for (x0, x1, y0, y1) in [(-0.075, -0.065, 0.04, 0.18), (0.065, 0.075, 0.04, 0.18), (-0.075, 0.075, 0.17, 0.18)]:
+        box('Rubber', G, x0, x1, y0, y1, 0.0, 0.06)                 # the scope's viewing hood
+    gauge(F, 'adi', 0.0, -0.02, 0.04)
+    gauge(F, 'hsi', 0.0, -0.17, 0.04)
+    gauge(F, 'asi', -0.15, 0.12, 0.027); gauge(F, 'alt', -0.15, 0.045, 0.027); gauge(F, 'vvi', -0.245, 0.09, 0.022)
+    gauge(F, 'g', -0.13, -0.12, 0.022)
+    gauge(F, 'rpm', 0.15, 0.12, 0.027); gauge(F, 'egt', 0.15, 0.045, 0.024); gauge(F, 'fuel', 0.245, 0.09, 0.024)
+    gauge(F, 'aoa', 0.13, -0.12, 0.022)
+    annunciators(F, -0.32, 0.17, ['master', 'stall', 'ab', 'brake'], w=0.022)
+    annunciators(F, 0.32, 0.17, ['launch', 'lock', 'gear', 'fuel'], w=0.022)
+    landing_gear(F, -0.39, 0.03)
+    switch_row(F, 0.29, 0.425, 0.03, 3, None, guard_at=2)
+
+def p_pcd(F):
+    # F-35: the panoramic cockpit display, 20 by 8 inches, as two portals; the standby flight display under it;
+    # no HUD (the helmet shows it)
+    box('Bezel', F, -0.27, 0.27, -0.06, 0.17, 0.0, 0.016)
+    display(F, -0.128, 0.055, 0.245, 0.2, osb=False, bezel=0.006)
+    display(F, 0.128, 0.055, 0.245, 0.2, osb=False, bezel=0.006)
+    display(F, 0.0, -0.14, 0.08, 0.07, osb=False, bezel=0.014)       # standby flight display
+    annunciators(F, -0.33, 0.12, ['master', 'stall'], w=0.026); annunciators(F, -0.33, 0.1, ['ab', 'brake'], w=0.026)
+    annunciators(F, 0.33, 0.12, ['launch', 'lock'], w=0.026); annunciators(F, 0.33, 0.1, ['gear', 'fuel'], w=0.026)
+    gauge(F, 'asi', -0.13, -0.15, 0.022); gauge(F, 'alt', 0.13, -0.15, 0.022); gauge(F, 'adi', -0.37, 0.03, 0.024)
+    landing_gear(F, -0.39, -0.0)
+    master_arm(F, 0.38, 0.0)
+
+def p_glass3(F):
+    # the European canards and the Su-57 / J-20: three big displays across the panel, the standby instruments on the
+    # pedestal, the warning panel above
+    display(F, -0.25, 0.065, 0.14, 0.14)
+    display(F, 0.0, 0.065, 0.155, 0.155)
+    display(F, 0.25, 0.065, 0.14, 0.14)
+    gauge(F, 'adi', 0.0, -0.13, 0.034); gauge(F, 'asi', -0.11, -0.13, 0.024); gauge(F, 'alt', 0.11, -0.13, 0.024)
+    annunciators(F, -0.25, 0.183, ['master', 'stall', 'ab', 'brake'])
+    annunciators(F, 0.25, 0.183, ['launch', 'lock', 'gear', 'fuel'])
+    landing_gear(F, -0.395, -0.0)
+    master_arm(F, 0.38, 0.0)
+    switch_row(F, -0.19, 0.19, -0.235, 9)
+
+PANELS = {'ddi3': p_ddi3, 'mfd2': p_mfd2, 'eagle': p_eagle, 'tomcat': p_tomcat, 'analog': p_analog,
+          'flanker': p_flanker, 'fishbed': p_fishbed, 'pcd': p_pcd, 'glass3': p_glass3}
+
 def ufc(F, x, y, ded=False):
     """up-front control: a keypad, option buttons, the text display (SCREEN), on its own plate"""
-    G = plate(F, x - 0.1, x + 0.1, y - 0.06, y + 0.06, 'CkGrey', 0.012)
+    G = plate(F, x - 0.1, x + 0.1, y - 0.06, y + 0.06, PAINT, 0.012)
     display(G, x + 0.03, y + 0.02, 0.1, 0.04 if not ded else 0.045, osb=False, bezel=0.008)
     keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'CLR', '0', 'ENT']
     for i, k in enumerate(keys):
@@ -354,15 +491,19 @@ def glareshield_hud():
         S.g('CkBlack').face([(xa, ya, -1.0), (xa, ya, lip), (xb, yb, lip), (xb, yb, -1.0)], None, (0, 1, 0))
         S.g('CkBlack').face([(xa, ya, lip), (xa, ya - 0.05, lip + 0.01), (xb, yb - 0.05, lip + 0.01), (xb, yb, lip)], None, (0, 0, 1))
         S.beam('CkBlack', (xa, ya - 0.004, lip + 0.004), (xb, yb - 0.004, lip + 0.004), 0.016, 0.016, caps=False)
+    if L.get('hmd'):
+        return   # (no HUD: the helmet display; the game keeps the symbology full screen)
     # the HUD: its body standing on the glareshield, the combiner frame and glass on the eye line
     Fh = frame((0, top, lip - 0.08))
     box('CkBlack', Fh, -0.085, 0.085, -0.01, 0.06, -0.12, 0.06)
     box('Bezel', Fh, -0.07, 0.07, 0.06, 0.075, -0.05, 0.05)
-    hud_tilt = 0.32
-    Fc = frame((0, top + 0.075, lip - 0.04), tilt=hud_tilt)
+    # (the combiner's glass straddles the eye line whatever the glareshield's height: its field of view is about
+    # +5° to -8°, so the view straight ahead goes through glass, not its frame)
+    hud_tilt, base = 0.32, -0.085
+    Fc = frame((0, base, lip - 0.04), tilt=hud_tilt)
     W, H = 0.16, 0.15
     for s in (-1, 1):
-        box('CkFrame', Fc, s * W / 2 - 0.006, s * W / 2 + 0.006, -0.01, H, -0.006, 0.006)
+        box('CkFrame', Fc, s * W / 2 - 0.006, s * W / 2 + 0.006, (top + 0.075) - base - 0.005, H, -0.006, 0.006)
     box('CkFrame', Fc, -W / 2 - 0.006, W / 2 + 0.006, H - 0.008, H + 0.004, -0.006, 0.006)
     P = Part('HUD_GLASS')
     P.g('Glass').face([(-W / 2, 0, 0), (W / 2, 0, 0), (W / 2, H - 0.008, 0), (-W / 2, H - 0.008, 0)], [(0, 0), (1, 0), (1, 1), (0, 1)], (0, 0, 1))
@@ -416,7 +557,7 @@ def canopy():
             box('Chrome', Fm, -0.037, 0.037, -0.009, 0.009, 0.0, 0.0015)
     else:
         # the F-16's one-piece canopy: no bow; its mirrors on short brackets on the canopy rails, ahead of the pilot
-        for s in (-1, 1):
+        for s in ((-1, 1) if L['mirrors'] else ()):
             Fm = frame((s * 0.385, SILL_Y + 0.09, -0.5), yaw=-s * 0.75, tilt=-0.1)
             box('CkFrame', Fm, -0.04, 0.04, -0.013, 0.013, -0.009, 0.0)
             box('Chrome', Fm, -0.037, 0.037, -0.01, 0.01, 0.0, 0.0015)
@@ -426,16 +567,17 @@ def canopy():
 def seat():
     zb = 0.2             # the seat back's face
     Fb = frame((0, 0, 0))
+    SEAT = 'CkSeatK' if L['seat'] == 'k36' else 'CkSeat'
     # the bucket: sides, pan, back; cushions; the headbox behind the head (clear of it: the head is ~0.1 m behind the eye)
     for s in (-1, 1):
-        box('CkSeat', Fb, s * 0.235 - 0.02, s * 0.235 + 0.02, -0.98, -0.6, -0.32, zb + 0.06)
+        box(SEAT, Fb, s * 0.235 - 0.02, s * 0.235 + 0.02, -0.98, -0.6, -0.32, zb + 0.06)
         box('Black', Fb, s * 0.258 - 0.0015, s * 0.258 + 0.0015, -0.94, -0.64, -0.3, zb)
-    box('CkSeat', Fb, -0.235, 0.235, -0.9, -0.84, -0.34, zb)
+    box(SEAT, Fb, -0.235, 0.235, -0.9, -0.84, -0.34, zb)
     box('CkCushion', Fb, -0.21, 0.21, -0.84, -0.79, -0.3, zb - 0.02)
-    box('CkSeat', Fb, -0.24, 0.24, -0.84, 0.0, zb + 0.02, zb + 0.12)
+    box(SEAT, Fb, -0.24, 0.24, -0.84, 0.0, zb + 0.02, zb + 0.12)
     box('CkCushion', Fb, -0.2, 0.2, -0.78, -0.12, zb - 0.03, zb + 0.02)
     # headbox (the parachute container), its warning stripes, the drogue chute
-    box('CkSeat', Fb, -0.17, 0.17, -0.06, 0.2, zb - 0.02, zb + 0.18)
+    box(SEAT, Fb, -0.17, 0.17, -0.06, 0.2, zb - 0.02, zb + 0.18)
     box('CkCushion', Fb, -0.11, 0.11, -0.1, 0.06, zb - 0.06, zb - 0.02)
     for i in range(6):
         box('Yellow' if i % 2 else 'Black', Fb, -0.17 + i * 0.0567, -0.17 + (i + 1) * 0.0567, 0.17, 0.2, zb - 0.0225, zb - 0.0195)
@@ -445,10 +587,11 @@ def seat():
         S.beam('CkStrap', (s * 0.2, -0.78, zb - 0.1), (s * 0.04, -0.74, -0.12), 0.045, 0.006)
     box('Metal', Fb, -0.03, 0.03, -0.75, -0.72, -0.15, -0.1)
     # the ejection handle: between the knees (Martin-Baker) or on the seat sides (ACES II)
-    if L['seat'] == 'mk14':
-        R._tube(S, (-0.06, -0.78, -0.3), (0.06, -0.78, -0.3), 0.012, 'Yellow', 8)
+    if L['seat'] in ('mk14', 'k36'):
+        col = 'Orange' if L['seat'] == 'k36' else 'Yellow'
+        R._tube(S, (-0.06, -0.78, -0.3), (0.06, -0.78, -0.3), 0.012, col, 8)
         for s in (-1, 1):
-            R._tube(S, (s * 0.06, -0.78, -0.3), (s * 0.06, -0.84, -0.27), 0.012, 'Yellow', 8)
+            R._tube(S, (s * 0.06, -0.78, -0.3), (s * 0.06, -0.84, -0.27), 0.012, col, 8)
         for i in range(4):
             S.beam('Black', (-0.05 + i * 0.033, -0.775, -0.3), (-0.05 + i * 0.033 + 0.012, -0.775, -0.3), 0.026, 0.026)
     else:

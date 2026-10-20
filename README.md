@@ -20,8 +20,12 @@ You need a local server because the game uses ES modules and loads `.glb` models
 - **Energy-based flight model**: lift from angle of attack, induced drag that bleeds speed in turns,
   stalls, thinner air at altitude, afterburner and a transonic drag rise. Fly-by-wire G-command
   handling with per-aircraft G limits. Takeoff, landing (gear, brakes) and rearming on the home runway.
-- **3D cockpit** in the style of GeoFS: live MFDs (radar, stores), attitude indicator, gauges,
-  warning lights, moving stick and throttle, sun shadows sweeping the panel, and head motion under G.
+- **3D cockpits** for every fighter (press V): the F-22's from a licensed model, the others built in Blender by
+  `tools/cockpits/cockpit_kit.py` from the real layouts (the F/A-18's DDIs and UFC, the F-16's side-stick and ICP, the
+  F-15's VSD and round dials, the F-14's VDI, the F-35's panoramic display, the Su-35's and MiG-21's blue-green panels,
+  the canards' three displays, the second generation's dials), with baked occlusion; live MFDs (radar, stores, the
+  tactical picture), HSI, attitude and engine gauges, warning lights, moving stick and throttle, sun shadows sweeping
+  the panel, and head motion under G.
 - **Combat**: lead-computing gunsight, flares and chaff, missile warnings, SAM sites and AAA flak.
 - **Real weapons per aircraft** (src/stores.js): every combat type carries its own air force's stores on an
   air-superiority / balanced / strike loadout — AIM-9X and AIM-120D on the F-22, Phoenix and Sparrow on the

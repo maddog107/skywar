@@ -50,10 +50,14 @@ describe('model cockpits', () => {
                 assert.ok(Math.abs(n.normalize().dot(c.clone().normalize())) > 0.3, m.name + ': faces the eye');
             }
             const hud = meshes.find(m => m.name.startsWith('HUD_GLASS')), canopy = meshes.find(m => m.name.startsWith('CANOPY_GLASS'));
-            assert.ok(hud && canopy, 'HUD combiner and canopy');
-            const hb = worldBox(hud), hc = hb.getCenter(new THREE.Vector3());
-            assert.ok(hc.z < -0.35 && hc.z > -0.9, 'the HUD ahead: ' + hc.z.toFixed(2));
-            assert.ok(Math.abs(Math.atan2(hc.y, -hc.z)) < 0.12, 'the HUD on the eye line (within 7°): ' + (Math.atan2(hc.y, -hc.z) * 57.3).toFixed(1));
+            assert.ok(canopy, 'canopy');
+            // (a helmet display's cockpit has no combiner: hmd)
+            assert.equal(!!hud, !def.hmd, def.hmd ? 'no HUD under a helmet display' : 'a HUD combiner');
+            if (hud) {
+                const hb = worldBox(hud), hc = hb.getCenter(new THREE.Vector3());
+                assert.ok(hc.z < -0.35 && hc.z > -0.9, 'the HUD ahead: ' + hc.z.toFixed(2));
+                assert.ok(Math.abs(Math.atan2(hc.y, -hc.z)) < 0.12, 'the HUD on the eye line (within 7°): ' + (Math.atan2(hc.y, -hc.z) * 57.3).toFixed(1));
+            }
             const cb = worldBox(canopy);
             assert.ok(cb.max.y > 0.1 && cb.min.z < -0.3, 'the canopy over the head and ahead');
             assert.ok(triangleCount(root) < 200000, 'triangles: ' + triangleCount(root));
@@ -101,13 +105,15 @@ describe('model cockpits', () => {
             const { meshes, root } = await load(def);
             const names = new Set(meshes.map(m => m.name));
             for (const k of ['adi', 'asi', 'alt']) assert.ok(names.has('GAUGE_' + k), 'GAUGE_' + k);
+            // (every gauge face is one the game draws)
+            for (const n of names) if (n.startsWith('GAUGE_')) assert.ok(['adi', 'hsi', 'asi', 'alt', 'vvi', 'g', 'rpm', 'egt', 'fuel', 'aoa'].includes(n.split('_')[1]), n);
             for (const k of ['master', 'stall', 'ab', 'brake', 'launch', 'lock', 'gear', 'fuel']) assert.ok(names.has('ANN_' + k), 'ANN_' + k);
             const nodes = []; root.traverse(o => nodes.push(o));
             assert.ok(nodes.some(o => o.name === 'STICK') && nodes.some(o => o.name === 'THROTTLE'), 'stick and throttle');
             assert.ok(nodes.filter(o => o.userData && o.userData.lbl != null).length > 40, 'placards');
             // the occlusion bake: every painted material of the merged cockpit has it, on the second UV set
             const json = JSON.parse(buf.subarray(20, 20 + buf.readUInt32LE(12)).toString('utf8'));
-            const painted = json.materials.filter(m => /^Ck(Grey|GreyDark|Black|Seat)$/.test(m.name));
+            const painted = json.materials.filter(m => /^Ck(Grey|GreyDark|Turq|Black|Seat|SeatK)$/.test(m.name));
             assert.ok(painted.length >= 4 && painted.every(m => m.occlusionTexture && m.occlusionTexture.texCoord === 1), 'occlusion on uv1');
         });
     }
