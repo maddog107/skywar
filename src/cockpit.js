@@ -10,6 +10,7 @@
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { swapMaterial, mergeLabels } from './roomdress.js';
 import { CLASSES } from './stores.js';
 import { ViewModel } from './viewmodel.js';
 import { clamp, damp, MS_TO_KTS, M_TO_FT, DEG } from './util.js';
@@ -23,12 +24,21 @@ const _up = new THREE.Vector3();
 // SCREEN_<n> (numbered top to bottom, then left to right; UV 0..1 across each, as the pilot sees it) take the live
 // displays listed in `screens`; HUD_GLASS is the combiner the HUD is drawn on; CANOPY_GLASS the canopy.
 // Display kinds: radar, stores, adi, ufdL / ufdR (the up-front text displays), tsd (the tactical situation display:
-// the picture from above), off. eye: where the pilot's eye sits from the file's origin (m: right, up, back), to fit
+// the picture from above), off. kit: built with tools/cockpits/cockpit_kit.py — its materials take the shared tiled
+// textures by name (roomdress.js) over its baked ambient occlusion, its placards are drawn into one atlas, and it
+// has GAUGE_<kind> faces (the standby instruments), ANN_<key> lamps (the annunciators), STICK and THROTTLE to move. eye: where the pilot's eye sits from the file's origin (m: right, up, back), to fit
 // the view (the panel low in the frame, the HUD on the horizon) without cutting the model again. paint: material
 // name → a colour for parts the model left plain white
 export const COCKPIT_MODELS = {
     // F-22: two up-front displays over three MFDs and the 8-inch primary display (the tactical picture), the
     // standby flight display under it (two faces in the model)
+    // the kit's (tools/cockpits/cockpit_kit.py): F/A-18 (and the EA-18G): the left and right DDIs, the UFC's
+    // display, the AMPCD between the knees
+    fa18: { file: 'models/cockpits/kit_hornet.glb', kit: true, screens: ['radar', 'stores', 'ufdL', 'tsd'] },
+    ea18g: { file: 'models/cockpits/kit_hornet.glb', kit: true, screens: ['radar', 'stores', 'ufdL', 'tsd'] },
+    // F-16 (and the F-2, its Japanese derivative): the two MFDs, the DED over the ICP, the RWR scope; the side-stick
+    f16: { file: 'models/cockpits/kit_viper.glb', kit: true, sideStick: true, screens: ['radar', 'stores', 'ufdL', 'tsd'] },
+    f2: { file: 'models/cockpits/kit_viper.glb', kit: true, sideStick: true, screens: ['radar', 'stores', 'ufdL', 'tsd'] },
     f22: { file: 'models/cockpits/f22.glb', screens: ['ufdL', 'ufdR', 'radar', 'tsd', 'stores', 'adi', 'adi'], eye: [0, -0.11, -0.2], paint: { F2266Mtl: 0x34383c } },
 };
 
@@ -456,12 +466,22 @@ export class Cockpit {
 
     loadModel(def) {
         return new Promise(resolve => new GLTFLoader().load(def.file, (gltf) => {
-            const root = gltf.scene, mc = { root, def, screens: [], glassMats: [], hud: null, canvases: {} };
+            const root = gltf.scene, mc = { root, def, screens: [], glassMats: [], hud: null, canvases: {}, lights: {}, stick: null, throttle: null };
             root.visible = false;
             if (def.eye) root.position.set(-def.eye[0], -def.eye[1], -def.eye[2]);
-            const screens = [];
+            const screens = [], labels = [], faces = [];
             root.traverse(o => {
+                if (o.name === 'STICK' || o.name === 'THROTTLE') {
+                    mc[o.name.toLowerCase()] = { o, rest: o.quaternion.clone() };
+                }
                 if (!o.isMesh) return;
+                if (o.userData && o.userData.lbl != null) { labels.push(o); return; }
+                if (/^(GAUGE|ANN)_/.test(o.name)) {
+                    const uv = o.geometry.attributes.uv;
+                    for (let i = 0; i < uv.count; i++) uv.setY(i, 1 - uv.getY(i));
+                    faces.push(o);
+                    return;
+                }
                 if (/^SCREEN_\d+/.test(o.name)) {
                     // (glTF's v runs down the image; the canvases are drawn with v up)
                     const uv = o.geometry.attributes.uv;
@@ -480,6 +500,8 @@ export class Cockpit {
                     return;
                 }
                 o.castShadow = o.receiveShadow = true;
+                // a kit cockpit: the shared textures by material name, over its own baked occlusion (the second UV set)
+                if (def.kit) o.material = Array.isArray(o.material) ? o.material.map(m => this.kitMaterial(m, o)) : this.kitMaterial(o.material, o);
                 for (const mat of [].concat(o.material)) {
                     mat.envMapIntensity = 0.45;
                     if (mat.map) mat.map.anisotropy = 8;
@@ -498,9 +520,45 @@ export class Cockpit {
                 mc.screens.push(o);
                 this.screens.push(o);
             });
+            // the standby gauges and the annunciator lamps
+            for (const o of faces) {
+                const [k, key] = o.name.split('_');
+                if (k === 'GAUGE') {
+                    const ct = key === 'adi' ? this.adi : (this.gauges.find(g => g.kind === key) || null);
+                    o.material = new THREE.MeshBasicMaterial({ map: ct ? ct.tex : null, color: ct ? 0xd9d9d9 : 0x111111, toneMapped: false });
+                    o.userData.glow = 0.85;
+                    this.screens.push(o);
+                } else {
+                    const proc = this.lights[key];
+                    if (!proc) continue;
+                    const m = new THREE.MeshBasicMaterial({ map: proc.mat.map, toneMapped: false, color: new THREE.Color(0.14, 0.14, 0.14) });
+                    o.material = m;
+                    mc.lights[key] = { mat: m, on: false };
+                }
+            }
+            if (labels.length) mergeLabels(root, labels);
+            root.traverse(o => { if (o.name === 'labels' && o.isMesh) { o.receiveShadow = true; o.material.envMapIntensity = 0.3; } });
             this.root.add(root);
             resolve(mc);
         }, undefined, () => resolve(null)));
+    }
+
+    // a kit cockpit's material: the shared tiled look for its name (roomdress.js), with the cockpit's own baked
+    // ambient occlusion where the mesh has its second UV set (a copy: the shared materials stay as they are)
+    kitMaterial(m, mesh) {
+        if (!m) return m;
+        const sw = swapMaterial(m), ao = mesh.geometry.attributes.uv1 ? m.aoMap : null;
+        this.kitMats = this.kitMats || new Map();
+        const key = sw.uuid + ':' + (ao ? ao.uuid : '-');
+        if (!this.kitMats.has(key)) {
+            const c = sw.clone();
+            // the tiled texture is grain on the paint, not a darker paint: its mean (~0.27 linear) taken back out, so
+            // the panel keeps the colour it was modelled in
+            if (c.map && c !== m) c.color.copy(m.color).multiplyScalar(1 / 0.27).setRGB(Math.min(c.color.r, 1), Math.min(c.color.g, 1), Math.min(c.color.b, 1));
+            if (ao) { c.aoMap = ao; c.aoMap.channel = 1; c.aoMapIntensity = 1; }
+            this.kitMats.set(key, c);
+        }
+        return this.kitMats.get(key);
     }
 
     // the canvas a model screen of `kind` shows (the procedural cockpit's own for the kinds it has)
@@ -776,10 +834,12 @@ export class Cockpit {
     }
 
     setLight(key, on) {
-        const l = this.lights[key];
-        if (!l || l.on === on) return;
-        l.on = on;
-        l.mat.color.setScalar(on ? 1.6 : 0.14);
+        for (const set of [this.lights, this.model && this.model.lights]) {
+            const l = set && set[key];
+            if (!l || l.on === on) continue;
+            l.on = on;
+            l.mat.color.setScalar(on ? 1.6 : 0.14);
+        }
     }
 
     // Copy the world's sun and sky light (and night-time instrument lighting) into the cockpit scene
@@ -865,6 +925,14 @@ export class Cockpit {
         this.stick.rotation.z = damp(this.stick.rotation.z, -c.roll * 0.25, 12, dt);
         this.throttle.position.z = -0.05 - p.throttle * 0.16;
         this.throttle.rotation.x = -p.throttle * 0.3;
+        // a model's own stick (a centre stick swings ±14°, a side-stick barely moves: it senses force) and throttle
+        const mcs = this.model && this.model.stick, mct = this.model && this.model.throttle;
+        if (mcs) {
+            const k = this.model.def.sideStick ? 0.06 : 0.25;
+            mcs.px = damp(mcs.px || 0, -c.pitch * k, 12, dt); mcs.rz = damp(mcs.rz || 0, -c.roll * k, 12, dt);
+            mcs.o.quaternion.copy(mcs.rest).multiply(_q.setFromEuler(_e.set(mcs.px, 0, mcs.rz, 'XYZ')));
+        }
+        if (mct) mct.o.quaternion.copy(mct.rest).multiply(_q.setFromEuler(_e.set(-p.throttle * 0.55 + 0.25, 0, 0, 'XYZ')));
 
         // annunciators
         const blink = (game.time * 3) % 1 < 0.5;

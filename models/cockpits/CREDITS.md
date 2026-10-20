@@ -10,9 +10,18 @@ CC BY models require the attribution below to be shown to players (the in-game c
 
 | File | Cockpit | Title / Author | Licence | Source |
 |---|---|---|---|---|
+| `kit_hornet.glb` | F/A-18 family (fa18, ea18g): centre stick, two DDIs over the AMPCD, the UFC, a windscreen bow with three mirrors, a Martin-Baker seat | SKYWAR, built in Blender by `tools/cockpits/cockpit_kit.py hornet` | CC0 | (built from the real cockpit's layout) |
+| `kit_viper.glb` | F-16 family (f16, f2): side-stick and throttle on the consoles, two MFDs, the DED over the ICP, the RWR scope, a one-piece canopy, an ACES II seat | SKYWAR, built in Blender by `tools/cockpits/cockpit_kit.py viper` | CC0 | (built from the real cockpit's layout) |
 | `f22.glb` | F-22 Raptor | "F22 Raptor" by weeadamp | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) (live Sketchfab API "CC Attribution", checked 2026-10-20) | https://sketchfab.com/3d-models/f22-raptor-1a58a540041242218cb99b46fa8c39a7 (GLB from the Objaverse mirror: `glbs/000-106/1a58a540041242218cb99b46fa8c39a7.glb`) |
 
 ## Commands
+
+    /opt/homebrew/bin/blender -b -P tools/cockpits/cockpit_kit.py -- hornet models/cockpits/kit_hornet.glb --ao 2048 --samples 32
+    /opt/homebrew/bin/blender -b -P tools/cockpits/cockpit_kit.py -- viper models/cockpits/kit_viper.glb --ao 2048 --samples 32
+
+(the kit's cockpits: real proportions round the design eye, the tiled shared textures by material name, placards drawn
+by the game, an ambient-occlusion bake on a second UV set as the glTF occlusion texture; `--preview DIR` renders five
+views from the eye.) The F-22's:
 
     /opt/homebrew/bin/blender -b -P tools/cockpits/import_cockpit.py -- 1a58a540041242218cb99b46fa8c39a7.glb models/cockpits/f22.glb \
         --box -3.3,3.3,-9,9,-1.8,5.2 --eye 0,-1.5,4.25 --upm 5.04 --screens Material.003 --hud F2277Mtl --glass Material.001

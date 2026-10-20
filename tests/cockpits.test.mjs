@@ -85,8 +85,30 @@ describe('model cockpits', () => {
             const file = def.file.split('/').pop();
             assert.match(credits, new RegExp('`' + file.replace('.', '\\.') + '`'));
             const main = readFileSync(new URL('src/main.js', repo), 'utf8');
-            const url = credits.split('\n').find(l => l.includes('`' + file + '`')).match(/https:\/\/sketchfab\.com\/3d-models\/[^\s)]+/);
+            const row = credits.split('\n').find(l => l.includes('`' + file + '`'));
+            if (def.kit) {
+                // (our own: built by the kit, CC0)
+                assert.match(row, /cockpit_kit\.py/); assert.match(row, /CC0/);
+                assert.ok(main.includes('tools/cockpits/cockpit_kit.py'), 'the kit in the in-game credits');
+                return;
+            }
+            const url = row.match(/https:\/\/sketchfab\.com\/3d-models\/[^\s)]+/);
             assert.ok(url && main.includes(url[0]), 'the source in the in-game credits');
+        });
+
+        if (def.kit) test(`${type}: the kit's live faces, controls, placards and baked occlusion`, async () => {
+            const buf = readFileSync(new URL(def.file, repo));
+            const { meshes, root } = await load(def);
+            const names = new Set(meshes.map(m => m.name));
+            for (const k of ['adi', 'asi', 'alt']) assert.ok(names.has('GAUGE_' + k), 'GAUGE_' + k);
+            for (const k of ['master', 'stall', 'ab', 'brake', 'launch', 'lock', 'gear', 'fuel']) assert.ok(names.has('ANN_' + k), 'ANN_' + k);
+            const nodes = []; root.traverse(o => nodes.push(o));
+            assert.ok(nodes.some(o => o.name === 'STICK') && nodes.some(o => o.name === 'THROTTLE'), 'stick and throttle');
+            assert.ok(nodes.filter(o => o.userData && o.userData.lbl != null).length > 40, 'placards');
+            // the occlusion bake: every painted material of the merged cockpit has it, on the second UV set
+            const json = JSON.parse(buf.subarray(20, 20 + buf.readUInt32LE(12)).toString('utf8'));
+            const painted = json.materials.filter(m => /^Ck(Grey|GreyDark|Black|Seat)$/.test(m.name));
+            assert.ok(painted.length >= 4 && painted.every(m => m.occlusionTexture && m.occlusionTexture.texCoord === 1), 'occlusion on uv1');
         });
     }
 });

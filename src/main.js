@@ -712,6 +712,7 @@ function buildCredits() {
         ['J-20, J-10, J-8, X-100', 'SKYWAR / Blender (tools/aircraft_kit.py)', 'CC0', 'tools/aircraft/'],
         // cockpits (models/cockpits/CREDITS.md)
         ['F22 Raptor (the F-22 cockpit view)', 'weeadamp', 'CC BY 4.0', 'https://sketchfab.com/3d-models/f22-raptor-1a58a540041242218cb99b46fa8c39a7'],
+        ['Cockpits: F/A-18 and F-16 families', 'SKYWAR / Blender (tools/cockpits/cockpit_kit.py)', 'CC0', 'tools/cockpits/'],
         // Soviet jets (models/aircraft/CREDITS.md)
         ['Mig21 (mig21: MiG-21bis)', 'manilov.ap', 'CC BY 4.0', 'https://sketchfab.com/3d-models/mig21-4e2b33b33fcb43948c78783867e3b166'],
         ['Mig25 (mig25: MiG-25 Foxbat)', 'manilov.ap', 'CC BY 4.0', 'https://sketchfab.com/3d-models/mig25-afe67617c5294dce9056106a22f640ff'],
