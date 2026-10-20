@@ -636,6 +636,12 @@ export class World {
             if (q === 'medium') this.terrainMat.defines.GROUND_LITE = ''; else delete this.terrainMat.defines.GROUND_LITE;
             this.terrainMat.needsUpdate = true;
         }
+        // 'high' / 'ultra': the photo detail carries on out to ~10 km (TERRAIN_FAR)
+        const far = q === 'high' || q === 'ultra';
+        if (('TERRAIN_FAR' in this.terrainMat.defines) !== far) {
+            if (far) this.terrainMat.defines.TERRAIN_FAR = ''; else delete this.terrainMat.defines.TERRAIN_FAR;
+            this.terrainMat.needsUpdate = true;
+        }
         this.syncCraterMat();
         this.grassOn = q === 'high' || q === 'ultra';
         this.setFogEdge();
@@ -941,40 +947,79 @@ export class World {
                         rockW *= 1.0 - crD; snowW *= 1.0 - crD; sandW *= 1.0 - crD;
                     }
                     // close-up detail: photo ground textures (meadow, dry grass, dirt, rock, sand, snow), each at two
-                    // scales mixed so neither repeat shows, as a ratio around the ground's own colour, with normal maps
+                    // scales mixed so neither repeat shows, as a ratio around the ground's own colour, with normal maps.
+                    // Further out (from a few hundred metres to ~10 km) the same photos again at 8× and ~28× their tile:
+                    // a meadow's clumps become scrub and bushes, the rock scan crags and gullies, so the ground seen
+                    // from the air isn't a smooth wash of colour; softer with distance, its normals for relief (high and
+                    // ultra: TERRAIN_FAR)
                     float nearF = uDetail * gReady * (1.0 - smoothstep(420.0, 1100.0, tDist));
+                    #ifdef TERRAIN_FAR
+                    float farF = uDetail * gReady * smoothstep(300.0, 850.0, tDist) * (1.0 - smoothstep(6500.0, 12000.0, tDist));
+                    #else
+                    const float farF = 0.0;
+                    #endif
                     vec2 gNrm = vec2(0.0);
                     #ifndef TERRAIN_LOW
-                    if (nearF > 0.0) {
+                    if (nearF > 0.0 || farF > 0.0) {
                         float wr = rockW, ws = sandW, wn = snowW * (1.0 - sandW), wg = max(1.0 - wr - ws - wn, 0.0);
                         float dryK = clamp((1.0 - smoothstep(0.3, 0.7, dm)) * 0.8 + smoothstep(320.0, 700.0, tH), 0.0, 1.0);
                         float dirtK = max(smoothstep(0.64, 0.8, texture2D(groundMap, wxz / 230.0 + 0.61).a) * 0.85, crD);
                         float gw[6];
                         gw[0] = wg * (1.0 - dryK) * (1.0 - dirtK); gw[1] = wg * dryK * (1.0 - dirtK); gw[2] = wg * dirtK;
                         gw[3] = wr; gw[4] = ws; gw[5] = wn;
-                        // share of the fine scale: varies across the ground; far away (where it would be finer than a
-                        // pixel) only the coarse one is sampled
-                        float mixK = (0.3 + 0.4 * smoothstep(0.25, 0.75, texture2D(groundMap, wxz / 61.0 + 0.23).a)) * (1.0 - smoothstep(300.0, 650.0, tDist));
-                        float nearN = nearF * (1.0 - smoothstep(150.0, 480.0, tDist));
-                        vec3 gc = vec3(0.0); float gs = 0.0;
-                        for (int i = 0; i < 6; i++) {
-                            if (gw[i] < 0.03) continue;
-                            vec3 c = vec3(1.0);
-                            // rock on steep faces is projected from the side (by the face's main direction), not stretched from above
-                            float sideW = i == 3 ? smoothstep(0.3, 0.5, tSlope) : 0.0;
-                            if (sideW < 1.0) c = groundLayer(i, wxz, pdx.xz, pdy.xz, mixK, nearN * (1.0 - sideW), gw[i] * (1.0 - sideW), gNrm);
-                            if (sideW > 0.0) {
-                                vec2 dummy = vec2(0.0);
-                                vec3 cs = sideX > 0.5 ? groundLayer(i, vWPos.zy, pdx.zy, pdy.zy, mixK, 0.0, 0.0, dummy)
-                                                      : groundLayer(i, vWPos.xy, pdx.xy, pdy.xy, mixK, 0.0, 0.0, dummy);
-                                c = mix(c, cs, sideW);
+                        if (nearF > 0.0) {
+                            // share of the fine scale: varies across the ground; far away (where it would be finer than a
+                            // pixel) only the coarse one is sampled
+                            float mixK = (0.3 + 0.4 * smoothstep(0.25, 0.75, texture2D(groundMap, wxz / 61.0 + 0.23).a)) * (1.0 - smoothstep(300.0, 650.0, tDist));
+                            float nearN = nearF * (1.0 - smoothstep(150.0, 480.0, tDist));
+                            vec3 gc = vec3(0.0); float gs = 0.0;
+                            for (int i = 0; i < 6; i++) {
+                                if (gw[i] < 0.03) continue;
+                                vec3 c = vec3(1.0);
+                                // rock on steep faces is projected from the side (by the face's main direction), not stretched from above
+                                float sideW = i == 3 ? smoothstep(0.3, 0.5, tSlope) : 0.0;
+                                if (sideW < 1.0) c = groundLayer(i, wxz, pdx.xz, pdy.xz, mixK, nearN * (1.0 - sideW), gw[i] * (1.0 - sideW), gNrm);
+                                if (sideW > 0.0) {
+                                    vec2 dummy = vec2(0.0);
+                                    vec3 cs = sideX > 0.5 ? groundLayer(i, vWPos.zy, pdx.zy, pdy.zy, mixK, 0.0, 0.0, dummy)
+                                                          : groundLayer(i, vWPos.xy, pdx.xy, pdy.xy, mixK, 0.0, 0.0, dummy);
+                                    c = mix(c, cs, sideW);
+                                }
+                                gc += c * gw[i];
+                                gs += gw[i];
                             }
-                            gc += c * gw[i];
-                            gs += gw[i];
+                            gc /= max(gs, 1e-3);
+                            gNrm *= nearN / max(gs, 1e-3);
+                            diffuseColor.rgb *= mix(vec3(1.0), clamp(gc, 0.0, 3.0), nearF * 0.9);
                         }
-                        gc /= max(gs, 1e-3);
-                        gNrm *= nearN / max(gs, 1e-3);
-                        diffuseColor.rgb *= mix(vec3(1.0), clamp(gc, 0.0, 3.0), nearF * 0.9);
+                        if (farF > 0.0) {
+                            const float FS = 0.125; // (8× the tile; groundLayer's coarse sample is 3.4× that again)
+                            // (beyond ~3 km only the coarse sample, and the normals only within ~4 km: what's further is
+                            // too small on screen to show them)
+                            float farMix = 0.55 * (1.0 - smoothstep(1500.0, 3500.0, tDist));
+                            float farN = farF * (1.0 - smoothstep(2000.0, 4500.0, tDist));
+                            vec3 fc = vec3(0.0); float fs = 0.0;
+                            vec2 fNrm = vec2(0.0);
+                            for (int i = 0; i < 6; i++) {
+                                if (gw[i] < 0.08) continue;
+                                vec3 c = vec3(1.0);
+                                // (rock from the side on steep faces, as close up; the two projections overlap only in a
+                                // narrow band of slope, and beyond 2 km, where the seam is too small to see, not at all)
+                                float sideW = i == 3 ? (tDist > 2000.0 ? step(0.41, tSlope) : smoothstep(0.37, 0.45, tSlope)) : 0.0;
+                                if (sideW < 1.0) c = groundLayer(i, wxz * FS, pdx.xz * FS, pdy.xz * FS, farMix, farN * (1.0 - sideW), gw[i] * (1.0 - sideW), fNrm);
+                                if (sideW > 0.0) {
+                                    vec2 dummy = vec2(0.0);
+                                    vec3 cs = sideX > 0.5 ? groundLayer(i, vWPos.zy * FS, pdx.zy * FS, pdy.zy * FS, farMix, 0.0, 0.0, dummy)
+                                                          : groundLayer(i, vWPos.xy * FS, pdx.xy * FS, pdy.xy * FS, farMix, 0.0, 0.0, dummy);
+                                    c = mix(c, cs, sideW);
+                                }
+                                fc += c * gw[i];
+                                fs += gw[i];
+                            }
+                            fc /= max(fs, 1e-3);
+                            gNrm += fNrm * farN * 0.6 / max(fs, 1e-3);
+                            diffuseColor.rgb *= mix(vec3(1.0), clamp(fc, 0.0, 3.0), farF * mix(0.8, 0.4, smoothstep(1200.0, 9000.0, tDist)));
+                        }
                     }
                     #endif
                     diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.022, 0.02, 0.018), 0.65 * crT.z * (0.6 + 0.4 * crN));

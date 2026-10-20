@@ -1207,9 +1207,14 @@ const OUTPUT_AA_FRAG = /* glsl */`
     // (colorspace_pars_fragment is already in three's ShaderMaterial prefix)
     uniform sampler2D tDiffuse;
     uniform vec2 resolution; // 1 / size
-    uniform float subpixel, aaOn;
+    uniform float subpixel, aaOn, saturation;
     varying vec2 vUv;
     vec3 toDisplay(vec3 c) {
+        // the grade: a little saturation off before the curve (a camera's look, not a game's), stronger on what's
+        // already vivid; greys are untouched (the sensor video's calibrated greys stay as they are)
+        float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+        float vivid = (max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b))) / max(max(c.r, max(c.g, c.b)), 1e-4);
+        c = max(mix(vec3(l), c, saturation * (1.0 - 0.12 * vivid)), 0.0);
         #ifdef LINEAR_TONE_MAPPING
         c = LinearToneMapping(c);
         #elif defined(REINHARD_TONE_MAPPING)
@@ -1294,7 +1299,7 @@ export class OutputAAPass extends OutputPass {
         super();
         this.uniforms = {
             tDiffuse: { value: null }, toneMappingExposure: { value: 1 }, resolution: { value: new THREE.Vector2() },
-            subpixel: { value: 0.75 }, aaOn: { value: 1 },
+            subpixel: { value: 0.75 }, aaOn: { value: 1 }, saturation: { value: 0.92 },
         };
         this.material.dispose();
         this.material = new THREE.ShaderMaterial({

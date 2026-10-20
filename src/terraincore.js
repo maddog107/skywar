@@ -55,15 +55,16 @@ export function colorAt(x, h, z, ny, out, o) {
     const slope = 1 - ny;
     let r, g, b;
     {
-        // lowland grass -> forest
-        r = lerp(0.33, 0.44, n); g = lerp(0.44, 0.49, n); b = lerp(0.2, 0.25, n);
-        r = lerp(r, 0.17, forest * 0.8); g = lerp(g, 0.26, forest * 0.8); b = lerp(b, 0.13, forest * 0.8);
+        // lowland grass -> forest (olive pasture and dark mixed woodland, as aerial photos show them: less green
+        // than a lawn, and a forest canopy nearly black-green)
+        r = lerp(0.37, 0.47, n); g = lerp(0.43, 0.48, n); b = lerp(0.23, 0.28, n);
+        r = lerp(r, 0.19, forest * 0.8); g = lerp(g, 0.25, forest * 0.8); b = lerp(b, 0.145, forest * 0.8);
         // alpine meadow / brown highland
         const hi = smoothstep(350, 800, h);
         r = lerp(r, 0.42 + n * 0.08, hi); g = lerp(g, 0.39 + n * 0.06, hi); b = lerp(b, 0.3, hi);
         // rock on steep slopes
         const rock = smoothstep(0.28, 0.5, slope + (h > 600 ? 0.1 : 0));
-        r = lerp(r, 0.44 + n * 0.1, rock); g = lerp(g, 0.42 + n * 0.08, rock); b = lerp(b, 0.4 + n * 0.06, rock);
+        r = lerp(r, 0.45 + n * 0.1, rock); g = lerp(g, 0.42 + n * 0.08, rock); b = lerp(b, 0.37 + n * 0.06, rock);
         // snow
         const snow = smoothstep(1150, 1450, h + n * 180) * (1 - smoothstep(0.45, 0.7, slope));
         r = lerp(r, 0.95, snow); g = lerp(g, 0.96, snow); b = lerp(b, 1.0, snow);
