@@ -134,6 +134,7 @@ input[type=range] { accent-color: var(--accent); width: 170px; }
 
 .seg.wrap { flex-wrap: wrap; max-width: 230px; justify-content: flex-end; }
 .seg.wrap button { border-left: 1px solid var(--line); }
+.seg.wrap.wide { max-width: 290px; } /* (weather, start: two lines rather than a panel too wide for its labels) */
 
 .quick-pos { display: none; border-top: 1px solid var(--line); padding-top: 10px; margin-top: 4px; }
 .quick-pos.show { display: block; }

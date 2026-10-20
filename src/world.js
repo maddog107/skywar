@@ -311,7 +311,7 @@ export class World {
         this.P = newPalette();
     }
 
-    // ── Weather: clear / cloudy / rain / storm / fog / overcast (weather.js WEATHER_KINDS) ──
+    // ── Weather: clear / cloudy / grey (overcast) / rain / storm / fog / overcast (low cloud) (weather.js WEATHER_KINDS) ──
     // now, everywhere (weather.js set(kind, { transition }) and sendFront() change it gradually)
     setWeather(w) {
         this.wx.set(w || 'clear');

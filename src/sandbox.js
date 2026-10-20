@@ -26,8 +26,8 @@ import { clamp } from './util.js';
 const FONT = '"Share Tech Mono", monospace';
 const OWN = '#6fb4ff', FOE = '#ff5a4a', CIV = '#cfd8e0', GREEN = '#5dffa0', AMBER = '#ffc23f', DIM = '#9fb2c4', TXT = '#e8f4ff';
 const TABS = [['spawn', 'SPAWN'], ['units', 'UNITS'], ['war', 'WAR'], ['watch', 'WATCH'], ['file', 'FILE']];
-const WEATHERS = ['clear', 'cloudy', 'rain', 'storm', 'fog', 'overcast'];
-const WX_LABEL = { clear: 'CLEAR', cloudy: 'CLOUDY', rain: 'RAIN', storm: 'STORM', fog: 'FOG', overcast: 'LOW CLOUD' };
+const WEATHERS = ['clear', 'cloudy', 'grey', 'rain', 'storm', 'fog', 'overcast'];
+const WX_LABEL = { clear: 'CLEAR', cloudy: 'CLOUDY', grey: 'OVERCAST', rain: 'RAIN', storm: 'STORM', fog: 'FOG', overcast: 'LOW CLOUD' };
 const TIMES = [['dawn', 'DAWN'], ['day', 'DAY'], ['dusk', 'DUSK'], ['night', 'NIGHT']];
 const CLOCKS = [0, 1, 20, 60, 300];
 const ALTS = { air: [1500, 5000, 9000], heli: [120, 300, 600] };
@@ -967,8 +967,8 @@ export class SandboxTools {
         y += 30;
         if (!Wx || !Wx.wx) return y;
         this.heading(ctx, x, y, 'WEATHER · NOW ' + (WX_LABEL[Wx.kind] || Wx.kind.toUpperCase())); y += 14;
-        this.row(ctx, map, x, y, W, WEATHERS.slice(0, 3).map(k => ({ label: WX_LABEL[k], on: Wx.kind === k, run: () => this.setWeather(k) }))); y += 26;
-        this.row(ctx, map, x, y, W, WEATHERS.slice(3).map(k => ({ label: WX_LABEL[k], on: Wx.kind === k, run: () => this.setWeather(k) }))); y += 26;
+        this.row(ctx, map, x, y, W, WEATHERS.slice(0, 4).map(k => ({ label: WX_LABEL[k], on: Wx.kind === k, run: () => this.setWeather(k) }))); y += 26;
+        this.row(ctx, map, x, y, W, WEATHERS.slice(4).map(k => ({ label: WX_LABEL[k], on: Wx.kind === k, run: () => this.setWeather(k) }))); y += 26;
         this.row(ctx, map, x, y, W, [
             { label: this.wxBlend ? 'CHANGE OVER 2 MIN' : 'CHANGE AT ONCE', on: this.wxBlend, run: () => { this.wxBlend = !this.wxBlend; } },
             { label: 'STORM FRONT', run: () => Wx.front('storm', { eta: 300 }) },

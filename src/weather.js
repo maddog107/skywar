@@ -63,6 +63,9 @@ export function nightOf(hour) {
 export const WEATHER_KINDS = {
     clear:    { thr: 0.56, base: 1300, thick: 560, baseVar: 160, deck: 0, deckY: 2400, deckThick: 650, overcast: 0, sev: 0, rain: 0, cells: 0, fog: 0, fogTop: 120, banks: 0.8, radiation: 1, wind: 3.6, turb: 0.05, lightning: 0, label: 'CLEAR' },
     cloudy:   { thr: 0.42, base: 1250, thick: 800, baseVar: 200, deck: 0, deckY: 2400, deckThick: 650, overcast: 0, sev: 0.35, rain: 0, cells: 1.5, fog: 0, fogTop: 150, banks: 0.8, radiation: 0.7, wind: 5, turb: 0.18, lightning: 0, label: 'CLOUDY' },
+    // a grey day: a closed stratocumulus deck ~2 km up with a few breaks, scattered cumulus under it, the air clear
+    // below (a ceiling to fly under, not fog): soft shadows, a dull flat light
+    grey:     { thr: 0.54, base: 1250, thick: 500, baseVar: 220, deck: 0.9, deckY: 2100, deckThick: 700, overcast: 0.55, sev: 0.22, rain: 0, cells: 0, fog: 0, fogTop: 150, banks: 0.6, radiation: 0, wind: 6.5, turb: 0.22, lightning: 0, label: 'OVERCAST' },
     rain:     { thr: 0.36, base: 1050, thick: 1000, baseVar: 160, deck: 0.75, deckY: 2400, deckThick: 650, overcast: 0.6, sev: 0.7, rain: 3, cells: 14, fog: 0, fogTop: 150, banks: 0, radiation: 0, wind: 8.6, turb: 0.45, lightning: 0, label: 'RAIN' },
     storm:    { thr: 0.3, base: 950, thick: 2200, baseVar: 160, deck: 1.2, deckY: 2400, deckThick: 650, overcast: 0.85, sev: 1, rain: 7, cells: 75, fog: 0, fogTop: 150, banks: 0, radiation: 0, wind: 17.2, turb: 1, lightning: 7, label: 'STORM' },
     // radiation / advection fog: dense fog in the low ground and over the sea, clear above it

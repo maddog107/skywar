@@ -22,13 +22,14 @@ const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vecto
 const MOTOR = { aam: 14000, lrm: 17000, sam: 24000, rkt: 6000 };
 // what the radio calls each weather
 const SAY = {
-    clear: 'CLEARING', cloudy: 'BROKEN CLOUD', rain: 'RAIN', storm: 'A LINE OF THUNDERSTORMS', fog: 'FOG', overcast: 'LOW CLOUD AND DRIZZLE',
+    clear: 'CLEARING', cloudy: 'BROKEN CLOUD', grey: 'A GREY OVERCAST', rain: 'RAIN', storm: 'A LINE OF THUNDERSTORMS', fog: 'FOG', overcast: 'LOW CLOUD AND DRIZZLE',
 };
 // what comes after what in the Living War (weights)
 const NEXT = {
-    clear: [['cloudy', 3], ['overcast', 1], ['fog', 0.6]],
-    cloudy: [['rain', 2], ['clear', 2], ['storm', 1], ['overcast', 1]],
-    rain: [['storm', 1.5], ['cloudy', 2], ['overcast', 1]],
+    clear: [['cloudy', 3], ['grey', 1], ['overcast', 1], ['fog', 0.6]],
+    cloudy: [['rain', 2], ['clear', 2], ['grey', 1.5], ['storm', 1], ['overcast', 1]],
+    grey: [['cloudy', 2], ['rain', 1.5], ['overcast', 1], ['clear', 0.5]],
+    rain: [['storm', 1.5], ['cloudy', 2], ['grey', 1], ['overcast', 1]],
     storm: [['rain', 2], ['cloudy', 1]],
     fog: [['clear', 2], ['cloudy', 1], ['overcast', 1]],
     overcast: [['cloudy', 2], ['rain', 1.5], ['clear', 1]],
@@ -432,7 +433,7 @@ export class WeatherSystem {
         const g = this.game;
         if (!['sandbox', 'freeflight', 'war'].includes(g.mode)) return [];
         const out = [];
-        const kinds = ['clear', 'cloudy', 'rain', 'storm', 'fog', 'overcast'];
+        const kinds = ['clear', 'cloudy', 'grey', 'rain', 'storm', 'fog', 'overcast'];
         for (const k of kinds) {
             out.push({ path: ['SANDBOX', 'WEATHER'], label: WEATHER_KINDS[k].label + ' (OVER 2 MIN)', hint: 'the whole sky', run: () => this.set(k, { transition: 120, say: true }) });
         }

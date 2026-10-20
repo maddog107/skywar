@@ -149,7 +149,7 @@ export function findSpot(item, anchor, env, { rMin = 0, rMax = 20000, side = nul
 //             mission?: { type, route: [{ x, z }], at: { x, z }, target: { x, z } | { ref } } }] }
 const num = (v, d = 0) => (Number.isFinite(+v) ? +v : d);
 const pt = (p) => (p && Number.isFinite(+p.x) && Number.isFinite(+p.z) ? { x: Math.round(+p.x), z: Math.round(+p.z) } : null);
-const WEATHERS = ['clear', 'cloudy', 'rain', 'storm', 'fog', 'overcast'];
+const WEATHERS = ['clear', 'cloudy', 'grey', 'rain', 'storm', 'fog', 'overcast'];
 
 function cleanMission(m, nUnits) {
     if (!m || !MISSIONS[m.type]) return null;

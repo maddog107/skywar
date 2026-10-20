@@ -300,7 +300,7 @@ function buildMenu() {
     seg('segDifficulty', Object.entries(DIFFICULTY).map(([k, v]) => [k, v.label]), 'difficulty', updateBest);
     seg('segTime', Object.entries(TIMES).map(([k, v]) => [k, v.label]), 'time', () => world.setTime(settings.time));
     seg('segWingmen', [[0, 'SOLO'], [1, '1'], [2, '2']], 'wingmen');
-    seg('segWeather', [['clear', 'CLEAR'], ['cloudy', 'CLOUDY'], ['rain', 'RAIN'], ['storm', 'STORM'], ['fog', 'FOG'], ['overcast', 'LOW']], 'weather', () => world.setWeather(settings.weather));
+    seg('segWeather', [['clear', 'CLEAR'], ['cloudy', 'CLOUDY'], ['grey', 'OVERCAST'], ['rain', 'RAIN'], ['storm', 'STORM'], ['fog', 'FOG'], ['overcast', 'LOW']], 'weather', () => world.setWeather(settings.weather));
     seg('segStart', [['auto', 'AUTO'], ['air', 'AIR'], ['runway', 'RWY'], ['apron', 'TAXI'], ['carrier', 'CVN'], ['water', 'WATER'], ['barracks', 'BARRACKS']], 'start'); // WATER: seaplanes afloat by a jetty
     seg('segLoadout', Object.entries(LOADOUT_LABELS).map(([k, v]) => [k, v.label.split(' ')[0]]), 'loadout', () => { const el = $('acLoadout'); if (el) el.innerHTML = loadoutLine(settings.aircraft); });
     seg('segLivery', Object.entries(LIVERIES).map(([k, v]) => [k, v.label]), 'livery', () => { if (showcase) applyLivery(showcase.model, settings.livery, showcase.type); });

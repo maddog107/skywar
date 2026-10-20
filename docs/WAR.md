@@ -1057,7 +1057,7 @@ entrance }), `ugSealed` (complex).
 ## Night and weather (Phase C: firelight.js, weather.js, weathersys.js, nightfx.js)
 
 ### How to see it
-- Menu: TIME (dawn, midday, dusk, night) and WEATHER (clear, cloudy, rain, storm, **fog**, **low** cloud).
+- Menu: TIME (dawn, midday, dusk, night) and WEATHER (clear, cloudy, **overcast**, rain, storm, **fog**, **low** cloud).
 - In the Living War the clock runs ×20 (a day in ~72 minutes: the war goes on into dusk and night) and a front
   comes through every 15-35 minutes, announced by WEATHER on the radio. COMMAND › SANDBOX › WEATHER / TIME (Sandbox,
   Free Flight and the Living War): any weather over two minutes, a front from upwind, automatic fronts on / off, jump
@@ -1067,7 +1067,8 @@ entrance }), `ugSealed` (complex).
 
 ### `game.weather` (weathersys.js)
 - `set(kind, { transition, say })`: the weather everywhere, now or blended over `transition` seconds. Kinds:
-  `clear`, `cloudy`, `rain`, `storm`, `fog`, `overcast` (weather.js `WEATHER_KINDS`: cloud cover and heights, the rain
+  `clear`, `cloudy`, `grey` (OVERCAST: a high grey deck, clear air under it), `rain`, `storm`, `fog`, `overcast` (LOW
+  CLOUD) (weather.js `WEATHER_KINDS`: cloud cover and heights, the rain
   deck, rain rates, ground fog, wind, turbulence, lightning).
 - `front(kind, { heading, speed, width, eta, dist, say })`: `kind` moves in behind a line across the map (default: with
   the wind, 18 m/s, a 16 km transition zone); `eta` is when its middle reaches the camera. Ahead of the line the old
