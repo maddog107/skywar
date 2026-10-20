@@ -434,8 +434,14 @@ const marchFrag = (FOG_GLSL) => /* glsl */`
                 // sun: single scattering plus two weaker, less attenuated, flatter octaves standing in for the
                 // multiple scattering that makes the sunlit side of a thick cloud so bright
                 float sun = exp(-od) * ph0 + 0.45 * exp(-od * 0.35) * ph1 + 0.18 * exp(-od * 0.12) * ph2;
+                // "powder": light that has only just entered (a thin edge, the rim of a billow) has had little
+                // chance to scatter toward the eye, so with the sun behind you the edges are darker than the creases
+                // between the billows (Schneider, the Horizon Zero Dawn clouds): the cauliflower reads. Looking into
+                // the sun, none of it: the edges are the silver lining
+                sun *= mix(1.0, 1.0 - exp(-od * 2.0 - 0.15), 0.55 * clamp(0.5 - 0.5 * mu, 0.0, 1.0));
                 sun *= 1.0 - min(dkL.x, 1.0) * 0.75 * step(p.y, dkL.y); // under the rain deck the sun is mostly gone
-                vec3 S = litColor * (sun * sunScale) + shadowColor * mix(0.2, 0.6, amb);
+                // (the sky's light: a flat base sees the dark ground, not the sky, so it's greyer than the tops)
+                vec3 S = litColor * (sun * sunScale) + shadowColor * mix(0.13, 0.62, amb);
                 S += vec3(0.75, 0.8, 1.0) * (flash * (1.6 - amb));    // lightning inside the cloud
                 if (lmask != 0) S += cloudFireLight(p, wm, lmask);    // [night] fires, motors, flashes
                 C += T * a * S;
