@@ -189,6 +189,8 @@ export class Gun {
         this.id = this.def.id;
         this.mag = opts.mag ?? this.def.mag;
         this.reserve = opts.reserve ?? this.def.reserve;
+        this.rateK = opts.rateK ?? 1;      // the action cycles this many times faster than the weapon's rpm
+        this.repeat = !!opts.repeat;       // a semi-automatic keeps firing at its rate while the trigger is held
         this.cycle = 0;          // s until the action can fire again
         this.pump = 0;           // shotgun: s left of the pump stroke
         this.chambered = true;   // shotgun: a shell sits in the chamber
@@ -252,11 +254,11 @@ export class Gun {
         }
         let n = 0;
         if (d.fire === 'auto') {
-            if (trigger && this.mag > 0) while (this.cycle <= 0 && this.mag > 0 && n < 4) { n++; this.mag--; this.cycle += 60 / d.rpm; }
+            if (trigger && this.mag > 0) while (this.cycle <= 0 && this.mag > 0 && n < 4) { n++; this.mag--; this.cycle += 60 / (d.rpm * this.rateK); }
             else if (press && this.mag <= 0) this.dry = true;
         } else if (d.fire === 'semi') {
-            if (press && this.cycle <= 0) {
-                if (this.mag > 0) { n = 1; this.mag--; this.cycle = 60 / d.rpm; } else this.dry = true;
+            if ((press || this.repeat && trigger && this.mag > 0) && this.cycle <= 0) {
+                if (this.mag > 0) { n = 1; this.mag--; this.cycle = 60 / (d.rpm * this.rateK); } else this.dry = true;
             }
         } else if (d.fire === 'pump') {
             if (press && this.cycle <= 0 && this.pump <= 0) {

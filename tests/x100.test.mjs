@@ -1,5 +1,5 @@
 // The X-100 Overkill test jet (config.js x100): every hangar bar at 100, the player's own (no enemy, ally or daily
-// pool flies it), its 500-round-a-second shotgun cannon (blasts of 20 rounds over a wide cone; weapons.js fireGun keeps
+// pool flies it), its 1000-round-a-second shotgun cannon (blasts of 20 rounds over a wide cone; weapons.js fireGun keeps
 // the rate at low frame rates too), and the
 // stores only it carries: the MK-84X mega bomb (its `bomb` over WEAPONS.bomb) and the GBU-57X bunker buster (the BBU
 // slot: it buries itself, goes off on its fuse, and what it hits takes it as a penetrator: underground.js, bases.js).
@@ -54,14 +54,14 @@ describe('X-100 Overkill: the test jet', () => {
         for (let d = 0; d < 400; d++) assert.notEqual(dailyMission(new Date(2026, 0, 1 + d)).aircraft, 'x100');
     });
 
-    test('its cannon fires 500 rounds a second, and still does at 20 fps', () => {
+    test('its cannon fires 1000 rounds a second, and still does at 20 fps', () => {
         for (const fps of [60, 30, 20]) {
             const g = arenaGame();
             const ac = g.spawn('x100', { team: 'blue', pos: { x: 0, y: 3000, z: 0 }, isPlayer: true });
             ac.ammo = 1e5;
             let shots = 0;
             for (let i = 0; i < fps * 2; i++) { g.time += 1 / fps; shots += g.weapons.fireGun(ac, g.time); }
-            assert.ok(shots > 970 && shots <= 1020, `${fps} fps: ${shots} rounds in 2 s`);
+            assert.ok(shots > 1940 && shots <= 2040, `${fps} fps: ${shots} rounds in 2 s`);
         }
         // an ordinary gun's rate is unchanged
         const g = arenaGame();

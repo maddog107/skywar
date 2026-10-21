@@ -11,7 +11,7 @@
 import * as THREE from 'three';
 import { clamp, rand, damp } from './util.js';
 import { Character } from './character.js';
-import { Gun, SLOTS, weaponDef, spreadFor, BODY, damageAt } from './arsenal.js';
+import { Gun, SLOTS, weaponDef, spreadFor, BODY, damageAt, ROCKET } from './arsenal.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3();
@@ -20,6 +20,13 @@ const _o = new THREE.Vector3(), _d = new THREE.Vector3(), _m = new THREE.Vector3
 const CANOPY_HP = 150;
 const ARMOR = 0.55;        // body armour and helmet: the share of a small-arms round's damage that gets through
 const REGEN = { delay: 6, rate: 7 }; // health comes back after `delay` s without a hit, `rate` hp/s
+// The player's own weapons handle better than a soldier's (infantry.js keeps the ARSENAL figures): the action
+// cycles `rate` times faster, pistols keep firing while the trigger is held, the cone is `spread` of the stance's
+// (no extra for being in the air: shooting from the chute), recoil is `recoil` of it, and the shooter's own
+// velocity isn't added to the round. The RPG's rocket leaves faster and flies flat (ROCKET_FLAT), aimed from the
+// muzzle at the point the crosshair is on.
+const HANDLING = { rate: 1.5, spread: 0.3, recoil: 0.4 };
+const ROCKET_FLAT = (() => { const R = { ...ROCKET, launch: 200 }; R.accel = (R.max - R.launch) / R.burn; R.gBoost = 0; R.coast = R.selfDestruct; return R; })();
 
 // squared distance between segments p1-q1 and p2-q2 (Ericson, Real-Time Collision Detection 5.1.9)
 export function segSegDistSq(p1, q1, p2, q2) {
@@ -158,7 +165,7 @@ export class PilotOnFoot {
         this.walker = null;
         // ── the arsenal ──
         this.guns = {};
-        for (const id of SLOTS) this.guns[id] = new Gun(id);
+        for (const id of SLOTS) this.guns[id] = new Gun(id, { rateK: HANDLING.rate, repeat: true });
         this.weaponId = 'ak47';
         this.lastWeapon = 'm9';
         this.switching = null;       // { from, to, t, dur }
@@ -403,6 +410,16 @@ export class PilotOnFoot {
         return null;
     }
 
+    // the point the crosshair is on: where the aim ray (origin, dir) meets the ground within 1.5 km, else 400 m out
+    aimPoint(origin, dir, out) {
+        const g = this.game;
+        for (let d = 5; d <= 1500; d += d < 200 ? 4 : 15) {
+            out.copy(origin).addScaledVector(dir, d);
+            if (out.y <= g.surfaceAt(out.x, out.z, out.y + 2).h) return out;
+        }
+        return out.copy(origin).addScaledVector(dir, 400);
+    }
+
     stance() {
         const w = this.walker;
         return { ads: this.adsK, walk: w ? clamp(w.speed / 3.4, 0, 1) : 0, run: this.sprinting ? 1 : 0, air: !this.onGround };
@@ -413,16 +430,19 @@ export class PilotOnFoot {
         const muzzle = this.muzzleWorld(_m);
         this.aimRay(_o, _d, muzzle);
         // a catch-up round (several in one long frame) left the muzzle a moment ago: start it further on
-        const late = (n - 1 - i) * (60 / def.rpm);
-        const spread = spreadFor(def, gun, this.stance());
+        const late = (n - 1 - i) * (60 / (def.rpm * gun.rateK));
+        const st = this.stance(); st.air = false;
+        const spread = spreadFor(def, gun, st) * HANDLING.spread;
         if (g.ordnance) {
-            if (def.projectile === 'rocket') g.ordnance.launchRocket(this, { origin: muzzle || _o, dir: _d, team: 'blue', carry: this.vel, backblast: true });
-            else g.ordnance.fireGun(this, def, { origin: _o, dir: _d, muzzle, spread, team: 'blue', carry: this.vel, tracer: def.tracer && (gun.mag % def.tracer === 0), late, gun });
+            if (def.projectile === 'rocket') {
+                const from = muzzle || _o;
+                g.ordnance.launchRocket(this, { origin: from, dir: _v2.subVectors(this.aimPoint(_o, _d, _v3), from).normalize(), team: 'blue', backblast: true, R: ROCKET_FLAT });
+            } else g.ordnance.fireGun(this, def, { origin: _o, dir: _d, muzzle, spread, team: 'blue', tracer: def.tracer && (gun.mag % def.tracer === 0), late, gun });
         }
         this.lastShotT = g.time;
         this.shotFlag++;
         // recoil: the aim climbs (less down the sights), a transient kick on top, a little sideways wander
-        const r = def.recoil, k = 1 - this.adsK * 0.35;
+        const r = def.recoil, k = (1 - this.adsK * 0.35) * HANDLING.recoil;
         const climb = r.pitch * k * rand(0.8, 1.2);
         this.pitch += climb; this.recoilDebt += climb * 0.55;
         this.yaw += rand(-1, 1) * r.yaw * k;

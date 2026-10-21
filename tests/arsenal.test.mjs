@@ -87,6 +87,17 @@ describe('arsenal: a carried gun', () => {
         }
     });
 
+    test('the player\'s guns (pilot.js HANDLING): the action cycles faster, a held pistol keeps firing', () => {
+        const ak = new Gun('ak47', { mag: 200, reserve: 0, rateK: 1.5 });
+        const want = ARSENAL.ak47.rpm * 1.5 / 60 * 2;
+        assert.ok(Math.abs(run(ak, 2, 60) - want) <= 2, 'AK at 1.5×');
+        const m9 = new Gun('m9', { mag: 100, reserve: 0, rateK: 1.5, repeat: true });
+        const n = run(m9, 1, 60);
+        assert.ok(Math.abs(n - ARSENAL.m9.rpm * 1.5 / 60) <= 2, 'held M9: ' + n);
+        const empty = new Gun('m9', { mag: 0, reserve: 0, repeat: true });
+        assert.equal(run(empty, 1, 60), 0);
+    });
+
     test('semi-automatics need a fresh pull, and can\'t outrun their action', () => {
         const g = new Gun('m9');
         assert.equal(run(g, 1, 60), 1, 'holding the trigger fires once');

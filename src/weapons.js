@@ -214,7 +214,7 @@ export class Weapons {
     }
 
     // The ground targets binned on a CELL m grid once a frame, so a round tests only the few near it (the X-100's
-    // shotgun keeps ~1000 rounds in the air over a war's 200-odd targets). A target with a hitTest bins by how far its
+    // shotgun keeps ~2000 rounds in the air over a war's 200-odd targets). A target with a hitTest bins by how far its
     // test reaches from pos (hitReach), one without by its sphere (center, radius); `pad` covers a round's step in a
     // frame. One with a hitTest but no hitReach, or too big to bin, goes in `always`: every round tests it.
     binTargets(targets, pad) {

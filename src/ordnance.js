@@ -117,9 +117,10 @@ export class Ordnance {
         const mesh = rocketModel();
         mesh.position.copy(o.origin);
         g.scene.add(mesh);
-        const vel = new THREE.Vector3().copy(o.dir).normalize().multiplyScalar(ROCKET.launch);
+        const R = o.R || ROCKET;
+        const vel = new THREE.Vector3().copy(o.dir).normalize().multiplyScalar(R.launch);
         if (o.carry) vel.add(o.carry);
-        const r = { mesh, pos: mesh.position, vel, age: 0, dist: 0, owner: shooter, team: o.team, puff: 0, lit: false };
+        const r = { mesh, pos: mesh.position, vel, age: 0, dist: 0, owner: shooter, team: o.team, puff: 0, lit: false, R };
         mesh.quaternion.setFromUnitVectors(_fwd, _v.copy(vel).normalize());
         this.rockets.push(r);
         // the launch: the booster's bang, a jet of smoke and flame out of the back, dust kicked up behind
@@ -158,7 +159,7 @@ export class Ordnance {
         for (let i = this.rockets.length - 1; i >= 0; i--) {
             const r = this.rockets[i];
             _prev.copy(r.pos);
-            stepRocket(r, dt);
+            stepRocket(r, dt, r.R);
             const dir = _v.copy(r.vel).normalize();
             r.mesh.quaternion.setFromUnitVectors(_fwd, dir);
             // the sustainer's flame and the smoke trail (puffs close together near the camera)
