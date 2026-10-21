@@ -2,7 +2,8 @@
 // On-foot weapon HUD (drawn by hud.js drawPilotMode):
 //   • a crosshair for each kind of weapon, opening up with the spread (movement, bloom, hip vs sights):
 //     rifle lines, a pistol's dot and ticks, the shotgun's pattern ring, the RPG-7's range stadia (worked out
-//     from the rocket's own ballistics), and the grenade's throw arc with a ring where it will land
+//     from the rocket's own ballistics: none for the player's, which flies flat), and the grenade's throw arc with
+//     a ring where it will land
 //   • hitmarkers (body, headshot, kill), red arcs toward whoever just hit you
 //   • the weapon panel: name and calibre, rounds in the magazine / in reserve, the reload bar, fire mode,
 //     and the 1–7 slots with the current one lit
@@ -15,18 +16,19 @@ const SHORT = { ak47: 'AK-47', m4a1: 'M4A1', m870: '870', m9: 'M9', deagle: 'DEA
 const MODE = { auto: 'AUTO', semi: 'SEMI', pump: 'PUMP', single: 'SINGLE', throw: 'THROWN' };
 const _v = new THREE.Vector3(), _d = new THREE.Vector3(), _p = {};
 
-// the RPG-7's drop below the line of the tube at 100…500 m (rad), from the rocket's own flight model
-let rpgDrop = null;
-function rpgStadia() {
-    if (rpgDrop) return rpgDrop;
-    const r = { pos: new THREE.Vector3(), vel: new THREE.Vector3(0, 0, -ROCKET.launch), age: 0, dist: 0 };
-    rpgDrop = [];
+// the RPG-7's drop below the line of the tube at 100…500 m (rad), from the rocket's own flight model (R)
+const rpgDrop = new Map();
+function rpgStadia(R = ROCKET) {
+    if (rpgDrop.has(R)) return rpgDrop.get(R);
+    const r = { pos: new THREE.Vector3(), vel: new THREE.Vector3(0, 0, -R.launch), age: 0, dist: 0 };
+    const marks = [];
     let next = 100;
     for (let i = 0; i < 2000 && next <= 500; i++) {
-        stepRocket(r, 1 / 120);
-        if (-r.pos.z >= next) { rpgDrop.push([next, Math.atan2(-r.pos.y, -r.pos.z)]); next += 100; }
+        stepRocket(r, 1 / 120, R);
+        if (-r.pos.z >= next) { marks.push([next, Math.atan2(-r.pos.y, -r.pos.z)]); next += 100; }
     }
-    return rpgDrop;
+    rpgDrop.set(R, marks);
+    return marks;
 }
 
 export function drawWeaponHud(hud, ctx, game, pm, W, H, C, M, mono) {
@@ -37,7 +39,7 @@ export function drawWeaponHud(hud, ctx, game, pm, W, H, C, M, mono) {
     const ads = pm.adsK || 0;
     const fp = !pm.thirdPerson;
     if (pm.alive && !pm.switching) {
-        const spread = spreadFor(def, gun, pm.stance());
+        const spread = pm.spread ? pm.spread(gun) : spreadFor(def, gun, pm.stance());
         const gap = Math.max(3, px(spread)) + pm.recoil * 200;
         const alpha = fp ? 0.9 * (1 - ads) : 0.9 - ads * 0.3; // down the sights (first person) the sights do it
         ctx.lineWidth = 2;
@@ -51,8 +53,9 @@ export function drawWeaponHud(hud, ctx, game, pm, W, H, C, M, mono) {
                 // a chevron, and range marks below it for 100–500 m
                 ctx.beginPath(); ctx.moveTo(cx - 9, cy + 7); ctx.lineTo(cx, cy); ctx.lineTo(cx + 9, cy + 7); ctx.stroke();
                 ctx.font = '600 10px "Share Tech Mono", ui-monospace, monospace'; ctx.textAlign = 'left';
-                for (const [m, a] of rpgStadia()) {
+                for (const [m, a] of rpgStadia(pm.rocket)) {
                     const y = cy + px(a);
+                    if (y - cy < 3) continue; // (no drop to mark: the chevron is the aim point)
                     ctx.beginPath(); ctx.moveTo(cx - 6, y); ctx.lineTo(cx + 6, y); ctx.stroke();
                     ctx.fillText(String(m / 100), cx + 9, y);
                 }

@@ -174,6 +174,7 @@ export class PilotOnFoot {
         this.moveSpeed = 0;
         this.onGround = !!seat.landed;
         this.landed = false;         // (one frame) just touched down
+        this.rocket = ROCKET_FLAT;   // the RPG's rocket (the HUD's sight works out its drop from it)
         this.recoil = 0;             // transient camera kick (rad, added to the view pitch by the camera)
         this.recoilDebt = 0;         // part of the aim climb that settles back when you stop shooting
         this.shotFlag = 0;           // shots since the view model last looked (it kicks for them)
@@ -425,18 +426,23 @@ export class PilotOnFoot {
         return { ads: this.adsK, walk: w ? clamp(w.speed / 3.4, 0, 1) : 0, run: this.sprinting ? 1 : 0, air: !this.onGround };
     }
 
+    // the cone the current gun's rounds leave in (rad, half-angle): the stance's, with the player's handling
+    spread(gun = this.gun) {
+        const st = this.stance(); st.air = false;
+        return spreadFor(gun.def, gun, st) * HANDLING.spread;
+    }
+
     fire(gun, i, n, dt) {
         const g = this.game, def = gun.def;
         const muzzle = this.muzzleWorld(_m);
         this.aimRay(_o, _d, muzzle);
         // a catch-up round (several in one long frame) left the muzzle a moment ago: start it further on
         const late = (n - 1 - i) * (60 / (def.rpm * gun.rateK));
-        const st = this.stance(); st.air = false;
-        const spread = spreadFor(def, gun, st) * HANDLING.spread;
+        const spread = this.spread(gun);
         if (g.ordnance) {
             if (def.projectile === 'rocket') {
                 const from = muzzle || _o;
-                g.ordnance.launchRocket(this, { origin: from, dir: _v2.subVectors(this.aimPoint(_o, _d, _v3), from).normalize(), team: 'blue', backblast: true, R: ROCKET_FLAT });
+                g.ordnance.launchRocket(this, { origin: from, dir: _v2.subVectors(this.aimPoint(_o, _d, _v3), from).normalize(), team: 'blue', backblast: true, R: this.rocket });
             } else g.ordnance.fireGun(this, def, { origin: _o, dir: _d, muzzle, spread, team: 'blue', tracer: def.tracer && (gun.mag % def.tracer === 0), late, gun });
         }
         this.lastShotT = g.time;
