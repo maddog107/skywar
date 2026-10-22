@@ -28,6 +28,8 @@ const _s1 = new THREE.Vector3(), _s2 = new THREE.Vector3(), _s3 = new THREE.Vect
 const UP = new THREE.Vector3(0, 1, 0);
 // a bunker buster's hole: narrow for its size and deep, the earth heaved up in a high rim
 const BUSTER_CRATER = { r: 7.5, depth: 7, rim: 1.8, scorch: 0.55, reach: 2.8, clods: 18 };
+// a MOAB's: it goes off just above the ground, so a wide, shallow bowl scorched black, earth thrown far
+const MOAB_CRATER = { r: 19, depth: 3.4, rim: 1.5, scorch: 1, reach: 3.0, clods: 24 };
 const GUN_BLUE = [3.2, 2.6, 1.2], GUN_RED = [3.4, 1.0, 0.5], FLAK_COLOR = [3.6, 1.2, 0.5];
 // terrain looked at ahead of a sea-skimmer or a cruise missile (m)
 const AHEAD = [100, 200, 350, 500, 700, 900, 1150, 1400, 1700, 2100, 2600, 3200, 4000];
@@ -55,10 +57,12 @@ const FINS = {
     jdam: [{ at: 0.5, chord: 0.3, span: 0.5 }, { at: 0.9, chord: 0.15, span: 1.6 }],
     sdb: [{ at: 0.42, chord: 0.12, span: 7, n: 2 }, { at: 0.92, chord: 0.1, span: 1.8 }],
     cbu: [{ at: 0.88, chord: 0.2, span: 1.4 }],
+    // the MOAB: four lattice fins on the tail and small fixed fins just ahead of them
+    moab: [{ at: 0.84, chord: 0.1, span: 0.45 }, { at: 0.97, chord: 0.04, span: 1.3, grid: true }],
 };
 const NOSE = { dome: 1, glass: 1, ogive: 4, blunt: 1.6, bomb: 2.2 };
 // IR seekers: a dark glass dome; TV / laser ones a glass window; radars, cruise and bombs an ogive
-const noseOf = (W) => W.cls === 'srm' ? 'dome' : W.seeker === 'tv' || W.seeker === 'laser' || W.seeker === 'mmw' ? 'glass' : W.drop || W.cls === 'gbu' || W.cls === 'bomb' ? 'bomb' : W.cls === 'rkt' ? 'blunt' : 'ogive';
+const noseOf = (W) => W.cls === 'srm' ? 'dome' : W.seeker === 'tv' || W.seeker === 'laser' || W.seeker === 'mmw' ? 'glass' : W.drop || W.cls === 'gbu' || W.cls === 'bomb' || W.cls === 'moab' ? 'bomb' : W.cls === 'rkt' ? 'blunt' : 'ogive';
 const STORE_GEO = new Map(), STORE_MAT = new Map();
 function storeMat(color, glass) {
     const k = glass ? 'glass' : color;
@@ -69,7 +73,8 @@ function storeGeo(W) {
     let e = STORE_GEO.get(W.id);
     if (e) return e;
     const L = W.len || 3, R = (W.dia || 0.15) / 2, nose = noseOf(W), nl = Math.min(L * 0.35, R * NOSE[nose]);
-    const bomb = nose === 'bomb', tailL = bomb ? L * 0.3 : L * 0.04, tailR = bomb ? R * (W.shape === 'cbu' ? 0.8 : 0.42) : R * 0.85;
+    const moab = W.shape === 'moab'; // (a long straight body that narrows only a little into its fins)
+    const bomb = nose === 'bomb', tailL = bomb ? L * (moab ? 0.1 : 0.3) : L * 0.04, tailR = bomb ? R * (W.shape === 'cbu' ? 0.8 : moab ? 0.75 : 0.42) : R * 0.85;
     // lathe profiles from the tail (−Y) up to the tip (+Y), rotated so the nose points along −Z
     const top = L / 2, shoulder = top - nl;
     const curve = nose === 'dome' || nose === 'glass' ? (t) => R * Math.sqrt(1 - t * t) : (t) => R * (1 - t * t);
@@ -907,16 +912,17 @@ export class Weapons {
 
     // ── Bombs (gravity; a guided one flies itself onto its target) ──
     // kind 'bomb': the type's bomb (stores.js: a Mk 82, a FAB-500, a cluster bomb, the X-100's MK-84X); 'gbu': its
-    // guided bomb (a Paveway, a JDAM, a KAB-500); 'buster': the X-100's GBU-57X bunker buster
+    // guided bomb (a Paveway, a JDAM, a KAB-500); 'buster': the X-100's GBU-57X bunker buster; 'moab': its GBU-43X
     bombW(ac, kind = 'bomb') {
-        return storeFor(ac, kind === 'buster' ? 'buster' : kind === 'gbu' ? 'gbu' : 'bomb') || (kind === 'buster' ? WEAPONS.buster : WEAPONS.bomb);
+        const cls = kind === 'buster' || kind === 'gbu' || kind === 'moab' ? kind : 'bomb';
+        return storeFor(ac, cls) || (kind === 'buster' ? WEAPONS.buster : kind === 'moab' ? WEAPONS.moab : WEAPONS.bomb);
     }
 
     // target: a guided bomb's (the laser's spot, or the GPS point: where the target is now)
     dropBomb(ac, kind = 'bomb', target = null) {
         const W = this.bombW(ac, kind), buster = kind === 'buster';
         const mesh = buster ? this.busterMesh() : W.id ? storeMesh(W) : this.bombGeo.clone();
-        const pos = ac.pos.clone().addScaledVector(ac.getUp(_v1), buster ? -2.6 : -2.2);
+        const pos = ac.pos.clone().addScaledVector(ac.getUp(_v1), buster ? -2.6 : kind === 'moab' ? -3 : -2.2);
         mesh.position.copy(pos);
         mesh.traverse(o => { if (o.isMesh) o.castShadow = true; });
         this.game.scene.add(mesh);
@@ -1110,7 +1116,8 @@ export class Weapons {
     }
 
     // A bomb going off at `at` (s: the surface there): the blast, the crater, the damage. A Mk 82 is the yardstick
-    // (k = 1); the MK-84X's fireball is bigger (its `fx` size), and a bunker buster goes off deep in the ground: the
+    // (k = 1); the MK-84X's and the MOAB's fireballs are bigger (their `fx` size; the MOAB's crater wide and shallow:
+    // MOAB_CRATER), and a bunker buster goes off deep in the ground: the
     // earth heaves up in a fountain, a deep crater, and what it hits takes it as a penetrator (through hardened
     // shelters, tunnel portals, command bunkers)
     bombBurst(b, at, s, wet, hitShip, onBuilding) {
@@ -1127,11 +1134,14 @@ export class Weapons {
             fx.debrisBurst(at, _v1.set(0, 70, 0), 14, 1.6);
             if (!onBuilding && !s.ship && !s.bridge) this.addCrater(at, BUSTER_CRATER, b.vel);
         } else {
-            // the MK-84X: a mushroom cloud over a ring of dust (effects.js megaBlast)
+            // the MK-84X and the MOAB: a mushroom cloud over a ring of dust (effects.js megaBlast)
             if (k > 1.5 && fx.megaBlast) fx.megaBlast(at, k); else fx.explosion(at, size);
             fx.debrisBurst(at, _v1.set(0, 40 * Math.sqrt(k), 0), Math.round(5 * k), 0.8 * Math.sqrt(k));
             for (let n = 0; n < Math.round(20 * Math.min(k, 2)); n++) fx.smoke.emit(at, _v1.set(rand(-25, 25), rand(15, 60), rand(-25, 25)).multiplyScalar(Math.sqrt(k)), rand(2, 4), 6 * Math.sqrt(k), 22 * Math.sqrt(k), [0.35, 0.3, 0.24], [0.5, 0.45, 0.38], 0.8, 0, 1.2, -12);
-            if (!hitShip && !s.ship && !onBuilding && !s.bridge) this.addCrater(at, 'bomb', b.vel, W.crater ? { scale: W.crater } : undefined);
+            if (!hitShip && !s.ship && !onBuilding && !s.bridge) {
+                if (b.kind === 'moab') this.addCrater(at, MOAB_CRATER, b.vel);
+                else this.addCrater(at, 'bomb', b.vel, W.crater ? { scale: W.crater } : undefined);
+            }
         }
         const camD = g.camera.position.distanceTo(at);
         if (!wet || !fx.water) g.audio.boom(camD, 1.6 * Math.sqrt(k)); // (in the water: splash.js's own whoomp)

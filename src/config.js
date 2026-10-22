@@ -71,12 +71,12 @@ function jet(o) {
 export const AIRCRAFT = {
     // SKYWAR's own test jet, just for fun: every hangar bar maxed (main.js statBars), a 1000-round-a-second shotgun
     // cannon (50 blasts a second of 20 rounds each, over a cone ±4.6° wide, 80 m across at 500 m: weapons.js fireGun),
-    // and stores no other type carries: MK-84X mega bombs (`bomb`: WEAPONS.bomb with these numbers) and GBU-57X
-    // bunker busters (`busters`: the BBU slot, WEAPONS.buster). The player's only: in no enemy or ally pool, and
+    // and stores no other type carries: MK-84X mega bombs (`bomb`: WEAPONS.bomb with these numbers), GBU-57X
+    // bunker busters (`busters`: the BBU slot, WEAPONS.buster) and twenty GBU-43X MOABs (the MOAB slot, WEAPONS.moab). The player's only: in no enemy or ally pool, and
     // `group` keeps it out of the daily missions and lists it under its own heading in the hangar.
     x100: jet({
         name: 'X-100 Overkill', role: 'Experimental Test Jet', country: 'SKYWAR', group: 'test', length: 21.0, span: 12.6,
-        desc: 'SKYWAR\'s own test jet. Every stat maxed, a 1000-round-a-second shotgun cannon, mega bombs and bunker busters. Not remotely fair.',
+        desc: 'SKYWAR\'s own test jet. Every stat maxed, a 1000-round-a-second shotgun cannon, mega bombs, bunker busters and twenty MOABs. Not remotely fair.',
         flight: { speed: 560, mach: 3.3, cd0: 0.034, aoaLimiter: true, accel: 22, gLimit: 12, roll: 6.2, alpha: 45, lift: 1.25 },
         health: 300, missiles: 16, flares: 90,
         gun: { damage: 14, rate: 1000, pellets: 20, cone: 0.08, ammo: 60000, name: 'GAU-X 30mm shotgun ×4', cal: 30 },
@@ -481,6 +481,12 @@ export const WEAPONS = {
     // into the ground (or through a roof) and goes off `fuse` s later deep under it: on a hardened shelter, a tunnel
     // portal or a command bunker it's a penetrator (weapons.js bombBurst), and the earth heaves up in a fountain.
     // kg, fx: its column in the water (splash.js) and its fireball's size (effects.js explosion: a Mk 82's is 2.4)
+    // the X-100's GBU-43X MOAB (the MOAB slot): the real GBU-43/B Massive Ordnance Air Blast is 9.2 m long, a metre
+    // across and 9,800 kg (8,500 kg of H6), set off just above the ground so the blast sweeps out over it. This one is
+    // the biggest bomb in the game: twice the MK-84X's reach, a fireball and mushroom cloud ~4× a Mk 82's
+    // (fx: weapons.js bombBurst, effects.js megaBlast), a wide shallow crater (MOAB_CRATER) and runway craters 3× a
+    // Mk 82's (bases.js: crater)
+    moab: { name: 'GBU-43X MOAB', damage: 3400, splash: 320, drag: 0.008, kg: 9800, fx: 10, crater: 3, unguided: true, lockTime: 1, lockCone: 2, range: 0 },
     buster: { name: 'GBU-57X BUNKER BUSTER', damage: 2600, splash: 60, drag: 0.004, fuse: 0.45, kg: 2400, fx: 4, unguided: true, lockTime: 1, lockCone: 2, range: 0 },
     rkt: { boost: 0.8, accelBoost: 420, turnG: 0, life: 5, prox: 11, damage: 38, splash: 32, unguided: true },
     sam: { speed: 820, boost: 4, accelBoost: 180, turnG: 24, life: 16, damage: 70, range: 7500, navN: 3.5 },

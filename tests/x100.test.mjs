@@ -1,8 +1,9 @@
 // The X-100 Overkill test jet (config.js x100): every hangar bar at 100, the player's own (no enemy, ally or daily
 // pool flies it), its 1000-round-a-second shotgun cannon (blasts of 20 rounds over a wide cone; weapons.js fireGun keeps
 // the rate at low frame rates too), and the
-// stores only it carries: the MK-84X mega bomb (its `bomb` over WEAPONS.bomb) and the GBU-57X bunker buster (the BBU
-// slot: it buries itself, goes off on its fuse, and what it hits takes it as a penetrator: underground.js, bases.js).
+// stores only it carries: the MK-84X mega bomb (its `bomb` over WEAPONS.bomb), the GBU-57X bunker buster (the BBU
+// slot: it buries itself, goes off on its fuse, and what it hits takes it as a penetrator: underground.js, bases.js) and
+// twenty GBU-43X MOABs (the MOAB slot, WEAPONS.moab: the biggest blast in the game).
 import { src } from './helpers/setup.mjs';
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,6 +12,7 @@ import { arenaGame, seeded, THREE } from './helpers/arena.mjs';
 const { AIRCRAFT, WEAPONS, ENEMY_POOL, ENEMY_EARLY, ALLY_POOL, hangarStats } = await src('config.js');
 const { SLOTS, slotFits, slotName } = await src('game.js');
 const { dailyMission } = await src('missions.js');
+const { armAircraft, storeFor } = await src('stores.js');
 const { Underground } = await src('underground.js');
 
 const X = AIRCRAFT.x100;
@@ -166,6 +168,39 @@ describe('X-100 Overkill: the test jet', () => {
             assert.deepEqual(mk84x.kinds, ['bomb']);
         });
         assert.equal(WEAPONS.bomb.damage, 220, 'the shared Mk 82 table is left as it was');
+    });
+
+    test('twenty GBU-43X MOABs: the X-100\'s only, on both its ground loadouts', () => {
+        const moab = SLOTS.find(s => s.key === 'moab');
+        assert.ok(slotFits(X, moab));
+        for (const [id, s] of Object.entries(AIRCRAFT)) if (id !== 'x100') assert.ok(!slotFits(s, moab), id);
+        assert.equal(slotName(X, moab), 'GBU-43X MOAB');
+        for (const pre of ['balanced', 'strike']) {
+            const ac = { type: 'x100', spec: X };
+            armAircraft(ac, pre);
+            assert.equal(ac.moabs, 20, pre);
+            assert.equal(ac.bombs > 0 && ac.busters > 0, true, pre + ': the MK-84Xs and bunker busters as well');
+        }
+        assert.ok(storeFor(X, 'moab').kg > storeFor(X, 'bomb').kg * 2, 'bigger than the MK-84X');
+    });
+
+    test('a MOAB hits harder than the MK-84X and wrecks things twice as far out', () => {
+        seeded(5, () => {
+            const run = (kind) => {
+                const near = target(V(0, 0, 30)), far = target(V(0, 0, 250));
+                const g = range([near, far]);
+                const ac = g.spawn('x100', { team: 'blue', pos: { x: 0, y: 300, z: 0 } });
+                const { b } = drop(g, ac, kind);
+                const sum = (t) => t.hits.reduce((a, h) => a + h.a, 0);
+                return { near: sum(near), far: sum(far), kinds: near.hits.map(h => h.kind), W: b.W };
+            };
+            const mk = run('bomb'), moab = run('moab');
+            assert.equal(moab.W.short, 'GBU-43X');
+            assert.ok(moab.near > mk.near * 1.5, `near: ${moab.near.toFixed(0)} vs ${mk.near.toFixed(0)}`);
+            assert.equal(mk.far, 0, 'the MK-84X does nothing 250 m out');
+            assert.ok(moab.far > 500, 'the MOAB still wrecks things 250 m out: ' + moab.far.toFixed(0));
+            assert.deepEqual(moab.kinds, ['bomb']);
+        });
     });
 
     test('a bunker buster buries itself, goes off on its fuse, and hits as a penetrator', () => {

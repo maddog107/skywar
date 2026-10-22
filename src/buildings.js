@@ -46,6 +46,11 @@ const HIDDEN = new THREE.Matrix4().makeScale(0, 0, 0);
 // flag one instance's slot for upload, not the whole buffer (an InstancedMesh can hold a whole group of towns)
 function touch(attr, i) { attr.addUpdateRange(i * attr.itemSize, attr.itemSize); attr.needsUpdate = true; }
 const DUST = new THREE.Color(0.45, 0.42, 0.38);
+// A blast that brings a whole district down at once (the X-100's MOAB) would have every building throw its own fireball,
+// debris and dust, fill the particle pools and leave the bomb's own mushroom cloud no room: the first FULL_FX to fall in a
+// frame get all of it, the rest just fall (the big blast covers them, and the feed sums them up in one line); the dust of
+// many collapsing at once and the fires of many burning share DUST_SHARE and FIRE_SHARE buildings' worth
+const FULL_FX = 10, DUST_SHARE = 10, FIRE_SHARE = 30;
 
 // the town and the airbases share one set, so every structure in the world is found by the same queries
 export const WORLD_BUILDINGS = { current: null };
@@ -94,6 +99,8 @@ export class Buildings {
         this.collapsing = [];
         this.burning = [];
         this.smoking = [];
+        this.fallen = 0;                    // buildings destroyed this frame
+        this.mass = { n: 0, pts: 0 };       // the player's beyond FULL_FX this frame (one feed line)
         this.night = false;
         WORLD_BUILDINGS.current = this;
         this.rubble = new THREE.InstancedMesh(rubbleGeometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }), 500);
@@ -264,20 +271,30 @@ export class Buildings {
         this.smoking = this.smoking.filter(s => s.b !== b);
         if (this.onBlast) this.onBlast(_v.set(b.x, b.y, b.z), Math.max(b.w, b.d) + 20);
         if (game) {
+            const full = this.fallen++ < FULL_FX;
             const fx = game.effects, c = _v.set(b.x, b.y + h * (vehicle ? 0.5 : 0.4), b.z);
-            fx.explosion(c, vehicle ? 1.2 : Math.min(3, 0.8 + h / 25));
-            fx.debrisBurst(c, _v2.set(0, 25, 0), 8, 1.2);
-            game.audio.boom(game.camera.position.distanceTo(c), 1.4);
+            if (full) {
+                fx.explosion(c, vehicle ? 1.2 : Math.min(3, 0.8 + h / 25));
+                fx.debrisBurst(c, _v2.set(0, 25, 0), 8, 1.2);
+                game.audio.boom(game.camera.position.distanceTo(c), 1.4);
+            }
             if (game.camera.position.distanceTo(c) < 900) game.shake = Math.min(1.5, (game.shake || 0) + 0.5);
             if (source && (source === game.player || source === game.pilotMode)) {
                 if (b.friendly) game.addFeed('FRIENDLY ' + b.name + ' DESTROYED', '#ff4a3d');
-                else { game.score += K.pts; game.addFeed(b.name + ' DESTROYED  +' + K.pts, '#ffc23f'); }
+                else {
+                    game.score += K.pts;
+                    if (full) game.addFeed(b.name + ' DESTROYED  +' + K.pts, '#ffc23f');
+                    else { this.mass.n++; this.mass.pts += K.pts; }
+                }
             }
         }
     }
 
     update(dt, cam) {
         const g = this.game;
+        this.fallen = 0;
+        if (this.mass.n && g) { g.addFeed('+' + this.mass.n + ' MORE BUILDINGS DESTROYED  +' + this.mass.pts, '#ffc23f'); this.mass.n = this.mass.pts = 0; }
+        const dustK = Math.min(1, DUST_SHARE / Math.max(1, this.collapsing.length)), fireK = Math.max(1, this.burning.length / FIRE_SHARE);
         for (let i = this.collapsing.length - 1; i >= 0; i--) {
             const c = this.collapsing[i], b = c.b;
             c.t = Math.min(1, c.t + dt / c.dur);
@@ -301,7 +318,7 @@ export class Buildings {
                     else q.o.matrixWorld.multiplyMatrices(_m2, q.base);
                 }
             }
-            if (g && !c.vehicle && Math.random() < dt * 40) {
+            if (g && !c.vehicle && Math.random() < dt * 40 * dustK) {
                 // billowing dust around the base
                 const a = rand(0, Math.PI * 2), r = Math.max(b.w, b.d) * rand(0.3, 0.8);
                 g.effects.smoke.emit(_v.set(b.x + Math.cos(a) * r, b.y + rand(0, c.h * (1 - k)), b.z + Math.sin(a) * r), _v2.set(Math.cos(a) * 6, rand(2, 8), Math.sin(a) * 6),
@@ -330,7 +347,7 @@ export class Buildings {
             f.t -= dt; f.fire -= dt; f.puff -= dt; f.flick += dt;
             if (g && f.puff <= 0) {
                 const far = cam ? Math.hypot(b.x - cam.x, b.z - cam.z) : 0;
-                f.puff = far > 7000 ? 1 : 0.18 + far / 6000;
+                f.puff = (far > 7000 ? 1 : 0.18 + far / 6000) * fireK;
                 if (far <= 7000) {
                     const p = _v.set(b.x + rand(-0.35, 0.35) * b.w, b.y + 1.5, b.z + rand(-0.35, 0.35) * b.d);
                     g.effects.puffSmoke(p, _v2.set(0, rand(3, 6), 0), 1.5 + b.w * 0.06, 0.12, 3.5, 0.55);

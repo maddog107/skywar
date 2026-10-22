@@ -46,14 +46,14 @@ const CAMERA_MODES = ['chase', 'cockpit', 'far', 'cinematic'];
 // The weapon slots (stores.js classes): X steps through the ones the jet carries — its type's own weapons on the
 // chosen loadout (an F-16's AIM-9X / AIM-120C / Maverick / GBU-12, a Growler's HARMs, an F-14's Phoenixes)
 export const SLOTS = CLASSES;
-// does this type carry the slot on any loadout (the bunker busters: the X-100 only)?
+// does this type carry the slot on any loadout (the bunker busters and MOABs: the X-100 only)?
 export const slotFits = (spec, slot) => carries(spec, slot.key);
 // can this jet use the slot now: it has some, or its loadout has the class (and it's run out)
 export const slotAvail = (ac, slot) => !!ac && (ac[slot.ammo] > 0 || !!(ac.stores && ac.stores[slot.key]));
 // a slot's weapon on this aircraft ("AIM-9X SIDEWINDER", the X-100's "MK-84X MEGA BOMB")
 export const slotName = (x, slot) => (storeFor(x, slot.key) || slot).name;
 // the sandbox keeps at least this many of a store (or the loadout's count, if fewer)
-const SANDBOX_KEEP = { rkt: 8, bomb: 4, gbu: 2, buster: 1 };
+const SANDBOX_KEEP = { rkt: 8, bomb: 4, gbu: 2, buster: 1, moab: 2 };
 const LOADOUTS = {
     balanced: { label: 'BALANCED' },
     air: { label: 'AIR SUPERIORITY' },
@@ -1008,7 +1008,7 @@ export class Game {
     // the selected slot's weapon on this jet (stores.js)
     get slotW() {
         const k = this.slotDef.key;
-        return storeFor(this.player, k) || (k === 'lrm' ? WEAPONS.lrm : k === 'rkt' ? WEAPONS.rkt : k === 'bomb' || k === 'gbu' ? WEAPONS.bomb : k === 'buster' ? WEAPONS.buster : WEAPONS.missile);
+        return storeFor(this.player, k) || (k === 'lrm' ? WEAPONS.lrm : k === 'rkt' ? WEAPONS.rkt : k === 'bomb' || k === 'gbu' ? WEAPONS.bomb : k === 'buster' ? WEAPONS.buster : k === 'moab' ? WEAPONS.moab : WEAPONS.missile);
     }
     // the slot index the step from i lands on: i, or the next one round this jet can use
     nextSlot(i) {
@@ -1191,7 +1191,7 @@ export class Game {
         if (!(p[slot.ammo] > 0)) { this.audio.tick(200, 0.1, 0.1); this.addFeed('NO ' + slot.label + ' LEFT — X TO SWITCH', '#ffc23f'); return; }
         const locked = this.lockProgress >= 1 && this.lockTarget && this.engageable(this.lockTarget) ? this.lockTarget : null;
         if (slot.drop) {
-            if (this.time - p.lastMissile < (slot.key === 'buster' ? 0.6 : 0.25) || p.onGround) return;
+            if (this.time - p.lastMissile < (slot.key === 'buster' ? 0.6 : slot.key === 'moab' ? 0.4 : 0.25) || p.onGround) return;
             p.lastMissile = this.time;
             // a guided bomb takes the lock: the laser's spot, or the GPS point
             this.weapons.dropBomb(p, slot.key, slot.key === 'gbu' ? locked : null);

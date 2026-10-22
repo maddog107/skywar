@@ -61,9 +61,9 @@ describe('stores: the catalogue and the loadouts', () => {
         // Russian / Chinese jets fly Russian / Chinese missiles
         assert.equal(storeFor(AIRCRAFT.su35, 'srm').short, 'R-73');
         assert.equal(storeFor(AIRCRAFT.j20, 'lrm').short, 'PL-15');
-        // the X-100's own: the mega bomb and the bunker busters, no one else's
+        // the X-100's own: the mega bomb, the bunker busters and the MOABs, no one else's
         assert.equal(storeFor(AIRCRAFT.x100, 'bomb').name, 'MK-84X MEGA BOMB');
-        for (const t of Object.keys(LOADOUTS)) if (t !== 'x100') assert.ok(!everywhere(t).has('gbu57x') && !everywhere(t).has('mk84x'), t);
+        for (const t of Object.keys(LOADOUTS)) if (t !== 'x100') assert.ok(!['gbu57x', 'mk84x', 'gbu43x'].some(id => everywhere(t).has(id)), t);
         assert.equal(loadoutText(AIRCRAFT.f16, 'strike'), 'AIM-9X ×2 · AIM-120C ×2 · HARM ×2 · MAVERICK ×4 · GBU-12 ×4');
     });
 
@@ -97,7 +97,7 @@ describe('stores: the catalogue and the loadouts', () => {
         assert.equal(step('ea18g', 'balanced'), 'lrm arm');
         assert.equal(step('f14', 'air'), 'srm lrm xlr');
         assert.equal(step('b52', 'strike'), 'alcm bomb');
-        assert.equal(step('x100', 'strike'), 'srm lrm arm agm bomb buster');
+        assert.equal(step('x100', 'strike'), 'srm lrm arm agm bomb buster moab');
         // a mission that hands it rockets (missions.js) adds the slot, with its side's pods
         const p = { type: 'f22', spec: AIRCRAFT.f22 };
         armAircraft(p, 'air');

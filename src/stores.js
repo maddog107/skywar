@@ -2,7 +2,7 @@
 // Stores: the real weapons each type carries, by loadout
 //  • CLASSES: the weapon slots X cycles through (the ones the jet carries): IR missile, radar missile, very long
 //    range missile, anti-radiation, air-to-ground, anti-ship, cruise missile, rockets, guided bombs, bombs, the
-//    X-100's bunker busters. Each keeps its count in its own field on the aircraft (ac.missiles, ac.lrm, ...) and
+//    X-100's bunker busters and MOABs. Each keeps its count in its own field on the aircraft (ac.missiles, ac.lrm, ...) and
 //    says what it can lock: aircraft, ground targets, ships or a radar that's transmitting.
 //  • STORES: the catalogue (AIM-9X, R-73, AIM-120D, AIM-54, R-37M, Meteor, HARM, Maverick, Harpoon, GBU-12, JDAM,
 //    ...): real names and sizes and how each behaves in weapons.js. Its seeker:
@@ -43,6 +43,7 @@ export const CLASSES = [
     { key: 'gbu', label: 'GBU', name: 'GUIDED BOMB', ammo: 'gbus', drop: true, vs: 'ground' },
     { key: 'bomb', label: 'BMB', name: 'BOMB', ammo: 'bombs', drop: true, vs: null },
     { key: 'buster', label: 'BBU', name: 'BUNKER BUSTER', ammo: 'busters', drop: true, vs: null },
+    { key: 'moab', label: 'MOAB', name: 'MASSIVE BOMB', ammo: 'moabs', drop: true, vs: null },
 ];
 export const CLASS = Object.fromEntries(CLASSES.map(c => [c.key, c]));
 export const AMMO_FIELDS = CLASSES.map(c => c.ammo);
@@ -179,9 +180,10 @@ export const STORES = {
     cbu87: S(CLUSTER(), 'bomb', 'USA', { name: 'CBU-87 CLUSTER BOMB', short: 'CBU-87', len: 2.34, dia: 0.39 }),
     bl755: S(CLUSTER({ n: 26, spread: 50, agl: 200 }), 'bomb', 'EU', { name: 'BL755 CLUSTER BOMB', short: 'BL755', len: 2.45, dia: 0.42, color: 0x5f6458 }),
     rbk500: S(CLUSTER({ n: 30, dmg: 50, r: 11, spread: 60, agl: 400 }), 'bomb', 'RUS', { name: 'RBK-500 PTAB', short: 'RBK-500', len: 2.5, dia: 0.45, color: 0x8c9188 }),
-    // the X-100's own (config.js: its `bomb` and WEAPONS.buster)
+    // the X-100's own (config.js: its `bomb`, WEAPONS.buster and WEAPONS.moab)
     mk84x: S(BOMB, 'bomb', 'SKYWAR', { short: 'MK-84X', ...AIRCRAFT.x100.bomb, mega: true, len: 4.2, dia: 0.62, color: 0x24262a }),
     gbu57x: S(WEAPONS.buster, 'buster', 'SKYWAR', { short: 'GBU-57X', shape: 'buster', len: 6.2, dia: 0.8 }),
+    gbu43x: S(WEAPONS.moab, 'moab', 'SKYWAR', { short: 'GBU-43X', shape: 'moab', len: 9.2, dia: 1.03, color: 0x4a5040 }),
 };
 for (const [id, s] of Object.entries(STORES)) s.id = id;
 
@@ -206,11 +208,11 @@ const DEFAULTS = {
 // (sources: each type's published stores lists; the air-to-air counts are the stations' worth, rounded up a little
 // where a real jet carries very few)
 const L = {
-    // SKYWAR's test jet: the best of everyone's, and its own mega bombs and bunker busters
+    // SKYWAR's test jet: the best of everyone's, and its own mega bombs, bunker busters and twenty MOABs
     x100: {
         air: 'aim9x 12, aim120d 10',
-        balanced: 'aim9x 8, aim120d 6, agm65 6, mk84x 8, gbu57x 4',
-        strike: 'aim9x 4, aim120d 4, agm88 4, agm65 8, mk84x 16, gbu57x 8',
+        balanced: 'aim9x 8, aim120d 6, agm65 6, mk84x 8, gbu57x 4, gbu43x 20',
+        strike: 'aim9x 4, aim120d 4, agm88 4, agm65 8, mk84x 16, gbu57x 8, gbu43x 20',
     },
     // F-22A: everything in the bays — two AIM-9X in the side bays, AMRAAMs or Small Diameter Bombs in the main one
     f22: {
@@ -450,7 +452,7 @@ export function storeFor(x, cls) {
     const d = DEFAULTS[spec.country] || DEFAULTS.USA;
     return STORES[d[cls] || DEFAULTS.USA[cls] || FALLBACK[cls]] || null;
 }
-const FALLBACK = { buster: 'gbu57x' };
+const FALLBACK = { buster: 'gbu57x', moab: 'gbu43x' };
 // fireMissile's kind → the store this aircraft fires for it
 export const storeOfKind = (x, kind) => storeFor(x, classOfKind(kind));
 
