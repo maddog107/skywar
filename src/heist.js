@@ -28,20 +28,14 @@ function freeOwn(m) { if (m && m.userData.ownGeo) { m.geometry.dispose(); m.mate
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _e = new THREE.Euler(0, 0, 0, 'YXZ');
 const MP_TRACER = [3.4, 1.0, 0.5];
 
-// Miramar, base-local: where the jet to steal is parked (clear of the flight line rows), and what's solid
+// Miramar, base-local: where the jet to steal is parked (clear of the flight line rows)
 export const HEIST_JET = { lx: 380, lz: -1450, yaw: Math.PI / 2 }; // nose toward the runways (-x)
-const MIRAMAR_OBSTACLES = (() => {
-    const o = [];
-    for (let k = 0; k < 9; k++) { const z = -1350 + k * 280; o.push([668, 732, z - 37, z + 37]); } // hangars
-    o.push([800, 1360, -2150, -334], [800, 1360, -266, 2150]);  // the base buildings, either side of the main road
-    o.push([40, 560, -1370, 1030]);                              // the flight line rows
-    o.push([612, 668, -1660, -1640]);                            // tower
-    return o;
-})();
 
 class HeistGround extends GroundStart {
     constructor(op, jet, start) {
-        super(op.game, jet, { base: op.base, obstacles: MIRAMAR_OBSTACLES, onFoot: start, character: 'civilian', noIntro: true });
+        // no hand-drawn boxes: Miramar's hangars, offices, tower and every parked aircraft are solid records already
+        // (airbase.js solid(), found by canMove's building query), so the open apron, grass and streets stay drivable
+        super(op.game, jet, { base: op.base, obstacles: [], onFoot: start, character: 'civilian', noIntro: true });
         this.op = op;
         this.hp = 100; // you, on foot: MP tackles and shots wear this down
     }
