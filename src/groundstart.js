@@ -22,6 +22,33 @@ const OBSTACLES = [
     [674, 726, -250, -200], // barracks blocks
 ];
 
+// ── Car handling (the Ready Room Humvee, the heist's stolen cars) ──
+// A bicycle model whose turn the tyres limit: at speed v the tightest circle has radius v²/GRIP, so a fast car
+// sweeps through a bend and a slow one turns on the spot (it used to turn as tight at 130 km/h as parked: 24 g).
+// The wheel is turned at a finite rate (slower at speed, so a tap of A/D is a lane change, not a flick) and
+// self-centres faster; the body's yaw follows the wheels with a little lag, and it rolls and pitches with the load.
+export const CAR = { wheelbase: 2.8, lock: 0.55, grip: 14, reverse: 10 }; // m, rad (≈4.6 m kerb radius), m/s² (1.4 g), m/s
+export function carStep(c, thr, steerIn, dt) {
+    const sp = Math.abs(c.v), f = Math.min(1, sp / c.maxV), v0 = c.v;
+    // power fades toward top speed; brakes bite harder than the engine pulls; coasting: rolling + air drag
+    if (thr > 0) c.v += c.v < 0 ? 16 * dt : (c.accel || 6) * (1 - 0.7 * f * f) * dt;
+    else if (thr < 0) c.v -= c.v > 0.5 ? 16 * dt : 4 * dt;
+    else c.v -= Math.sign(c.v) * Math.min(sp, (0.6 + sp * 0.025) * dt);
+    c.v = clamp(c.v, -CAR.reverse, c.maxV);
+    // the steering wheel: turn-in at 2.6/s parked, 1/s flat out; back to the middle (or across) at 3.5/s
+    const out = steerIn !== 0 && (c.steer === 0 || Math.sign(steerIn) === Math.sign(c.steer));
+    const rate = out ? 2.6 - 1.6 * f : 3.5;
+    c.steer += clamp(steerIn - c.steer, -rate * dt, rate * dt);
+    // the wheels' angle: full lock, or as much as the grip allows at this speed
+    const ang = c.steer * Math.min(CAR.lock, Math.atan(CAR.wheelbase * CAR.grip / Math.max(1, c.v * c.v)));
+    c.yawRate = damp(c.yawRate || 0, c.v / CAR.wheelbase * Math.tan(ang), 7, dt);
+    c.yaw += c.yawRate * dt;
+    // body roll away from the turn (≈4° at 1 g) and squat / dive under power and brakes (≈2° at 1 g)
+    c.lean = damp(c.lean || 0, -clamp(c.yawRate * c.v / 9.81, -1.5, 1.5) * 0.07, 6, dt);
+    c.dive = damp(c.dive || 0, clamp((c.v - v0) / Math.max(dt, 1e-4) / 9.81, -1.2, 1.2) * 0.035, 5, dt);
+    return c.v * dt;
+}
+
 export function makeSoldier() {
     const g = new THREE.Group();
     const suit = new THREE.MeshStandardMaterial({ color: 0x55603f, roughness: 0.9 });
@@ -78,7 +105,7 @@ export class GroundStart {
             const start = baseToWorld(b, BARRACKS.lx + 4, BARRACKS.lz - 48);
             const toGate = baseToWorld(b, GATE.lx + 40, GATE.lz);
             this.setCar(propInstance('humvee') || new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.8, 4.6), new THREE.MeshStandardMaterial({ color: 0x5b6443 })),
-                new THREE.Vector3(start.x, 0, start.z), Math.atan2(-(toGate.x - start.x), -(toGate.z - start.z)), 30, 'HUMVEE');
+                new THREE.Vector3(start.x, 0, start.z), Math.atan2(-(toGate.x - start.x), -(toGate.z - start.z)), 34, 'HUMVEE', 5.5);
         }
         const gw = baseToWorld(b, GATE.lx, GATE.lz);
         this.gatePos = new THREE.Vector3(gw.x, b.h, gw.z);
@@ -88,9 +115,10 @@ export class GroundStart {
         if (this.car) this.placeCar();
     }
 
-    setCar(mesh, pos, yaw, maxV = 30, name = 'CAR') {
+    // maxV: top speed (m/s); accel: off-the-line pull (m/s²)
+    setCar(mesh, pos, yaw, maxV = 34, name = 'CAR', accel = 6) {
         if (this.car && this.car.mesh !== mesh) this.game.scene.remove(this.car.mesh);
-        this.car = { mesh, pos: pos.clone(), yaw, v: 0, steer: 0, maxV, name };
+        this.car = { mesh, pos: pos.clone(), yaw, v: 0, steer: 0, yawRate: 0, lean: 0, dive: 0, maxV, accel, name };
         this.car.pos.y = this.groundY(pos.x, pos.z);
         this.game.scene.add(mesh);
         this.placeCar();
@@ -151,24 +179,19 @@ export class GroundStart {
         const c = this.car, g = this.game;
         const thr = (input.down('KeyW', 'ArrowUp') ? 1 : 0) - (input.down('KeyS', 'ArrowDown') ? 1 : 0);
         const steerIn = (input.down('KeyA', 'ArrowLeft') ? 1 : 0) - (input.down('KeyD', 'ArrowRight') ? 1 : 0);
-        if (thr > 0) c.v += (c.v < 0 ? 14 : 5.5) * dt;
-        else if (thr < 0) c.v -= (c.v > 0.5 ? 14 : 3.5) * dt;
-        else c.v -= Math.sign(c.v) * Math.min(Math.abs(c.v), (1 + Math.abs(c.v) * 0.12) * dt);
-        c.v = clamp(c.v, -7, c.maxV);
-        c.steer = damp(c.steer, steerIn, 6, dt);
-        c.yaw += c.v / 3.3 * Math.tan(c.steer * 0.55) * dt;
+        const dist = carStep(c, thr, steerIn, dt);
         const fwd = _v.set(-Math.sin(c.yaw), 0, -Math.cos(c.yaw));
-        const next = _v2.copy(c.pos).addScaledVector(fwd, c.v * dt);
-        const res = this.canMove(c.pos, next, 2.5);
-        if (res === 'ok') { c.pos.x = next.x; c.pos.z = next.z; }
-        else {
+        // in steps of a metre or so, so a fast car can't hop through a parked jet's fuselage or a lamp-post's box
+        const n = Math.min(8, Math.ceil(Math.abs(dist) / 1.2)), next = _v2;
+        for (let i = 0; i < n; i++) {
+            next.copy(c.pos).addScaledVector(fwd, dist / n);
+            const res = this.canMove(c.pos, next, 2.5);
+            if (res === 'ok' || (res === 'barrier' && this.onBarrier(c))) { c.pos.x = next.x; c.pos.z = next.z; continue; }
             if (Math.abs(c.v) > 4) { g.shake = Math.min(1.2, g.shake + Math.abs(c.v) * 0.04); g.audio.tick(90, 0.25, 0.3); }
-            if (res === 'barrier' && this.onBarrier(c)) { c.pos.x = next.x; c.pos.z = next.z; }
-            else {
-                c.v = -c.v * 0.15;
-                if (res === 'barrier') g.addFeed('SENTRY: "HALT! Stop at the checkpoint."', '#ff9f5a');
-                if (res === 'fence') this.hint = 'THE FENCE — USE THE MAIN GATE';
-            }
+            c.v = -c.v * 0.15; c.yawRate = 0;
+            if (res === 'barrier') g.addFeed('SENTRY: "HALT! Stop at the checkpoint."', '#ff9f5a');
+            if (res === 'fence') this.hint = 'THE FENCE — USE THE MAIN GATE';
+            break;
         }
         c.pos.y = this.groundY(c.pos.x, c.pos.z);
         // hitting traffic: a hard enough knock wrecks the other car, and it slows (and dents) yours
@@ -218,7 +241,7 @@ export class GroundStart {
         const fwd = _v.set(-Math.sin(c.yaw), 0, -Math.cos(c.yaw)), right = _v2.set(-fwd.z, 0, fwd.x);
         const hf = this.groundY(c.pos.x + fwd.x * 1.7, c.pos.z + fwd.z * 1.7), hb = this.groundY(c.pos.x - fwd.x * 1.7, c.pos.z - fwd.z * 1.7);
         const hr = this.groundY(c.pos.x + right.x, c.pos.z + right.z), hl = this.groundY(c.pos.x - right.x, c.pos.z - right.z);
-        _e.set(Math.atan2(hf - hb, 3.4), c.yaw, Math.atan2(hl - hr, 2));
+        _e.set(Math.atan2(hf - hb, 3.4) + (c.dive || 0), c.yaw, Math.atan2(hr - hl, 2) + (c.lean || 0));
         c.mesh.position.copy(c.pos);
         c.mesh.quaternion.setFromEuler(_e);
     }
@@ -298,7 +321,11 @@ export class GroundStart {
         if (this.state === 'drive') {
             const c = this.car;
             target = _v.copy(c.pos).setY(c.pos.y + 2.2);
-            dist = 10; height = 3.2; yaw = c.yaw + this.camYaw;
+            // the camera swings round after the car (a spring on the heading) rather than being bolted to it
+            if (this.camWas !== 'drive') this.camHeading = c.yaw; // just got in: start behind it
+            let dh = c.yaw - this.camHeading; dh = Math.atan2(Math.sin(dh), Math.cos(dh));
+            this.camHeading += dh * Math.min(1, dt * 4.5);
+            dist = 10 + Math.min(4, Math.abs(c.v) * 0.06); height = 3.2; yaw = this.camHeading + this.camYaw;
             this.camYaw = damp(this.camYaw, 0, Math.abs(c.v) > 3 ? 1.2 : 0, dt); // drift back behind the car when moving
         } else {
             const w = this.walker;
@@ -311,9 +338,9 @@ export class GroundStart {
         const gy = Math.max(terrainHeight(want.x, want.z), 0) + 0.6;
         if (want.y < gy) want.y = gy;
         cam.position.lerp(want, this.camInit ? Math.min(1, dt * 8) : 1);
-        this.camInit = true;
+        this.camInit = true; this.camWas = this.state;
         cam.lookAt(target);
-        cam.fov = damp(cam.fov, 62, 4, dt);
+        cam.fov = damp(cam.fov, 62 + (this.state === 'drive' ? Math.min(12, Math.abs(this.car.v) * 0.2) : 0), 4, dt); // a little wider at speed
         cam.updateProjectionMatrix();
     }
 

@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 const THREE = await import('three');
 const { Buildings, WORLD_BUILDINGS } = await src('buildings.js');
 const { Airbases } = await src('airbase.js');
-const { GroundStart } = await src('groundstart.js');
+const { GroundStart, carStep, CAR } = await src('groundstart.js');
 const { HEIST_JET } = await src('heist.js');
 const { BASES, baseToWorld, fenceOf, gateOf, worldToBase } = await src('world.js');
 
@@ -61,5 +61,83 @@ describe('heist: driving around Miramar', () => {
             n++; if (!drivable(l.lx, l.lz)) solid++;
         }
         assert.ok(n > 100 && solid === n, solid + ' of ' + n + ' Miramar offices block the car');
+    });
+});
+
+// the handling (groundstart.js carStep) on its own: a car record, keys held for a time, at a frame rate
+const car = (o = {}) => ({ v: 0, yaw: 0, steer: 0, yawRate: 0, maxV: 52, accel: 7.5, ...o });
+function hold(c, thr, steer, secs, fps = 60, each = null) {
+    for (let i = 0, n = Math.round(secs * fps); i < n; i++) { carStep(c, thr, steer, 1 / fps); if (each) each(c); }
+    return c;
+}
+const DEG = 180 / Math.PI;
+
+describe('car handling', () => {
+    test('full lock at speed: the turn is as wide as the tyres need (no 24 g flick)', () => {
+        for (const kmh of [60, 100, 130, 180]) {
+            const v = kmh / 3.6, c = hold(car({ v }), 0, 1, 3, 60, (q) => { q.v = v; }); // held at that speed
+            const lat = Math.abs(c.v * c.yawRate);
+            assert.ok(lat <= CAR.grip * 1.02, kmh + ' km/h: ' + lat.toFixed(1) + ' m/s² sideways (grip ' + CAR.grip + ')');
+            assert.ok(lat > CAR.grip * 0.7, kmh + ' km/h: still turns properly (' + lat.toFixed(1) + ' m/s²)');
+        }
+        // at 130 km/h: well under 30°/s (it was about 380°/s)
+        const c = hold(car({ v: 36 }), 0, 1, 3, 60, (q) => { q.v = 36; });
+        assert.ok(Math.abs(c.yawRate) * DEG < 30, (Math.abs(c.yawRate) * DEG).toFixed(1) + '°/s');
+    });
+
+    test('slow: full lock turns on a kerb-to-kerb circle', () => {
+        const c = car({ v: 4, maxV: 4 });
+        hold(c, 1, 1, 3);
+        const R = c.v / c.yawRate;
+        assert.ok(R > 4 && R < 6, 'radius ' + R.toFixed(2) + ' m');
+    });
+
+    test('a tap of the key at 150 km/h is a nudge, and the yaw never jerks', () => {
+        const c = car({ v: 150 / 3.6 });
+        const keep = (q) => { q.v = 150 / 3.6; };
+        hold(c, 0, 1, 0.1, 60, keep); hold(c, 0, 0, 1.5, 60, keep);
+        assert.ok(Math.abs(c.yaw) * DEG < 2.5, 'heading changed ' + (c.yaw * DEG).toFixed(2) + '°');
+        // full left to full right at 100 km/h, 30 fps: the yaw rate swings over (about 0.6 s) rather than snapping
+        const d = car({ v: 100 / 3.6 }); let last = 0, worst = 0;
+        const k100 = (q) => { q.v = 100 / 3.6; };
+        hold(d, 0, 1, 1.5, 30, k100); last = d.yawRate;
+        hold(d, 0, -1, 1.5, 30, (q) => { k100(q); worst = Math.max(worst, Math.abs(q.yawRate - last)); last = q.yawRate; });
+        assert.ok(worst * DEG < 4, 'worst frame-to-frame change ' + (worst * DEG).toFixed(2) + '°/s');
+    });
+
+    test('pulls hard off the line, tops out at its top speed, brakes harder than it accelerates', () => {
+        const c = car(); let t100 = 0, t = 0;
+        hold(c, 1, 0, 30, 60, (q) => { t += 1 / 60; if (!t100 && q.v >= 100 / 3.6) t100 = t; });
+        assert.ok(t100 > 3 && t100 < 5, '0–100 km/h in ' + t100.toFixed(2) + ' s');
+        assert.ok(c.v <= c.maxV && c.v > c.maxV * 0.98, 'top ' + (c.v * 3.6).toFixed(0) + ' km/h');
+        const b = car({ v: 100 / 3.6 }); let tb = 0;
+        hold(b, -1, 0, 3, 60, (q) => { if (q.v > 0.5) tb += 1 / 60; });
+        assert.ok(tb < 2, '100–0 in ' + tb.toFixed(2) + ' s');
+        assert.ok(b.v < 0 && b.v >= -CAR.reverse, 'then reverses, slowly');
+        // a sports car is quicker still
+        const s = car({ maxV: 64, accel: 10 }); let ts = 0; t = 0;
+        hold(s, 1, 0, 6, 60, (q) => { t += 1 / 60; if (!ts && q.v >= 100 / 3.6) ts = t; });
+        assert.ok(ts < t100 && ts < 3.5, 'sports car 0–100 in ' + ts.toFixed(2) + ' s');
+    });
+
+    test('the same drive at 30 and 120 fps ends up in the same place', () => {
+        const run = (fps) => {
+            const c = car(); let x = 0, z = 0;
+            const leg = (thr, st, secs) => hold(c, thr, st, secs, fps, (q) => { x += -Math.sin(q.yaw) * q.v / fps; z += -Math.cos(q.yaw) * q.v / fps; });
+            leg(1, 0, 4); leg(1, 1, 2); leg(0, 0, 1); leg(-1, -1, 1.5); leg(1, 0, 2);
+            return { x, z, yaw: c.yaw };
+        };
+        const a = run(30), b = run(120);
+        assert.ok(Math.hypot(a.x - b.x, a.z - b.z) < 3, 'apart by ' + Math.hypot(a.x - b.x, a.z - b.z).toFixed(2) + ' m');
+        assert.ok(Math.abs(a.yaw - b.yaw) * DEG < 2, 'headings ' + (a.yaw * DEG).toFixed(1) + '° vs ' + (b.yaw * DEG).toFixed(1) + '°');
+    });
+
+    test('the body leans out of a turn and squats under power', () => {
+        const c = hold(car({ v: 25 }), 0, 1, 2, 60, (q) => { q.v = 25; }); // turning left
+        assert.ok(c.lean < -0.02, 'rolls to the right (outside): ' + (c.lean * DEG).toFixed(1) + '°');
+        const d = hold(car(), 1, 0, 0.6);
+        assert.ok(d.dive > 0.005, 'nose up accelerating: ' + (d.dive * DEG).toFixed(2) + '°');
+        hold(d, -1, 0, 0.5);
+        assert.ok(d.dive < -0.005, 'nose down braking: ' + (d.dive * DEG).toFixed(2) + '°');
     });
 });

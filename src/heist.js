@@ -139,8 +139,10 @@ class HeistGround extends GroundStart {
         if (c.dir < 0) _v2.negate();
         const yaw = Math.atan2(-_v2.x, -_v2.z);
         const mesh = propInstance(type.id) || ownMesh(new THREE.BoxGeometry(2, 1.4, 4.5), new THREE.MeshStandardMaterial({ color: c.color }));
-        const fast = type.id.startsWith('car_sports') ? 44 : type.id === 'car_police' ? 42 : 36;
-        this.setCar(mesh, c.pos.clone(), yaw, fast, type.id === 'car_police' ? 'POLICE CAR' : 'CAR');
+        // top speed (m/s) and pull off the line (m/s²): a sports car 230 km/h and 0–100 in about 3 s, a police
+        // interceptor 210 km/h, anything else 185 km/h and 0–100 in about 4 s
+        const [top, accel] = type.id.startsWith('car_sports') ? [64, 10] : type.id === 'car_police' ? [58, 9] : [52, 7.5];
+        this.setCar(mesh, c.pos.clone(), yaw, top, type.id === 'car_police' ? 'POLICE CAR' : 'CAR', accel);
         this.car.hp = 100;
         // the driver bails out and runs off
         const driver = new Character('civilian');
