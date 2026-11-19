@@ -895,6 +895,7 @@ export class Towns {
         const pick = (a) => a[Math.floor(r() * a.length) % a.length];
         const walls = [], gables = [], hips = [], flats = [], bits = [], tanks = [], dormers = [], spires = [], trees = [], parks = [], driveways = [], ground = [];
         const B = this.buildings = new Buildings(this.group);
+        B.groundAt = (x, z) => this.groundAt(x, z); // (where the rubble lands: the graded ground)
         const up = new THREE.Vector3(0, 1, 0);
         // tryPlace: the whole footprint must be on dry land, clear of every road and street, and not too steep
         // (a building on a slope stands on a plinth down to its lowest corner). gap: space kept to its neighbours
