@@ -7,35 +7,28 @@
 //   • when the pool is full the oldest piece is reused (a district flattened by a MOAB keeps the newest rubble)
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { mulberry32 } from './util.js';
 
-// A unit lump (about 1 m across, centred): a box with its corners knocked about, flat-shaded, light/dark vertex
-// colours so a pile of them doesn't read as one flat colour. Its instances are scaled into slabs, blocks and bits.
+// A unit lump (about 1 m across, centred): a box with its corners knocked about, flat-shaded, light/dark faces so a
+// pile of them doesn't read as one flat colour. Its instances are scaled into slabs, blocks and bits (32 triangles:
+// a district's worth of rubble is ~100k)
 function chunkGeometry() {
     const r = mulberry32(911);
-    const parts = [];
-    for (let k = 0; k < 2; k++) {
-        const g = new THREE.BoxGeometry(1, 1, 1, 2, 1, 2);
-        const p = g.attributes.position;
-        // (the same corner shared by several faces must move the same way, or the lump opens up)
-        const moved = new Map();
-        for (let i = 0; i < p.count; i++) {
-            const key = `${p.getX(i).toFixed(2)},${p.getY(i).toFixed(2)},${p.getZ(i).toFixed(2)}`;
-            let d = moved.get(key);
-            if (!d) moved.set(key, d = [(r() - 0.5) * 0.3, (r() - 0.5) * 0.35, (r() - 0.5) * 0.3]);
-            p.setXYZ(i, p.getX(i) + d[0], p.getY(i) + d[1], p.getZ(i) + d[2]);
-        }
-        if (k) { g.scale(0.6, 0.6, 0.6); g.rotateY(0.7); g.translate(0.25, 0.3, -0.2); } // a lump stuck on top
-        parts.push(g.toNonIndexed());
+    const g = new THREE.BoxGeometry(1, 1, 1, 2, 1, 2);
+    const p = g.attributes.position;
+    // (the same corner shared by several faces must move the same way, or the lump opens up)
+    const moved = new Map();
+    for (let i = 0; i < p.count; i++) {
+        const key = `${p.getX(i).toFixed(2)},${p.getY(i).toFixed(2)},${p.getZ(i).toFixed(2)}`;
+        let d = moved.get(key);
+        if (!d) moved.set(key, d = [(r() - 0.5) * 0.3, (r() - 0.5) * 0.35, (r() - 0.5) * 0.3]);
+        p.setXYZ(i, p.getX(i) + d[0], p.getY(i) + d[1], p.getZ(i) + d[2]);
     }
-    for (const g of parts) {
-        g.deleteAttribute('uv');
-        const n = g.attributes.position.count, col = new Float32Array(n * 3);
-        for (let i = 0; i < n; i += 3) { const v = 0.78 + r() * 0.34; for (let j = 0; j < 3; j++) { col[(i + j) * 3] = v; col[(i + j) * 3 + 1] = v * 0.98; col[(i + j) * 3 + 2] = v * 0.95; } }
-        g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    }
-    const out = mergeGeometries(parts);
+    const out = g.toNonIndexed();
+    out.deleteAttribute('uv');
+    const n = out.attributes.position.count, col = new Float32Array(n * 3);
+    for (let i = 0; i < n; i += 3) { const v = 0.78 + r() * 0.34; for (let j = 0; j < 3; j++) { col[(i + j) * 3] = v; col[(i + j) * 3 + 1] = v * 0.98; col[(i + j) * 3 + 2] = v * 0.95; } }
+    out.setAttribute('color', new THREE.BufferAttribute(col, 3));
     out.computeVertexNormals();
     return out;
 }
