@@ -208,11 +208,11 @@ const DEFAULTS = {
 // (sources: each type's published stores lists; the air-to-air counts are the stations' worth, rounded up a little
 // where a real jet carries very few)
 const L = {
-    // SKYWAR's test jet: the best of everyone's, and its own mega bombs, bunker busters and twenty MOABs
+    // SKYWAR's test jet: the best of everyone's, and its own mega bombs, bunker busters, twenty MOABs and fifty Harpoons
     x100: {
         air: 'aim9x 12, aim120d 10',
-        balanced: 'aim9x 8, aim120d 6, agm65 6, mk84x 8, gbu57x 4, gbu43x 20',
-        strike: 'aim9x 4, aim120d 4, agm88 4, agm65 8, mk84x 16, gbu57x 8, gbu43x 20',
+        balanced: 'aim9x 8, aim120d 6, agm65 6, agm84 50, mk84x 8, gbu57x 4, gbu43x 20',
+        strike: 'aim9x 4, aim120d 4, agm88 4, agm65 8, agm84 50, mk84x 16, gbu57x 8, gbu43x 20',
     },
     // F-22A: everything in the bays — two AIM-9X in the side bays, AMRAAMs or Small Diameter Bombs in the main one
     f22: {

@@ -177,7 +177,7 @@ export class Game {
         // nothing carries over from the last sortie: stick ramps, head look, slow-mo, callouts, rearm timers
         this.stick.pitch = this.stick.roll = this.stick.yaw = 0;
         this.freeLook.yaw = this.freeLook.pitch = this.freeLook.t = 0;
-        this.timeScale = 1; this.slowmoT = 0; this.shake = 0; this.firing = false;
+        this.timeScale = 1; this.slowmoT = 0; this.shake = 0; this.shocks = []; this.firing = false;
         this._bingo = false; this.rearmT = 0; this._rearmMsg = false; this._rearmDone = false;
         this.missileCamHold = 0; this.prevE = false; this.mouseStick = null;
         this.feed = [];
@@ -855,7 +855,7 @@ export class Game {
         ev.on('exploded', (ac, { ground, water } = {}) => {
             const d = this.camera.position.distanceTo(ac.pos);
             this.audio.boom(d, 1.2);
-            if (d < 500) this.shake = Math.min(1.5, this.shake + (500 - d) / 400);
+            if (d < 500) this.shockShake(d, (500 - d) / 400);
             this.weapons.blastPeople(ac.pos, 45, 110, null); // a jet going up next to a parachute
             if (ground && !water) this.crashCrater(ac);
         });
@@ -1037,6 +1037,15 @@ export class Game {
     addFeed(text, color) {
         this.feed.unshift({ text, color, t: this.time });
         if (this.feed.length > 6) this.feed.pop();
+    }
+
+    // A blast `dist` m from the camera shakes it by `amount` (up to `cap`) when its shock gets here, at the speed of
+    // sound: a far one's flash first, then the jolt, as its boom (audio.js) arrives
+    shockShake(dist, amount, cap = 1.5) {
+        if (!(amount > 0)) return;
+        if (!this.shocks) this.shocks = [];
+        if (this.shocks.length > 24) this.shocks.shift();
+        this.shocks.push({ t: this.time + dist / 343, a: amount, cap });
     }
 
     showBanner(text, sub = '', dur = 3, color) { this.banner = { text, sub, t: this.time, dur, color }; }
@@ -1622,6 +1631,13 @@ export class Game {
             this.pullUp = false;
         }
         this.shake = Math.max(0, this.shake - rawDt * 2.2);
+        // blast waves arriving (shockShake): the jolt comes with the shock, after the flash
+        for (let i = this.shocks.length - 1; i >= 0; i--) {
+            const k = this.shocks[i];
+            if (this.time < k.t) continue;
+            this.shake = Math.min(Math.max(k.cap, this.shake), this.shake + k.a);
+            this.shocks.splice(i, 1);
+        }
         // buffet in a stall (the deeper past max AoA, the harder it shakes)
         const sd = this.player && this.player.alive && !this.pilotMode ? this.player.stallDepth || 0 : 0;
         if (sd > 0) this.shake = Math.max(this.shake, Math.min(0.6, 0.15 + sd * 0.5));
@@ -1997,8 +2013,11 @@ export class Game {
         // shake
         const sh = this.shake + (p.afterburner && this.cameraMode !== 'cockpit' ? 0.04 : 0) + (p.speed > 380 ? 0.03 : 0);
         if (sh > 0.001) {
-            cam.rotateX((Math.random() - 0.5) * sh * 0.012);
-            cam.rotateY((Math.random() - 0.5) * sh * 0.012);
+            // (smooth: a few incommensurate sines, a jolt rather than a jitter; a big one sways slower as well)
+            const t = this.time, k = sh * Math.min(1, 0.4 + sh * 0.6);
+            cam.rotateX(k * 0.0065 * (Math.sin(t * 29.3) * 0.6 + Math.sin(t * 17.1 + 1.3) * 0.4 + Math.sin(t * 5.3 + 0.4) * 0.5 * Math.min(1, sh)));
+            cam.rotateY(k * 0.0065 * (Math.sin(t * 25.7 + 0.7) * 0.6 + Math.sin(t * 13.9 + 2.1) * 0.4 + Math.sin(t * 4.1 + 2.2) * 0.5 * Math.min(1, sh)));
+            cam.rotateZ(k * 0.004 * (Math.sin(t * 21.1 + 2.9) * 0.6 + Math.sin(t * 3.7) * 0.4));
         }
         cam.fov = damp(cam.fov, fov, 4, dt);
         cam.updateProjectionMatrix();

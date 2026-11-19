@@ -9,6 +9,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { PostFX, ScenePass } from './postfx.js'; // [postfx] AO, water SSR, motion blur, DOF, flare, FXAA, adaptive resolution
 import { NightFX } from './nightfx.js'; // [night] glow in the air round lights, rain on the canopy, night-vision goggles
+import { ShockPass } from './shockfx.js';
 import { AIRCRAFT, MODES, DIFFICULTY, TIMES, hangarStats } from './config.js';
 import { World, BASES, terrainHeight } from './world.js';
 import { Effects } from './effects.js';
@@ -118,6 +119,9 @@ composer.addPass(grade);
 // cockpit pass and FXAA at the end; also owns the pixel ratio (adaptive resolution)
 const postfx = new PostFX({ renderer, composer, camera, scenePass: renderPass, cockpitPass });
 const nightfx = new NightFX({ composer, camera, scenePass: renderPass, cockpitPass, bloom, postfx }); // [night] nightfx.js
+// the shock fronts of big blasts, bending the light they pass through (shockfx.js; off while there are none)
+const shockPass = new ShockPass(camera);
+composer.insertPass(shockPass, composer.passes.indexOf(cockpitPass));
 
 function applyQuality() {
     const q = settings.quality;
@@ -147,6 +151,7 @@ window.addEventListener('resize', resize);
 // ── Systems ──
 let world;
 const effects = new Effects(scene);
+effects.shockPass = shockPass;
 const audio = new Audio();
 const input = new Input(renderer.domElement);
 const touchUI = setupTouch(input);

@@ -312,7 +312,8 @@ export class Buildings {
                 else this.spall(this.collapsing[this.collapsing.length - 1], dx, dz);
                 game.audio.boom(game.camera.position.distanceTo(c), 1.4);
             }
-            if (game.camera.position.distanceTo(c) < 900) game.shake = Math.min(1.5, (game.shake || 0) + 0.5);
+            const cd = game.camera.position.distanceTo(c);
+            if (cd < 900) { if (game.shockShake) game.shockShake(cd, 0.5); else game.shake = Math.min(1.5, (game.shake || 0) + 0.5); }
             if (source && (source === game.player || source === game.pilotMode)) {
                 if (b.friendly) game.addFeed('FRIENDLY ' + b.name + ' DESTROYED', '#ff4a3d');
                 else {

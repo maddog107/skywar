@@ -646,9 +646,10 @@ export class Effects {
         const onWater = low && this.isWater(pos.x, pos.z);
         const water = onWater || !!(opts && opts.quench);
 
-        // flash + shockwave + light
+        // flash + shockwave + light (a big one's shock front bends the light it passes through: shockfx.js)
         this.sprite(this.flashTex, pos, 16 * s, 0.13, 0.5, 1, [1, 0.9, 0.75]);
         if (s >= 0.7) this.sprite(this.ringTex, pos, 4 * s, 0.4, 60 * s, 0.3, [1, 0.95, 0.9]);
+        if (s >= 1.3 && this.shockPass && !water) this.shockPass.add(pos, s);
         this.light(pos, 40 * s, 0.6);
 
         // lingering smoke that rises and drifts (emitted first so the fireball draws over it)
@@ -745,6 +746,7 @@ export class Effects {
             this.explosion(P.set(pos.x + Math.cos(a) * 9 * k, pos.y + rand(3, 10) * k, pos.z + Math.sin(a) * 9 * k).clone(), 1.3 * k);
         }
         this.sprite(this.ringTex, pos, 10 * k, 0.7, 160 * k, 0.45, [1, 0.95, 0.88]); // (the shock front)
+        if (this.shockPass) this.shockPass.add(pos, 6 * k * k);
         this.light(pos, 120 * k, 1.2);
         // the ground surge
         for (let i = 0; i < 120; i++) {
@@ -754,6 +756,54 @@ export class Effects {
         }
         this.emitters.push({ kind: 'mushroom', pos: pos.clone(), life: 1.9, t: 0, acc: 0, size: k });
         this.smokeColumn(pos, 1.6 * q, 30);
+    }
+
+    // A jet going into the ground (aircraft.js, L: its length): its fuel bursts into a fireball that is carried on along
+    // its path (a smear of fire a hundred metres long at a fast, shallow impact; taller and rounder straight in), dirt,
+    // sparks and pieces sprayed ahead, and the spilt fuel left burning for most of a minute under black columns
+    crashBlast(pos, vel, L = 15) {
+        const V = this._tmpV, P = this._tmpP;
+        const sp = vel.length(), vh = Math.hypot(vel.x, vel.z);
+        const dx = vh > 1 ? vel.x / vh : 0, dz = vh > 1 ? vel.z / vh : 0;
+        const steep = sp > 1 ? Math.min(1, Math.abs(vel.y) / sp) : 1;
+        const k = clamp(L / 18, 0.5, 3); // (the fuel aboard: a fighter ~1, a bomber or an airliner 2-3)
+        const s = clamp(1.4 * Math.sqrt(k), 1, 2.6);
+        const gh = this.heightAt(pos.x, pos.z);
+        this.explosion(new THREE.Vector3(pos.x, Math.max(pos.y, gh + 2), pos.z), 1.8 * s);
+        // the fuel: fireballs strung out along the path, thrown on at a share of the speed, rolling up off the ground
+        const D = clamp(vh * 0.45 * (1 - 0.6 * steep), 10, 180);
+        const n = Math.round(14 + 14 * k);
+        for (let i = 0; i < n; i++) {
+            const f = Math.pow(Math.random(), 0.7), d = f * D, carry = vh * rand(0.08, 0.25) * (1 - f);
+            P.set(pos.x + dx * d + rand(-6, 6) * s, gh + rand(1, 6) * s, pos.z + dz * d + rand(-6, 6) * s);
+            V.set(dx * carry + rand(-6, 6), rand(4, 16) * s * 0.6, dz * carry + rand(-6, 6));
+            this.flame.emit(P, V, rand(2.6, 4.2), rand(10, 15) * s, rand(28, 42) * s, [0.1, 0.085, 0.075], SOOT_C, 0.95, 0, 1.6, 4.5, rand(0.9, 1), rand(0.35, 0.5), 1.4);
+        }
+        // and the heart of it rolling up off the ground on its own heat
+        for (let i = 0; i < 6 + 4 * k; i++) {
+            const d = rand(0.1, 0.5) * D;
+            P.set(pos.x + dx * d + rand(-5, 5), gh + rand(4, 10), pos.z + dz * d + rand(-5, 5));
+            V.set(dx * vh * 0.05 + rand(-4, 4), rand(14, 26) * Math.sqrt(s), dz * vh * 0.05 + rand(-4, 4));
+            this.flame.emit(P, V, rand(3.2, 4.6), rand(14, 18) * s, rand(36, 50) * s, [0.1, 0.085, 0.075], SOOT_C, 0.95, 0, 0.9, 3, 1, rand(0.3, 0.42), 1);
+        }
+        this.light(P.set(pos.x + dx * D * 0.3, gh + 8, pos.z + dz * D * 0.3), 70 * s, 1.1);
+        // sparks and burning scraps sprayed on ahead, low
+        for (let i = 0; i < 40; i++) {
+            V.set(dx * vh * rand(0.25, 0.7) + rand(-15, 15), rand(3, 25), dz * vh * rand(0.25, 0.7) + rand(-15, 15));
+            this.sparks.emit(P.set(pos.x, gh + 1, pos.z), V, rand(0.6, 1.8), rand(0.5, 0.9), 0.2, [2.4, 1.5, 0.55], [1.3, 0.35, 0.05], 1, 0, 0.4, -9.8, 0, 0.5, 1, 0.035);
+        }
+        // dirt thrown on along the gouge
+        for (let i = 0; i < 24; i++) {
+            const d = rand(0, D * 0.7), c = rand(0.1, 0.18);
+            V.set(dx * vh * rand(0.05, 0.3) + rand(-5, 5), rand(6, 22), dz * vh * rand(0.05, 0.3) + rand(-5, 5));
+            this.smoke.emit(P.set(pos.x + dx * d, gh + 1, pos.z + dz * d), V, rand(1.4, 2.6), rand(0.5, 1.1), rand(0.4, 0.8), [c, c * 0.82, c * 0.62], [c * 1.3, c * 1.05, c * 0.8], 1, 0.7, 0.2, -20, 0, 0.5, 3);
+        }
+        // the spilt fuel burning where it came down: two or three fires under black columns
+        const nf = 2 + (k > 1.5 ? 1 : 0);
+        for (let i = 0; i < nf; i++) {
+            const d = (i / nf + rand(0, 0.3)) * D * 0.8;
+            this.smokeColumn(P.set(pos.x + dx * d + rand(-4, 4), gh + 1, pos.z + dz * d + rand(-4, 4)), rand(0.9, 1.3) * Math.sqrt(k), rand(35, 60));
+        }
     }
 
     // The X-100's bunker buster going off deep under `pos`: little fire, the ground heaving up in a geyser of earth
@@ -1004,6 +1054,7 @@ export class Effects {
         this.updateLighting(camera);
         this.updateEmitters(dt);
         this.water.update(dt, camera, fog);
+        if (this.shockPass) this.shockPass.update(dt);
         this.smoke.update(dt, fog, this.wind);
         this.flame.update(dt, fog, this.wind);
         this.fire.update(dt, fog, null);
@@ -1068,6 +1119,7 @@ export class Effects {
         this.landed.forEach(m => this.scene.remove(m)); this.landed = [];
         this.emitters = [];
         this.sprites.forEach(s => { s.visible = false; s.userData.life = 0; });
+        if (this.shockPass) this.shockPass.reset();
         fireLights.clear();
         this.tracers.geometry.setDrawRange(0, 0);
     }

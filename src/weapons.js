@@ -1145,7 +1145,7 @@ export class Weapons {
         }
         const camD = g.camera.position.distanceTo(at);
         if (!wet || !fx.water) g.audio.boom(camD, 1.6 * Math.sqrt(k)); // (in the water: splash.js's own whoomp)
-        if (camD < 800 * Math.sqrt(k)) g.shake = Math.min(1.5 * Math.sqrt(k), g.shake + (wet ? 0.45 : 0.6) * Math.sqrt(k));
+        if (camD < 800 * Math.sqrt(k)) { const a = (wet ? 0.45 : 0.6) * Math.sqrt(k), cap = 1.5 * Math.sqrt(k); if (g.shockShake) g.shockShake(camD, a, cap); else g.shake = Math.min(cap, g.shake + a); }
         g.events.emit('bombImpact', b, { at, water: wet, ship: hitShip, W, kind: b.kind || 'bomb' }); // (bases.js: runway craters)
         // splash damage
         if (g.ground) for (const t of g.ground.targets) {

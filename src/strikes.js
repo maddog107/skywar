@@ -1173,7 +1173,7 @@ export class StrikeManager {
         const g = this.game, d = g.camera.position.distanceTo(at);
         const delay = Math.min(d / 343, 30);
         setTimeout(() => g.audio.boom && g.audio.boom(d, size), delay * 1000);
-        if (d < 3000) g.shake = Math.max(g.shake, clamp((3000 - d) / 3000 * size * 0.6, 0, 1));
+        if (d < 3000) { const a = clamp((3000 - d) / 3000 * size * 0.6, 0, 1); if (g.shockShake) g.shockShake(d, a, 1); else g.shake = Math.max(g.shake, a); }
     }
     audioLaunch(p, spec) {
         const g = this.game, d = g.camera.position.distanceTo(p);

@@ -170,7 +170,7 @@ describe('X-100 Overkill: the test jet', () => {
         assert.equal(WEAPONS.bomb.damage, 220, 'the shared Mk 82 table is left as it was');
     });
 
-    test('twenty GBU-43X MOABs: the X-100\'s only, on both its ground loadouts', () => {
+    test('twenty GBU-43X MOABs (the X-100\'s only) and fifty Harpoons, on both its ground loadouts', () => {
         const moab = SLOTS.find(s => s.key === 'moab');
         assert.ok(slotFits(X, moab));
         for (const [id, s] of Object.entries(AIRCRAFT)) if (id !== 'x100') assert.ok(!slotFits(s, moab), id);
@@ -179,6 +179,7 @@ describe('X-100 Overkill: the test jet', () => {
             const ac = { type: 'x100', spec: X };
             armAircraft(ac, pre);
             assert.equal(ac.moabs, 20, pre);
+            assert.equal(ac.ashms, 50, pre + ': fifty Harpoons');
             assert.equal(ac.bombs > 0 && ac.busters > 0, true, pre + ': the MK-84Xs and bunker busters as well');
         }
         assert.ok(storeFor(X, 'moab').kg > storeFor(X, 'bomb').kg * 2, 'bigger than the MK-84X');

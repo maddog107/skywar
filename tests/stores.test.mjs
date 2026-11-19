@@ -97,7 +97,7 @@ describe('stores: the catalogue and the loadouts', () => {
         assert.equal(step('ea18g', 'balanced'), 'lrm arm');
         assert.equal(step('f14', 'air'), 'srm lrm xlr');
         assert.equal(step('b52', 'strike'), 'alcm bomb');
-        assert.equal(step('x100', 'strike'), 'srm lrm arm agm bomb buster moab');
+        assert.equal(step('x100', 'strike'), 'srm lrm arm agm ashm bomb buster moab');
         // a mission that hands it rockets (missions.js) adds the slot, with its side's pods
         const p = { type: 'f22', spec: AIRCRAFT.f22 };
         armAircraft(p, 'air');

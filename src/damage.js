@@ -12,6 +12,7 @@ import { Floater } from './float.js';
 import { hasEjectionSeat } from './config.js';
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion();
+const MAX_WRECKS = 30; // sections of crashed airframes left lying on the ground (the oldest go first)
 
 export const REGIONS = ['center', 'nose', 'wingL', 'wingR', 'tail'];
 
@@ -272,6 +273,69 @@ export class Wreckage {
         }
     }
 
+    // Into the ground: the airframe comes apart and its sections are thrown on along its path, bounce, tumble and slide
+    // to a stop strung out over a hundred metres or more, and stay there burning, then smoking (a debris field)
+    scatter(ac) {
+        if (!ac.regions) return;
+        const v = ac.vel, vh = Math.hypot(v.x, v.z);
+        for (const r of REGIONS) {
+            if (ac.lostRegions.has(r)) continue;
+            const p = this.detach(ac, r, 0);
+            if (!p) continue;
+            // on along the path at a share of the speed (the heavy centre keeps more), bounced up off the ground
+            const keep = r === 'center' ? rand(0.45, 0.6) : rand(0.25, 0.55), side = vh * 0.12;
+            p.vel.set(v.x * keep + rand(-side, side), rand(4, 14), v.z * keep + rand(-side, side));
+            p.spin.set(rand(-4, 4), rand(-2, 2), rand(-4, 4));
+            p.ground = true; p.bounces = 0; p.life = 1e9;
+            p.burning = r === 'center' || Math.random() < 0.75;
+            p.obj.position.y += 1.5;
+        }
+    }
+
+    // a section of a crashed airframe on the ground (scatter): bounces off it, slides to a stop, then burns and smokes
+    // where it lies. True when it has gone (cleared away to make room)
+    groundPart(p, dt, gh, fx) {
+        const o = p.obj, rest = p.radius * 0.3;
+        if (p.resting) return false; // (its fire and smoke are an effects column: see below)
+        if (o.position.y >= gh + rest) return false;
+        o.position.y = gh + rest;
+        const vy = -p.vel.y, vh = Math.hypot(p.vel.x, p.vel.z);
+        if (vy > 4 && p.bounces < 3) {
+            // bounces off it, shedding speed, throwing up dirt and sparks
+            p.bounces++;
+            p.vel.y = vy * 0.3; p.vel.x *= 0.7; p.vel.z *= 0.7; p.spin.multiplyScalar(0.7);
+            fx.groundImpact(o.position);
+            for (let i = 0; i < 6; i++) fx.sparks.emit(o.position, _v.set(p.vel.x * 0.6 + rand(-8, 8), rand(2, 9), p.vel.z * 0.6 + rand(-8, 8)), rand(0.3, 0.8), 0.6, 0.2, [2.4, 1.6, 0.6], [1.3, 0.4, 0.06], 1, 0, 1, -9.8, 0, 0.5, 1, 0.04);
+            if (p.heavy && p.bounces === 1) {
+                const su = this.game.surfaceAt(o.position.x, o.position.z, o.position.y + 3);
+                if (!su.ship && !su.bridge && !su.runway) this.game.weapons.addCrater(_v.set(o.position.x, gh, o.position.z), 'part', null);
+            }
+        } else if (vh > 1) {
+            // sliding and rolling over to a stop: ground friction, and less and less tumbling
+            p.vel.y = 0;
+            const f = Math.max(0, 1 - 9 * dt / vh);
+            p.vel.x *= f; p.vel.z *= f;
+            p.spin.multiplyScalar(Math.exp(-3 * dt));
+            p.slideT = (p.slideT || 0) - dt;
+            if (p.slideT <= 0) {
+                p.slideT = 0.06;
+                fx.smoke.emit(o.position, _v.set(rand(-1, 1), rand(0.5, 2), rand(-1, 1)), rand(2, 3.5), 1.5, 6 + vh * 0.05, [0.36, 0.32, 0.27], [0.44, 0.41, 0.36], 0.6, 0, 1.2, 0.3, 0, 0.5, 0.6);
+                if (vh > 8) fx.sparks.emit(o.position, _v.set(p.vel.x * 0.5 + rand(-4, 4), rand(1, 5), p.vel.z * 0.5 + rand(-4, 4)), rand(0.2, 0.5), 0.5, 0.2, [2.4, 1.6, 0.6], [1.3, 0.4, 0.06], 1, 0, 1, -9.8, 0, 0.5, 1, 0.04);
+            }
+        } else {
+            // at rest, dug in a little: it burns for a minute or so and smokes for a while after
+            p.vel.set(0, 0, 0); p.spin.set(0, 0, 0);
+            o.position.y = gh + rest * 0.5;
+            p.resting = true; p.t = 0;
+            // burning where it lies under a column of black smoke (the fire dies down after the first half or so)
+            if (p.burning) fx.smokeColumn(o.position, p.heavy ? 0.85 : 0.5, rand(70, 140));
+            // (a war leaves a lot of wrecks: the oldest go once there are too many)
+            const resting = this.parts.filter(q => q.resting && q.life > 0);
+            if (resting.length > MAX_WRECKS) resting[0].life = -1; // (parts are kept in the order they were thrown: the first is the oldest)
+        }
+        return false;
+    }
+
     eject(ac) {
         if (ac.ejected || !hasEjectionSeat(ac.spec)) return;
         ac.ejected = true;
@@ -332,6 +396,11 @@ export class Wreckage {
         // ── falling sections ──
         for (let i = this.parts.length - 1; i >= 0; i--) {
             const p = this.parts[i];
+            if (p.resting) {
+                if (p.life <= 0) { this.removeObj(p.obj); this.parts.splice(i, 1); }
+                else this.groundPart(p, dt, 0, fx);
+                continue;
+            }
             p.life -= dt;
             p.vel.y -= 9.81 * dt;
             const drag = p.heavy ? 0.12 : 0.35;
@@ -347,6 +416,8 @@ export class Wreckage {
                 if (p.burning) fx.puffFire(p.obj.position, _v.copy(p.vel).multiplyScalar(0.2), p.heavy ? 7 : 4, 0.35);
             }
             const surf = g.surfaceAt(p.obj.position.x, p.obj.position.z, p.obj.position.y + 3);
+            // (a crashed airframe's sections on land: bounce, slide, then lie burning; cleared with the sortie)
+            if (p.ground && !surf.water) { this.groundPart(p, dt, surf.h, fx); continue; }
             const h = surf.water ? -1 : surf.h;
             const gh = surf.h;
             if (p.obj.position.y < gh + 1 || p.life <= 0) {

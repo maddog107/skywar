@@ -1014,12 +1014,15 @@ export class Aircraft {
         // into the sea: a sheet of spray along its path, the fuel going up on the water, a slick left (splash.js)
         if (water) { if (fx.water) fx.water.crash(this); else fx.waterSplash(this.pos, 1.4); }
         if (!water) {
-            fx.explosion(this.pos, ground ? 2.2 : 1.6, ground ? null : this.vel);
-            fx.debrisBurst(this.pos, ground ? _v1.set(0, 0, 0) : this.vel, ground ? 6 : 12, this.spec.length / 22);
+            // into the ground: the fuel goes up and is carried on along the path (effects.crashBlast)
+            if (ground) fx.crashBlast(this.pos, this.vel, this.spec.length);
+            else fx.explosion(this.pos, 1.6, this.vel);
+            fx.debrisBurst(this.pos, ground ? _v1.copy(this.vel).multiplyScalar(0.6).setY(8) : this.vel, ground ? 10 : 12, this.spec.length / 22);
         }
-        // last-second ejection, then the airframe comes apart
+        // last-second ejection, then the airframe comes apart (into the ground: strewn along its path, burning)
         if (!ground && !this.ejected && this.ejectT > 0) this.game.wreckage.eject(this);
         if (!ground && !water) this.game.wreckage.breakup(this, 1.3);
+        else if (ground && !water && this.game.wreckage.scatter) this.game.wreckage.scatter(this);
         this.game.events.emit('exploded', this, { ground, water });
         this.root.visible = false;
         this.stopTrails();
