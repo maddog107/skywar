@@ -155,6 +155,8 @@ input[type=range] { accent-color: var(--accent); width: 170px; }
 .mp-lobby { display: none; padding: 2px 0 6px; margin: 0 0 4px; border-bottom: 1px solid var(--line); }
 .setup.mp .mp-lobby { display: block; }
 .setup.mp .sp-only, .setup.mp #best { display: none; }
+/* (no carrier, seaplane jetty or Ready Room drive-in in a multiplayer world: air, runway or taxi) */
+.setup.mp #segStart button[data-val="carrier"], .setup.mp #segStart button[data-val="water"], .setup.mp #segStart button[data-val="barracks"] { display: none; }
 .mp-input { width: 190px; padding: 6px 9px; background: rgba(0, 0, 0, 0.35); border: 1px solid var(--line-2); color: var(--text); font-family: 'Share Tech Mono', monospace; font-size: 14px; letter-spacing: 0.12em; text-transform: uppercase; outline: none; user-select: text; }
 .mp-input:focus { border-color: var(--accent); }
 .mp-input::placeholder { color: rgba(143, 160, 178, 0.55); }

@@ -158,6 +158,28 @@ describe('multiplayer: the interpolation buffer', () => {
         for (let t = 0; t <= 2; t += 0.1) { buf.sample(t, out); assert.ok(out.px >= -1e-9 && out.px <= 50 + 1e-9, 'x = ' + out.px); }
     });
 
+    test('a sender whose simulation runs at half speed (a struggling machine): its puppet moves evenly, never ahead and back', () => {
+        const buf = new InterpBuffer(), out = {};
+        // a snapshot every 50 ms of its clock, but only 25 ms of ground covered each time; its velocity still says 250 m/s
+        for (let i = 0; i <= 20; i++) buf.push(i * 0.05, { px: 0, py: 3000, pz: -250 * 0.025 * i, vx: 0, vy: 0, vz: -250, qw: 1 });
+        let last = Infinity, worst = 0;
+        for (let t = 0.3; t < 0.95; t += 0.004) {
+            assert.equal(buf.sample(t, out), MODE.INTERP);
+            assert.ok(out.pz <= last + 1e-9, 'never backwards (at t = ' + t.toFixed(3) + ')');
+            last = out.pz;
+            worst = Math.max(worst, Math.abs(out.pz + 125 * t));
+        }
+        assert.ok(worst < 0.01, 'on the line it really flew: ' + worst.toFixed(4) + ' m off');
+        assert.ok(Math.abs(out.vz + 125) < 0.5, 'at the speed it really covers ground: ' + out.vz);
+        // and it coasts on at that pace, not at the speed it claims
+        assert.equal(buf.sample(1.1, out), MODE.EXTRAP);
+        assert.ok(Math.abs(out.pz + 125 * 1.1) < 0.1, 'coasting: ' + (out.pz + 137.5).toFixed(3) + ' m off');
+        // a sender that keeps up has a pace of 1 (the turning jet above is unchanged by any of this)
+        const ok = new InterpBuffer();
+        fill(ok, 0, 1);
+        assert.ok(Math.abs(ok.newest.k - 1) < 1e-4, 'pace ' + ok.newest.k);
+    });
+
     test('slerp: the short way round, unit length, and on past the end', () => {
         const a = { qx: 0, qy: 0, qz: 0, qw: 1 }, q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), 1), b = { qx: -q.x, qy: -q.y, qz: -q.z, qw: -q.w }, out = {};
         slerp(a, b, 0.5, out);

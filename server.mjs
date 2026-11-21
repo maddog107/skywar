@@ -1,4 +1,5 @@
 // Tiny static file server: `node server.mjs` then open http://localhost:8080
+// (and the multiplayer relay at /ws on the same port: relay.mjs, docs/MULTIPLAYER.md)
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';

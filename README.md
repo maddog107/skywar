@@ -50,6 +50,10 @@ You need a local server because the game uses ES modules and loads `.glb` models
 - **Modes**: Dogfight waves, Strike (destroy an airbase), Naval Strike (sink a carrier group),
   Survival, Target Practice (timed range), Sandbox (unlimited everything, invincible, bombs, N spawns
   bandits), Ring Race (timed canyon course) and Free Flight (with an unarmed carrier group offshore to shoot at).
+- **Multiplayer**: pick MULTIPLAYER, type a callsign and a room code (or join the public room), choose BLUE or RED,
+  and fly in the same world as your friends: dogfight each other with guns and missiles, hold Tab for the scoreboard,
+  and let the room's host call in AI bandits (N) to fight together. `node server.mjs` serves the game and the relay;
+  see [docs/MULTIPLAYER.md](docs/MULTIPLAYER.md).
 - **Weather**: clear, cloudy, overcast, rain or storm, with rain streaks, darker skies, turbulence, and lightning
   whose thunder arrives late depending on distance. **Photo mode** (O) freezes the action for orbit shots. Four times of day: dawn, midday, dusk and night.
 - **Aircraft carriers**: take off by catapult (full throttle on deck) and land on the angled deck to
@@ -139,6 +143,7 @@ weapons, Back toggles gear and Start pauses.
 cameras. `aircraft.js` is the flight model. `ai.js` holds the AI pilots. `weapons.js` handles guns,
 missiles and flares. `damage.js` covers break-up and ejection. `naval.js` holds the carriers and destroyers, and `pilot.js` is the on-foot pilot. `world.js` builds terrain, sky, ocean
 and clouds. `effects.js` draws particles and trails. `cockpit.js` builds the 3D cockpit. `hud.js`,
-`audio.js`, `input.js` and `config.js` hold the HUD, audio, input and aircraft data.
+`audio.js`, `input.js` and `config.js` hold the HUD, audio, input and aircraft data. Multiplayer is `relay.mjs` (the
+WebSocket relay) and `src/multiplayer.js`, `netproto.js`, `netinterp.js`, `netlink.js`, `mplobby.js` (docs/MULTIPLAYER.md).
 
 Model credits and licences are in `models/CREDITS.md` and on the in-game Credits screen.

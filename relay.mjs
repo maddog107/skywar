@@ -13,7 +13,7 @@
 //
 // A public server, so: an Origin allowlist, caps (players per room, rooms, connections, connections per address),
 // every message validated (type whitelist, finite numbers in range, short strings from a safe alphabet, 2 KB), a
-// connection that sends rubbish or floods is dropped, silent ones time out, and nothing is logged or stored
+// connection that sends rubbish or floods (more than 80 frames a second, sustained) is dropped, silent ones time out, and nothing is logged or stored
 // (no message contents, no addresses). Environment: HOST, PORT, ALLOWED_ORIGINS (comma-separated host names or
 // origins), ALLOW_NO_ORIGIN=1 (clients that are not browsers), RELAY_STATS=1 (a line of counts a minute),
 // TRUST_PROXY=1 (behind a reverse proxy on this machine: count connections by the X-Real-IP header it sets; without
@@ -31,14 +31,16 @@ export const PROTOCOL = 1;
 
 export const DEFAULTS = {
     maxMsg: 2048,        // bytes in one client message (a frame, or a fragmented message in all)
-    maxRate: 80,         // frames a second from one connection before it is dropped
+    maxRate: 80,         // frames a second from one connection, sustained, before it is dropped
+    burst: 240,          // …with this many saved up: a client held up for a few seconds (its machine, the network, this
+                         // process) delivers what it owed in one go, and that is not a flood
     maxPerRoom: 16, maxRooms: 64, maxConns: 256, maxPerIp: 8,
     tickMs: 50,          // the combined state message: 20 a second
     pingMs: 25000,       // a ping this often (Cloudflare closes a WebSocket idle for ~100 s)
     deadMs: 70000,       // nothing at all heard for this long (not even a pong): gone
     helloMs: 10000,      // connected but no hello yet
     idleMs: 600000,      // in a room but no state or event for this long (a tab left hidden): the slot is freed
-    maxBuffered: 262144, // bytes waiting to be written to a slow client before it is dropped
+    maxBuffered: 524288, // bytes waiting to be written to a slow client before it is dropped
     origins: ['localhost', '127.0.0.1', '[::1]', 'maddog107.com', 'www.maddog107.com'],
     allowNoOrigin: false,
     trustProxy: false,   // believe X-Real-IP from a peer on this machine (a reverse proxy in front): off unless asked for
@@ -292,10 +294,12 @@ export function createRelay(options = {}) {
             const payload = Buffer.allocUnsafe(len);
             for (let i = 0; i < len; i++) payload[i] = b[off + 4 + i] ^ b[off + (i & 3)];
             c.buf = b.subarray(off + 4 + len);
-            // flooding: more than maxRate frames in a second
+            // flooding: a budget of maxRate frames a second, at most `burst` saved up
             const now = Date.now();
-            if (now - c.rateT >= 1000) { c.rateT = now; c.rateN = 0; }
-            if (++c.rateN > opt.maxRate) return drop(c, 4005, 'flood');
+            c.tokens = Math.min(opt.burst, c.tokens + (now - c.rateT) * opt.maxRate / 1000);
+            c.rateT = now;
+            if (c.tokens < 1) return drop(c, 4005, 'flood');
+            c.tokens -= 1;
             c.seen = now;
             if (op === 1) {
                 if (c.frag) return drop(c, 1002, 'protocol');
@@ -334,7 +338,7 @@ export function createRelay(options = {}) {
             + createHash('sha1').update(key + GUID).digest('base64') + '\r\n\r\n');
         socket.setNoDelay(true);
         const c = { socket, ip, id: 0, room: null, name: '', team: 'blue', ac: 'f16', lv: 'default', buf: head && head.length ? head : Buffer.alloc(0),
-            frag: null, fragLen: 0, rateT: Date.now(), rateN: 0, seen: Date.now(), born: Date.now(), active: Date.now(), pinged: Date.now(),
+            frag: null, fragLen: 0, rateT: Date.now(), tokens: opt.burst, seen: Date.now(), born: Date.now(), active: Date.now(), pinged: Date.now(),
             state: null, dirty: false, gone: false };
         // full: say so in a message the page can show, then close (a refused upgrade gives the page no reason at all)
         if (conns.size >= opt.maxConns || (perIp.get(ip) || 0) >= opt.maxPerIp) {

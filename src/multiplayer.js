@@ -48,6 +48,7 @@ const BANDIT_GAP = 8;               // s between a cleared wave of AI bandits an
 const MAX_PUPPETS = 48, PEER_PUPPETS = 14;   // aircraft we build for the others in all, and for any one of them (its jet + the host's bandits)
 const MAX_GHOSTS = 64, PEER_GHOSTS = 16;     // their missiles we draw
 const GUN_REACH = 4000;                      // m: a cannon hit claimed from further away than this is refused
+const SEND_GAP = 0.07, MAX_DELAY = 0.25;     // s: the longest between two snapshots of a peer that sends evenly; the most we draw it in the past
 export const LIMITS = { MAX_PUPPETS, PEER_PUPPETS, MAX_GHOSTS, PEER_GHOSTS, GUN_REACH };
 const TIMES = ['dawn', 'day', 'dusk', 'night'], WEATHERS = ['clear', 'cloudy', 'grey', 'rain', 'storm', 'fog', 'overcast'];
 const MISSILE_KINDS = ['aam', 'lrm', 'xlr', 'arm', 'agm', 'ashm', 'alcm', 'sam'];
@@ -110,6 +111,12 @@ export class Multiplayer {
 
     now() { return this.clockFn(); }
 
+    // The clock snapshots are stamped with and puppets are placed by: game.time, which advances by exactly what the
+    // aircraft are moved by each frame, kept on the wall clock by a corrected offset (update()). Stamping with the
+    // wall clock itself would be off by wherever in its frame each client happened to read it: a few milliseconds,
+    // a metre or more of a jet, different every frame.
+    frameNow() { return this.t0 + this.game.time; }
+
     reset() {
         this.me = { id: 0, name: 'PILOT', team: 'blue', ac: 'f16', lv: 'default' };
         this.room = { code: '', host: 0, set: { time: 'day', weather: 'clear', ai: false } };
@@ -125,7 +132,7 @@ export class Multiplayer {
         this.kills = 0; this.deaths = 0;
         this.sendT = 0; this.statT = 0; this.sentStat = '';
         this.menuOpen = false;
-        this.away = false; this.wasHidden = false; this.awaySince = 0; this.lastTick = 0;
+        this.away = false; this.wasHidden = false; this.awaySince = 0; this.lastTick = 0; this.t0 = 0;
         this.offline = null;           // { since, tries, nextAt, msg }: the connection dropped, we're trying again
         this.connecting = false;
         this.where = 'runway';
@@ -183,6 +190,7 @@ export class Multiplayer {
         if (pend) this.attach(pend.link, pend.welcome, pend.hello, pend.url);
         else this.offline = { since: this.now(), tries: 0, nextAt: Infinity, msg: 'NOT CONNECTED' }; // (launched without the lobby: alone)
         this.lastTick = 0;
+        this.t0 = this.now() - (g.time || 0);
         this.quietWorld(true);
         const p = g.player;
         if (this.me.team === 'red' && g.war && g.war.setSide) g.war.setSide('red');
@@ -209,12 +217,17 @@ export class Multiplayer {
         // flying while we were gone. (Not the first frame after the launch, however long that one took.)
         const gap = this.lastTick ? now - this.lastTick : 0;
         this.lastTick = now;
+        // The frame clock stays on the wall clock. A few milliseconds apart is only where in its frame this was read:
+        // eased out. More is time the simulation really lost (a frame longer than the game steps in one go, a stall):
+        // the jet hung in the air that long, and the clock says so at once.
+        const slip = now - this.frameNow();
+        if (Math.abs(slip) > 0.015) this.t0 += slip; else this.t0 += slip * 0.05;
         if ((this.wasHidden && gap > AWAY_RESPAWN) || gap > STALL_RESPAWN) this.backFromAway(gap);
         this.wasHidden = false;
         if (this.link) this.link.pump();
         this.syncLocals(now);
         this.updateDeath(now);
-        this.updatePuppets(now);
+        this.updatePuppets(now, dt);
         this.updateGhosts(dt, now);
         this.trackMissiles();
         this.updateBandits(dt);
@@ -356,7 +369,7 @@ export class Multiplayer {
         if (p && !p.exploded && !this.locals.has(p)) this.adoptPlayer(p);
         for (const a of g.aircraft) {
             if (a.puppet || a === p || this.locals.has(a) || a.exploded || !a.alive || a.abandoned || a.isPlayer) continue;
-            this.adoptAI(a);
+            if (this.isHost || !this.link) this.adoptAI(a); // (only the host flies AI; on our own, offline, they are ours too)
         }
         for (const [a, e] of this.locals) {
             if (a === p) continue;
@@ -409,7 +422,7 @@ export class Multiplayer {
             ms.push(encodeMissile({ id: r.id, pos: m.pos, vel: m.vel, tracking: !!t && m.target === t && !m.lost && t.alive !== false }));
         }
         this.flushClaims();
-        link.state(Math.round(now * 1e4) / 10, rows, ms); // our clock, ms to a tenth (a millisecond is 30 cm at Mach 1)
+        link.state(Math.round(this.frameNow() * 1e4) / 10, rows, ms); // our frame clock, ms to a tenth (a millisecond is 30 cm at Mach 1)
     }
 
     send(e, to) { if (this.link && this.link.open) this.link.event(e, to); }
@@ -560,7 +573,7 @@ export class Multiplayer {
             id, name: cleanCallsign(p[1]) || 'PILOT', team: p[2] === 'red' ? 'red' : 'blue',
             ac: own(AIRCRAFT, p[3]) ? p[3] : 'f16', lv: own(LIVERIES, p[4]) ? p[4] : 'default',
             clock: new ClockSync(), ents: new Map(), desc: new Map(), ended: new Map(), ghosts: new Map(),
-            launches: {}, builds: {}, heard: 0, away: false, kills: 0, deaths: 0, ping: 0,
+            launches: {}, builds: {}, heard: 0, away: false, kills: 0, deaths: 0, ping: 0, late: 0, delay: INTERP_DELAY,
         };
         this.peers.set(id, peer);
         return peer;
@@ -663,7 +676,9 @@ export class Multiplayer {
             const peer = this.peers.get(s[0]); // (ours comes back too: the relay sends the room one message)
             const c = typeof s[1] === 'number' ? s[1] / 1000 : NaN;
             if (!peer || !(c >= 0 && c < 1e10)) continue;
-            peer.clock.update(c, now);
+            // how much later than the quickest delivery this one came: the worst of late (fading) sets how far back we draw
+            const late = now - peer.clock.update(c, now) - c;
+            peer.late = Math.max(peer.late * 0.96, Math.min(Math.max(late, 0), 0.5)); // (halves in under a second)
             peer.heard = now;
             const rows = s[2], ms = s[3];
             if (Array.isArray(rows)) for (let k = 0; k < rows.length && k < MAX_ENTITIES; k++) this.onEntity(peer, c, rows[k], now);
@@ -732,10 +747,10 @@ export class Multiplayer {
         rec.ac = null;
     }
 
-    // Aircraft.update for a puppet: where its owner's snapshots put it now (INTERP_DELAY in the past)
+    // Aircraft.update for a puppet: where its owner's snapshots put it now (the peer's delay in the past)
     placePuppet(rec, ac, dt) {
-        const now = this.now(), off = rec.peer.clock.offset ?? 0;
-        const mode = rec.buf.sample(now - off - INTERP_DELAY, _S);
+        const now = this.frameNow(), off = rec.peer.clock.offset ?? 0;
+        const mode = rec.buf.sample(now - off - rec.peer.delay, _S);
         if (mode === MODE.NONE) return;
         // snapshots are back after it coasted: ease out the step between where we drew it and where it really was
         const corr = rec.corr;
@@ -784,8 +799,13 @@ export class Multiplayer {
 
     // every frame: which puppets are really there (snapshots stopped for a while, or the owner's tab is hidden:
     // not drawn, can't be hit or locked, until they're back)
-    updatePuppets(now) {
+    updatePuppets(now, dt = 0) {
         for (const peer of this.peers.values()) {
+            // How far in the past this peer's aircraft are drawn: INTERP_DELAY when its snapshots arrive evenly; more (up
+            // to MAX_DELAY) when they come late or in bunches, so there is still one either side of the moment drawn
+            // (a snapshot every SEND_GAP at worst, plus the lateness seen lately). Changed slowly: the puppets must not lurch.
+            const want = clamp(SEND_GAP + peer.late, INTERP_DELAY, MAX_DELAY);
+            peer.delay += clamp(want - peer.delay, -0.05 * dt, 0.1 * dt);
             for (const rec of peer.ents.values()) {
                 const ac = rec.ac;
                 if (!ac) continue;
@@ -871,7 +891,7 @@ export class Multiplayer {
         this.myMissiles.set(m, { id, target: target || null });
         const p = m.pos, v = m.vel;
         this.send(['ml', id, e.n, safeStr(m.W.id || '', 16), m.kind, this.idOf(target), Math.round(p.x * 10) / 10, Math.round(p.y * 10) / 10, Math.round(p.z * 10) / 10,
-            Math.round(v.x), Math.round(v.y), Math.round(v.z), Math.round(this.now() * 1000)]);
+            Math.round(v.x), Math.round(v.y), Math.round(v.z), Math.round(this.frameNow() * 1000)]);
     }
 
     // ours that are gone (weapons.js took them out of the scene: hit, decoyed and spent, into the ground): tell the room
@@ -971,7 +991,7 @@ export class Multiplayer {
         const fx = this.game.effects;
         for (const gh of this.ghosts) {
             if (now - gh.heard > 2) { this.removeGhost(gh, false); continue; } // its owner stopped reporting it
-            const T = now - (gh.peer.clock.offset ?? 0) - INTERP_DELAY;
+            const T = this.frameNow() - (gh.peer.clock.offset ?? 0) - gh.peer.delay;
             const first = gh.buf.count ? gh.buf.at(gh.buf.count - 1) : null;
             if (!first || T < first.t) continue; // not launched yet in the picture we draw
             if (!gh.buf.sample(T, _S)) continue;
@@ -1002,6 +1022,8 @@ export class Multiplayer {
 
     // the dogfight mode's wave spawner, on the host only: the next wave a few seconds after the last bandit is down
     updateBandits(dt) {
+        // (AI we still fly although we aren't the host: we were, lost the connection, and someone else is now)
+        if (!this.isHost && this.link && this.link.open && this.locals.size > 1) this.clearBandits();
         if (!this.isHost || !this.room.set.ai) return;
         const g = this.game, p = g.player;
         let alive = 0;
@@ -1105,7 +1127,7 @@ export class Multiplayer {
     quietWorld(on) {
         const g = this.game, world = g.world || {};
         if (on && !this.quiet) {
-            const q = this.quiet = { helis: null, traffic: null, bl: null, bridges: [] };
+            const q = this.quiet = { helis: null, traffic: null, bl: null, bridges: [], war: null };
             const ab = world.airbases;
             if (ab && ab.helis && ab.helis.length) {
                 q.helis = ab.helis;
@@ -1122,6 +1144,10 @@ export class Multiplayer {
             const bl = world.towns && world.towns.buildings;
             if (bl && bl.damage) { q.bl = bl; bl.damage = () => {}; bl.explode = () => {}; }
             for (const b of (world.towns && world.towns.bridges) || []) if (b.damage) { b.damage = () => {}; q.bridges.push(b); }
+            // the war layer's intelligence chatter ("INTEL: IDENTIFIED: …" for every boat and truck seen) would push the
+            // kill lines off the feed: not here (the tower's calls stay)
+            const war = g.war;
+            if (war && war.radio) { q.war = war; const radio = war.radio; war.radio = function (from, text, o) { return from === 'INTEL' ? undefined : radio.call(this, from, text, o); }; }
         } else if (!on && this.quiet) {
             const q = this.quiet;
             this.quiet = null;
@@ -1134,6 +1160,7 @@ export class Multiplayer {
             }
             if (q.bl) { delete q.bl.damage; delete q.bl.explode; }
             for (const b of q.bridges) delete b.damage;
+            if (q.war) delete q.war.radio;
         }
     }
 

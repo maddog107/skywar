@@ -557,7 +557,7 @@ function launch(room = null) {
     audio.init();
     if (settings.mode === 'multiplayer' && !room) {
         // the room decides the time of day and the weather: connect, then launch into it (or stay in the menu with the reason)
-        lobby.join().then((r) => { if (r && game.state === 'menu' && settings.mode === 'multiplayer') launch(r); });
+        lobby.join().then((r) => { if (r && game.state === 'menu' && settings.mode === 'multiplayer') launch(r); else if (r) game.mp.dropPending(); });
         return;
     }
     career.startSortie();

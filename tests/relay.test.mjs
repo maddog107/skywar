@@ -166,6 +166,7 @@ describe('relay: names and message shapes', () => {
     test('the limits asked for', () => {
         assert.equal(DEFAULTS.maxPerRoom, 16); assert.equal(DEFAULTS.maxRooms, 64); assert.equal(DEFAULTS.maxConns, 256); assert.equal(DEFAULTS.maxPerIp, 8);
         assert.ok(DEFAULTS.maxMsg <= 2048); assert.equal(DEFAULTS.maxRate, 80);
+        assert.ok(DEFAULTS.burst >= 160 && DEFAULTS.burst <= 400, 'a few seconds of a client\'s messages may arrive at once');
         assert.ok(DEFAULTS.pingMs < 100000, 'pings well inside Cloudflare\'s 100 s idle limit');
         assert.ok(DEFAULTS.origins.includes('maddog107.com') && DEFAULTS.origins.includes('localhost') && !DEFAULTS.allowNoOrigin);
         assert.equal(DEFAULTS.trustProxy, false, 'no proxy header is believed unless the relay is told it is behind one');
@@ -426,16 +427,43 @@ describe('relay: rooms', { skip: !HAS_WS && 'no global WebSocket in this Node' }
         assert.equal((await a.untilClosed()).code, 1009);
     });
 
-    test('more than 80 messages in a second drops the connection', async () => {
+    test('a flood drops the connection; what a held-up client owed, delivered in one go, does not', async () => {
         const a = await join(R.url, { room: 'FLOOD', name: 'A' }), b = await join(R.url, { room: 'FLOOD', name: 'B' });
-        for (let i = 0; i < 60; i++) b.send({ t: 'ping', n: i });
-        for (let i = 0; i < 120; i++) a.send({ t: 'ping', n: i });
+        // B was stalled for a few seconds and now sends the 150 messages it owed at once: not a flood
+        for (let i = 0; i < 150; i++) b.send({ t: 'ping', n: i });
+        // A sends 600 at once
+        for (let i = 0; i < 600; i++) a.send({ t: 'ping', n: i });
         assert.equal((await a.untilClosed()).code, 4005);
         assert.equal((await b.next('leave')).id, a.me.id);
         b.send({ t: 'ping', n: 1000 });
-        await b.next('pong');
-        assert.ok(!b.closed, '60 in a second is fine');
+        for (;;) { const p = await b.next('pong'); if (p.n === 1000) break; }
+        assert.ok(!b.closed, 'the burst was let through');
         b.close();
+    });
+});
+
+describe('relay: more than 80 messages a second, sustained', { skip: !HAS_WS && 'no global WebSocket in this Node' }, () => {
+    test('a steady 60 a second is fine; a steady 200 a second is dropped once its allowance is spent', async () => {
+        const R = await startRelay({ burst: 40 });
+        try {
+            assert.equal(R.relay.options.maxRate, 80);
+            const a = await join(R.url, { room: 'RATE', name: 'A' }), b = await join(R.url, { room: 'RATE', name: 'B' });
+            const t0 = Date.now();
+            let dropped = 0;
+            a.ws.addEventListener('close', () => { dropped = Date.now() - t0; });
+            // 2 s: A at 200 a second, B at 60 a second
+            for (let i = 0; i < 100 && !dropped; i++) {
+                for (let k = 0; k < 4; k++) if (!a.closed) a.send({ t: 'ping', n: i });
+                b.send({ t: 'ping', n: i });
+                if (i % 5 === 0) b.send({ t: 's', c: i + 1, e: [] });
+                await wait(20);
+            }
+            assert.equal((await a.untilClosed()).code, 4005);
+            assert.ok(dropped > 100 && dropped < 1500, 'dropped after ' + dropped + ' ms (40 saved up, 120 a second over the limit)');
+            for (let i = 0; i < 60; i++) { b.send({ t: 'ping', n: 2000 + i }); await wait(16); }
+            assert.ok(!b.closed, '60 a second goes on for as long as it likes');
+            b.close();
+        } finally { await R.stop(); }
     });
 });
 

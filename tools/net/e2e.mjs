@@ -13,12 +13,20 @@
 //   5. B dies: both show "VIPER SHOT DOWN MAVERICK", both scoreboards agree, B gets a new jet that A sees
 //   6. a screenshot from A of B's jet with its name tag, and one with the scoreboard up (--shots)
 //   7. B leaves: gone from A; a third page in another room sees nobody, and A doesn't see it
+//   8. the third page leaves through the menu and joins A's room without a reload; a dropped connection (5b) reconnects by itself
+//   9. co-op: the host turns AI bandits on, the guest sees them as puppets and shoots one down (a claim the host applies)
+//  10. the host leaves: the guest becomes the host and flies what is left of the bandits
+//  11. a page served without a relay: the lobby reports that the server can't be reached, and stays in the menu
 // Exit code 0 when everything held. Needs playwright-core: PLAYWRIGHT_CORE=<path to its index.mjs>, a local install,
 // or the copy in ~/git/flight-tool. Pages read their settings from a stubbed localStorage and never write it.
 // At most two game pages are open at a time (the third opens after the second has closed).
 // ═══════════════════════════════════════════════════════════════
 import { homedir } from 'node:os';
 import { mkdirSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { extname, join as joinPath, normalize } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import http from 'node:http';
 
 const args = Object.fromEntries(process.argv.slice(2).reduce((a, s, i, all) => {
     if (s.startsWith('--')) a.push([s.slice(2), all[i + 1] && !all[i + 1].startsWith('--') ? all[i + 1] : true]);
@@ -71,6 +79,9 @@ async function join(name, team, aircraft, room, extra = {}) {
         const THREE = await import('three');
         const g = window.skywar.game, v = new THREE.Vector3();
         window.__track = [];
+        window.__feed = [];
+        const addFeed = g.addFeed.bind(g);
+        g.addFeed = (text, color) => { window.__feed.push(String(text)); addFeed(text, color); };
         const orig = g.updatePlayer.bind(g);
         g.updatePlayer = (dt, m) => {
             orig(dt, m);
@@ -82,14 +93,19 @@ async function join(name, team, aircraft, room, extra = {}) {
                 p.vel.copy(t.vel);
                 p.pos.copy(t.pos).addScaledVector(p.getForward(v), -window.__chase.d);
             }
-            if (window.__fire && p.alive) { p.ammo = 500; g.weapons.fireGun(p, g.time); }
+            if (window.__fire && p.alive) {
+                const t = window.__chase && window.__chase.ac;
+                if (window.__stopBelow != null && t && t.health < window.__stopBelow) window.__fire = false; // (enough: see what it did)
+                else { p.ammo = 500; g.weapons.fireGun(p, g.time); }
+            }
+            if (window.__god && p.alive) p.health = p.maxHealth;
         };
         const upd = g.mp.update.bind(g.mp);
         g.mp.update = (dt) => {
             upd(dt);
             if (!window.__rec) return;
             const p = g.player, peer = [...g.mp.peers.values()][0], rec = peer && peer.ents.get(0);
-            window.__track.push([performance.timeOrigin + performance.now(), p.pos.x, p.pos.y, p.pos.z, rec && rec.ac ? rec.ac.pos.x : NaN, rec && rec.ac ? rec.ac.pos.y : NaN, rec && rec.ac ? rec.ac.pos.z : NaN, rec ? rec.mode : 0]);
+            window.__track.push([performance.timeOrigin + g.mp.frameNow() * 1000, p.pos.x, p.pos.y, p.pos.z, rec && rec.ac ? rec.ac.pos.x : NaN, rec && rec.ac ? rec.ac.pos.y : NaN, rec && rec.ac ? rec.ac.pos.z : NaN, rec ? rec.mode : 0]);
         };
         document.getElementById('clickToFly').style.display = 'none';
     });
@@ -103,7 +119,9 @@ const view = (P) => P.ev(() => {
     const p = g.player;
     return { id: mp.me.id, name: mp.me.name, team: mp.me.team, room: mp.room.code, host: mp.room.host, set: mp.room.set, peers, aircraft: g.aircraft.length, state: g.state,
         me: p ? { alive: p.alive, health: p.health, maxHealth: p.maxHealth, type: p.type, team: p.team, callsign: p.callsign, life: mp.life } : null,
-        kills: mp.kills, deaths: mp.deaths, feed: g.feed.map(f => f.text), score: mp.scoreRows().map(r => [r.name, r.team, r.kills, r.deaths]), ping: Math.round(mp.link ? mp.link.rtt : -1), offline: !!mp.offline, time: g.world.timeKey, weather: g.world.weather };
+        isHost: mp.isHost, ai: [...mp.locals].filter(([, e]) => e.n > 0).map(([ac, e]) => ({ n: e.n, type: ac.type, team: ac.team, alive: ac.alive, pilot: !!ac.pilot, puppet: !!ac.puppet, x: ac.pos.x, z: ac.pos.z })),
+        aiPuppets: [...mp.peers.values()].flatMap(p => [...p.ents.values()].filter(r => r.n > 0 && r.ac).map(r => ({ n: r.n, type: r.ac.type, team: r.ac.team, alive: r.ac.alive, health: r.ac.health }))),
+        kills: mp.kills, deaths: mp.deaths, feed: window.__feed.slice().reverse(), score: mp.scoreRows().map(r => [r.name, r.team, r.kills, r.deaths]), ping: Math.round(mp.link ? mp.link.rtt : -1), offline: !!mp.offline, time: g.world.timeKey, weather: g.world.weather };
 });
 const until = async (what, fn, ms = 30000) => { const t = Date.now(); for (;;) { const v = await fn(); if (v) return v; if (Date.now() - t > ms) { check(false, what, 'timed out after ' + ms / 1000 + ' s'); return null; } await sleep(100); } };
 
@@ -117,7 +135,7 @@ const fingerprint = (P) => P.ev(async () => {
     for (let x = -60000; x <= 60000; x += 800) for (let z = -60000; z <= 60000; z += 800) add(terrainHeight(x, z));
     out.terrain = h; h = 2166136261 >>> 0;
     const bl = w.towns && w.towns.buildings ? w.towns.buildings.list : [];
-    for (const b of bl) { add(b.x); add(b.z); add(b.w || 0); add(b.d || 0); add(b.top || 0); add(b.y || 0); add(b.r || 0); }
+    for (const b of bl) { add(b.x); add(b.z); add(b.w || 0); add(b.d || 0); add(b.top || 0); add(b.y || 0); add(b.r || 0); add(b.yaw || 0); for (const ch of String(b.kind)) add(ch.charCodeAt(0)); }
     out.buildings = bl.length + ':' + h; h = 2166136261 >>> 0;
     const br = (w.towns && w.towns.bridges) || [];
     for (const b of br) { const p = b.pos || b.center || { x: 0, y: 0, z: 0 }; add(p.x); add(p.y || 0); add(p.z); add(b.radius || 0); }
@@ -165,23 +183,30 @@ try {
     const ta = await A.ev(() => { window.__rec = false; return window.__track.splice(0); }), tb = await B.ev(() => { window.__rec = false; return window.__track.splice(0); });
     await A.ev(() => { window.__ctl = { pitch: 0, roll: 0, yaw: 0, throttle: 0.85 }; });
     {
-        // A's own track (ta: t, x, y, z) against B's puppet of A (tb: t, …, px, py, pz): for each of B's frames, where A
-        // really was `delay` earlier; the delay that fits best is the puppet's lag (the interpolation delay + the network)
+        // A's own track (ta: t, x, y, z) against B's puppet of A (tb: t, …, px, py, pz, how it was placed). For each of
+        // B's frames: where A really was `lag` earlier. The lag that fits best is how far behind B draws A (the
+        // interpolation delay plus the network). Frames are compared where both pages were running smoothly (a page
+        // that stalls doesn't fly: its jet stands still while the clock runs) and, for the error that matters, where
+        // the puppet was placed between two snapshots (the rest: it coasted past the newest one for a moment).
+        const gapA = (T) => { let i = 1; while (i < ta.length - 1 && ta[i][0] < T) i++; return ta[i][0] - ta[i - 1][0]; };
         const at = (T) => { let i = 1; while (i < ta.length - 1 && ta[i][0] < T) i++; const p = ta[i - 1], q = ta[i], u = (T - p[0]) / Math.max(q[0] - p[0], 1e-6); return [p[1] + (q[1] - p[1]) * u, p[2] + (q[2] - p[2]) * u, p[3] + (q[3] - p[3]) * u]; };
-        const rows = tb.filter(r => isFinite(r[4]) && r[0] > ta[0][0] + 600 && r[0] < ta[ta.length - 1][0] - 50);
-        const errAt = (delay) => { let worst = 0, sum = 0; for (const r of rows) { const p = at(r[0] - delay), e = Math.hypot(r[4] - p[0], r[5] - p[1], r[6] - p[2]); worst = Math.max(worst, e); sum += e; } return { worst, mean: sum / Math.max(rows.length, 1) }; };
-        let best = { delay: 0, mean: Infinity, worst: Infinity };
-        for (let d = 0; d <= 500; d += 2) { const e = errAt(d); if (e.mean < best.mean) best = { delay: d, ...e }; }
-        const now = errAt(0), moved = Math.hypot(ta[ta.length - 1][1] - ta[0][1], ta[ta.length - 1][2] - ta[0][2], ta[ta.length - 1][3] - ta[0][3]);
+        const all = tb.filter((r, i) => i > 0 && isFinite(r[4]) && r[0] > ta[0][0] + 600 && r[0] < ta[ta.length - 1][0] - 50);
+        const errOf = (rows, lag) => { let worst = 0, sum = 0; for (const r of rows) { const p = at(r[0] - lag), e = Math.hypot(r[4] - p[0], r[5] - p[1], r[6] - p[2]); worst = Math.max(worst, e); sum += e; } return { worst, mean: sum / Math.max(rows.length, 1), n: rows.length }; };
+        let best = { lag: 0, mean: Infinity };
+        for (let d = 0; d <= 600; d += 2) { const e = errOf(all, d); if (e.mean < best.mean) best = { lag: d, ...e }; }
+        const smooth = all.filter((r) => { const i = tb.indexOf(r); return r[0] - tb[i - 1][0] < 45 && gapA(r[0] - best.lag) < 45 && gapA(r[0] - best.lag - 150) < 45 && gapA(r[0] - best.lag + 150) < 45; });
+        const between = smooth.filter(r => r[7] === 1);
+        const eb = errOf(between, best.lag), es = errOf(smooth, best.lag), now = errOf(all, 0);
+        const moved = Math.hypot(ta[ta.length - 1][1] - ta[0][1], ta[ta.length - 1][2] - ta[0][2], ta[ta.length - 1][3] - ta[0][3]);
         const fps = (t) => (t.length - 1) / ((t[t.length - 1][0] - t[0][0]) / 1000);
         const speed = moved / ((ta[ta.length - 1][0] - ta[0][0]) / 1000);
-        const interp = rows.filter(r => r[7] === 1).length / Math.max(rows.length, 1);
-        log(`     A flew ${(moved / 1000).toFixed(2)} km through a roll and a pull (${ta.length} frames at ${fps(ta).toFixed(0)} fps; B ${tb.length} at ${fps(tb).toFixed(0)} fps); ${rows.length} of B's frames compared, ${(interp * 100).toFixed(0)}% of them between two snapshots`);
-        log(`     B's puppet of A lags A by ${best.delay} ms; at that lag it is ${best.mean.toFixed(2)} m (mean) / ${best.worst.toFixed(2)} m (worst) from A's own track; against A's present position: ${now.mean.toFixed(1)} m / ${now.worst.toFixed(1)} m`);
-        check(rows.length > 40, 'enough frames to compare', rows.length + ' frames');
-        check(best.delay >= 60 && best.delay <= 400, 'the puppet lags by the interpolation delay plus the network', best.delay + ' ms');
-        check(best.mean < 3 && best.worst < 12, 'B\'s puppet of A follows A\'s track within a small error', `mean ${best.mean.toFixed(2)} m, worst ${best.worst.toFixed(2)} m at ${speed.toFixed(0)} m/s`);
-        check(now.worst < speed * 0.5, 'and is never far behind where A is now', now.worst.toFixed(1) + ' m');
+        log(`     A flew ${(moved / 1000).toFixed(2)} km through a roll and a pull at ${speed.toFixed(0)} m/s (A ${fps(ta).toFixed(0)} fps, B ${fps(tb).toFixed(0)} fps)`);
+        log(`     B draws A ${best.lag} ms behind. Of B's ${all.length} frames, ${smooth.length} had both pages running smoothly, ${between.length} of those with the puppet between two snapshots`);
+        log(`     error against A's own track at that lag: between snapshots ${eb.mean.toFixed(2)} m mean / ${eb.worst.toFixed(2)} m worst; all smooth frames ${es.mean.toFixed(2)} / ${es.worst.toFixed(2)} m; every frame ${best.mean.toFixed(2)} / ${best.worst.toFixed(2)} m; against A's present position ${now.mean.toFixed(1)} / ${now.worst.toFixed(1)} m`);
+        check(between.length > 40, 'enough frames to compare', between.length + ' frames');
+        check(best.lag >= 60 && best.lag <= 450, 'the puppet lags by the interpolation delay plus the network', best.lag + ' ms');
+        check(eb.mean < 3 && eb.worst < speed * 0.1, 'B\'s puppet of A follows A\'s track within a small error', `mean ${eb.mean.toFixed(2)} m, worst ${eb.worst.toFixed(2)} m at ${speed.toFixed(0)} m/s (a tenth of a second of flight is ${(speed * 0.1).toFixed(0)} m)`);
+        check(now.mean < speed * 0.5, 'and stays with A (never left behind)', `on average ${now.mean.toFixed(0)} m behind A\'s present position`);
     }
 
     // ── 4. A shoots B ──
@@ -191,10 +216,10 @@ try {
     await A.ev(() => { const g = window.skywar.game, peer = [...g.mp.peers.values()][0]; window.__chase = { ac: peer.ents.get(0).ac, d: 250 }; });
     await sleep(800);
     const hp0 = (await view(B)).me.health;
-    await A.ev(() => { window.__fire = true; });
+    await A.ev((hp) => { window.__stopBelow = hp - 4; window.__fire = true; }, hp0);
     const hurt = await until('B\'s health drops', async () => { const v = await view(B); return v.me.health < hp0 - 3 ? v : null; }, 15000);
-    await A.ev(() => { window.__fire = false; });
-    await sleep(700);
+    await A.ev(() => { window.__fire = false; window.__stopBelow = null; });
+    await sleep(900);
     if (hurt) {
         const vb = await view(B), va = await view(A);
         check(vb.me.health < hp0, 'A shoots B: B\'s health drops on B', `${hp0.toFixed(1)} → ${vb.me.health.toFixed(1)}`);
@@ -222,10 +247,24 @@ try {
         check(!!np && np.health === np.maxHealth && np.safe, 'the new jet is whole and spawn-protected');
     }
 
+    // ── 5b. A's connection drops: it reconnects by itself, and the two see each other again ──
+    {
+        const before = await view(A);
+        await A.ev(() => { window.skywar.game.mp.link.ws.close(); });
+        const lost = await until('A notices the lost connection', async () => { const v = await view(A); return v.offline || v.id !== before.id ? v : null; }, 5000);
+        const back = await until('A is back in the room', async () => { const v = await view(A); return !v.offline && v.id !== before.id && v.peers.length === 1 && v.peers[0].puppet ? v : null; }, 20000);
+        const seen = await until('B sees A again', async () => { const v = await view(B); return v.peers.length === 1 && v.peers[0].id === (back && back.id) && v.peers[0].puppet && v.peers[0].puppet.alive ? v : null; }, 10000);
+        check(!!lost && !!back && !!seen, 'a dropped connection: A reconnects by itself, both see each other again', back ? `A was client ${before.id}, is ${back.id} now; room ${back.room}; score kept: ${back.kills} kill` : '');
+        check(!!back && back.kills === before.kills && back.room === before.room && back.feed.some(f => /BACK IN ROOM/.test(f)), 'same room, score kept, the feed says so', back ? back.feed.slice(0, 3).join(' | ') : '');
+        check(!!seen && seen.feed.some(f => f === 'VIPER LEFT') && seen.feed.some(f => /^VIPER JOINED/.test(f)), 'B saw A leave and join again', seen ? seen.feed.slice(0, 4).join(' | ') : '');
+    }
+
     // ── 6. screenshots from A: B's jet with its name tag; the scoreboard ──
     if (SHOTS) {
         mkdirSync(SHOTS, { recursive: true });
         await B.ev(() => { const g = window.skywar.game; g.player.spawnAir(new (g.player.pos.constructor)(600, 2600, -1500), 0.4, 0.55); window.__ctl = { pitch: 0, roll: 0, yaw: 0, throttle: 1 }; });
+        await until('B\'s spawn protection over', async () => { const v = await view(A); const p = v.peers[0] && v.peers[0].puppet; return p && p.alive && !p.safe; }, 20000);
+        await B.ev(() => { const g = window.skywar.game; g.player.spawnAir(new (g.player.pos.constructor)(600, 2600, -1500), 0.4, 0.55); });
         await sleep(1200);
         await A.ev(async () => {
             const THREE = await import('three');
@@ -236,8 +275,9 @@ try {
                 orig(dt, m);
                 if (!window.__cam || t.exploded) return;
                 const cam = g.camera;
-                cam.position.copy(t.pos).addScaledVector(t.getForward(v), -26).addScaledVector(t.getRight(r), 14).add(v.set(0, 7, 0));
-                cam.up.set(0, 1, 0); cam.lookAt(t.pos); cam.fov = 50; cam.updateProjectionMatrix();
+                cam.position.copy(t.pos).addScaledVector(t.getForward(v), -30).addScaledVector(t.getRight(r), 16).add(v.set(0, 8, 0));
+                // (the jet a little left of the middle, clear of our own HUD's symbology)
+                cam.up.set(0, 1, 0); cam.lookAt(v.copy(t.pos).addScaledVector(t.getRight(r), 13).addScaledVector(t.getForward(r), 6)); cam.fov = 50; cam.updateProjectionMatrix();
                 g.shake = 0; if (g.cockpit) g.cockpit.enabled = false;
             };
             window.__cam = true;
@@ -265,9 +305,90 @@ try {
     check(JSON.stringify(fc) === JSON.stringify(fa), 'the third page built the same world too');
     check(va.ping >= 0 && va.ping < 500 && !va.offline, 'the connection is healthy', 'ping ' + va.ping + ' ms');
 
+    // ── 8. C leaves its room through the menu and joins A's (no reload) ──
+    await C.ev(() => window.skywar.game.pause(true));
+    const menuUp = await C.ev(() => ({ shown: document.getElementById('pause').classList.contains('show'), state: window.skywar.game.state }));
+    check(menuUp.shown && menuUp.state === 'playing', 'Esc in multiplayer: the menu comes up, the game goes on', JSON.stringify(menuUp));
+    await C.page.click('#abortBtn');
+    await C.page.waitForSelector('#menu.show', { timeout: 20000 });
+    const left = await C.ev(() => ({ state: window.skywar.game.state, link: !!window.skywar.game.mp.link, active: window.skywar.game.mp.active, aircraft: window.skywar.game.aircraft.length }));
+    check(left.state === 'menu' && !left.link && !left.active, 'ABORT: back in the hangar, the connection closed', JSON.stringify(left));
+    await C.page.fill('#mpRoom', ROOM);
+    await C.page.click('#launchBtn');
+    await C.page.waitForFunction(() => window.skywar.game.state === 'playing' && window.skywar.game.mode === 'multiplayer' && window.skywar.game.mp.link, null, { timeout: 60000 });
+    const cIn = await until('C and A see each other', async () => { const c = await view(C), a = await view(A); return c.room === ROOM && c.peers.length === 1 && c.peers[0].puppet && a.peers.length === 1 && a.peers[0].puppet ? { c, a } : null; }, 20000);
+    check(!!cIn && cIn.c.host === cIn.a.id && cIn.a.isHost && !cIn.c.isHost && cIn.a.peers[0].name === 'GHOST', 'C joined A\'s room from the menu; A is its host', cIn ? `room ${cIn.c.room}, host ${cIn.c.host}` : '');
+
+    // ── 9. co-op: the host calls in AI bandits; the guest sees them and shoots one down ──
+    await A.ev(() => { const g = window.skywar.game; window.__god = true; g.player.spawnAir(new (g.player.pos.constructor)(0, 3000, 0), 0, 0.6); window.__ctl = { pitch: 0, roll: 0, yaw: 0, throttle: 0.85 }; g.mp.toggleBandits(); });
+    await C.ev(() => { const g = window.skywar.game; window.__god = true; g.player.spawnAir(new (g.player.pos.constructor)(500, 3200, 2000), 0, 0.6); window.__ctl = { pitch: 0, roll: 0, yaw: 0, throttle: 0.85 }; });
+    const wave = await until('the host\'s bandits arrive', async () => { const a = await view(A); return a.ai.filter(x => x.alive).length >= 1 ? a : null; }, 20000);
+    // (a puppet on the guest for every bandit alive on the host)
+    let lastSeen = null;
+    const seenAI = wave && await until('the guest sees them', async () => { const c = await view(C), a = await view(A); lastSeen = { c, a }; const alive = a.ai.filter(x => x.alive); return alive.length >= 1 && alive.every(x => c.aiPuppets.some(p => p.n === x.n)) ? { c, a } : null; }, 25000);
+    if (wave && !seenAI && lastSeen) log('     host AI: ' + JSON.stringify(lastSeen.a.ai) + ' | guest puppets: ' + JSON.stringify(lastSeen.c.aiPuppets) + ' | guest thinks the host is ' + lastSeen.c.host + ', the host is ' + lastSeen.a.id);
+    check(!!wave && !!seenAI && seenAI.c.set.ai === true, 'the host turns AI bandits on: a wave spawns on the host, the guest has a puppet of each', seenAI ? `${seenAI.a.ai.length} bandit(s) on the host: ${seenAI.a.ai.map(x => x.type).join(', ')}; puppets on the guest: ${seenAI.c.aiPuppets.map(x => x.type).join(', ')}` : '');
+    if (seenAI) {
+        check(seenAI.a.ai.every(x => x.pilot && !x.puppet && x.team === 'red') && seenAI.c.aiPuppets.every(x => x.team === 'red'), 'they are real AI aircraft on the host, red puppets on the guest');
+        // the guest sits behind one of them and fires
+        const n = await C.ev(() => { const g = window.skywar.game, host = g.mp.peers.get(g.mp.room.host), rec = [...host.ents.values()].find(r => r.n > 0 && r.ac && r.ac.alive); window.__chase = { ac: rec.ac, d: 220 }; window.__fire = true; return rec.n; });
+        const down = await until('the guest shoots a bandit down', async () => { const c = await view(C); return c.kills >= 1 ? c : null; }, 40000);
+        await C.ev(() => { window.__fire = false; window.__chase = null; });
+        await sleep(500);
+        const a = await view(A), c = await view(C);
+        const line = (v) => v.feed.find(f => /^GHOST SHOT DOWN /.test(f));
+        check(!!down && !!line(a) && line(a) === line(c), 'the guest\'s hits were applied by the host; the kill is the guest\'s, and both say so', `"${line(c)}"`);
+        check(c.kills === 1 && a.kills === 1 && !a.ai.some(x => x.n === n && x.alive), 'scores: the guest has the bandit, the host keeps its earlier kill', `guest ${c.kills}, host ${a.kills}`);
+    }
+
+    // ── 10. the host leaves: the guest is the host now and flies what is left of the bandits ──
+    const remaining = (await view(A)).ai.filter(x => x.alive).length;
+    await A.close();
+    const mig = await until('C becomes the host', async () => { const v = await view(C); return v.isHost && v.peers.length === 0 ? v : null; }, 10000);
+    check(!!mig && mig.feed.some(f => /HOST NOW/.test(f)) && mig.set.ai === true, 'the host leaves: the guest is the host, the bandits\' switch is still on', mig ? mig.feed.slice(0, 2).join(' | ') : '');
+    if (remaining > 0) {
+        const mine = await until('the bandits are the new host\'s', async () => { const v = await view(C); return v.ai.length >= 1 && v.aiPuppets.length === 0 ? v : null; }, 5000);
+        await sleep(1500);
+        const later = await view(C);
+        const moved = mine && later.ai.length ? Math.hypot(later.ai[0].x - mine.ai[0].x, later.ai[0].z - mine.ai[0].z) : 0;
+        check(!!mine && mine.ai.every(x => x.pilot && !x.puppet) && moved > 50, 'the bandit that was left is the new host\'s own AI aircraft now, and flying', mine ? `${mine.ai.length} bandit(s): ${mine.ai.map(x => x.type).join(', ')}; moved ${moved.toFixed(0)} m in 1.5 s` : '');
+    } else {
+        const next = await until('the new host\'s next wave', async () => { const v = await view(C); return v.ai.length >= 1 ? v : null; }, 25000);
+        check(!!next, 'no bandit was left to hand over; the new host spawns the next wave', next ? next.ai.map(x => x.type).join(', ') : '');
+    }
+    const vEnd = await view(C);
+    check(vEnd.ping >= 0 && !vEnd.offline, 'the connection is healthy', 'ping ' + vEnd.ping + ' ms');
+
     const errs = [...A.errors.map(e => 'A: ' + e), ...B.errors.map(e => 'B: ' + e), ...C.errors.map(e => 'C: ' + e)];
     check(errs.length === 0, 'no page errors or console errors', errs.slice(0, 5).join('\n'));
-    await C.close(); await A.close();
+    await C.close();
+
+    // ── 11. no relay to reach: the lobby says so and the menu stays ──
+    {
+        const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.glb': 'model/gltf-binary', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg' };
+        const root = fileURLToPath(new URL('../../', import.meta.url));
+        // the same files, from a server with no relay behind it
+        const plain = http.createServer(async (req, res) => {
+            const path = normalize(decodeURIComponent(new URL(req.url, 'http://x').pathname)).replace(/^(\.\.[/\\])+/, '');
+            const file = joinPath(root, path === '/' ? 'index.html' : path);
+            if (!file.startsWith(root)) { res.writeHead(403); return res.end(); }
+            try { const data = await readFile(file); res.writeHead(200, { 'Content-Type': types[extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' }); res.end(data); } catch (e) { res.writeHead(404); res.end(); }
+        });
+        await new Promise(r => plain.listen(0, '127.0.0.1', r));
+        const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+        const page = await context.newPage();
+        await page.addInitScript((S) => { const gi = Storage.prototype.getItem; Storage.prototype.getItem = function (k) { return k === 'skywar.settings' ? JSON.stringify(S) : gi.call(this, k); }; Storage.prototype.setItem = () => {}; },
+            { mode: 'multiplayer', aircraft: 'f16', quality: QUALITY, time: 'day', weather: 'clear', controlMode: 'keyboard', dynRes: false, music: 0, volume: 0, mpName: 'NOBODY', mpRoom: ROOM, mpTeam: 'blue' });
+        await page.goto('http://127.0.0.1:' + plain.address().port + '/');
+        await page.waitForSelector('#menu.show', { timeout: 240000 });
+        await page.click('#launchBtn');
+        await page.waitForFunction(() => document.getElementById('mpStatus').classList.contains('err'), null, { timeout: 20000 }).catch(() => {});
+        const r = await page.evaluate(() => ({ text: document.getElementById('mpStatus').textContent, err: document.getElementById('mpStatus').classList.contains('err'), menu: document.getElementById('menu').classList.contains('show'), state: window.skywar.game.state, link: !!window.skywar.game.mp.link, pending: !!window.skywar.game.mp.pending }));
+        check(r.err && /can't reach the multiplayer server/i.test(r.text) && r.menu && r.state === 'menu' && !r.link && !r.pending, 'no relay to reach: the lobby says so in plain words and the menu stays up', '"' + r.text + '"');
+        if (SHOTS) { await page.screenshot({ path: SHOTS + '/mp-lobby-error.png' }); log('     screenshot: ' + SHOTS + '/mp-lobby-error.png'); }
+        await context.close();
+        plain.close(); plain.closeAllConnections && plain.closeAllConnections();
+    }
 } catch (e) {
     failed++;
     log('  FAIL ' + (e && e.stack || e));

@@ -33,7 +33,7 @@ export class InterpBuffer {
     constructor(size = 16) {
         this.size = size;
         this.snaps = [];
-        for (let i = 0; i < size; i++) this.snaps.push({ t: 0, px: 0, py: 0, pz: 0, vx: 0, vy: 0, vz: 0, qx: 0, qy: 0, qz: 0, qw: 1, thr: 0, flags: 0, hp: 0, g: 1 });
+        for (let i = 0; i < size; i++) this.snaps.push({ t: 0, px: 0, py: 0, pz: 0, vx: 0, vy: 0, vz: 0, qx: 0, qy: 0, qz: 0, qw: 1, thr: 0, flags: 0, hp: 0, g: 1, k: 1 });
         this.head = -1;   // index of the newest
         this.count = 0;
     }
@@ -44,12 +44,14 @@ export class InterpBuffer {
     // t: the sender's time (s). Out-of-order or repeated snapshots are ignored.
     push(t, s) {
         if (this.count && t <= this.snaps[this.head].t) return false;
+        const prev = this.count ? this.snaps[this.head] : null;
         this.head = (this.head + 1) % this.size;
         if (this.count < this.size) this.count++;
         const d = this.snaps[this.head];
         d.t = t;
         for (const k of FIELDS) d[k] = s[k] ?? (k === 'qw' ? 1 : 0);
         d.thr = s.thr ?? 0; d.flags = s.flags ?? 0; d.hp = s.hp ?? 0; d.g = s.g ?? 1;
+        d.k = prev ? pace(prev, d) : 1;
         return true;
     }
 
@@ -72,10 +74,12 @@ export class InterpBuffer {
                 const al = Math.hypot(ax, ay, az);
                 if (al > 120) { ax *= 120 / al; ay *= 120 / al; az *= 120 / al; }
             }
-            out.px = b.px + b.vx * e + 0.5 * ax * e * e;
-            out.py = b.py + b.vy * e + 0.5 * ay * e * e;
-            out.pz = b.pz + b.vz * e + 0.5 * az * e * e;
-            out.vx = b.vx + ax * e; out.vy = b.vy + ay * e; out.vz = b.vz + az * e;
+            // (at the pace it was really covering ground: a sender whose simulation runs slow moves less than its speed says)
+            const k = b.k;
+            out.px = b.px + (b.vx * e + 0.5 * ax * e * e) * k;
+            out.py = b.py + (b.vy * e + 0.5 * ay * e * e) * k;
+            out.pz = b.pz + (b.vz * e + 0.5 * az * e * e) * k;
+            out.vx = (b.vx + ax * e) * k; out.vy = (b.vy + ay * e) * k; out.vz = (b.vz + az * e) * k;
             // and the rotation it had, for at most one more interval
             if (a && dt > 1e-3 && dt < 0.4 && e > 0) slerp(a, b, 1 + Math.min(e / dt, 1.5), out);
             else { out.qx = b.qx; out.qy = b.qy; out.qz = b.qz; out.qw = b.qw; }
@@ -93,11 +97,12 @@ export class InterpBuffer {
             out.thr = o.thr; out.flags = o.flags; out.hp = o.hp; out.g = o.g;
             return MODE.INTERP;
         }
-        const p0 = this.at(k), p1 = this.at(k - 1), dt = p1.t - p0.t, u = (t - p0.t) / dt;
+        const p0 = this.at(k), p1 = this.at(k - 1), dt = p1.t - p0.t, u = (t - p0.t) / dt, pc = p1.k;
         if (dt < 0.5) {
-            // cubic Hermite through both positions with both velocities
+            // cubic Hermite through both positions with both velocities (the velocities at the pace the ground was
+            // really covered: with a slow sender's full speed for tangents the curve would run ahead and come back)
             const u2 = u * u, u3 = u2 * u;
-            const h00 = 2 * u3 - 3 * u2 + 1, h10 = (u3 - 2 * u2 + u) * dt, h01 = -2 * u3 + 3 * u2, h11 = (u3 - u2) * dt;
+            const h00 = 2 * u3 - 3 * u2 + 1, h10 = (u3 - 2 * u2 + u) * dt * pc, h01 = -2 * u3 + 3 * u2, h11 = (u3 - u2) * dt * pc;
             out.px = h00 * p0.px + h10 * p0.vx + h01 * p1.px + h11 * p1.vx;
             out.py = h00 * p0.py + h10 * p0.vy + h01 * p1.py + h11 * p1.vy;
             out.pz = h00 * p0.pz + h10 * p0.vz + h01 * p1.pz + h11 * p1.vz;
@@ -105,7 +110,7 @@ export class InterpBuffer {
             // a long gap (it stood still, or we lost it for a while): a straight line, no overshoot
             out.px = p0.px + (p1.px - p0.px) * u; out.py = p0.py + (p1.py - p0.py) * u; out.pz = p0.pz + (p1.pz - p0.pz) * u;
         }
-        out.vx = p0.vx + (p1.vx - p0.vx) * u; out.vy = p0.vy + (p1.vy - p0.vy) * u; out.vz = p0.vz + (p1.vz - p0.vz) * u;
+        out.vx = (p0.vx + (p1.vx - p0.vx) * u) * pc; out.vy = (p0.vy + (p1.vy - p0.vy) * u) * pc; out.vz = (p0.vz + (p1.vz - p0.vz) * u) * pc;
         slerp(p0, p1, u, out);
         out.thr = p0.thr + (p1.thr - p0.thr) * u;
         out.g = p0.g + (p1.g - p0.g) * u;
@@ -113,6 +118,17 @@ export class InterpBuffer {
         out.flags = u < 0.5 ? p0.flags : p1.flags;
         return MODE.INTERP;
     }
+}
+
+// The pace between two snapshots: the ground really covered over what their velocities say it should have been.
+// 1 for a sender whose simulation keeps up with its clock; less when it doesn't (a machine below ~20 frames a second
+// steps less game time than passes, a page that stalled for part of the interval); never much above 1.
+function pace(a, b) {
+    const dt = b.t - a.t;
+    const want = 0.5 * Math.hypot(a.vx + b.vx, a.vy + b.vy, a.vz + b.vz) * dt;
+    if (!(dt > 1e-4) || want < 0.5) return 1; // (standing or creeping: nothing to scale)
+    const k = Math.hypot(b.px - a.px, b.py - a.py, b.pz - a.pz) / want;
+    return k > 1.25 ? 1.25 : k;
 }
 
 // quaternion a → b at u (u > 1 carries the rotation on past b), the short way round; out.qx … out.qw, unit length
