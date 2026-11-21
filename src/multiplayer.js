@@ -48,7 +48,7 @@ const BANDIT_GAP = 8;               // s between a cleared wave of AI bandits an
 const MAX_PUPPETS = 48, PEER_PUPPETS = 14;   // aircraft we build for the others in all, and for any one of them (its jet + the host's bandits)
 const MAX_GHOSTS = 64, PEER_GHOSTS = 16;     // their missiles we draw
 const GUN_REACH = 4000;                      // m: a cannon hit claimed from further away than this is refused
-const SEND_GAP = 0.07, MAX_DELAY = 0.25;     // s: the longest between two snapshots of a peer that sends evenly; the most we draw it in the past
+const MAX_DELAY = 0.25;                      // s: the most we draw a peer's aircraft in the past
 export const LIMITS = { MAX_PUPPETS, PEER_PUPPETS, MAX_GHOSTS, PEER_GHOSTS, GUN_REACH };
 const TIMES = ['dawn', 'day', 'dusk', 'night'], WEATHERS = ['clear', 'cloudy', 'grey', 'rain', 'storm', 'fog', 'overcast'];
 const MISSILE_KINDS = ['aam', 'lrm', 'xlr', 'arm', 'agm', 'ashm', 'alcm', 'sam'];
@@ -573,7 +573,7 @@ export class Multiplayer {
             id, name: cleanCallsign(p[1]) || 'PILOT', team: p[2] === 'red' ? 'red' : 'blue',
             ac: own(AIRCRAFT, p[3]) ? p[3] : 'f16', lv: own(LIVERIES, p[4]) ? p[4] : 'default',
             clock: new ClockSync(), ents: new Map(), desc: new Map(), ended: new Map(), ghosts: new Map(),
-            launches: {}, builds: {}, heard: 0, away: false, kills: 0, deaths: 0, ping: 0, late: 0, delay: INTERP_DELAY,
+            launches: {}, builds: {}, heard: 0, away: false, kills: 0, deaths: 0, ping: 0, late: 0, gap: 0, lastC: 0, delay: INTERP_DELAY,
         };
         this.peers.set(id, peer);
         return peer;
@@ -679,6 +679,9 @@ export class Multiplayer {
             // how much later than the quickest delivery this one came: the worst of late (fading) sets how far back we draw
             const late = now - peer.clock.update(c, now) - c;
             peer.late = Math.max(peer.late * 0.96, Math.min(Math.max(late, 0), 0.5)); // (halves in under a second)
+            // and how far apart its snapshots are stamped (a sender on a slow machine sends fewer)
+            if (peer.lastC > 0 && c > peer.lastC) peer.gap = Math.max(peer.gap * 0.96, Math.min(c - peer.lastC, 0.4));
+            peer.lastC = c;
             peer.heard = now;
             const rows = s[2], ms = s[3];
             if (Array.isArray(rows)) for (let k = 0; k < rows.length && k < MAX_ENTITIES; k++) this.onEntity(peer, c, rows[k], now);
@@ -803,8 +806,8 @@ export class Multiplayer {
         for (const peer of this.peers.values()) {
             // How far in the past this peer's aircraft are drawn: INTERP_DELAY when its snapshots arrive evenly; more (up
             // to MAX_DELAY) when they come late or in bunches, so there is still one either side of the moment drawn
-            // (a snapshot every SEND_GAP at worst, plus the lateness seen lately). Changed slowly: the puppets must not lurch.
-            const want = clamp(SEND_GAP + peer.late, INTERP_DELAY, MAX_DELAY);
+            // (the spacing of its snapshots plus the lateness seen lately). Changed slowly: the puppets must not lurch.
+            const want = clamp(Math.max(peer.gap, 1 / SEND_HZ) + peer.late + 0.02, INTERP_DELAY, MAX_DELAY);
             peer.delay += clamp(want - peer.delay, -0.05 * dt, 0.1 * dt);
             for (const rec of peer.ents.values()) {
                 const ac = rec.ac;

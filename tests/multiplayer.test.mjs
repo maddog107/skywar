@@ -81,6 +81,14 @@ describe('multiplayer: the wire format', () => {
         assert.equal(P.relayUrl('https://maddog107.com/skywar/index.html'), 'wss://maddog107.com/skywar/ws');
     });
 
+    test('every aircraft type, paint scheme and store id is one the relay lets through (or the others would see an F-16)', async () => {
+        const { AIRCRAFT } = await src('config.js'), { LIVERIES } = await src('models.js'), { STORES } = await src('stores.js');
+        for (const k of Object.keys(AIRCRAFT)) assert.ok(relay.isToken(k), 'aircraft ' + k);
+        for (const k of Object.keys(LIVERIES)) assert.ok(relay.isToken(k), 'livery ' + k);
+        for (const k of Object.keys(STORES)) assert.ok(k.length <= 16 && relay.validEvent({ e: ['ml', 1, 0, k, 'aam', 0, 0, 0, 0, 0, 0, 0, 0] }), 'store ' + k);
+        assert.ok(!relay.isToken('F-16') && !relay.isToken('') && !relay.isToken('x'.repeat(17)) && !relay.isToken(5));
+    });
+
     test('the mode and its system are registered', () => {
         assert.ok(MODES.multiplayer && MODES.multiplayer.label === 'MULTIPLAYER');
         assert.ok(SYSTEMS.some(([name, S]) => name === 'mp' && S === Multiplayer));
@@ -401,6 +409,22 @@ describe('multiplayer: seeing each other', () => {
         run([A, B], 0.5);                                // the snapshots are back
         assert.ok(pb.alive && pb.root.visible, 'back');
         assert.ok(pb.pos.distanceTo(B.player.pos) < B.player.speed * 0.15 + 2, 'and where its owner is');
+    });
+
+    test('the drawing delay follows how late a peer\'s snapshots come (0.1 s when they come evenly, never over 0.25 s) and comes back', () => {
+        const { hub, A, B, b } = pair();
+        const peer = A.mp.peers.get(b), pb = puppetOf(A, b);
+        assert.ok(Math.abs(peer.delay - P.INTERP_DELAY) < 0.011, 'evenly delivered: ' + peer.delay.toFixed(3) + ' s');
+        // the network delivers in bunches, every 150 ms
+        let frame = 0, n = 0, interp = 0;
+        hub.hold = true;
+        run([A, B], 4, (t) => { if (++frame % 9 === 0) { hub.release(); hub.hold = true; } if (t > 2.5) { n++; if (pb.puppet.mode === MODE.INTERP) interp++; } });
+        hub.release();
+        assert.ok(peer.delay > 0.16 && peer.delay <= 0.25 + 1e-9, 'bunched: ' + peer.delay.toFixed(3) + ' s');
+        assert.ok(interp / n > 0.9, 'and so the puppet is still drawn between two snapshots (' + Math.round(100 * interp / n) + '% of frames)');
+        assert.ok(pb.alive && pb.pos.distanceTo(B.player.pos) < B.player.speed * 0.45, 'with its owner');
+        run([A, B], 6);
+        assert.ok(peer.delay < 0.125, 'even again: ' + peer.delay.toFixed(3) + ' s');
     });
 
     test('a hidden tab is away at once: hidden to the others, can\'t be hurt; back in the air after a long absence it gets a new jet', () => {

@@ -52,6 +52,7 @@ export const EVENTS = new Set(['hit', 'die', 'boom', 'part', 'ml', 'mx', 'fl', '
 const TIMES = new Set(['dawn', 'day', 'dusk', 'night']);
 const WEATHERS = new Set(['clear', 'cloudy', 'grey', 'rain', 'storm', 'fog', 'overcast']);
 const TOKEN = /^[a-z0-9_]{1,16}$/;                 // an aircraft type, a livery
+export const isToken = (s) => typeof s === 'string' && TOKEN.test(s);
 const EVENT_STR = /^[A-Za-z0-9_ -]{0,24}$/;        // a string inside an event (a weapon id, a callsign)
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
@@ -225,8 +226,8 @@ export function createRelay(options = {}) {
         do { c.id = nextId; nextId = nextId % 9999 + 1; } while ([...conns].some(o => o !== c && o.id === c.id));
         c.name = name;
         c.team = m.team === 'red' ? 'red' : 'blue';
-        c.ac = typeof m.ac === 'string' && TOKEN.test(m.ac) ? m.ac : 'f16';
-        c.lv = typeof m.lv === 'string' && TOKEN.test(m.lv) ? m.lv : 'default';
+        c.ac = isToken(m.ac) ? m.ac : 'f16';
+        c.lv = isToken(m.lv) ? m.lv : 'default';
         c.room = room;
         if (!room.clients.size) room.host = c.id;
         const peers = [...room.clients.values()].map(info);
