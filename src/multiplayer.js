@@ -1151,7 +1151,7 @@ export class Multiplayer {
         } else if (!on && this.quiet) {
             const q = this.quiet;
             this.quiet = null;
-            if (q.helis && world.airbases) { world.airbases.helis = q.helis; for (const h of q.helis) { h.mesh.visible = h.alive; if (h.alive) registerAirTarget(h); } }
+            if (q.helis && world.airbases) { world.airbases.helis = q.helis; for (const h of q.helis) { h.mesh.visible = h.alive; registerAirTarget(h); } }
             if (q.traffic) {
                 const at = q.traffic;
                 delete at.update;
@@ -1189,7 +1189,7 @@ export class Multiplayer {
         }
         if (!g.input || !g.input.down('Tab')) return;
         const rows = this.scoreRows(), rh = 22, w = Math.min(560, W - 24), x = (W - w) / 2, h = 74 + rows.length * rh, y = Math.max(10, (H - h) / 2);
-        ctx.fillStyle = 'rgba(6,12,18,0.82)'; ctx.fillRect(x, y, w, h);
+        ctx.fillStyle = 'rgba(6,12,18,0.92)'; ctx.fillRect(x, y, w, h);
         ctx.strokeStyle = 'rgba(93,255,160,0.35)'; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
         ctx.textAlign = 'left'; mono('700', 15); ctx.fillStyle = GREEN;
         ctx.fillText('ROOM ' + this.room.code, x + 14, y + 18);

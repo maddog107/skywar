@@ -9,7 +9,8 @@
 //   1. both pages join through the lobby (callsign, room, side) and each sees the other's puppet
 //   2. the two pages built the same world (terrain, towns' buildings, bridges, runways: a fingerprint of each)
 //   3. A flies a turn: B's puppet of A follows it (error against A's own track, at the delay that fits best)
-//   4. A shoots B: B's health drops on B, and the same on A's puppet of B
+//   4. A shoots B: B's health drops on B, and the same on A's puppet of B; a missile from A is an incoming ghost on B
+//      with its launch warning, and B's flares are dropped in A's world
 //   5. B dies: both show "VIPER SHOT DOWN MAVERICK", both scoreboards agree, B gets a new jet that A sees
 //   6. a screenshot from A of B's jet with its name tag, and one with the scoreboard up (--shots)
 //   7. B leaves: gone from A; a third page in another room sees nobody, and A doesn't see it
@@ -87,6 +88,15 @@ async function join(name, team, aircraft, room, extra = {}) {
             orig(dt, m);
             const p = g.player;
             if (window.__ctl) Object.assign(p.controls, window.__ctl);
+            // a flown programme on the game's clock: __prog = { t0, steps: [[seconds, stick], …] }; when it is over the
+            // jet is put back straight and level, the recording stops and __progDone is set
+            if (window.__prog) {
+                const P = window.__prog;
+                if (P.t0 == null) { P.t0 = g.time; window.__rec = true; }
+                let t = g.time - P.t0, on = false;
+                for (const [d, stick] of P.steps) { if (t < d) { Object.assign(p.controls, stick); on = true; break; } t -= d; }
+                if (!on) { window.__prog = null; window.__rec = false; window.__progDone = true; p.spawnAir(new (p.pos.constructor)(0, 3000, 3000), 0, 0.6); }
+            }
             if (window.__chase && window.__chase.ac && !window.__chase.ac.exploded) {
                 const t = window.__chase.ac;
                 p.qv.copy(t.quat); p.alpha = 0; p.beta = 0; p.rollRate = 0; p.syncBody();
@@ -155,8 +165,9 @@ try {
     const B = await join('Maverick', 'red', 'f15', ROOM, { livery: 'navy' });
     log('B is in');
     check(A.lobby.shown && A.lobby.name === 'VIPER' && A.lobby.room === ROOM && !A.lobby.disabled, 'the lobby shows callsign and room, LAUNCH enabled', JSON.stringify(A.lobby));
-    let a = await until('A sees B\'s puppet', async () => { const v = await view(A); return v.peers.length === 1 && v.peers[0].puppet ? v : null; });
-    let b = await until('B sees A\'s puppet', async () => { const v = await view(B); return v.peers.length === 1 && v.peers[0].puppet ? v : null; });
+    // (a living puppet: a page that has only just launched may still be stalling, and is hidden to the other until it flies)
+    let a = await until('A sees B\'s puppet', async () => { const v = await view(A); return v.peers.length === 1 && v.peers[0].puppet && v.peers[0].puppet.alive ? v : null; }, 60000);
+    let b = await until('B sees A\'s puppet', async () => { const v = await view(B); return v.peers.length === 1 && v.peers[0].puppet && v.peers[0].puppet.alive ? v : null; }, 60000);
     if (!a || !b) throw new Error('the two pages never saw each other');
     check(a.room === ROOM && b.room === ROOM && a.host === a.id && b.host === a.id, 'same room, the first one in is the host', `room ${a.room}, host ${a.host}`);
     check(a.name === 'VIPER' && b.name === 'MAVERICK' && a.team === 'blue' && b.team === 'red', 'callsigns and sides as typed', `${a.name} (${a.team}), ${b.name} (${b.team})`);
@@ -174,14 +185,12 @@ try {
     await A.ev(() => { const g = window.skywar.game; g.player.spawnAir(new (g.player.pos.constructor)(0, 3000, 3000), 0, 0.6); window.__ctl = { pitch: 0, roll: 0, yaw: 0, throttle: 0.85 }; });
     await B.ev(() => { const g = window.skywar.game; g.player.spawnAir(new (g.player.pos.constructor)(3000, 3000, 0), 0, 0.6); window.__ctl = { pitch: 0, roll: 0, yaw: 0, throttle: 0.85 }; });
     await sleep(1500);
-    await A.ev(() => { window.__rec = true; }); await B.ev(() => { window.__rec = true; });
-    await sleep(800);
-    await A.ev(() => { window.__ctl = { pitch: 0, roll: 0.9, yaw: 0, throttle: 1 }; });
-    await sleep(700);
-    await A.ev(() => { window.__ctl = { pitch: 0.7, roll: 0, yaw: 0, throttle: 1 }; });
-    await sleep(3000);
-    const ta = await A.ev(() => { window.__rec = false; return window.__track.splice(0); }), tb = await B.ev(() => { window.__rec = false; return window.__track.splice(0); });
-    await A.ev(() => { window.__ctl = { pitch: 0, roll: 0, yaw: 0, throttle: 0.85 }; });
+    // B records; A flies a programme on its own game clock: level, roll in, pull, and records itself while it does
+    await B.ev(() => { window.__rec = true; });
+    await A.ev(() => { window.__god = true; window.__progDone = false; window.__prog = { t0: null, steps: [[1.0, { pitch: 0, roll: 0, yaw: 0, throttle: 1 }], [0.7, { pitch: 0, roll: 0.9, yaw: 0, throttle: 1 }], [3.0, { pitch: 0.7, roll: 0, yaw: 0, throttle: 1 }]] }; });
+    await until('A flies its programme', () => A.ev(() => window.__progDone), 120000);
+    await sleep(600);
+    const ta = await A.ev(() => window.__track.splice(0)), tb = await B.ev(() => { window.__rec = false; return window.__track.splice(0); });
     {
         // A's own track (ta: t, x, y, z) against B's puppet of A (tb: t, …, px, py, pz, how it was placed). For each of
         // B's frames: where A really was `lag` earlier. The lag that fits best is how far behind B draws A (the
@@ -225,6 +234,29 @@ try {
         check(vb.me.health < hp0, 'A shoots B: B\'s health drops on B', `${hp0.toFixed(1)} → ${vb.me.health.toFixed(1)}`);
         check(Math.abs(va.peers[0].puppet.health - vb.me.health) < 0.2, 'and the same on A\'s puppet of B', `${va.peers[0].puppet.health.toFixed(1)} on A, ${vb.me.health.toFixed(1)} on B`);
         check(vb.me.alive && va.kills === 0, 'B is hurt, not dead; no kill yet');
+    }
+
+    // ── 4b. A fires a missile at B: B sees it coming and is warned; B's flares are dropped in A's world too ──
+    {
+        await B.ev(() => { const g = window.skywar.game; g.player.health = g.player.maxHealth; });
+        await A.ev(() => { window.__chase.d = 1200; }); // (back off: a missile needs room to arm)
+        await sleep(700);
+        const launched = await A.ev(() => { const g = window.skywar.game, m = g.weapons.fireMissile(g.player, window.__chase.ac, 'aam'); return m ? { store: m.W.short, tracked: g.mp.myMissiles.size } : null; });
+        const warned = await until('B is warned of the missile', () => B.ev(() => {
+            const g = window.skywar.game, gh = [...g.mp.ghosts][0];
+            return gh && g.player.incoming.includes(gh) ? { store: gh.W.short, calls: window.__feed.filter(f => /MISSILE LAUNCH/.test(f)).length } : null;
+        }), 6000);
+        check(!!launched && launched.tracked === 1 && !!warned && warned.store === launched.store && warned.calls >= 1, 'A fires a missile: B has it as an incoming ' + (launched ? launched.store : 'missile') + ', with the launch warning', warned ? `"${warned.store}", ${warned.calls} MISSILE LAUNCH call` : '');
+        const drawn = await until('B draws the missile', () => B.ev(() => { const gh = [...window.skywar.game.mp.ghosts][0]; return !gh || (gh.mesh.visible && gh.age > 0.3) ? { there: !!gh } : null; }), 6000);
+        await B.ev(() => { const g = window.skywar.game; g.player.flares = 20; g.weapons.dropFlares(g.player, g.time); });
+        const flares = await until('B\'s flares in A\'s world', () => A.ev(() => { const w = window.skywar.game.weapons, t = window.__chase.ac; return w.flares.length >= 4 && w.flares.every(f => f.owner === t) ? w.flares.length : 0; }), 4000);
+        check(!!drawn && flares >= 4, 'B draws the missile in flight; B\'s flares are dropped by its puppet on A', flares + ' flares on A');
+        const ended = await until('the missile ends on both', async () => (await A.ev(() => window.skywar.game.mp.myMissiles.size)) === 0 && (await B.ev(() => window.skywar.game.mp.ghosts.size + window.skywar.game.player.incoming.length)) === 0, 25000);
+        const vb = await view(B);
+        check(!!ended, 'the missile ends on both, and the warning with it', vb.me.health < vb.me.maxHealth ? `it hit: B at ${vb.me.health.toFixed(1)} / ${vb.me.maxHealth}` : 'it missed or was decoyed: B untouched');
+        await B.ev(() => { const g = window.skywar.game; if (g.player.alive) g.player.health = g.player.maxHealth; });
+        await A.ev(() => { if (window.__chase) window.__chase.d = 250; });
+        await sleep(800);
     }
 
     // ── 5. B dies ──
