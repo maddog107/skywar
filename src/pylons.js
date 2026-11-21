@@ -879,8 +879,8 @@ export function releaseStore(ac, cls, out) {
     let p = null, rail = false;
     if (seq && seq.length) {
         if (cls === 'rkt') {
-            // out of the front of the next pod
-            const s = seq[v.cycle++ % seq.length], r = s.pod ? s.pod.dia * 0.3 : 0.1, a = Math.random() * 6.283;
+            // out of the front of the next pod, tube after tube round its face
+            const s = seq[v.cycle++ % seq.length], r = s.pod ? s.pod.dia * 0.3 : 0.1, a = v.cycle * 2.4;
             p = _v.set(s.pos.x + Math.cos(a) * r, s.pos.y + Math.sin(a) * r, s.pos.z - s.len / 2);
         } else if (v.shown[cls] > 0) {
             const s = seq[--v.shown[cls]];
