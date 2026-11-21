@@ -25,7 +25,7 @@
 import * as THREE from 'three';
 import { AIRCRAFT } from './config.js';
 import { CLASSES, CLASS, STATIONS, storeFor, stationPlan, stationsOf, podOf } from './stores.js';
-import { modelTemplate } from './models.js';
+import { modelTemplate, VISIBLE_STORES } from './models.js';
 import { storeParts } from './weapons.js';
 import { regionAt } from './damage.js';
 
@@ -706,7 +706,10 @@ function plan(ac, v) {
     const load = [];
     for (const c of CLASSES) {
         const n = ac[c.ammo] | 0;
-        const full = Math.max(n, lc[c.key] | 0, same ? v.full[c.key] | 0 : 0);
+        // the class's full load: what it was armed with (some may be spent already), or more if it was given more;
+        // a class it has none of now, and none planned, takes no stations (a mission that leaves the missiles at home)
+        const was = same ? v.full[c.key] | 0 : 0;
+        const full = n > 0 || was > 0 ? Math.max(n, lc[c.key] | 0, was) : 0;
         v.full[c.key] = full;
         if (!full) continue;
         const W = storeFor(ac, c.key);
@@ -798,7 +801,7 @@ function loseRegions(ac, v) {
 // Is the jet close enough to show its stores? By its length on screen at the camera's field of view (a zoomed
 // targeting pod still sees them), with some slack between showing and hiding.
 export function storesNear(ac, cam) {
-    if (!cam || !cam.isPerspectiveCamera || !ac.model || !ac.model.visible || ac.exploded) return false;
+    if (!VISIBLE_STORES || !cam || !cam.isPerspectiveCamera || !ac.model || !ac.model.visible || ac.exploded) return false;
     const d = Math.max(cam.position.distanceTo(ac.pos), 1);
     const px = ac.spec.length / d * 450 / Math.tan((cam.fov || 60) * Math.PI / 360);
     return px > (ac.storesView && ac.storesView.built ? HIDE_PX : SHOW_PX);
@@ -808,7 +811,7 @@ export function storesNear(ac, cam) {
 // is kept). Returns the number of stores hanging (shown or spent).
 export function syncStores(ac, near = true) {
     let v = ac.storesView;
-    if (!near) { if (v && v.built) unbuild(v); return 0; }
+    if (!near || !VISIBLE_STORES) { if (v && v.built) unbuild(v); return 0; }
     if (!v) v = ac.storesView = newView();
     // plan again after a rearm (armAircraft makes a new loadCounts) or when something grew past what was planned
     let again = !v.plan || v.lc !== ac.loadCounts;

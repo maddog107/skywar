@@ -122,6 +122,8 @@ export const MODEL_FILES = {
 //   { mat }       every triangle of the materials matching
 //   { mat, box }  those of them wholly inside the box
 //   { box }       every shell (connected piece of mesh) wholly inside the box, whatever its material
+// (?stores=0 in the address switches the visible stores off, for comparing: the files' own stores stay, nothing hangs)
+export const VISIBLE_STORES = !(typeof location !== 'undefined' && /[?&]stores=0\b/.test(location.search || ''));
 const STRIP = {
     // the Tomcat's six Phoenixes / Sparrows and two Sidewinders
     f14: [{ mat: /^White_[01]$/ }],
@@ -152,7 +154,7 @@ const STRIP = {
 // Apply a type's STRIP rules to its file's scene (already scaled into model space under `holder`). Exported for the
 // tests' headless loader.
 export function stripBakedStores(holder, id) {
-    const rules = STRIP[id];
+    const rules = VISIBLE_STORES && STRIP[id];
     if (!rules) return 0;
     holder.updateMatrixWorld(true);
     const v = new THREE.Vector3();
