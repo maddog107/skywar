@@ -100,7 +100,7 @@ export function farModelFor(ac) {
     try {
         const L = ac.spec.length;
         // (a cell of ~1/70 of the length: an E-3 comes out at a couple of thousand triangles)
-        const { position, color, index } = clusterTriangles(ac.model, L / 70, { skip: (o) => /prop|flame|nav/i.test(o.name || ''), colorSplit: true });
+        const { position, color, index } = clusterTriangles(ac.model, L / 70, { skip: (o) => /prop|flame|nav|stores/i.test(o.name || ''), colorSplit: true });
         if (index.length >= 30) {
             const g = new THREE.BufferGeometry();
             g.setAttribute('position', new THREE.BufferAttribute(position, 3));

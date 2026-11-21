@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { WEAPONS } from './config.js';
-import { storeOfKind, storeFor, radiating, flareChance, chaffChance, notchChance } from './stores.js';
+import { storeOfKind, storeFor, classOfKind, radiating, flareChance, chaffChance, notchChance } from './stores.js';
 import { emitterOf } from './ew.js';
 import { rand, clamp, segPointDistSq, G, makeRadialTexture } from './util.js';
 import { terrainHeight, isOnRunway } from './world.js';
@@ -21,6 +21,16 @@ const roundVs = (b, cls) => (b.small ? materielDamage(b.def, cls) : b.damage);
 
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _v4 = new THREE.Vector3();
 const _prev = new THREE.Vector3();
+// the station a store leaves from (Aircraft.releaseStore fills it: pylons.js) and the roll it leaves with
+const _stn = { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), rail: false };
+const _qt = new THREE.Quaternion(), _tw = new THREE.Vector3(), AXIS_Z = new THREE.Vector3(0, 0, 1);
+// A released store's mesh points along its flight path; `twist` (a roll about its own axis) keeps its fins where
+// they were on the pylon, so it leaves without a jump: the roll that takes "pointing along dir" to the attitude
+// `quat` it hung at
+function releaseTwist(quat, dir) {
+    _qt.setFromUnitVectors(_tw.set(0, 0, -1), dir).invert().multiply(quat);
+    return 2 * Math.atan2(_qt.z, _qt.w);
+}
 // the ground targets' grid for rounds (binTargets): cell size (m) and a cell's key
 const CELL = 250;
 const cellKey = (ix, iz) => ix * 65536 + iz;
@@ -69,8 +79,14 @@ function storeMat(color, glass) {
     if (!STORE_MAT.has(k)) STORE_MAT.set(k, glass ? new THREE.MeshStandardMaterial({ color: 0x1b1f24, roughness: 0.15, metalness: 0.6 }) : new THREE.MeshStandardMaterial({ color, roughness: 0.5, metalness: 0.3 }));
     return STORE_MAT.get(k);
 }
-function storeGeo(W) {
-    let e = STORE_GEO.get(W.id);
+// a store's shared geometry: { geo: body and fins, nose: the seeker's glass dome or null, half: how far its fins reach
+// to the side (m), R, len } (pylons.js hangs the same shapes under the wings). stowed: as it hangs on the pylon, the
+// pop-out wings of a cruise missile or a glide bomb still folded
+export function storeParts(W, stowed = false) {
+    const fins = FINS[W.shape] || FINS.aam;
+    if (stowed && !fins.some(f => f.n === 2)) stowed = false;
+    const key = stowed ? W.id + ':stowed' : W.id;
+    let e = STORE_GEO.get(key);
     if (e) return e;
     const L = W.len || 3, R = (W.dia || 0.15) / 2, nose = noseOf(W), nl = Math.min(L * 0.35, R * NOSE[nose]);
     const moab = W.shape === 'moab'; // (a long straight body that narrows only a little into its fins)
@@ -84,9 +100,12 @@ function storeGeo(W) {
     const body = new THREE.LatheGeometry([new THREE.Vector2(0.001, -top), new THREE.Vector2(tailR, -top), new THREE.Vector2(R, -top + tailL), new THREE.Vector2(R, shoulder)], 12);
     const parts = [body];
     if (nose !== 'dome' && nose !== 'glass') parts.push(noseG);
-    for (const f of FINS[W.shape] || FINS.aam) {
+    let half = R;
+    for (const f of fins) {
+        if (stowed && f.n === 2) continue;
         const n = f.n || 4, span = f.span * R, chord = Math.max(0.03, f.chord * L), th = f.grid ? Math.max(0.02, R * 0.5) : Math.max(0.008, R * 0.07);
         const y = top - f.at * L;
+        half = Math.max(half, n === 2 ? R + span : (R + span) * Math.SQRT1_2);
         for (let k = 0; k < n; k++) {
             const b = new THREE.BoxGeometry(th, chord, n === 2 ? span * 2 + R * 2 : span);
             if (n !== 2) b.translate(0, y, R + span / 2); else b.translate(0, y, 0);
@@ -98,12 +117,12 @@ function storeGeo(W) {
     const geo = mergeGeometries(parts);
     geo.rotateX(-Math.PI / 2);
     noseG.rotateX(-Math.PI / 2);
-    e = { geo, nose: nose === 'dome' || nose === 'glass' ? noseG : null };
-    STORE_GEO.set(W.id, e);
+    e = { geo, nose: nose === 'dome' || nose === 'glass' ? noseG : null, half, R, len: L };
+    STORE_GEO.set(key, e);
     return e;
 }
 export function storeMesh(W) {
-    const e = storeGeo(W);
+    const e = storeParts(W);
     const root = new THREE.Group();
     const body = new THREE.Mesh(e.geo, storeMat(W.color ?? 0xd8d8d2));
     body.castShadow = true;
@@ -348,10 +367,17 @@ export class Weapons {
         const W = Wo || storeOfKind(ac, kind) || WEAPONS[kind === 'aam' ? 'missile' : kind] || WEAPONS.missile;
         const fwd = ac.getForward ? ac.getForward(_v1) : _v1.copy(ac.launchDir);
         const pos = _v2.copy(ac.pos);
+        let st = null;
         if (ac.getUp) {
-            // drop from a rail under the wing
-            const side = (ac.missileSide = -(ac.missileSide || 1));
-            pos.addScaledVector(ac.getRight(_v3), side * ac.rig.halfSpan * (kind === 'rkt' ? 0.25 : 0.35)).addScaledVector(ac.getUp(_v4), -1.5);
+            // from the station it hangs on (pylons.js: the store shown there leaves the jet, a rocket its pod); a jet
+            // too far away to show its stores, or one that carries this internally with no bay to show, drops it from
+            // under the wing
+            st = ac.releaseStore ? ac.releaseStore(classOfKind(kind), _stn) : null;
+            if (st) pos.copy(st.pos);
+            else {
+                const side = (ac.missileSide = -(ac.missileSide || 1));
+                pos.addScaledVector(ac.getRight(_v3), side * ac.rig.halfSpan * (kind === 'rkt' ? 0.25 : 0.35)).addScaledVector(ac.getUp(_v4), -1.5);
+            }
             if (kind === 'rkt') fwd.add(_v3.set(rand(-0.012, 0.012), rand(-0.012, 0.012), rand(-0.012, 0.012))).normalize();
         }
         let mesh;
@@ -363,15 +389,18 @@ export class Weapons {
             mesh.castShadow = true;
         }
         mesh.position.copy(pos);
+        if (st) mesh.quaternion.copy(st.quat); else if (ac.quat) mesh.quaternion.copy(ac.quat);
         this.game.scene.add(mesh);
         const vel = (ac.vel ? ac.vel.clone() : new THREE.Vector3()).addScaledVector(fwd, kind === 'sam' ? 60 : kind === 'rkt' ? 120 : 15);
-        if (ac.getUp && kind !== 'rkt') vel.addScaledVector(ac.getUp(_v4), -6);
+        // pushed off its pylon (a missile on an overwing or wingtip rail slides off forward instead)
+        if (ac.getUp && kind !== 'rkt' && !(st && st.rail)) vel.addScaledVector(ac.getUp(_v4), -6);
         const big = W.cls === 'alcm' || W.cls === 'ashm' || W.cls === 'xlr';
         const m = {
             mesh, pos: mesh.position, vel, target, owner: ac, team: ac.team, kind, W,
             life: W.life, age: 0, armed: false, lost: false,
             trail: this.game.effects.addTrail({ max: 220, width: kind === 'sam' ? 1.0 : kind === 'rkt' ? 0.6 : big ? 1.4 : 1.1, life: kind === 'sam' ? 7 : kind === 'rkt' ? 2 : 5.5, color: [0.92, 0.92, 0.9], alpha: 0.5, minDist: 10, widthGrow: 2.2 }),
             fireT: 0,
+            twist: st && vel.lengthSq() > 1 ? releaseTwist(st.quat, _v3.copy(vel).normalize()) : 0,
         };
         // a GPS weapon flies to where the target is now (a cruise missile: JASSM, Storm Shadow)
         if (target && W.seeker === 'gps') m.aim = target.pos.clone();
@@ -435,6 +464,7 @@ export class Weapons {
                 continue;
             }
             m.mesh.quaternion.setFromUnitVectors(_v2.set(0, 0, -1), _v3.copy(m.vel).normalize());
+            if (m.twist) m.mesh.quaternion.multiply(_qt.setFromAxisAngle(AXIS_Z, m.twist));
             // exhaust (a ramjet or a turbojet sustainer burns clean: no smoke after the booster)
             if (m.age > 0.25 && m.age < W.boost + 0.25) {
                 m.trail.push(m.pos, fx.now);
@@ -922,11 +952,15 @@ export class Weapons {
     dropBomb(ac, kind = 'bomb', target = null) {
         const W = this.bombW(ac, kind), buster = kind === 'buster';
         const mesh = buster ? this.busterMesh() : W.id ? storeMesh(W) : this.bombGeo.clone();
-        const pos = ac.pos.clone().addScaledVector(ac.getUp(_v1), buster ? -2.6 : kind === 'moab' ? -3 : -2.2);
+        // off the rack it hangs on (pylons.js: the bomb shown there leaves the jet), else from under the belly
+        const st = ac.releaseStore ? ac.releaseStore(kind === 'bomb' || !kind ? 'bomb' : kind, _stn) : null;
+        const pos = st ? st.pos.clone() : ac.pos.clone().addScaledVector(ac.getUp(_v1), buster ? -2.6 : kind === 'moab' ? -3 : -2.2);
         mesh.position.copy(pos);
+        mesh.quaternion.copy(st ? st.quat : ac.quat);
         mesh.traverse(o => { if (o.isMesh) o.castShadow = true; });
         this.game.scene.add(mesh);
         const b = { mesh, pos: mesh.position, vel: ac.vel.clone().addScaledVector(ac.getUp(_v1), -4), owner: ac, team: ac.team, life: W.guided ? 300 : 90, W, kind, age: 0 }; // (a glide bomb can be minutes in the air)
+        if (st && b.vel.lengthSq() > 1) b.twist = releaseTwist(st.quat, _v2.copy(b.vel).normalize());
         if (W.guided && target) { b.target = target; if (W.seeker === 'gps') b.aim = target.pos.clone(); }
         this.bombs.push(b);
         this.game.events.emit('bomb', ac, { kind, bomb: b });
@@ -1084,6 +1118,7 @@ export class Weapons {
             if (W.thrust && b.age > 0.5 && b.age < 0.5 + W.boost) b.vel.addScaledVector(_v1.copy(b.vel).normalize(), W.thrust * dt);
             b.pos.addScaledVector(b.vel, dt);
             b.mesh.quaternion.setFromUnitVectors(_v1.set(0, 0, -1), _v2.copy(b.vel).normalize());
+            if (b.twist) b.mesh.quaternion.multiply(_qt.setFromAxisAngle(AXIS_Z, b.twist));
             const s = g.surfaceAt(b.pos.x, b.pos.z, b.pos.y + 2);
             // a cluster bomb opens at its height (or as it's about to hit, dropped low)
             if (W.cluster && b.age > 0.6 && (b.pos.y - s.h < W.cluster.agl || b.pos.y + b.vel.y * 0.25 < s.h)) {

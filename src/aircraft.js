@@ -21,6 +21,7 @@ import { surfaceTravel, surfaceWells } from './surfaces.js';
 import { waveTilt } from './float.js';
 import { waterStep, waterContact, enterWater } from './seaplane.js';
 import { farMesh } from './farmodel.js';
+import { syncStores, storesNear, releaseStore, disposeStores } from './pylons.js';
 
 const LIFT_K = 0.0016;
 const CL_MAX = 1.65;
@@ -1037,6 +1038,7 @@ export class Aircraft {
 
     remove() {
         this.stopTrails();
+        disposeStores(this);
         if (this.wireMeshes) this.wireMeshes.forEach(m => this.game.scene.remove(m));
         this.wire = null;
         this.game.scene.remove(this.root);
@@ -1081,7 +1083,20 @@ export class Aircraft {
         this.updateFlight(dt);
         this.updateVisuals(dt);
         this.updateLod();
+        this.updateStores();
     }
+
+    // What hangs under the wings and the fuselage (pylons.js): the loadout's stores on their stations, in step with
+    // the ammunition counters. Shown while the jet is big enough on screen to make them out (and always kept on the
+    // player's own: its weapons leave from them); a far jet has none, and no work.
+    updateStores() {
+        const cam = this.game && this.game.camera;
+        if (!cam || !cam.isPerspectiveCamera) return;
+        const near = this.isPlayer || storesNear(this, cam);
+        if (near || this.storesView) syncStores(this, near);
+    }
+    // where a weapon of this class starts from: its station (pylons.js), or null to drop it from under the wing
+    releaseStore(cls, out) { return releaseStore(this, cls, out); }
 
     // Level of detail: a jet other than the player's that is small on screen (under ~12 px long at the camera's current
     // field of view, so a zoomed targeting pod still sees the real one) is drawn with its far version (farmodel.js:
