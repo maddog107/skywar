@@ -13,7 +13,8 @@ import { foamTexture } from './shipfx.js';
 import { fireLights } from './firelight.js'; // [night] fire light budget (quality, ambient level)
 import { SunShadows, CSM, SUN_TAN_RADIUS } from './shadows.js'; // camera-centred cascaded sun shadows
 import { TerrainShadow } from './terrainshadow.js'; // the mountains' shadows at any range (a worker sweeps them)
-import { Weather, WX_FOG, GROUND_FOG_GLSL, BANK_GLSL, KEY_HOURS, sunAt, MOON_DIR, paletteAt, applyWeatherToPalette, newPalette, nightOf, timeKeyFor, groundFogTau, FOG_W } from './weather.js'; // [weather] the sky model
+import { Weather, WX_FOG, GROUND_FOG_GLSL, BANK_GLSL, KEY_HOURS, sunAt, MOON_DIR, MOON_GROUND, skyPalette, sunLightAt, newSky, newPalette, nightOf, timeKeyFor, groundFogTau, FOG_W } from './weather.js'; // [weather] the sky model
+import { Atmosphere, ATM, SKY_LUT_U, SKY_LUT_GLSL } from './atmosphere.js'; // the air: the sky's, the sun's and the haze's colours
 // the height function and the airbase list live in terraincore.js (no three.js: the terrain worker uses them too)
 export { BASES, terrainHeight };
 
@@ -41,26 +42,36 @@ const CUT_GLSL = /* glsl */`
         return false;
     }`;
 
-// Aerial perspective for every built-in material: exp² haze whose density thins out with altitude (clear
-// air when you look down from height, hazy valleys and horizons), a low mist layer that pools over lakes
-// and lowlands (denser at dawn, dusk and in rain), warm in-scatter toward the sun that matches the sky's
-// horizon glow, and a fade to the horizon colour before the streamed terrain runs out.
+// Aerial perspective for every material: what the air between the camera and a point does to its light.
+//   How much it takes (transmittance): the weather's haze, an exp² law whose density thins out with altitude (clear
+//   air looking down from height, hazy valleys and horizons: weather.js's visibility, which the game's eyes and
+//   sensors share), a low mist layer that pools over lakes and lowlands, the ground fog, and the air's own molecules
+//   (Rayleigh: blue goes first, so distant ground loses its blue-lit shadows last and its reds first), then a fade
+//   before the streamed terrain runs out.
+//   What it adds (in-scatter): the sky-view table's colour for the ray's direction (atmosphere.js: the light that
+//   air scatters toward the eye from there: pale blue by day, warm toward a low sun and cool away from it), times
+//   what it took, per colour: so the haze comes in blue over a few kilometres and whitens as it thickens. Thick fog
+//   adds its own white instead. The sky dome draws the same table, so ground fading out at the edge of the view
+//   fades into exactly the sky behind it.
 // The parameters live in typed arrays that every material's uniforms point at: UniformsUtils.clone copies
 // Colors and Vectors but keeps typed arrays by reference, so one write updates the whole scene.
 export const SKY_FOG = {
     a: new Float32Array([0.00006, 1 / 1500, 13000, 18000]), // haze density at sea level, 1/scale height, edge fade start, end (m)
-    b: new Float32Array([0, 1, 0, 0.25]),                    // sun direction (world), glow strength at the horizon
-    c: new Float32Array([1, 0.8, 0.6, 0]),                   // glow colour (linear)
-    d: new Float32Array([0, 1 / 70, 1.1, 0]),                // mist density at sea level, 1/scale height, mist brightness
+    b: new Float32Array([ATM.BETA_R[0] * 1e-3, ATM.BETA_R[1] * 1e-3, ATM.BETA_R[2] * 1e-3, 1 / (ATM.HR * 1000)]), // the molecules' extinction at sea level (1/m: r, g, b), 1/scale height
+    c: new Float32Array([1, 1, 1, 0]),                       // thick fog's own colour (linear: white droplets under the sun and the sky)
+    d: new Float32Array([0, 1 / 70, 0, 0]),                  // mist density at sea level, 1/scale height, how far the mist counts as thick fog (0: it is haze, the sky's colour)
     // [weather] the ground fog (radiation / valley fog, sea fog banks) and the weather front (weather.js WX_FOG)
     e: WX_FOG.e, f: WX_FOG.f, g: WX_FOG.g, h: WX_FOG.h,
-    // every fog uniform, for a custom shader that includes FOG_GLSL (shared by reference: always current)
+    // every fog uniform, for a custom shader that includes FOG_GLSL (shared by reference: always current), the
+    // sky-view table with them
     uniforms() {
         return { skyFogA: { value: SKY_FOG.a }, skyFogB: { value: SKY_FOG.b }, skyFogC: { value: SKY_FOG.c }, skyFogD: { value: SKY_FOG.d },
-            skyFogE: { value: SKY_FOG.e }, skyFogF: { value: SKY_FOG.f }, skyFogG: { value: SKY_FOG.g }, skyFogH: { value: SKY_FOG.h } };
+            skyFogE: { value: SKY_FOG.e }, skyFogF: { value: SKY_FOG.f }, skyFogG: { value: SKY_FOG.g }, skyFogH: { value: SKY_FOG.h },
+            skyLut: SKY_LUT_U.skyLut, skyLutA: SKY_LUT_U.skyLutA };
     },
 };
-export const FOG_GLSL = /* glsl */`
+// the air's amounts (no texture: for a shader that has the table's colour already, e.g. looked up per vertex)
+export const FOG_AIR_GLSL = /* glsl */`
     uniform vec4 skyFogA, skyFogB, skyFogC, skyFogD, skyFogE, skyFogF, skyFogG, skyFogH;
     // optical depth of an exponential height layer along a ray from height y0 to y1 of length L
     float skyFogLayer(float dens, float k, float y0, float y1, float L) {
@@ -70,46 +81,75 @@ export const FOG_GLSL = /* glsl */`
     }
     ${BANK_GLSL}
     ${GROUND_FOG_GLSL}
-    // ray: camera -> point, world space. x: fog amount, y: how much of it is low mist (or ground fog)
-    vec2 skyFogAmount(vec3 ray, float camY) {
-        float L = length(ray);
-        float haze = skyFogLayer(skyFogA.x, skyFogA.y, camY, camY + ray.y, L);
-        float mist = skyFogLayer(skyFogD.x, skyFogD.y, camY, camY + ray.y, L);
+    // The air along a ray (camera -> point, world space) from a camera at camP. x: the weather's optical depth (haze
+    // and mist squared: its exp² law; plus the ground fog, Beer-Lambert: it's a real fog), y: the share of thick fog
+    // in it, z: the molecules along the ray (metres of sea-level air), w: the fade at the edge of the terrain
+    vec4 skyFogAir(vec3 ray, vec3 camP, float gf) {
+        float L = length(ray), y1 = camP.y + ray.y;
+        float haze = skyFogLayer(skyFogA.x, skyFogA.y, camP.y, y1, L);
+        float mist = skyFogLayer(skyFogD.x, skyFogD.y, camP.y, y1, L);
         float tau = haze + mist;
-        float f = 1.0 - exp(-tau * tau);
-        f = max(f, smoothstep(skyFogA.z, skyFogA.w, length(ray.xz)));
-        return vec2(f, mist / max(tau, 1e-6));
+        gf = max(gf, 0.0);
+        return vec4(tau * tau + gf, clamp((mist * skyFogD.z + gf * 2.0) / max(tau + gf * 2.0, 1e-6), 0.0, 1.0),
+            skyFogLayer(1.0, skyFogB.w, camP.y, y1, L), smoothstep(skyFogA.z, skyFogA.w, length(ray.xz)));
     }
-    // [weather] the same with the ground fog (Beer-Lambert: it's a real fog, not a haze), from a camera at camP
+    vec4 skyFogAir(vec3 ray, vec3 camP) { return skyFogAir(ray, camP, groundFogTau(camP, camP + ray, length(ray))); }
+    // x: how much of the point's light the air takes (in the green), y: the share of thick fog in it
     vec2 skyFogAmount(vec3 ray, vec3 camP) {
-        float L = length(ray);
-        float haze = skyFogLayer(skyFogA.x, skyFogA.y, camP.y, camP.y + ray.y, L);
-        float mist = skyFogLayer(skyFogD.x, skyFogD.y, camP.y, camP.y + ray.y, L);
-        float gf = groundFogTau(camP, camP + ray, L);
-        float tau = haze + mist;
-        float f = 1.0 - exp(-tau * tau - gf);
-        f = max(f, smoothstep(skyFogA.z, skyFogA.w, length(ray.xz)));
-        return vec2(f, (mist + gf * 2.0) / max(tau + gf * 2.0, 1e-6));
+        vec4 a = skyFogAir(ray, camP);
+        return vec2(1.0 - exp(-a.x - skyFogB.y * a.z) * (1.0 - a.w), a.y);
     }
-    vec3 skyFogColor(vec3 base, vec3 ray, float mistShare) {
-        float sd = max(dot(normalize(ray), skyFogB.xyz), 0.0);
-        vec3 c = base + skyFogC.rgb * (pow(sd, 6.0) * skyFogB.w);
-        return mix(c, base * skyFogD.z + skyFogC.rgb * (pow(sd, 3.0) * skyFogB.w * 0.6), mistShare * 0.7);
+    // (without the ground fog, from a camera camY up)
+    vec2 skyFogAmount(vec3 ray, float camY) {
+        vec4 a = skyFogAir(ray, vec3(0.0, camY, 0.0), 0.0);
+        return vec2(1.0 - exp(-a.x - skyFogB.y * a.z) * (1.0 - a.w), a.y);
+    }
+    // col seen through the air a (from skyFogAir), sky: the sky-view table's colour for the ray's direction. amt:
+    // as skyFogAmount's x
+    vec3 skyFogThrough(vec3 col, vec3 sky, vec4 a, out float amt) {
+        vec3 T = exp(-a.x - skyFogB.rgb * a.z) * (1.0 - a.w);
+        amt = 1.0 - T.g;
+        return col * T + mix(sky, skyFogC.rgb, a.y * 0.7) * (1.0 - T);
     }`;
+// ... and with the table: everything a custom shader needs. skyFog(col, ray, camP) is the whole of it; skyFogAmount
+// and skyFogColor are the two halves as they were (a grey amount, the colour it mixes toward), for a shader that
+// mixes them itself (premultiplied colours, lights that punch through)
+export const FOG_GLSL = /* glsl */`
+    ${FOG_AIR_GLSL}
+    ${SKY_LUT_GLSL}
+    // the colour the air adds along a ray; fogShare: skyFogAmount's y (base: what was the fog's one colour, unused)
+    vec3 skyFogColor(vec3 base, vec3 ray, float fogShare) {
+        return mix(skyLutAt(normalize(ray)), skyFogC.rgb, fogShare * 0.7);
+    }
+    vec3 skyFog(vec3 col, vec3 ray, vec3 camP, out float amt) { return skyFogThrough(col, skyLutAt(normalize(ray)), skyFogAir(ray, camP), amt); }
+    vec3 skyFog(vec3 col, vec3 ray, vec3 camP) { float amt; return skyFog(col, ray, camP, amt); }`;
 function patchFogChunks() {
     const C = THREE.ShaderChunk;
-    C.fog_pars_vertex = '#ifdef USE_FOG\n\tvarying float vFogDepth;\n\tvarying vec3 vFogPos;\n#endif';
-    C.fog_vertex = '#ifdef USE_FOG\n\tvFogDepth = - mvPosition.z;\n\tvFogPos = mvPosition.xyz;\n#endif';
+    // (the table's colour is looked up per vertex: a texture less in the fragment shaders, where the terrain is at
+    // the GPU's limit of 16, and the direction changes little across a triangle far enough away to be hazed)
+    C.fog_pars_vertex = `#ifdef USE_FOG
+        varying float vFogDepth;
+        varying vec3 vFogPos, vFogSky;
+        ${SKY_LUT_GLSL}
+    #endif`;
+    C.fog_vertex = `#ifdef USE_FOG
+        vFogDepth = - mvPosition.z;
+        vFogPos = mvPosition.xyz;
+        vec3 fogDirW = ( vec4( mvPosition.xyz, 0.0 ) * viewMatrix ).xyz; // view -> world direction (rigid view matrix)
+        vFogSky = skyLutAt( fogDirW * inversesqrt( max( dot( fogDirW, fogDirW ), 1e-12 ) ) );
+    #endif`;
     C.fog_pars_fragment = `#ifdef USE_FOG
         uniform vec3 fogColor;
         varying float vFogDepth;
-        varying vec3 vFogPos;
-        ${FOG_GLSL}
+        varying vec3 vFogPos, vFogSky;
+        ${FOG_AIR_GLSL}
     #endif`;
+    // (fogAmt.x: how much of the pixel is haze: the sun-share alpha in shadows.js reads it)
     C.fog_fragment = `#ifdef USE_FOG
-        vec3 fogRay = ( vec4( vFogPos, 0.0 ) * viewMatrix ).xyz; // view -> world direction (rigid view matrix)
-        vec2 fogAmt = skyFogAmount( fogRay, cameraPosition );
-        gl_FragColor.rgb = mix( gl_FragColor.rgb, skyFogColor( fogColor, fogRay, fogAmt.y ), fogAmt.x );
+        vec3 fogRay = ( vec4( vFogPos, 0.0 ) * viewMatrix ).xyz;
+        vec4 fogAir = skyFogAir( fogRay, cameraPosition );
+        vec2 fogAmt = vec2( 0.0, fogAir.y );
+        gl_FragColor.rgb = skyFogThrough( gl_FragColor.rgb, vFogSky, fogAir, fogAmt.x );
     #endif`;
     for (const k in THREE.ShaderLib) {
         const u = THREE.ShaderLib[k].uniforms;
@@ -213,53 +253,8 @@ const _v1 = new THREE.Vector3();
 // [weather] the sea state for a weather kind (water.js has clear / cloudy / rain / storm seas)
 const SEA_KEYS = { fog: 'clear', overcast: 'cloudy' };
 const seaKey = (w) => SEA_KEYS[w] || w;
-// [weather] the sky's scratch: the sun's direction, the horizon glow's, the night glow (the old night palette's), the
-// sky colour a lightning flash lifts it toward
-const _sunDir = new THREE.Vector3(), _glow = new THREE.Vector3(), _nightGlow = new THREE.Vector3(-0.3, 0.45, -0.85).normalize(), _flashSky = new THREE.Color(0.8, 0.82, 0.95);
-
-// ── The sun through the atmosphere ──
-// Direct-beam transmittance exp(-tau m) at red, green and blue (~680, 550, 440 nm) for a sun `el` degrees up:
-// Rayleigh and ozone optical depths from Hillaire's Earth atmosphere ("A Scalable and Production Ready Sky and
-// Atmosphere Rendering Technique", EGSR 2020: scattering 5.802, 13.558, 33.1 per Mm over an 8 km scale height;
-// ozone 0.650, 1.881, 0.085 per Mm over ~15 km), the coast's evening haze (aerosol optical depth 0.25 at 550 nm,
-// Angstrom exponent 1.3: with it the transmittance lands on the artist's palettes both at noon and 5° up) and the
-// Kasten & Young (1989) air mass, which stays finite at the horizon (about 38).
-const TAU_RAYLEIGH = [5.802e-6 * 8000, 13.558e-6 * 8000, 33.1e-6 * 8000];
-const TAU_OZONE = [0.650e-6 * 15000, 1.881e-6 * 15000, 0.085e-6 * 15000];
-const TAU_AEROSOL = [0.25 * Math.pow(680 / 550, -1.3), 0.25, 0.25 * Math.pow(440 / 550, -1.3)];
-export function airMass(el) {
-    const z = 90 - Math.max(el, -1);
-    return 1 / (Math.cos(z * Math.PI / 180) + 0.50572 * Math.pow(Math.max(96.07995 - z, 0.5), -1.6364));
-}
-export function sunTransmittance(el, out = [0, 0, 0]) {
-    const m = airMass(el);
-    for (let i = 0; i < 3; i++) out[i] = Math.exp(-(TAU_RAYLEIGH[i] + TAU_OZONE[i] + TAU_AEROSOL[i]) * m);
-    return out;
-}
-const _tr = [0, 0, 0], _trRef = sunTransmittance(26);
-const BLUE_FILL = new THREE.Color(0x4c64dc); // the deep blue of the sky overhead at dusk, what lights the shadows
-const lum3 = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-// The palettes put the sun's colour right from ~25° up; below that the beam reddens far faster than they do
-// (2.5° up it is deep orange-red). Low sun: the colour from the transmittance (the palette's brightness kept), the sun
-// only a little dimmer (the beam really falls to a tenth of noon's, but eyes and cameras adapt: lowSunExposure), and the
-// sky's fill stronger, so what lies in a mountain's shadow is blue and sky-lit while the lit faces glow.
-export function lowSun(P, el) {
-    // (not once it has set: the light is the moon's then, see applySky)
-    const b = (1 - smoothstep(12, 26, el)) * smoothstep(-2, 0.5, el);
-    if (b <= 0) return P;
-    sunTransmittance(Math.max(el, 0), _tr);
-    const lt = lum3(_tr), lp = 0.2126 * P.sun.r + 0.7152 * P.sun.g + 0.0722 * P.sun.b;
-    const k = lp / Math.max(lt, 1e-6);
-    P.sun.setRGB(P.sun.r + (_tr[0] * k - P.sun.r) * b, P.sun.g + (_tr[1] * k - P.sun.g) * b, P.sun.b + (_tr[2] * k - P.sun.b) * b);
-    const dim = Math.max(Math.pow(lt / lum3(_trRef), 0.12), 0.9); // (0.9 of the palette's sun at the horizon)
-    P.sunI *= 1 + (dim - 1) * b;
-    // (at sunset the sky outshines the sun on level ground: what lies in a mountain's shadow is lit blue-violet by
-    // it, not black or grey)
-    P.hemiI *= 1 + 0.55 * b;
-    P.envI *= 1 + 0.2 * b;
-    P.hemiSky.lerp(BLUE_FILL, 0.7 * b);
-    return P;
-}
+// [weather] the sky's scratch: the sun's direction, the sky colour a lightning flash lifts it toward
+const _sunDir = new THREE.Vector3(), _flashSky = new THREE.Color(0.8, 0.82, 0.95), _sunRGB = [0, 0, 0];
 
 // Exposure adapting to the low sun, as an eye or a camera does: the scene's light falls at dawn and dusk (the beam
 // through ~10-38 air masses, much of the ground in long shadows) and the exposure opens up to +18 % between ~14° and
@@ -288,6 +283,9 @@ export class World {
         this.terrainDetail = { value: 1 };                   // 0 on 'low' quality: no close-up ground detail
         this.detailTex = this.makeDetailTexture();
 
+        // the air (atmosphere.js): its lookup tables, and the state they are drawn from (weather.js skyPalette)
+        this.atm = new Atmosphere(renderer);
+        this.sky = newSky();
         this.initLights();
         this.initSky();
         this.initTerrainMaterial();
@@ -406,7 +404,7 @@ export class World {
         const f = this.flash;
         this.hemi.intensity = this.baseHemi + f * (this.boltOn ? 2.2 : 1.4);
         this.clouds.flash = f; // lightning lights the clouds up from inside
-        this.skyMat.uniforms.zenith.value.copy(this.palette.zenith).lerp(_flashSky, f * 0.6);
+        this.skyMat.uniforms.flash.value = f * 0.6; // ... and the sky behind them
     }
 
     clearFlash() {
@@ -414,7 +412,7 @@ export class World {
         this.clouds.flash = 0;
         this.bolt.visible = false;
         if (this.baseHemi != null) this.hemi.intensity = this.baseHemi;
-        if (this.palette) this.skyMat.uniforms.zenith.value.copy(this.palette.zenith);
+        this.skyMat.uniforms.flash.value = 0;
         if (this.wx) this.wx.thunder.length = 0;
     }
 
@@ -458,7 +456,7 @@ export class World {
     }
 
     // The sky, the sun (or the moon), the fog and the clouds from the weather model: the palette of the time of day
-    // (blended by the sun's elevation, weather.js paletteAt) greyed by the weather where the camera is. force: all of
+    // under the weather where the camera is, its colours from the air (weather.js skyPalette). force: all of
     // it now, the environment map re-baked; otherwise (the clock running, a front moving in) the environment map is
     // re-baked only once the palette has moved on enough
     applySky(force = false, at = null) {
@@ -470,49 +468,46 @@ export class World {
         const h24 = ((hour % 24) + 24) % 24, morning = h24 < 12;
         this.timeKey = timeKeyFor(hour);
         const nightK = nightOf(hour);
-        const P = applyWeatherToPalette(lowSun(paletteAt(hour, this.P), el), W); // (the low sun through the air)
+        // the palette and the sky's state from the air (weather.js skyPalette, atmosphere.js): the sun's beam through
+        // it, the sky's light, the haze's amounts; then the tables the dome and the fog read
+        const S = this.sky, P = skyPalette(hour, W, this.P, S);
+        this.atm.set(S);
+        this.atm.setCover(this.domeCover(this.camY ?? 800));
+        this.atm.update(this.camY ?? 800, true);
         this.exposure = lowSunExposure(el);
         if (this.renderer) this.renderer.toneMappingExposure = this.exposure;
-        // the light: the sun while it's up (fading out as it sets), then the moon (fading in once the sun is well down),
-        // so the shadows never jump while the light is on
-        let lightI;
-        if (el > -3) { this.sunDir.copy(_sunDir); lightI = smoothstep(-3, 1, el); }
-        else { this.sunDir.copy(MOON_DIR); lightI = smoothstep(-3, -7, el); }
+        // the light: the sun while it's up (its beam gone by the time it sets), then the moon (in once the sun is well
+        // down), so the shadows never jump while the light is on
+        this.sunDir.copy(el > -3 ? _sunDir : MOON_DIR);
         if (this.sunDir.y < 0.02) { this.sunDir.y = 0.02; this.sunDir.normalize(); }
-        const low = smoothstep(25, 2, el);
         this.palette = P;
         this.veg.uniforms.vegSun.value.copy(this.sunDir); // impostor trees look their shadows up toward the sun
+        // (one colour for what can't look the table up by direction: the horizon's, averaged round the compass)
         this.fogColor.copy(P.horizon);
         this.scene.fog.color.copy(P.horizon);
         this.scene.fog.density = P.fogDensity;
         this.scene.background = P.horizon;
-        // shared aerial-perspective parameters (see FOG_GLSL): the glow sits on the sun, stays on the horizon where it
-        // set through the twilight, and swings to the night's faint glow as it gets dark
-        _glow.set(_sunDir.x, Math.max(_sunDir.y, 0.02), _sunDir.z).normalize().lerp(_nightGlow, smoothstep(-5, -11, el)).normalize();
+        // shared aerial-perspective parameters (see FOG_AIR_GLSL)
         SKY_FOG.a[0] = P.fogDensity; SKY_FOG.a[1] = 1 / P.haze;
-        SKY_FOG.b[0] = _glow.x; SKY_FOG.b[1] = _glow.y; SKY_FOG.b[2] = _glow.z;
-        SKY_FOG.b[3] = (0.25 + low * 0.9) * (1 - (P.overcast || 0) * 0.6);
-        SKY_FOG.c[0] = P.glow.r; SKY_FOG.c[1] = P.glow.g; SKY_FOG.c[2] = P.glow.b;
-        SKY_FOG.d[0] = P.mist; SKY_FOG.d[1] = 1 / P.mistH; SKY_FOG.d[2] = 1.12 + 0.13 * nightK;
+        SKY_FOG.c[0] = P.fogWhite.r; SKY_FOG.c[1] = P.fogWhite.g; SKY_FOG.c[2] = P.fogWhite.b;
+        SKY_FOG.d[0] = P.mist; SKY_FOG.d[1] = 1 / P.mistH;
         this.setFogEdge();
 
         this.sun.color.copy(P.sun);
-        this.sun.intensity = P.sunI * lightI;
+        this.sun.intensity = P.sunI;
         this.hemi.color.copy(P.hemiSky);
         this.hemi.groundColor.copy(P.hemiGround);
         this.hemi.intensity = P.hemiI;
         this.baseHemi = P.hemiI;
 
+        // the dome: the sun's disc and the glare round it (its light as it reaches the ground: it reddens and dims
+        // into the horizon by itself), the moon's
         const su = this.skyMat.uniforms;
-        su.zenith.value.copy(P.zenith);
-        su.horizon.value.copy(P.horizon);
-        su.sunColor.value.copy(P.sun);
-        su.glowColor.value.copy(P.glow);
-        su.beltColor.value.copy(P.belt);
-        su.sunDir.value.copy(_glow);
+        su.sunDir.value.copy(_sunDir);
+        this.syncSunDisc();
         su.moonDir.value.copy(MOON_DIR);
+        su.moonColor.value.setRGB(MOON_GROUND[0], MOON_GROUND[1], MOON_GROUND[2]).multiplyScalar(1 / 0.35);
         su.night.value = nightK;
-        su.lowSun.value = low;
         su.overcast.value = P.overcast || 0;
         this.starsBase = smoothstep(0.55, 0.95, nightK) * (1 - smoothstep(0.35, 0.65, P.overcast || 0));
         this.starMat.uniforms.bright.value = this.starsBase * (this.starsFog ?? 1);
@@ -522,7 +517,8 @@ export class World {
         wu.deepColor.value.copy(P.water);
         wu.skyColor.value.copy(P.zenith);
         wu.horizonColor.value.copy(P.horizon);
-        wu.sunColor.value.copy(P.sun).multiplyScalar((1 - 0.6 * nightK) * (1 - (P.overcast || 0) * 0.85) * lightI); // a moon glint on the water at night
+        // (the glint's colour: the light's, at the old palettes' scale: 1 for a white sun)
+        wu.sunColor.value.copy(P.sun).multiplyScalar(P.sunI / (el > -3 ? 3.3 : 0.35) * (1 - 0.6 * nightK) * (1 - (P.overcast || 0) * 0.85)); // a moon glint on the water at night
         wu.sunDir.value.copy(this.sunDir);
 
         // clouds: cover, heights, the rain deck (and the front) from the weather model, lit with the palette
@@ -536,7 +532,7 @@ export class World {
         CSM.info[1] = SUN_TAN_RADIUS * (1 + this.overcast * 6);
 
         // [night] the ambient light the fire lights are weighed against (sun + sky, as irradiance)
-        fireLights.ambient = P.sunI * lightI * Math.max(this.sunDir.y, 0.1) * (1 - (P.overcast || 0) * 0.6) + P.hemiI + P.envI * 0.3;
+        fireLights.ambient = P.sunI * Math.max(this.sunDir.y, 0.1) * (1 - (P.overcast || 0) * 0.6) + P.hemiI + P.envI * 0.3;
         fireLights.night = nightK;
         this.terrainMat.emissive.setRGB(0.0006 * nightK, 0.001 * nightK, 0.0018 * nightK); // (0x020306 at night, linear)
         this.syncCraterMat();
@@ -553,12 +549,26 @@ export class World {
             if (this.airTraffic) this.airTraffic.setNight(on);
         }
         // the environment map (the jets' reflections, the sky light): a PMREM bake, so only when it shows
-        const sig = P.zenith.r + P.zenith.g + P.zenith.b + P.horizon.r + P.horizon.g + P.horizon.b + P.hemiI + P.sunI * lightI * 0.2 + (P.overcast || 0);
+        const sig = P.zenith.r + P.zenith.g + P.zenith.b + P.horizon.r + P.horizon.g + P.horizon.b + P.hemiI + P.sunI * 0.2 + (P.overcast || 0);
         const now = performance.now();
         if (force || !this.envRT || (Math.abs(sig - (this.envSig ?? -1)) > 0.03 && now - (this.envAt || 0) > 3000)) {
             this.envSig = sig; this.envAt = now;
             this.updateEnvironment();
         }
+    }
+
+    // the sun's disc and glare on the dome: its light as it reaches the camera's height (the table's own height)
+    syncSunDisc() {
+        const c = sunLightAt(this.sky, Math.max(this.atm.camH, 0.001), _sunRGB);
+        this.skyMat.uniforms.sunColor.value.setRGB(c[0], c[1], c[2]);
+    }
+
+    // How much of the sky is overcast as seen from y metres up: under the weather's deck all that the palette lit the
+    // ground with (weather.js skyPalette `cover`); above it only the high cloud that comes with bad weather
+    domeCover(y) {
+        const S = this.sky, W = this.wx.local;
+        if (!(S.cover > S.coverHigh) || !(W.deck > 0)) return S.cover;
+        return S.coverHigh + (S.cover - S.coverHigh) * (1 - smoothstep(W.deckY - 200, W.deckY + W.deckThick, y));
     }
 
     updateEnvironment() {
@@ -652,10 +662,9 @@ export class World {
         this.skyMat = new THREE.ShaderMaterial({
             side: THREE.BackSide, depthWrite: false, fog: false,
             uniforms: {
-                zenith: { value: new THREE.Color() }, horizon: { value: new THREE.Color() },
-                sunColor: { value: new THREE.Color() }, glowColor: { value: new THREE.Color() }, beltColor: { value: new THREE.Color() },
+                sunColor: { value: new THREE.Color() }, moonColor: { value: new THREE.Color() }, flashColor: { value: _flashSky },
                 sunDir: { value: new THREE.Vector3(0, 1, 0) }, camPos: { value: new THREE.Vector3() }, moonDir: { value: new THREE.Vector3(0, 1, 0) },
-                night: { value: 0 }, lowSun: { value: 0 }, domeCentered: { value: 0 }, overcast: { value: 0 },
+                night: { value: 0 }, domeCentered: { value: 0 }, overcast: { value: 0 }, flash: { value: 0 },
                 ...SKY_FOG.uniforms(),
             },
             vertexShader: /* glsl */`
@@ -672,8 +681,8 @@ export class World {
                     #endif
                 }`,
             fragmentShader: /* glsl */`
-                uniform vec3 zenith, horizon, sunColor, glowColor, beltColor, sunDir, camPos, moonDir;
-                uniform float night, lowSun, domeCentered, overcast;
+                uniform vec3 sunColor, moonColor, flashColor, sunDir, camPos, moonDir;
+                uniform float night, domeCentered, overcast, flash;
                 varying vec3 vWorld;
                 ${FOG_GLSL}
                 float hash13(vec3 p) { p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
@@ -685,46 +694,54 @@ export class World {
                 void main() {
                     vec3 dir = normalize(vWorld - camPos);
                     float h = dir.y;
-                    float up = clamp(h, 0.0, 1.0);
-                    // deeper blue overhead, a pale band just above the horizon
-                    vec3 col = mix(horizon, zenith, pow(up, 0.5));
+                    // The air (atmosphere.js): the sky's radiance for this direction from the sky-view table: the deep
+                    // blue overhead, the pale band on the horizon, the glow round the sun, the twilight arch and the
+                    // Earth's shadow opposite it; below the horizon, the colour distant ground and sea fade to (the
+                    // fog reads the same table: skyFogThrough), so the two meet without a seam
+                    vec3 col = skyLutAt(dir);
+                    // lightning lights the sky from inside the cloud
+                    col = mix(col, flashColor, flash * sqrt(clamp(h, 0.0, 1.0)));
+                    // the mist and the ground fog between the eye and the sky, as the ground at the edge of the view has
+                    // them, thinning as the ray climbs out of them; lowT: what they leave of the sun, the moon, the stars
+                    float lowT = 1.0;
+                    if (domeCentered < 0.5) {
+                        vec3 ray = dir * (skyFogA.w / max(length(dir.xz), 0.05));
+                        float rl = length(ray);
+                        float mist = skyFogLayer(skyFogD.x, skyFogD.y, camPos.y, camPos.y + ray.y, rl);
+                        float gf = groundFogTau(camPos, camPos + ray, rl);
+                        vec4 air = skyFogAir(ray, camPos, gf);
+                        col = mix(col, skyFogC.rgb, air.y * 0.7 * (1.0 - exp(-4.0 * (mist + gf * 2.0))));
+                        lowT = exp(-gf - mist);
+                    }
                     vec3 sd3 = normalize(sunDir);
-                    float sdr = dot(dir, sd3), sd = max(sdr, 0.0);
-                    // warm glow around the sun; at the horizon it equals the fog's in-scatter (skyFogColor), so the
-                    // hazy terrain edge melts into the sky
-                    col += glowColor * pow(sd, 6.0) * (0.25 + lowSun * 0.9 * exp(-up * 6.0)) * (1.0 - overcast * 0.6);
-                    // dawn/dusk: the pink "belt of Venus" above the horizon opposite the sun
-                    col += beltColor * lowSun * pow(max(-sdr, 0.0), 1.5) * exp(-abs(up - 0.08) * 14.0) * (1.0 - night);
-                    col += sunColor * (pow(sd, 90.0) * 0.6 + pow(sd, 1200.0) * 2.5) * (1.0 - night * 0.8) * (1.0 - overcast * 0.8);
-                    // below the horizon: the same colour the fog gives distant ground and sea
-                    if (h < 0.0) col = mix(col, skyFogColor(horizon, vec3(dir.x, 0.0, dir.z), 0.0), smoothstep(0.0, -0.04, h));
-                    // sun / moon disc ([weather] night is 0..1: the moon and the Milky Way come out as the twilight goes)
-                    float disc = smoothstep(0.99955, 0.99975, sd) * (1.0 - overcast * 0.9);
+                    float sd = max(dot(dir, sd3), 0.0);
+                    // the glare close round the sun: finer than the table holds (the wide glow in the haze is the table's)
+                    col += sunColor * (pow(sd, 1200.0) * 0.75 * (1.0 - overcast * 0.8) * lowT);
+                    // sun / moon disc ([weather] night is 0..1: the moon and the Milky Way come out as the twilight goes);
+                    // the sun's is its light as it reaches the ground: it reddens and dims into the horizon by itself
+                    float disc = smoothstep(0.99955, 0.99975, sd) * (1.0 - overcast * 0.9) * lowT * smoothstep(-0.004, 0.004, h - cos(skyLutA.x));
                     float nk = smoothstep(0.35, 0.9, night);
                     if (nk > 0.0) {
                         // Milky Way: a faint, mottled band across the night sky
                         vec3 pole = normalize(vec3(0.35, 0.5, 0.79));
                         float band = exp(-pow(dot(dir, pole) * 5.0, 2.0));
                         float n = vnoise(dir * 9.0) * 0.6 + vnoise(dir * 23.0) * 0.4;
-                        col += vec3(0.020, 0.022, 0.030) * band * smoothstep(0.3, 0.8, n) * smoothstep(0.0, 0.25, h) * nk * (1.0 - overcast);
+                        col += vec3(0.020, 0.022, 0.030) * band * smoothstep(0.3, 0.8, n) * smoothstep(0.0, 0.25, h) * nk * (1.0 - overcast) * lowT;
                         // moon: limb darkened, with darker maria, and a soft halo in the haze round it
                         vec3 md = normalize(moonDir);
                         float mdr = max(dot(dir, md), 0.0);
-                        float mdisc = smoothstep(0.99955, 0.99975, mdr) * (1.0 - overcast * 0.9);
-                        col += sunColor * (pow(mdr, 400.0) * 0.18 + pow(mdr, 40.0) * 0.035) * nk * (1.0 - overcast * 0.7);
+                        float mdisc = smoothstep(0.99955, 0.99975, mdr) * (1.0 - overcast * 0.9) * lowT;
+                        col += moonColor * (pow(mdr, 400.0) * 0.18 + pow(mdr, 40.0) * 0.035) * nk * (1.0 - overcast * 0.7) * lowT;
                         if (mdisc > 0.0) {
                             vec3 t1 = normalize(cross(md, vec3(0.0, 1.0, 0.0))), t2 = cross(t1, md);
                             vec2 q = vec2(dot(dir, t1), dot(dir, t2)) / 0.028;
                             float maria = smoothstep(0.45, 0.7, vnoise(vec3(q * 2.3, 1.7)) * 0.7 + vnoise(vec3(q * 5.1, 4.2)) * 0.3);
-                            col += sunColor * mdisc * nk * 2.6 * (1.0 - 0.35 * maria) * (0.75 + 0.25 * sqrt(max(1.0 - dot(q, q), 0.0)));
+                            col += moonColor * mdisc * nk * 2.6 * (1.0 - 0.35 * maria) * (0.75 + 0.25 * sqrt(max(1.0 - dot(q, q), 0.0)));
                         }
                     }
-                    if (nk < 1.0) col += sunColor * disc * 18.0 * (1.0 - nk);
-                    // [weather] looking up out of a ground fog (or through a low stratus' fog): the sky fades into it
-                    if (domeCentered < 0.5 && (skyFogE.x > 0.0 || skyFogE.z > 0.0)) {
-                        float gft = groundFogTau(camPos, camPos + dir * 30000.0, 30000.0);
-                        col = mix(col, horizon * skyFogD.z, 1.0 - exp(-gft));
-                    }
+                    col += sunColor * disc * 6.0;
+                    // a grain finer than the display's steps, so the smooth sky never shows them as bands
+                    if (domeCentered < 0.5) col += (hash13(vec3(gl_FragCoord.xy, 7.3)) - 0.5) * (0.012 * col + 0.0006);
                     gl_FragColor = vec4(col, 1.0);
                     #include <tonemapping_fragment>
                     #include <colorspace_fragment>
@@ -1846,6 +1863,10 @@ export class World {
         this.skyMat.uniforms.camPos.value.copy(camera.position);
         const fog = this.scene.fog;
         const cam = camera.position;
+        // the sky-view table follows the camera's height (and whatever applySky changed since it was drawn)
+        this.camY = cam.y;
+        this.atm.setCover(this.domeCover(cam.y));
+        if (this.atm.update(cam.y)) this.syncSunDisc();
         this.uTime.value = this.time;
         this.veg.uniforms.vegCam.value.copy(cam); // trees fade with distance from the camera (also in the shadow passes)
         this.starMat.uniforms.time.value = this.time;
