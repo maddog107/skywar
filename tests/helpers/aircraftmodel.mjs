@@ -25,6 +25,7 @@ export function stripTextures(buf) {
         const pbr = m.pbrMetallicRoughness || {};
         delete pbr.baseColorTexture; delete pbr.metallicRoughnessTexture;
         delete m.normalTexture; delete m.occlusionTexture; delete m.emissiveTexture;
+        delete m.extensions; // (specular / clearcoat / transmission maps are textures too)
     }
     const js = Buffer.from(JSON.stringify(json));
     const pad = (4 - (js.length % 4)) % 4;

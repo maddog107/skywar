@@ -562,11 +562,13 @@ export const STATIONS = {
     f16: {
         st: { 1: TIP({ own: true }), 2: WING(0.84, { own: true }), 3: WING(0.64, { own: true }), 4: WING(0.38, { own: true }), 5: FUS(0, 0.04) },
         use: { lrm: '1 2 3', srm: '2 1 3', arm: '3 4', agm: '3 4*2', ashm: '4 3', alcm: '4', gbu: '4*2 3 5*2', bomb: '4*3 3*3 5*3', rkt: '4 3' },
+        podsFirst: true,
     },
     // F-2A: the F-16's layout on a bigger wing, with a fourth pair of pylons for its anti-ship missiles
     f2: {
         st: { 1: TIP({ own: true }), 2: WING(0.86), 3: WING(0.7, { own: true }), 4: WING(0.53, { own: true }), 5: WING(0.34), 6: FUS(0, 0.04) },
         use: { lrm: '1 2 3', srm: '2 1 3', ashm: '4 5', gbu: '5*2 3 6*2', bomb: '5*3 4*3 6*3', agm: '3 4', arm: '3', rkt: '5 4' },
+        podsFirst: true,
     },
     // F/A-18E: eleven stations. 1/11 wingtip rails, 2/10 3/9 4/8 the wing pylons, 5/7 the nacelle (cheek) stations, 6 centreline
     fa18: {
@@ -628,7 +630,7 @@ export const STATIONS = {
     mig21: {
         st: { 1: WING(0.74), 2: WING(0.542, { own: true }), c: FUS(0, 0.02) },
         use: { srm: '1 2', rkt: '2 1', bomb: 'c*2 2 1', gbu: '2', agm: '2' },
-        order: ['lrm', 'srm', 'rkt', 'bomb', 'gbu', 'agm'],
+        podsFirst: true,
     },
     // MiG-25PD: two pylons under each wing (the outer pair takes R-60s two by two); the RB's bombs under the belly too
     mig25: {
@@ -640,19 +642,19 @@ export const STATIONS = {
         st: { bf: FUS(0.62, -0.06, { sink: 0.12 }), br: FUS(0.62, 0.14, { sink: 0.12 }), 1: WING(0.68), 2: WING(0.516, { own: true }) },
         use: { xlr: 'bf br', lrm: '2 1', srm: '1*2 2', arm: '2 bf br', bomb: '2', agm: '2', gbu: '2', rkt: '2' },
     },
-    // J-10A: three pylons under each wing, the centreline and the intake sides
+    // J-10A: eleven points. Three pylons under each wing, the centreline, two pairs under the fuselage
     j10: {
-        st: { 1: WING(0.77, { own: true }), 2: WING(0.53, { own: true }), 3: WING(0.31), c: FUS(0, 0.05, { own: true }), f: FUS(0.75, 0.2) },
-        use: { srm: '1 2', lrm: '2 3', rkt: '3 2', gbu: '3 c 2', bomb: '3+2 c+2 f 2', agm: '3', arm: '3' },
+        st: { 1: WING(0.76, { own: true }), 2: WING(0.516, { own: true }), 3: WING(0.31), c: FUS(0, 0.05, { own: true }), ff: FUS(0.75, -0.02), fr: FUS(0.75, 0.2) },
+        use: { srm: '1 2', lrm: '2 3', rkt: '3 2', gbu: '3 c 2', bomb: 'ff fr c+2 3+2 2', agm: '3', arm: '3' },
     },
     // J-8II: two pylons under each wing (a third inboard for bombs) and the centreline
     j8: {
-        st: { 1: WING(0.75, { own: true }), 2: WING(0.52, { own: true }), 3: WING(0.34), c: FUS(0, 0.05, { own: true }) },
+        st: { 1: WING(0.735, { own: true }), 2: WING(0.507, { own: true }), 3: WING(0.34), c: FUS(0, 0.05, { own: true }) },
         use: { srm: '1 2', lrm: '2 3', rkt: '3 2', bomb: '3+2 c+2 2', gbu: '3 c', agm: '3', arm: '3' },
     },
     // Typhoon: four semi-recessed fuselage stations, four pylons under each wing (the wingtips carry the DASS pods)
     typhoon: {
-        st: { ff: FUS(0.72, -0.06, { sink: 0.07 }), fr: FUS(0.72, 0.16, { sink: 0.07 }), 1: WING(0.816, { own: true }), 2: WING(0.661, { own: true }), 3: WING(0.494, { own: true }), 4: WING(0.31, { own: true }), c: FUS(0, 0.05) },
+        st: { ff: FUS(0.72, -0.075, { sink: 0.07 }), fr: FUS(0.72, 0.175, { sink: 0.07 }), 1: WING(0.816, { own: true }), 2: WING(0.661, { own: true }), 3: WING(0.494, { own: true }), 4: WING(0.31, { own: true }), c: FUS(0, 0.05) },
         use: { lrm: 'ff fr 2', srm: '1 2', agm: '3*3 2*3', alcm: '4 3', gbu: '2 3 4 c', bomb: '3*2 2*2 c', arm: '3', rkt: '3 2' },
     },
     // Rafale: wingtip rails, three pylons under each wing, two rear fuselage stations, the centreline
@@ -712,6 +714,8 @@ export const podOf = (W0) => PODS[W0 && W0.id] || PODS.hydra;
 // the order the classes pick their stations in, round by round (every class its first choice, then every class its
 // second ...), so each kind of store shows before any takes a second pair of pylons
 const PLAN_ORDER = ['lrm', 'srm', 'xlr', 'alcm', 'ashm', 'arm', 'agm', 'gbu', 'bomb', 'buster', 'moab', 'rkt'];
+// (a type whose bombs have somewhere else to go gives its rocket pods their pylons first)
+const PODS_FIRST = ['lrm', 'srm', 'xlr', 'alcm', 'ashm', 'arm', 'agm', 'rkt', 'gbu', 'bomb', 'buster', 'moab'];
 // small enough for a twin or triple rack (the 500 lb class, the short missiles)
 const slim = (W0) => (W0.dia || 0.3) <= 0.355 && (W0.len || 3) <= 3.9;
 const AIR_CLASSES = new Set(['srm', 'lrm', 'xlr']);
@@ -756,7 +760,7 @@ export function stationPlan(type, load) {
         left[e.cls] = e.cls === 'rkt' ? Math.ceil(e.n / podOf(e.store).tubes) : e.n;
     }
     const free = new Set(Object.keys(T0.st));
-    const order = T0.order || PLAN_ORDER;
+    const order = T0.podsFirst ? PODS_FIRST : PLAN_ORDER;
     const classes = [...order.filter(c => by[c]), ...Object.keys(by).filter(c => !order.includes(c))];
     for (let round = 0, moved = true; moved && round < 12; round++) {
         moved = false;

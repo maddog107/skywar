@@ -522,10 +522,11 @@ function rackOf(t, cls, n, cap, tandem) {
     };
     const triple = (z, k) => {
         // an ejector rack's beam, a store under it and one on either shoulder
-        const bl = clamp(0.72 * len, 1.1, 2.3);
-        hw.push([0, -0.085, z, 0.14, 0.17, bl, 'rack']);
-        const sx = 0.07 + R + 0.012;
-        if (k >= 3 || k === 1) spots.push({ dx: 0, dy: -0.17 - R - 0.01, dz: z });
+        // (the shoulders far enough out that a fat store clears the one below: the beam is as wide as that takes)
+        const bl = clamp(0.72 * len, 1.1, 2.3), below = 0.17 + R + 0.01, rise = below - 0.085;
+        const sx = Math.max(0.07 + R + 0.012, Math.sqrt(Math.max(0, (2 * R + 0.03) ** 2 - rise * rise)));
+        hw.push([0, -0.085, z, 2 * (sx - R - 0.012), 0.17, bl, 'rack']);
+        if (k >= 3 || k === 1) spots.push({ dx: 0, dy: -below, dz: z });
         if (k >= 2) spots.push({ dx: sx, dy: -0.085, dz: z }, { dx: -sx, dy: -0.085, dz: z });
     };
     if (n <= 1 || cap <= 1) single(0, 0, zs);
@@ -863,7 +864,8 @@ export function disposeStores(ac) {
 }
 
 // ── For tests and tools ──
-// (tests: forget what was measured)
+// (tests: measure a type on a model given here; forget what was measured)
+export function fitModel(type, root, length, surfaces = null) { const f = new Fit(root, length, surfaces); FITS.set(type, f); return f; }
 export function resetFits() { FITS.clear(); }
 // what hangs on the jet now: { cls: shown }, and every slot (model space)
 export function storesShown(ac) {
