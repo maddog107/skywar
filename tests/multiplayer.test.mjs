@@ -10,7 +10,7 @@ import { noop } from './helpers/arena.mjs';
 const THREE = await import('three');
 const P = await src('netproto.js');
 const { InterpBuffer, ClockSync, MODE, slerp } = await src('netinterp.js');
-const { Multiplayer, SPAWN_SAFE, RESPAWN_DELAY } = await src('multiplayer.js');
+const { Multiplayer, SPAWN_SAFE, RESPAWN_DELAY, LIMITS } = await src('multiplayer.js');
 const { Aircraft } = await src('aircraft.js');
 const { Pilot } = await src('ai.js');
 const { Weapons } = await src('weapons.js');
@@ -769,5 +769,223 @@ describe('multiplayer: outside the mode', () => {
         assert.equal(A.mp.onAction('photo'), true, 'photo mode is refused');
         assert.equal(A.mp.onAction('eject'), true, 'so is ejecting');
         assert.ok(A.feed.some(f => /PHOTO/.test(f)) && A.feed.some(f => /EJECT/.test(f)));
+    });
+});
+
+// ═════════════ A peer is not trusted ═════════════
+// What a modified client could send: every message here has a shape the relay lets through (relay.validEvent /
+// validState), delivered as the relay would deliver it, stamped with the sender's id.
+describe('multiplayer: a peer is not trusted', () => {
+    // A (blue, host), B (red), C (blue) in one room, all past their spawn protection
+    function trio() {
+        const hub = new Hub();
+        const A = makeGame(hub, { name: 'VIPER', team: 'blue', ac: 'f16' }, { at: [0, 3000, 0] });
+        const B = makeGame(hub, { name: 'MAVERICK', team: 'red', ac: 'f15' }, { at: [0, 3000, -300] });
+        const C = makeGame(hub, { name: 'GHOST', team: 'blue', ac: 'f14' }, { at: [3000, 3500, 2000] });
+        run([A, B, C], 0.6); unsafe(A, B, C); run([A, B, C], 0.2);
+        return { hub, A, B, C, a: A.mp.me.id, b: B.mp.me.id, c: C.mp.me.id };
+    }
+    // deliver to `to` what `from` (a client id) could have sent through the relay
+    const forge = (to, from, e) => { assert.ok(relay.validEvent({ t: 'e', e }), 'the relay would pass it: ' + JSON.stringify(e)); to.mp.onMessage({ t: 'e', f: from, e }); };
+    const forgeState = (to, from, c, rows, ms) => { const m = { t: 's', c, e: rows, ...(ms ? { m: ms } : {}) }; assert.ok(relay.validState(m)); to.mp.onMessage({ t: 's', s: [ms ? [from, c, rows, ms] : [from, c, rows]] }); };
+    const row = (n, life, x, y, z, flags = P.FLAG.ALIVE) => P.encodeEntity({ n, life, pos: { x, y, z }, quat: { x: 0, y: 0, z: 0, w: 1 }, vel: { x: 0, y: 0, z: -200 }, throttle: 0.8, flags, health: 100, g: 1 });
+    const stateClock = (g) => Math.round(clock.t * 1e4) / 10;
+
+    test('missile ids are each peer\'s own: one peer can\'t touch another\'s ghost, and ids out of range are refused', () => {
+        const { A, B, C, a, b } = trio();
+        const m = A.weapons.fireMissile(A.player, puppetOf(A, b), 'aam');
+        run([A, B, C], 0.3);
+        const pa = C.mp.peers.get(a), pb = C.mp.peers.get(b);
+        const id = A.mp.myMissiles.get(m).id;
+        same(pa.ghosts.size, 1); assert.ok(pa.ghosts.has(id)); same(pb.ghosts.size, 0);
+        const ghost = pa.ghosts.get(id);
+        // B tries to end A's missile: by its id, and by ids that the old packed key would have mapped onto it
+        for (const forged of [id, id + 65536, id + (a - b) * 65536, id - 65536, 0, -1, 65536, 1e9, 0.5]) forge(C, b, ['mx', forged, ghost.pos.x, ghost.pos.y, ghost.pos.z]);
+        assert.ok(pa.ghosts.get(id) === ghost && ghost.alive && C.mp.ghosts.has(ghost), 'A\'s ghost is still there');
+        // and to launch under such ids: refused outright
+        for (const forged of [65536, id + 65536, 1e6, 0, -3, 2.5]) forge(C, b, ['ml', forged, 0, 'aim9x', 'aam', 0, 0, 3000, 0, 0, 0, -300, stateClock()]);
+        same(pb.ghosts.size, 0);
+        forgeState(C, b, stateClock() + 1, [], [[70000, 0, 3000, 0, 0, 0, -300, 1], [0, 0, 3000, 0, 0, 0, -300, 1], [1.5, 0, 3000, 0, 0, 0, -300, 1]]);
+        same(pb.ghosts.size, 0, 'missile rows with ids out of range are dropped');
+        // B's own missile with the very same id as A's is a different ghost; ending it leaves A's alone
+        forge(C, b, ['ml', id, 0, 'aim9x', 'aam', 0, 0, 3000, 0, 0, 0, -300, stateClock()]);
+        same(pb.ghosts.size, 1); assert.ok(pb.ghosts.get(id) !== ghost && pb.ghosts.get(id).peer === pb);
+        forge(C, b, ['mx', id, 0, 3000, 0]);
+        same(pb.ghosts.size, 0);
+        assert.ok(pa.ghosts.get(id) === ghost && ghost.alive);
+        same(C.mp.ghosts.size, 1);
+    });
+
+    test('ghosts are capped whichever message asks for them: per peer and in all', () => {
+        const { C, b } = trio();
+        const { PEER_GHOSTS, MAX_GHOSTS } = LIMITS;
+        const pb = C.mp.peers.get(b);
+        // unknown ids in state rows (the path with no launch event), 12 a message, for 10 messages
+        let id = 100, c = stateClock();
+        for (let k = 0; k < 10; k++) { const ms = []; for (let i = 0; i < 12; i++) ms.push([id++, i * 10, 3000, 0, 0, 0, -300, 1]); forgeState(C, b, c += 50, [], ms); }
+        same(pb.ghosts.size, PEER_GHOSTS, 'one peer: ' + pb.ghosts.size);
+        // launch events too
+        for (let i = 0; i < 200; i++) forge(C, b, ['ml', 5000 + i, 0, 'aim9x', 'aam', 0, 0, 3000, 0, 0, 0, -300, stateClock()]);
+        same(pb.ghosts.size, PEER_GHOSTS);
+        // many peers at it together
+        for (let p = 0; p < 10; p++) {
+            C.mp.onMessage({ t: 'join', p: [900 + p, 'X' + p, 'red', 'f16', 'default'] });
+            const ms = []; for (let i = 0; i < 12; i++) ms.push([1 + i, i * 10, 3000, p * 10, 0, 0, -300, 1]);
+            forgeState(C, 900 + p, c, [], ms); forgeState(C, 900 + p, c + 50, [], ms.map(r => [r[0] + 50, ...r.slice(1)]));
+        }
+        assert.ok(C.mp.ghosts.size <= MAX_GHOSTS, 'in all: ' + C.mp.ghosts.size);
+        same(C.mp.ghosts.size, MAX_GHOSTS);
+        for (const peer of C.mp.peers.values()) assert.ok(peer.ghosts.size <= PEER_GHOSTS);
+        // they go when their owners stop reporting them, and the count with them
+        run([C], 2.5);
+        same(C.mp.ghosts.size, 0);
+        for (const peer of C.mp.peers.values()) same(peer.ghosts.size, 0);
+    });
+
+    test('a death is recorded once, only for a living airframe we have a picture of; the killer must be in the room', () => {
+        const { A, B, C, a, b, c } = trio();
+        const feedOf = (g) => g.feed.filter(f => /SHOT DOWN|CRASHED/.test(f));
+        const before = { feed: feedOf(C).length, kills: [A.mp.kills, B.mp.kills, C.mp.kills] };
+        const life = B.mp.life;
+        // deaths of things that don't exist: an entity B has none of, an airframe it hasn't got to, a past one
+        for (const e of [['die', 7, 1, P.eid(a, 0), 0], ['die', 0, life + 1, P.eid(a, 0), 0], ['die', 0, life - 1, P.eid(a, 0), 0], ['die', -1, life, 0, 0], ['die', 0.5, life, 0, 0], ['die', 5000, life, 0, 0], ['die', 0, 1e9, 0, 0]]) {
+            for (let i = 0; i < 50; i++) { forge(C, b, e); forge(A, b, e); }
+        }
+        same(feedOf(C).length, before.feed, 'nothing in the feed: ' + feedOf(C).join(' | '));
+        same(A.mp.kills, 0, 'no kill handed to anyone');
+        assert.ok(puppetOf(C, b).alive);
+        // B's real jet "dies" a thousand times, naming A, who never hit it
+        for (let i = 0; i < 1000; i++) { forge(C, b, ['die', 0, life, P.eid(a, 0), 0]); forge(A, b, ['die', 0, life, P.eid(a, 0), 0]); }
+        same(feedOf(C).length, before.feed + 1, 'one line on the watcher: ' + feedOf(C).join(' | '));
+        same(feedOf(A).length, 1);
+        same(A.mp.kills, 0, 'A never claimed a hit on it: the kill is not A\'s');
+        assert.ok(feedOf(A)[0] === 'MAVERICK WAS SHOT DOWN', feedOf(A)[0]);
+        assert.ok(!puppetOf(C, b).alive && puppetOf(C, b).puppet.dead);
+        // …and once its airframe has ended, nothing more can be said about it
+        forge(C, b, ['boom', 0, life, 0, 0, 0, 3000, 0]);
+        for (let i = 0; i < 20; i++) forge(C, b, ['die', 0, life, P.eid(a, 0), 0]);
+        same(feedOf(C).length, before.feed + 1);
+        assert.deepEqual([A.mp.kills, B.mp.kills, C.mp.kills], before.kills);
+        void c;
+    });
+
+    test('a killer who isn\'t in the room is "unknown"; a peer can only report its own aircraft', () => {
+        const { A, B, C, a, b, c } = trio();
+        const life = B.mp.life;
+        forge(C, b, ['die', 0, life, P.eid(4242, 0), 1]);            // nobody has that id
+        assert.ok(C.feed.includes('MAVERICK WAS SHOT DOWN'), C.feed.join(' | '));
+        assert.ok(!C.feed.some(f => /SHOT DOWN MAVERICK/.test(f)));
+        // C "reports" a death with A's airframe number: it can only ever mean C's own jet, whatever it says
+        const T = trio();
+        T.A.mp.locals.get(T.A.player);
+        forge(T.B, T.c, ['die', 0, T.A.mp.life, P.eid(T.b, 0), 0]);
+        assert.ok(puppetOf(T.B, T.a).alive, 'A\'s puppet on B is untouched');
+        assert.ok(!puppetOf(T.B, T.c).alive, 'it killed its own picture');
+        assert.ok(T.B.feed.some(f => /GHOST/.test(f)) && !T.B.feed.some(f => /SHOT DOWN VIPER|VIPER (WAS|CRASHED)/.test(f)));
+        same(T.B.mp.kills, 0, 'and B, named as the killer, had not hit it: no kill');
+        void a; void c; void A; void B;
+    });
+
+    test('table lookups are by a table\'s own entries: "constructor", "toString", "__proto__" are not aircraft, liveries or stores', () => {
+        const { C, b } = trio();
+        for (const [i, t] of ['constructor', 'toString', '__proto__', 'hasOwnProperty', 'valueOf'].entries()) {
+            const id = 700 + i;
+            C.mp.onMessage({ t: 'join', p: [id, 'EVIL' + i, 'red', t, t] });
+            const peer = C.mp.peers.get(id);
+            same(peer.ac, 'f16'); same(peer.lv, 'default');
+            forgeState(C, id, stateClock(), [row(0, 1, 100 * i, 3000, 0)]);
+            const pp = puppetOf(C, id);
+            assert.ok(pp && pp.type === 'f16', 'built as an F-16');
+            forge(C, id, ['ml', 1, 0, t, t, 0, 0, 3000, 0, 0, 0, -300, stateClock()]);
+            same(peer.ghosts.size, 1);
+            assert.ok(typeof peer.ghosts.get(1).W.boost === 'number', 'a real weapon table');
+        }
+        void b;
+    });
+
+    test('only the host has aircraft besides its own jet', () => {
+        const { A, B, C, b } = trio();
+        assert.ok(A.mp.isHost);
+        forge(C, b, ['ai', 3, 'su57', 1, 'FAKE', 300, 90, 1]);
+        same(C.mp.peers.get(b).desc.size, 0, 'a description from a peer who isn\'t the host is ignored');
+        forgeState(C, b, stateClock(), [row(3, 1, 0, 3000, 0)]);
+        same(puppetOf(C, b, 3), null);
+        same(C.aircraft.length, 3);
+        // a hit claimed for such an aircraft is refused too
+        const hp = C.player.health;
+        forge(C, b, ['hit', 0, C.mp.life, 50, 0, 3]);
+        same(C.player.health, hp);
+        void B;
+    });
+
+    test('hit claims: the amount must be a number, the kind a known one, and a cannon doesn\'t reach across the map', () => {
+        const { A, B, C, a, b } = trio();
+        const hp = B.player.health, life = B.mp.life;
+        for (const e of [['hit', 0, life, '50', 0, 0], ['hit', 0, life, 50, 99, 0], ['hit', 0, life, 50, -1, 0], ['hit', 0, life, 50, 0, -1], ['hit', 0, life, 50, 0, 9999], ['hit', '0', life, 50, 0, 0], ['hit', 0, life, 50, 0.5, 0], ['hit', 0, life, 50]]) forge(B, a, e);
+        same(B.player.health, hp, 'malformed claims do nothing');
+        // the shooter, as B sees it, is 20 km away
+        const far = B.player.health;
+        puppetOf(B, a).pos.set(0, 3000, 20000);
+        assert.ok(puppetOf(B, a).pos.distanceTo(B.player.pos) > LIMITS.GUN_REACH);
+        forge(B, a, ['hit', 0, life, 30, P.kindCode('gun'), 0]);
+        same(B.player.health, far, 'a cannon hit from 20 km is refused');
+        forge(B, a, ['hit', 0, life, 30, P.kindCode('missile'), 0]);
+        assert.ok(B.player.health < far, 'a missile\'s is not (it flew there)');
+        void b;
+    });
+
+    test('repeating a message does not make more of anything: flares, launches, airframes, parts', () => {
+        const { A, B, C, b } = trio();
+        const pb = C.mp.peers.get(b);
+        for (let i = 0; i < 300; i++) forge(C, b, ['fl', 0]);
+        same(C.weapons.flares.length, 4, 'one salvo, not three hundred');
+        for (let i = 0; i < 300; i++) forge(C, b, ['ml', 1 + i, 0, 'aim9x', 'aam', P.eid(C.mp.me.id, 0), 0, 3000, 0, 0, 0, -300, stateClock()]);
+        assert.ok(pb.ghosts.size <= 8, pb.ghosts.size + ' ghosts from 300 launches in one instant');
+        assert.ok(C.player.incoming.length <= 8);
+        const warnings = C.events.log.filter(([k, o, d]) => k === 'missileLaunch' && d && d.missile && d.missile.ghost).length;
+        assert.ok(warnings <= 8, warnings + ' launch warnings');
+        // a new airframe number in every snapshot
+        let built = 0;
+        const make = C.mp.makePuppet.bind(C.mp);
+        C.mp.makePuppet = (...args) => { const r = make(...args); if (r) built++; return r; };
+        let c = stateClock();
+        for (let life = 2; life < 400; life++) forgeState(C, b, c += 50, [row(0, life, 0, 3000, 0)]);
+        assert.ok(built <= 1, built + ' aircraft built for 400 airframe numbers in one instant');
+        run([C], 3, () => { for (let k = 0; k < 5; k++) forgeState(C, b, c += 50, [row(0, 1000 + Math.round(c), 0, 3000, 0)]); });
+        assert.ok(built <= 5, built + ' in three seconds of it');
+        same(C.aircraft.length, 3, 'never more than the one puppet');
+        // a wing can only come off once, and only a wing
+        const pp = puppetOf(C, b), L = pp.puppet.life;
+        for (let i = 0; i < 50; i++) for (const region of [0, 1, 2, 3, 4, 9, -1]) forge(C, b, ['part', 0, L, region]);
+        assert.ok(pp.lostRegions.size <= 2 && !pp.lostRegions.has('center') && !pp.lostRegions.has('nose') && !pp.lostRegions.has('tail'));
+        void A; void B;
+    });
+
+    test('nothing grows without bound: wild entity numbers, airframe numbers, scores, room members', () => {
+        const { C, b } = trio();
+        const pb = C.mp.peers.get(b);
+        const ended = pb.ended.size;
+        for (let i = 0; i < 3000; i++) {
+            forge(C, b, ['boom', 4096 + i, 1, 0, 0, 0, 0, 0]); forge(C, b, ['gone', -i - 1, 1]); forge(C, b, ['boom', i + 0.5, 1, 0, 0, 0, 0, 0]);
+            forge(C, b, ['gone', 5 + (i % 4000), 1e9]); forge(C, b, ['gone', 5 + (i % 4000), 3]); forge(C, b, ['boom', 5 + (i % 4000), i, 0, 0, 0, 0, 0]);
+        }
+        assert.ok(pb.ended.size > ended && pb.ended.size <= ended + 4000, 'ended: ' + pb.ended.size);
+        assert.ok(pb.ended.size <= P.NMAX);
+        assert.ok(puppetOf(C, b).alive, 'and its real jet is untouched');
+        forge(C, b, ['st', 1e9, -5, 2.5]);
+        assert.deepEqual([pb.kills, pb.deaths, pb.ping], [0, 0, 0]);
+        forge(C, b, ['st', 12, 3, 40]);
+        assert.deepEqual([pb.kills, pb.deaths, pb.ping], [12, 3, 40]);
+        same(C.mp.kills, 0, 'a peer\'s score is its own word: it never adds to ours');
+        for (let i = 0; i < 500; i++) C.mp.onMessage({ t: 'join', p: [2000 + i, 'P' + i, 'red', 'f16', 'default'] });
+        assert.ok(C.mp.peers.size <= P.MAX_PLAYERS * 2, C.mp.peers.size + ' peers');
+        // the same member announced twice is one member
+        const n = C.mp.peers.size;
+        C.mp.onMessage({ t: 'join', p: [b, 'OTHER', 'blue', 'f16', 'default'] });
+        same(C.mp.peers.size, n); same(C.mp.peers.get(b).name, 'MAVERICK');
+        // rubbish instead of messages
+        for (const m of [null, 5, 'x', [], {}, { t: 's' }, { t: 's', s: 'x' }, { t: 's', s: [5, null, [b], [b, 'x'], [b, -1, []], [b, 5, 'rows'], [b, 5, [null, 5, 'x', []]]] }, { t: 'e' }, { t: 'e', f: b }, { t: 'e', f: b, e: 'x' },
+            { t: 'e', f: b, e: ['hit', {}, []] }, { t: 'e', f: b, e: ['die', [0], null] }, { t: 'e', f: 12345, e: ['die', 0, 1, 0, 0] }, { t: 'join' }, { t: 'join', p: 'x' }, { t: 'join', p: [-1] }, { t: 'leave' }, { t: 'leave', id: 'x', host: {} }, { t: 'set' }, { t: 'set', set: 5 }]) C.mp.onMessage(m);
+        assert.ok(puppetOf(C, b).alive);
     });
 });

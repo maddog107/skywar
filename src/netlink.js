@@ -20,7 +20,8 @@ export class NetLink {
         this.now = opts.now || (() => performance.now());
         this.ws = null;
         this.open = false;
-        this.rtt = 0;              // ms, smoothed
+        this.rtt = 0;              // ms: the ping
+        this.rtts = [];
         this.onMessage = null;     // (msg) every message after the welcome
         this.backlog = [];         // what arrived after the welcome before anyone was listening (multiplayer.js attach reads it)
         this.onClose = null;       // ({ code, reason, refused }) the connection ended (after it had been open)
@@ -45,7 +46,8 @@ export class NetLink {
                 let m;
                 try { m = JSON.parse(ev.data); } catch (e) { return; }
                 if (!m || typeof m !== 'object') return;
-                if (m.t === 'pong') { const r = this.now() - m.n; if (r >= 0 && r < 60000) this.rtt = this.rtt ? this.rtt + (r - this.rtt) * 0.3 : r; return; }
+                // the ping: the quickest of the last few round trips (a slow frame holds a reply up; the network didn't)
+                if (m.t === 'pong') { const r = this.now() - m.n; if (r >= 0 && r < 60000) { this.rtts.push(r); if (this.rtts.length > 8) this.rtts.shift(); this.rtt = Math.min(...this.rtts); } return; }
                 if (m.t === 'err') { refused = typeof m.msg === 'string' ? m.msg.slice(0, 200) : 'The multiplayer server refused the connection.'; if (!done) fail(refused); return; }
                 if (!done) {
                     if (m.t !== 'welcome') return;
@@ -59,7 +61,7 @@ export class NetLink {
                 // (welcomed, but the game hasn't taken the connection over yet: kept for it, the newest snapshots dropped
                 // first if that takes long)
                 if (this.onMessage) this.onMessage(m);
-                else if (this.backlog.length < 400 || m.t !== 's') this.backlog.push(m);
+                else if (this.backlog.length < (m.t === 's' ? 400 : 2000)) this.backlog.push(m);
             };
             ws.onerror = () => { if (!done) fail(unreachable); };
             ws.onclose = (ev) => {

@@ -34,14 +34,35 @@ import { InterpBuffer, ClockSync, MODE } from './netinterp.js';
 import {
     SEND_HZ, INTERP_DELAY, STALE_AFTER, MAX_ENTITIES, MAX_MISSILES, NMAX, FLAG, KINDS, REGION_CODES, kindCode,
     eid, eidOwner, eidN, encodeEntity, decodeEntity, encodeMissile, decodeMissile, safeStr, relayUrl,
+    MAX_MISSILE_ID, MAX_LIFE, MAX_PLAYERS, cleanCallsign, cleanRoom,
 } from './netproto.js';
 
 export const SPAWN_SAFE = 6;        // s of spawn protection (it ends early when you open fire)
 export const RESPAWN_DELAY = 4;     // s from being shot down to the new jet
-export const AWAY_RESPAWN = 3;      // s hidden / frozen after which an airborne jet is replaced by a fresh one
+export const AWAY_RESPAWN = 3;      // s with the tab hidden after which an airborne jet is replaced by a fresh one
+export const STALL_RESPAWN = 8;     // s frozen without the tab being hidden (a stalled machine): the same
 const BANDIT_GAP = 8;               // s between a cleared wave of AI bandits and the next
-const MAX_PUPPETS = 48;
+// Nothing a peer sends is trusted (it arrives through the relay, which only checks its shape): every id, number and
+// string is checked again where it is used, an event about something its sender doesn't own is ignored, and what a
+// peer can make us build is capped, however often it repeats itself.
+const MAX_PUPPETS = 48, PEER_PUPPETS = 14;   // aircraft we build for the others in all, and for any one of them (its jet + the host's bandits)
+const MAX_GHOSTS = 64, PEER_GHOSTS = 16;     // their missiles we draw
+const GUN_REACH = 4000;                      // m: a cannon hit claimed from further away than this is refused
+export const LIMITS = { MAX_PUPPETS, PEER_PUPPETS, MAX_GHOSTS, PEER_GHOSTS, GUN_REACH };
+const TIMES = ['dawn', 'day', 'dusk', 'night'], WEATHERS = ['clear', 'cloudy', 'grey', 'rain', 'storm', 'fog', 'overcast'];
 const MISSILE_KINDS = ['aam', 'lrm', 'xlr', 'arm', 'agm', 'ashm', 'alcm', 'sam'];
+// a table's own entry (never 'constructor' or 'toString' off its prototype: the key is a peer's)
+const own = (table, key) => typeof key === 'string' && Object.prototype.hasOwnProperty.call(table, key);
+// an integer in [lo, hi], or -1
+const int = (x, lo, hi) => (typeof x === 'number' && x >= lo && x <= hi && x === Math.floor(x) ? x : -1);
+// a budget: `rate` a second, at most `cap` saved up (a launch, a new airframe: more than that from one peer is noise)
+function allow(b, now, rate, cap) {
+    b.n = Math.min(cap, (b.n ?? cap) + Math.max(0, now - (b.t ?? now)) * rate);
+    b.t = now;
+    if (b.n < 1) return false;
+    b.n -= 1;
+    return true;
+}
 const BLUE = '#5ab8ff', RED = '#ff6a5a', GREEN = '#5dffa0', AMBER = '#ffc23f', DIM = '#9fb2c4', WARN = '#ff4a3d';
 const teamCol = (t) => (t === 'red' ? RED : BLUE);
 
@@ -59,6 +80,9 @@ class Puppet {
         this.mode = MODE.NONE;
         this.corr = new THREE.Vector3(); this.shown = new THREE.Vector3();
         this.heard = 0;          // when its last snapshot arrived (our clock)
+        this.born = mp.now();    // when we built it
+        this.hitT = -1e9;        // when one of ours last claimed a hit on it (a kill of it can only be ours after that)
+        this.flareT = -1e9;
         this.dead = false;       // its owner said it was killed
         this.stale = false;      // no snapshots for a while, or its owner's tab is hidden: hidden here, can't be hit
         this.safe = false;       // spawn protection
@@ -96,12 +120,12 @@ export class Multiplayer {
         this.nextN = 1;                // numbers for the AI we own
         this.myMissiles = new Map();   // our missiles in flight → { id, target }
         this.nextMissile = 0;
-        this.ghosts = new Map();       // other people's missiles: peer id * 65536 + missile id → ghost
+        this.ghosts = new Set();       // other people's missiles as we draw them (each peer's own, by its id: peer.ghosts)
         this.claims = new Map();
         this.kills = 0; this.deaths = 0;
         this.sendT = 0; this.statT = 0; this.sentStat = '';
         this.menuOpen = false;
-        this.away = false; this.awaySince = 0; this.lastTick = 0;
+        this.away = false; this.wasHidden = false; this.awaySince = 0; this.lastTick = 0;
         this.offline = null;           // { since, tries, nextAt, msg }: the connection dropped, we're trying again
         this.connecting = false;
         this.where = 'runway';
@@ -126,7 +150,9 @@ export class Multiplayer {
         this.pending = { link, welcome: w, hello, url };
         // (a connection made and then never launched: let go of it if it closes meanwhile)
         link.onClose = () => { if (this.pending && this.pending.link === link) this.pending = null; };
-        return { code: w.room, name: w.name, time: w.set.time, weather: w.set.weather, ai: !!w.set.ai, host: w.host === w.id, players: w.peers.length + 1 };
+        const set = w.set && typeof w.set === 'object' ? w.set : {};
+        return { code: cleanRoom(w.room), name: cleanCallsign(w.name) || 'PILOT', time: TIMES.includes(set.time) ? set.time : 'day', weather: WEATHERS.includes(set.weather) ? set.weather : 'clear',
+            ai: set.ai === true, host: w.host === w.id, players: (Array.isArray(w.peers) ? w.peers.length : 0) + 1 };
     }
     dropPending() { if (this.pending) { this.pending.link.close(); this.pending = null; } }
 
@@ -135,8 +161,9 @@ export class Multiplayer {
         this.link = link; this.hello = hello; this.url = url || this.url;
         link.onMessage = (m) => { try { this.onMessage(m); } catch (e) { if (!this._warned) { this._warned = true; console.warn('[multiplayer] bad message', e); } } };
         link.onClose = (info) => this.onLinkClosed(info);
-        this.me = { id: w.id, name: w.name, team: hello.team === 'red' ? 'red' : 'blue', ac: hello.ac, lv: hello.lv || 'default' };
-        this.room = { code: w.room, host: w.host, set: { time: 'day', weather: 'clear', ai: false, ...(w.set || {}) } };
+        const set = w.set && typeof w.set === 'object' ? w.set : {};
+        this.me = { id: int(w.id, 1, 1e6), name: cleanCallsign(w.name) || 'PILOT', team: hello.team === 'red' ? 'red' : 'blue', ac: hello.ac, lv: hello.lv || 'default' };
+        this.room = { code: cleanRoom(w.room), host: int(w.host, 1, 1e6), set: { time: TIMES.includes(set.time) ? set.time : 'day', weather: WEATHERS.includes(set.weather) ? set.weather : 'clear', ai: set.ai === true } };
         this.peers.clear();
         for (const p of Array.isArray(w.peers) ? w.peers : []) this.addPeer(p);
         // what the relay sent between its welcome and now (someone joined or left, a host described its bandits)
@@ -155,7 +182,7 @@ export class Multiplayer {
         this.where = ['air', 'runway', 'apron'].includes(opts.start) ? opts.start : g.startPoint ? g.startPoint() : 'runway';
         if (pend) this.attach(pend.link, pend.welcome, pend.hello, pend.url);
         else this.offline = { since: this.now(), tries: 0, nextAt: Infinity, msg: 'NOT CONNECTED' }; // (launched without the lobby: alone)
-        this.lastTick = this.now();
+        this.lastTick = 0;
         this.quietWorld(true);
         const p = g.player;
         if (this.me.team === 'red' && g.war && g.war.setSide) g.war.setSide('red');
@@ -168,7 +195,7 @@ export class Multiplayer {
     clear() {
         const g = this.game;
         if (this.link) { this.link.onClose = null; this.link.close(); this.link = null; }
-        for (const gh of this.ghosts.values()) this.removeGhost(gh, false);
+        for (const gh of [...this.ghosts]) this.removeGhost(gh, false);
         if (this.active || this.quiet) this.quietWorld(false);
         this.active = false;
         g.cockpitOnly = false;
@@ -178,10 +205,12 @@ export class Multiplayer {
     update(dt) {
         if (!this.active) return;
         const g = this.game, now = this.now();
-        // back from a hidden tab or a long stall with the jet in the air: it wasn't flying while we were gone
-        const gap = now - this.lastTick;
+        // back from a hidden tab (or a stall so long that everyone lost sight of us) with the jet in the air: it wasn't
+        // flying while we were gone. (Not the first frame after the launch, however long that one took.)
+        const gap = this.lastTick ? now - this.lastTick : 0;
         this.lastTick = now;
-        if (gap > AWAY_RESPAWN) this.backFromAway(gap);
+        if ((this.wasHidden && gap > AWAY_RESPAWN) || gap > STALL_RESPAWN) this.backFromAway(gap);
+        this.wasHidden = false;
         if (this.link) this.link.pump();
         this.syncLocals(now);
         this.updateDeath(now);
@@ -405,7 +434,7 @@ export class Multiplayer {
 
     // an entity anywhere in the room, by id: { ac, name, team, mine, player }
     who(id) {
-        if (!id) return null;
+        if (typeof id !== 'number' || !(id > 0) || id !== Math.floor(id) || id > 1e12) return null;
         const cid = eidOwner(id), n = eidN(id);
         if (cid === this.me.id) {
             const ac = this.byN.get(n);
@@ -452,8 +481,9 @@ export class Multiplayer {
         this.send(['boom', e.n, e.life, ground ? 1 : 0, water ? 1 : 0, Math.round(p.x * 10) / 10, Math.round(p.y * 10) / 10, Math.round(p.z * 10) / 10]);
     }
 
-    // a kill, for the feed and the score: victim / killer { name, team, mine, player }
-    record(victim, killer, kind) {
+    // a kill, for the feed and the score: victim / killer { name, team, mine, player }; unknown: someone was named as
+    // the killer who isn't in the room (or it was us, and we never hit it)
+    record(victim, killer, kind, unknown = false) {
         const g = this.game;
         const mineKill = !!killer && killer.mine && killer.player, mineDeath = victim.mine && victim.player;
         if (mineKill) {
@@ -464,7 +494,7 @@ export class Multiplayer {
             g.audio && g.audio.say && g.audio.say(pick(['Splash one!', 'Good kill, good kill!', 'Bandit down!', 'Splash!']));
         }
         const how = kind === 'gun' ? ' [GUNS]' : kind === 'missile' ? ' [MISSILE]' : '';
-        const text = killer ? killer.name + ' shot down ' + victim.name + how : victim.name + ' crashed';
+        const text = killer ? killer.name + ' shot down ' + victim.name + how : unknown ? victim.name + ' was shot down' : victim.name + ' crashed';
         g.addFeed(text.toUpperCase(), mineKill ? GREEN : mineDeath ? WARN : victim.team === this.me.team ? '#ff9f5a' : BLUE);
     }
 
@@ -477,6 +507,7 @@ export class Multiplayer {
         if (!src || source.team === ac.team) return; // nothing else here may hurt it; never our own side
         const g = this.game;
         ac.lastHitBy = source; ac.lastHitTime = g.time;
+        rec.hitT = this.now();
         g.events.emit('hit', ac, { source, amount, kind });
         const k = kindCode(kind), key = rec.peer.id + ':' + rec.n + ':' + rec.life + ':' + k + ':' + src.n;
         const c = this.claims.get(key);
@@ -490,18 +521,23 @@ export class Multiplayer {
     }
 
     // someone claims a hit on one of ours: apply it through the normal damage path, their puppet as the source
+    // e: ['hit', our entity's number, its airframe, amount, kind, the shooter's entity number]. The shooter decides
+    // whether it hit (that is the design: it saw the target where it shot at it); what we can check, we do.
     onHit(peer, e) {
-        const ac = this.byN.get(e[1]), ent = ac && this.locals.get(ac), now = this.now();
-        if (!ent || ent.life !== e[2] || !ac.alive) return;
+        const n = int(e[1], 0, NMAX - 1), srcN = int(e[5], 0, NMAX - 1), kind = KINDS[int(e[4], 0, KINDS.length - 1)], amount = e[3];
+        if (n < 0 || srcN < 0 || !kind || typeof amount !== 'number' || !(amount > 0)) return;
+        const ac = this.byN.get(n), ent = ac && this.locals.get(ac), now = this.now();
+        if (!ent || ent.life !== e[2] || !ac.alive) return;     // not ours, not this airframe, already down
         if (this.away || now - this.lastTick > 1) return;       // we're not really here (a hidden tab): no free kills
         if (ent.safeUntil > now) return;                        // spawn protection
-        const amount = +e[3];
-        if (!(amount > 0)) return;
-        const srcRec = peer.ents.get(e[5] | 0), src = srcRec ? srcRec.ac : null;
-        const team = srcRec ? srcRec.ac.team : (e[5] | 0) === 0 ? peer.team : 'red';
+        if (srcN > 0 && peer.id !== this.room.host) return;     // only the host has aircraft besides its own jet
+        const srcRec = peer.ents.get(srcN), src = srcRec && srcRec.ac ? srcRec.ac : null;
+        const team = src ? src.team : srcN === 0 ? peer.team : 'red';
         if (team === ac.team) return;                           // same side
-        ent.hitBy = eid(peer.id, e[5] | 0); ent.hitT = this.game.time;
-        ac.damage(Math.min(amount, 5000), src, KINDS[e[4] | 0] || 'gun');
+        // a cannon reaches a couple of kilometres: not from where we see that shooter flying, then it isn't a hit
+        if (kind === 'gun' && src && !srcRec.stale && !srcRec.dead && src.pos.distanceToSquared(ac.pos) > GUN_REACH * GUN_REACH) return;
+        ent.hitBy = eid(peer.id, srcN); ent.hitT = this.game.time;
+        ac.damage(Math.min(amount, 5000), src, kind);
     }
 
     // ═════════════ Messages from the relay ═════════════
@@ -516,14 +552,17 @@ export class Multiplayer {
         }
     }
 
+    // p: [id, callsign, side, aircraft type, livery] as the relay lists a room member
     addPeer(p) {
-        if (!Array.isArray(p) || !(p[0] > 0) || p[0] === this.me.id) return null;
+        const id = Array.isArray(p) ? int(p[0], 1, 1e6) : -1;
+        if (id < 0 || id === this.me.id || this.peers.has(id) || this.peers.size >= MAX_PLAYERS * 2) return null;
         const peer = {
-            id: p[0] | 0, name: safeStr(String(p[1] || 'PILOT'), 14).toUpperCase() || 'PILOT', team: p[2] === 'red' ? 'red' : 'blue',
-            ac: AIRCRAFT[p[3]] ? p[3] : 'f16', lv: typeof p[4] === 'string' && LIVERIES[p[4]] ? p[4] : 'default',
-            clock: new ClockSync(), ents: new Map(), desc: new Map(), ended: new Map(), heard: 0, away: false, kills: 0, deaths: 0, ping: 0,
+            id, name: cleanCallsign(p[1]) || 'PILOT', team: p[2] === 'red' ? 'red' : 'blue',
+            ac: own(AIRCRAFT, p[3]) ? p[3] : 'f16', lv: own(LIVERIES, p[4]) ? p[4] : 'default',
+            clock: new ClockSync(), ents: new Map(), desc: new Map(), ended: new Map(), ghosts: new Map(),
+            launches: {}, builds: {}, heard: 0, away: false, kills: 0, deaths: 0, ping: 0,
         };
-        this.peers.set(peer.id, peer);
+        this.peers.set(id, peer);
         return peer;
     }
 
@@ -543,7 +582,7 @@ export class Multiplayer {
     onLeave(id, host) {
         const peer = this.peers.get(id), g = this.game;
         const wasHost = this.room.host === id;
-        if (typeof host === 'number') this.room.host = host;
+        if (int(host, 1, 1e6) > 0) this.room.host = host;
         if (peer) {
             // the host's AI bandits pass to the new host: ours now, if that's us
             if (wasHost && this.isHost) this.inherit(peer);
@@ -555,7 +594,7 @@ export class Multiplayer {
 
     removePeer(peer) {
         for (const rec of [...peer.ents.values()]) this.removePuppet(rec);
-        for (const gh of [...this.ghosts.values()]) if (gh.peer === peer) this.removeGhost(gh, false);
+        for (const gh of [...peer.ghosts.values()]) this.removeGhost(gh, false);
         this.peers.delete(peer.id);
     }
 
@@ -569,31 +608,48 @@ export class Multiplayer {
         }
     }
 
+    // An event from `from` (the relay stamps the sender: a peer can only speak as itself). Everything in it is the
+    // peer's own word: each handler checks the ids, ranges and ownership it relies on, and none does more work or
+    // keeps more memory when a message is repeated.
     onEvent(from, e) {
         const peer = this.peers.get(from);
-        if (!peer || !Array.isArray(e)) return;
+        if (!peer || !Array.isArray(e) || e.length > 24) return;
         for (let i = 1; i < e.length; i++) if (typeof e[i] !== 'string' && !(typeof e[i] === 'number' && isFinite(e[i]))) return;
         switch (e[0]) {
             case 'hit': return this.onHit(peer, e);
             case 'die': return this.onDie(peer, e);
             case 'boom': return this.onBoom(peer, e);
-            case 'gone': { const rec = peer.ents.get(e[1] | 0); peer.ended.set(e[1] | 0, e[2] | 0); if (rec) this.removePuppet(rec); return; }
+            case 'gone': return this.onGone(peer, e);
             case 'part': return this.onPart(peer, e);
             case 'fl': return this.onFlares(peer, e);
             case 'ml': return this.onLaunch(peer, e);
             case 'mx': return this.onMissileEnd(peer, e);
             case 'ai': return this.onDescribe(peer, e);
-            case 'st': peer.kills = clamp(e[1] | 0, 0, 9999); peer.deaths = clamp(e[2] | 0, 0, 9999); peer.ping = clamp(e[3] | 0, 0, 9999); return;
+            // (its own score as it counts it: shown on the board, never added to ours)
+            case 'st': peer.kills = Math.max(0, int(e[1], 0, 9999)); peer.deaths = Math.max(0, int(e[2], 0, 9999)); peer.ping = Math.max(0, int(e[3], 0, 9999)); return;
             case 'away': peer.away = e[1] === 1; return;
         }
     }
 
+    // that airframe of its is over (peer.ended: at most one entry per entity number, so it can't grow)
+    endLife(peer, n, life) { if ((peer.ended.get(n) ?? -1) < life) peer.ended.set(n, life); }
+
+    onGone(peer, e) {
+        const n = int(e[1], 0, NMAX - 1), life = int(e[2], 0, MAX_LIFE);
+        if (n < 0 || life < 0) return;
+        const rec = peer.ents.get(n);
+        if (rec && rec.life > life) return; // (an airframe it has already replaced)
+        this.endLife(peer, n, life);
+        if (rec) this.removePuppet(rec);
+    }
+
+    // the AI aircraft a host flies: only the room's host has any
     onDescribe(peer, e) {
-        const n = e[1] | 0;
-        if (!(n > 0 && n < NMAX) || peer.desc.size > 200) return;
+        const n = int(e[1], 1, NMAX - 1);
+        if (n < 0 || peer.id !== this.room.host || (peer.desc.size >= 200 && !peer.desc.has(n))) return;
         peer.desc.set(n, {
-            type: AIRCRAFT[e[2]] ? e[2] : 'f16', team: e[3] === 0 ? 'blue' : 'red', name: safeStr(String(e[4] || ''), 20),
-            maxHealth: clamp(+e[5] || 0, 1, 5000), skill: clamp((+e[6] || 60) / 100, 0.1, 1), ace: e[7] === 1,
+            type: own(AIRCRAFT, e[2]) ? e[2] : 'f16', team: e[3] === 0 ? 'blue' : 'red', name: typeof e[4] === 'string' ? safeStr(e[4], 20) : '',
+            maxHealth: clamp(typeof e[5] === 'number' ? e[5] : 100, 1, 5000), skill: clamp((typeof e[6] === 'number' ? e[6] : 60) / 100, 0.1, 1), ace: e[7] === 1,
         });
     }
 
@@ -601,46 +657,55 @@ export class Multiplayer {
     onState(list) {
         if (!Array.isArray(list)) return;
         const now = this.now();
-        for (const s of list) {
+        for (let i = 0; i < list.length && i < MAX_PLAYERS * 2; i++) {
+            const s = list[i];
             if (!Array.isArray(s)) continue;
             const peer = this.peers.get(s[0]); // (ours comes back too: the relay sends the room one message)
-            const c = s[1] / 1000;
-            if (!peer || !(c >= 0)) continue;
+            const c = typeof s[1] === 'number' ? s[1] / 1000 : NaN;
+            if (!peer || !(c >= 0 && c < 1e10)) continue;
             peer.clock.update(c, now);
             peer.heard = now;
-            if (Array.isArray(s[2])) for (const row of s[2]) this.onEntity(peer, c, row, now);
-            if (Array.isArray(s[3])) for (const row of s[3]) this.onMissile(peer, c, row, now);
+            const rows = s[2], ms = s[3];
+            if (Array.isArray(rows)) for (let k = 0; k < rows.length && k < MAX_ENTITIES; k++) this.onEntity(peer, c, rows[k], now);
+            if (Array.isArray(ms)) for (let k = 0; k < ms.length && k < MAX_MISSILES; k++) this.onMissile(peer, c, ms[k], now);
         }
     }
 
     onEntity(peer, c, row, now) {
         const d = decodeEntity(row, _D);
         if (!d) return;
-        if ((peer.ended.get(d.n) ?? -1) >= d.life) return; // (still in the post when that airframe went)
+        if (d.n > 0 && peer.id !== this.room.host) return;   // only the host flies anything but its own jet
+        if ((peer.ended.get(d.n) ?? -1) >= d.life) return;   // (still in the post when that airframe went)
         let rec = peer.ents.get(d.n);
         if (rec && rec.life !== d.life) {
             if (d.life < rec.life) return;
-            this.removePuppet(rec); rec = null;           // a new airframe under that number
+            // a new airframe under that number: at most one a second (a real one takes RESPAWN_DELAY)
+            if (now - rec.born < 1) return;
+            this.endLife(peer, d.n, rec.life);
+            this.removePuppet(rec); rec = null;
         }
         if (!rec) {
             if (!(d.flags & FLAG.ALIVE)) return;
-            rec = this.makePuppet(peer, d.n, d.life, d);
+            rec = this.makePuppet(peer, d.n, d.life, d, now);
             if (!rec) return;
         }
         rec.buf.push(c, d);
         rec.heard = now;
     }
 
-    makePuppet(peer, n, life, d) {
+    // every puppet is built here: so many in all, so many for one peer, and no faster than a peer could really need
+    // them (building an aircraft costs a few milliseconds: a peer changing its airframe number in every message
+    // would otherwise stall us)
+    makePuppet(peer, n, life, d, now = this.now()) {
         const g = this.game;
         const desc = n === 0 ? { type: peer.ac, team: peer.team, name: peer.name, lv: peer.lv, human: true } : peer.desc.get(n);
         if (!desc) return null; // (an AI whose description hasn't arrived yet)
         let count = 0;
         for (const p of this.peers.values()) count += p.ents.size;
-        if (count >= MAX_PUPPETS) return null;
-        const type = AIRCRAFT[desc.type] ? desc.type : 'f16';
+        if (count >= MAX_PUPPETS || peer.ents.size >= PEER_PUPPETS || !allow(peer.builds, now, 2, 12)) return null;
+        const type = own(AIRCRAFT, desc.type) ? desc.type : 'f16';
         const ac = new Aircraft(g, type, { team: desc.team, name: desc.name || null });
-        if (desc.lv && desc.lv !== 'default' && LIVERIES[desc.lv]) { try { applyLivery(ac.model, desc.lv, type); } catch (e) { /* stock paint */ } }
+        if (desc.lv && desc.lv !== 'default' && own(LIVERIES, desc.lv)) { try { applyLivery(ac.model, desc.lv, type); } catch (e) { /* stock paint */ } }
         if (desc.maxHealth) ac.maxHealth = ac.health = desc.maxHealth;
         if (desc.ace) ac.isAce = true;
         const rec = new Puppet(this, peer, n, life, !!desc.human);
@@ -724,7 +789,10 @@ export class Multiplayer {
             for (const rec of peer.ents.values()) {
                 const ac = rec.ac;
                 if (!ac) continue;
-                if (ac.exploded) { peer.ents.delete(rec.n); peer.ended.set(rec.n, Math.max(peer.ended.get(rec.n) ?? -1, rec.life)); continue; }
+                if (ac.exploded) { peer.ents.delete(rec.n); this.endLife(peer, rec.n, rec.life); continue; }
+                // an AI aircraft its host stopped reporting long ago (without a word): gone, its place freed
+                // (if it does come back, it is built again)
+                if (rec.n > 0 && now - rec.heard > STALE_AFTER * 4) { this.removePuppet(rec); continue; }
                 const stale = peer.away || now - rec.heard > STALE_AFTER;
                 if (stale !== rec.stale) {
                     rec.stale = stale;
@@ -738,13 +806,20 @@ export class Multiplayer {
         }
     }
 
+    // e: ['die', its entity's number, that airframe, the killer's id (0: nobody), kind]. A peer can only report the
+    // death of an aircraft of its own that we have a living picture of, once: nothing reaches the kill feed or the
+    // score for an airframe we never saw, one that has already died or ended, or the same death told again.
     onDie(peer, e) {
-        const g = this.game, n = e[1] | 0, life = e[2] | 0, kind = KINDS[e[4] | 0] || 'gun';
-        const rec = peer.ents.get(n), d = n === 0 ? null : peer.desc.get(n);
-        const killer = this.who(e[3]);
-        this.record({ name: n === 0 ? peer.name : rec ? rec.name : d ? this.descName(d) : 'BANDIT', team: n === 0 ? peer.team : d ? d.team : 'red', mine: false, player: n === 0 }, killer, kind);
-        if (!rec || rec.life !== life || rec.dead) return;
+        const g = this.game, n = int(e[1], 0, NMAX - 1), life = int(e[2], 0, MAX_LIFE), kind = KINDS[int(e[4], 0, KINDS.length - 1)] || 'gun';
+        if (n < 0 || life < 0) return;
+        const rec = peer.ents.get(n);
+        if (!rec || !rec.ac || rec.life !== life || rec.dead || (peer.ended.get(n) ?? -1) >= life) return;
         rec.dead = true;
+        // who did it: someone in the room now (us: only an aircraft of ours that did claim a hit on it); anyone else is "unknown"
+        let killer = typeof e[3] === 'number' && e[3] > 0 ? this.who(e[3]) : null;
+        const named = typeof e[3] === 'number' && e[3] > 0;
+        if (killer && killer.mine && !(this.now() - rec.hitT < 30)) killer = null;
+        this.record({ name: rec.name, team: rec.ac.team, mine: false, player: n === 0 }, killer, kind, named && !killer);
         const ac = rec.ac;
         ac.alive = false; ac.health = 0;
         for (const m of ac.incoming) if (m.ghost) m.target = null;
@@ -753,30 +828,35 @@ export class Multiplayer {
     }
 
     onBoom(peer, e) {
-        const n = e[1] | 0, life = e[2] | 0, rec = peer.ents.get(n);
-        peer.ended.set(n, Math.max(peer.ended.get(n) ?? -1, life));
-        if (!rec || rec.life !== life) return;
+        const n = int(e[1], 0, NMAX - 1), life = int(e[2], 0, MAX_LIFE);
+        if (n < 0 || life < 0) return;
+        const rec = peer.ents.get(n);
+        if (!rec || !rec.ac || rec.life !== life) return; // (not the airframe we have: nothing to blow up, nothing to remember)
+        this.endLife(peer, n, life);
         const ac = rec.ac;
         peer.ents.delete(n);
         if (rec.stale) { this.removePuppet(rec); return; }
         // where it really went in (we draw it a moment behind)
-        if (_v.set(+e[5], +e[6], +e[7]).distanceToSquared(ac.pos) < 3000 * 3000) ac.pos.copy(_v);
+        if (typeof e[5] === 'number' && typeof e[6] === 'number' && typeof e[7] === 'number' && _v.set(e[5], e[6], e[7]).distanceToSquared(ac.pos) < 3000 * 3000) ac.pos.copy(_v);
         rec.dead = true;
         ac.root.visible = true;
         ac.explode(e[3] === 1, e[4] === 1);
     }
 
     onPart(peer, e) {
-        const rec = peer.ents.get(e[1] | 0), region = REGION_CODES[e[3] | 0], g = this.game;
-        if (!rec || rec.life !== (e[2] | 0) || !region || !rec.ac.regions[region] || rec.ac.lostRegions.has(region)) return;
+        const rec = peer.ents.get(int(e[1], 0, NMAX - 1)), region = REGION_CODES[int(e[3], 0, REGION_CODES.length - 1)], g = this.game;
+        // (a wing: the only part the game shears off a flying jet)
+        if (!rec || !rec.ac || rec.life !== e[2] || (region !== 'wingL' && region !== 'wingR') || !rec.ac.regions[region] || rec.ac.lostRegions.has(region)) return;
         const ac = rec.ac;
         g.effects.explosion(ac.regions[region].getWorldPosition(_v), 0.5, ac.vel);
         g.wreckage.detach(ac, region, 1);
     }
 
     onFlares(peer, e) {
-        const rec = peer.ents.get(e[1] | 0), g = this.game;
-        if (!rec || !rec.ac.alive) return;
+        const rec = peer.ents.get(int(e[1], 0, NMAX - 1)), g = this.game, now = this.now();
+        // (a dispenser fires a salvo every 0.35 s at most: more often than that is ignored)
+        if (!rec || !rec.ac || !rec.ac.alive || now - rec.flareT < 0.25) return;
+        rec.flareT = now;
         // dropped for real by its puppet here: our own missiles' seekers can be pulled off by them
         rec.ac.flares = 9; rec.ac.lastFlare = -10;
         g.weapons.dropFlares(rec.ac, g.time);
@@ -806,19 +886,25 @@ export class Multiplayer {
     }
 
     onLaunch(peer, e) {
-        const id = e[1] | 0, kind = MISSILE_KINDS.includes(e[4]) ? e[4] : 'aam';
-        if (!(id > 0) || this.ghosts.size > 60) return;
-        const W = (typeof e[3] === 'string' && STORES[e[3]]) || WEAPONS[kind === 'aam' ? 'missile' : kind] || WEAPONS.missile;
-        const owner = peer.ents.get(e[2] | 0), target = this.who(e[5]);
-        const gh = this.makeGhost(peer, id, W, kind, owner ? owner.ac : null, target && target.ac, +e[6], +e[7], +e[8], +e[9], +e[10], +e[11], +e[12] / 1000);
+        const id = int(e[1], 1, MAX_MISSILE_ID), n = int(e[2], 0, NMAX - 1), kind = MISSILE_KINDS.includes(e[4]) ? e[4] : 'aam';
+        if (id < 0 || n < 0 || (n > 0 && peer.id !== this.room.host)) return; // (only the host flies anything but its own jet)
+        // a jet fires one every 0.6 s at most, the host's bandits a few between them: more than that is noise
+        if (!allow(peer.launches, this.now(), 3, 8)) return;
+        const W = (own(STORES, e[3]) && STORES[e[3]]) || WEAPONS[kind === 'aam' ? 'missile' : kind] || WEAPONS.missile;
+        const owner = peer.ents.get(n), target = this.who(e[5]);
+        const gh = this.makeGhost(peer, id, W, kind, owner ? owner.ac : null, target && target.ac, e[6], e[7], e[8], e[9], e[10], e[11], typeof e[12] === 'number' ? e[12] / 1000 : -1);
         if (!gh) return;
         // the launch as the game knows it: its sound, the warning for whoever it's meant for
         this.game.events.emit('missileLaunch', gh.owner, { missile: gh, target: gh.target });
     }
 
+    // every ghost is made here, so the limits hold whichever message asked for it: one per (peer, id), a few per
+    // peer, so many in all; a position off the map or a speed no missile has is refused
     makeGhost(peer, id, W, kind, owner, target, x, y, z, vx, vy, vz, c) {
-        const g = this.game, key = peer.id * 65536 + id;
-        if (this.ghosts.has(key) || !isFinite(x + y + z + vx + vy + vz) || Math.abs(x) > 250000 || Math.abs(z) > 250000) return null;
+        const g = this.game;
+        if (int(id, 1, MAX_MISSILE_ID) < 0 || peer.ghosts.has(id) || peer.ghosts.size >= PEER_GHOSTS || this.ghosts.size >= MAX_GHOSTS) return null;
+        for (const v of [x, y, z, vx, vy, vz]) if (typeof v !== 'number' || !isFinite(v)) return null;
+        if (Math.abs(x) > 250000 || Math.abs(z) > 250000 || y < -1000 || y > 90000 || Math.hypot(vx, vy, vz) > 7000) return null;
         let mesh;
         if (W.id) mesh = storeMesh(W);
         else {
@@ -829,7 +915,7 @@ export class Multiplayer {
         mesh.visible = false; // (until the others' picture of the launcher, a moment behind, gets there)
         g.scene.add(mesh);
         const gh = {
-            ghost: true, key, id, peer, W, kind, mesh, pos: mesh.position, vel: new THREE.Vector3(vx, vy, vz),
+            ghost: true, id, peer, W, kind, mesh, pos: mesh.position, vel: new THREE.Vector3(vx, vy, vz),
             owner: owner || { pos: mesh.position, team: peer.team, callsign: peer.name }, team: peer.team, target: target || null,
             tracking: !!target, buf: new InterpBuffer(8), age: 0, heard: this.now(), lost: false, alive: true,
             trail: g.effects.addTrail({ max: 220, width: 1.1, life: 5.5, color: [0.92, 0.92, 0.9], alpha: 0.5, minDist: 10, widthGrow: 2.2 }),
@@ -837,14 +923,15 @@ export class Multiplayer {
         if (c >= 0) gh.buf.push(c, { px: x, py: y, pz: z, vx, vy, vz });
         // it's after one of ours: the usual warning (HUD, tone, the AI's evasion) reads the target's `incoming`
         if (target && this.locals.has(target)) target.incoming.push(gh);
-        this.ghosts.set(key, gh);
+        this.ghosts.add(gh);
+        peer.ghosts.set(id, gh);
         return gh;
     }
 
     onMissile(peer, c, row, now) {
         const d = decodeMissile(row, _M);
         if (!d) return;
-        let gh = this.ghosts.get(peer.id * 65536 + d.id);
+        let gh = peer.ghosts.get(d.id); // (a peer's ids name its own missiles only)
         // one we never saw launched (we joined while it flew): a plain missile
         if (!gh) { gh = this.makeGhost(peer, d.id, WEAPONS.missile, 'aam', null, null, d.px, d.py, d.pz, d.vx, d.vy, d.vz, c); if (!gh) return; gh.age = 1; }
         gh.buf.push(c, d);
@@ -859,15 +946,16 @@ export class Multiplayer {
     }
 
     onMissileEnd(peer, e) {
-        const gh = this.ghosts.get(peer.id * 65536 + (e[1] | 0));
-        if (!gh) return;
-        if (_v.set(+e[2], +e[3], +e[4]).distanceToSquared(gh.pos) < 4000 * 4000) gh.pos.copy(_v);
+        const gh = peer.ghosts.get(int(e[1], 1, MAX_MISSILE_ID));
+        if (!gh || gh.peer !== peer) return;
+        if (typeof e[2] === 'number' && typeof e[3] === 'number' && typeof e[4] === 'number' && _v.set(e[2], e[3], e[4]).distanceToSquared(gh.pos) < 4000 * 4000) gh.pos.copy(_v);
         this.removeGhost(gh, true);
     }
 
     removeGhost(gh, bang) {
         const g = this.game;
-        this.ghosts.delete(gh.key);
+        this.ghosts.delete(gh);
+        if (gh.peer.ghosts.get(gh.id) === gh) gh.peer.ghosts.delete(gh.id);
         gh.alive = false;
         if (gh.target && gh.target.incoming) { const i = gh.target.incoming.indexOf(gh); if (i >= 0) gh.target.incoming.splice(i, 1); }
         if (gh.trail) gh.trail.emitting = false;
@@ -881,7 +969,7 @@ export class Multiplayer {
     updateGhosts(dt, now) {
         if (!this.ghosts.size) return;
         const fx = this.game.effects;
-        for (const gh of this.ghosts.values()) {
+        for (const gh of this.ghosts) {
             if (now - gh.heard > 2) { this.removeGhost(gh, false); continue; } // its owner stopped reporting it
             const T = now - (gh.peer.clock.offset ?? 0) - INTERP_DELAY;
             const first = gh.buf.count ? gh.buf.at(gh.buf.count - 1) : null;
@@ -959,7 +1047,7 @@ export class Multiplayer {
     onVisibility(hidden) {
         if (!this.active) return;
         const now = this.now();
-        if (hidden) { this.away = true; this.awaySince = now; this.flushClaims(); this.send(['away', 1]); }
+        if (hidden) { this.away = true; this.wasHidden = true; this.awaySince = now; this.flushClaims(); this.send(['away', 1]); }
         else if (this.away) { this.away = false; this.send(['away', 0]); }
     }
 

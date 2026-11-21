@@ -18,6 +18,8 @@ export const EXTRAP_MAX = 0.5;      // s: how long a remote aircraft coasts on i
 export const STALE_AFTER = 3;       // s without a snapshot: the aircraft is hidden and can't be hit or locked
 export const MAX_ENTITIES = 12, MAX_MISSILES = 12;   // rows in one state message (the relay's limits)
 export const MAX_PLAYERS = 16;
+export const MAX_MISSILE_ID = 65535;                 // a missile's id with its owner: 1 … this (anything else is refused)
+export const MAX_LIFE = 1e6;                         // airframe counts beyond this are refused
 
 // an entity's id across the room: its owner's client id and its number with that owner
 export const NMAX = 4096;
@@ -53,7 +55,7 @@ export function decodeEntity(row, out = {}) {
     if (!Array.isArray(row) || row.length < 16) return null;
     for (let i = 0; i < 16; i++) if (!fin(row[i])) return null;
     const n = row[0], life = row[1];
-    if (n < 0 || n >= NMAX || n !== Math.floor(n) || life < 0 || life > 1e6 || life !== Math.floor(life)) return null;
+    if (n < 0 || n >= NMAX || n !== Math.floor(n) || life < 0 || life > MAX_LIFE || life !== Math.floor(life)) return null;
     if (Math.abs(row[2]) > 250000 || Math.abs(row[4]) > 250000 || row[3] < -1000 || row[3] > 60000) return null;
     let qx = row[5], qy = row[6], qz = row[7], qw = row[8];
     const ql = Math.hypot(qx, qy, qz, qw);
@@ -80,7 +82,8 @@ export function encodeMissile(m) {
 export function decodeMissile(row, out = {}) {
     if (!Array.isArray(row) || row.length < 8) return null;
     for (let i = 0; i < 8; i++) if (!fin(row[i])) return null;
-    if (row[0] < 0 || row[0] > 1e6 || Math.abs(row[1]) > 250000 || Math.abs(row[3]) > 250000 || row[2] < -1000 || row[2] > 90000) return null;
+    if (row[0] < 1 || row[0] > MAX_MISSILE_ID || row[0] !== Math.floor(row[0])) return null;
+    if (Math.abs(row[1]) > 250000 || Math.abs(row[3]) > 250000 || row[2] < -1000 || row[2] > 90000) return null;
     out.id = row[0];
     out.px = row[1]; out.py = row[2]; out.pz = row[3];
     out.vx = clamp(row[4], -4000, 4000); out.vy = clamp(row[5], -4000, 4000); out.vz = clamp(row[6], -4000, 4000);

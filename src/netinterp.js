@@ -22,7 +22,7 @@ export class ClockSync {
     update(sent, received) {
         const d = received - sent;
         if (this.offset === null || d < this.offset) this.offset = d;
-        else this.offset += (d - this.offset) * 0.01;
+        else this.offset += (d - this.offset) * 0.004; // (slow: every millisecond it wanders is 30 cm of a jet at Mach 1)
         return this.offset;
     }
 }
