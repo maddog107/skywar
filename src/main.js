@@ -29,6 +29,7 @@ import { AirTraffic } from './airtraffic.js';
 import { preloadProps } from './props.js';
 import { preloadCharacter } from './character.js';
 import { preloadWeapons } from './weaponmodels.js';
+import { preloadFlipbooks } from './flipbook.js'; // simulated fireballs (models/fx)
 import { SLOTS } from './arsenal.js';
 import { preloadShips } from './naval.js';
 import * as vehicles from './vehicles.js';
@@ -174,7 +175,8 @@ async function boot() {
     $('loadText').textContent = 'GENERATING TERRAIN…';
     await new Promise(r => setTimeout(r, 30));
     // the models start downloading (and their textures decoding, off the main thread) while the terrain is generated
-    const assets = Promise.all([preloadModels((f) => { $('loadFill').style.width = (10 + f * 60) + '%'; }), preloadProps(), preloadCharacter(), preloadShips(), preloadWeapons()]);
+    const assets = Promise.all([preloadModels((f) => { $('loadFill').style.width = (10 + f * 60) + '%'; }), preloadProps(), preloadCharacter(), preloadShips(), preloadWeapons(),
+        preloadFlipbooks(renderer, { half: settings.quality === 'low' || settings.quality === 'medium' })]); // (the fireball atlases: flipbook.js)
     world = new World(scene, renderer);
     world.setWeather(settings.weather || 'clear'); // [weather] the sky model (weather.js)
     world.setTime(settings.time);
@@ -564,6 +566,7 @@ function launch() {
     try {
         game.effects.explosion(new THREE.Vector3(0, -500, 0), 0.1);
         game.effects.water.warm(); // (splash.js: its particle systems and textures, so the first splash doesn't hitch)
+        game.effects.warm(renderer); // (the fireball flipbooks: their shader and atlases)
         renderer.compile(scene, camera);
         warmUpload();
         cockpit.viewModel.prewarm(SLOTS); // every weapon and the arms, so the first draw on foot doesn't hitch
@@ -757,6 +760,7 @@ function buildCredits() {
         ['Trees, grass, ferns and ground textures (photoscans; see models/vegetation and models/ground)', 'Poly Haven', 'CC0', 'https://polyhaven.com'],
         ['Underground complexes: portals, blast doors, vents, guard posts, substation, poles, masts (see models/underground/CREDITS.md)', 'SKYWAR / Blender (tools/underground)', 'CC0', 'tools/underground/'],
         ['Concrete, shotcrete, asphalt, gravel and painted-steel textures of the underground complexes', 'Poly Haven', 'CC0', 'https://polyhaven.com'],
+        ['Explosion fireballs: fluid simulations of an air burst, a ground burst and a fuel fire, baked to flipbooks (see models/fx/CREDITS.md)', 'SKYWAR / Blender (tools/fx)', 'CC0', 'tools/fx/'],
     ];
     const body = $('creditsBody');
     body.innerHTML = '';
