@@ -151,7 +151,8 @@ export class Game {
         return r;
     }
 
-    get difficulty() { return DIFFICULTY[this.settings.difficulty] || DIFFICULTY.veteran; }
+    // (multiplayer: the same rules for everyone, whatever each has in his menu)
+    get difficulty() { return (this.mode !== 'multiplayer' && DIFFICULTY[this.settings.difficulty]) || DIFFICULTY.veteran; }
     clockText() { return formatTime(this.missionTime || 0); }
 
     // ═════════════ Setup ═════════════
@@ -197,16 +198,17 @@ export class Game {
         if (this.nvg) { this.nvg = false; this.onNvg && this.onNvg(false); }
         if (this.rings) { this.rings.remove(); this.rings = null; }
         this.navTarget = null;
-        this.lives = this.mission ? (this.mission.lives ?? 0) : ['freeflight', 'sandbox', 'practice', 'rings', 'war'].includes(this.mode) ? Infinity : 2;
+        this.lives = this.mission ? (this.mission.lives ?? 0) : ['freeflight', 'sandbox', 'practice', 'rings', 'war', 'multiplayer'].includes(this.mode) ? Infinity : 2;
         if (this.mode === 'rings') this.rings = new RingCourse(this, 7);
         this.input.consumeMouse();
         this.input.spoilersOn = false;
         this.autopilot.disengage();
         this.pilotMode = null;
-        this.world.setWeather(this.settings.weather || 'clear');
+        this.world.setWeather(opts.weather || this.settings.weather || 'clear'); // (opts.weather: a multiplayer room's)
         const storm = this.world.weather === 'storm', rain = this.world.weather === 'rain';
         this.wind.set(storm ? 14 : rain ? 7 : 3, 0, storm ? -10 : rain ? -5 : -2);
-        this.naval.spawnHomeCarrier();
+        // (not in multiplayer: the carrier steams on each client's own dice, so it would be somewhere else for everyone)
+        if (this.mode !== 'multiplayer') this.naval.spawnHomeCarrier();
         if (this.world.towns) {
             this.ground.addBridges(this.world.towns.bridges);
             for (const b of this.world.towns.bridges) b.game = this;
@@ -249,6 +251,8 @@ export class Game {
             // custom missions set themselves up below
         } else if (this.mode === 'war') {
             // the Living War: the war plug-ins (director.js, front.js, tasks.js…) set it up in their start()
+        } else if (this.mode === 'multiplayer') {
+            // the other players, the spawn point and the briefing: multiplayer.js start()
         } else if (this.mode === 'rings') {
             this.placeAtRing();
             this.showBanner('RING RACE', this.rings.rings.length + ' rings through the valleys. Crashing respawns you at your last ring (+5 s).', 5);
@@ -261,7 +265,7 @@ export class Game {
             this.mission.setup && this.mission.setup(this);
             this.showBanner((this.isDaily ? 'DAILY: ' : 'MISSION: ') + this.mission.title, this.mission.desc, 6, '#ffc23f');
         }
-        if (this.settings.wingmen > 0 && !this.mission && !['freeflight', 'practice', 'sandbox', 'rings'].includes(this.mode)) {
+        if (this.settings.wingmen > 0 && !this.mission && !['freeflight', 'practice', 'sandbox', 'rings', 'multiplayer'].includes(this.mode)) {
             for (let i = 0; i < this.settings.wingmen; i++) {
                 const id = pick(ALLY_POOL);
                 const w = new Aircraft(this, id, { team: 'blue', name: WINGMEN[i] });
@@ -343,13 +347,15 @@ export class Game {
         const inf = this.infantry;
         if (!inf) return;
         if (['strike', 'sandbox', 'freeflight', 'war'].includes(this.mode)) inf.garrison(BASES.find(b => b.id === 'enemy'), 'red', baseToWorld, GARRISONS.enemy);
-        if (!['rings', 'naval'].includes(this.mode)) inf.garrison(BASES.find(b => b.id === 'home'), 'blue', baseToWorld, GARRISONS.home);
+        if (!['rings', 'naval', 'multiplayer'].includes(this.mode)) inf.garrison(BASES.find(b => b.id === 'home'), 'blue', baseToWorld, GARRISONS.home);
     }
 
     // Where the player starts: air, runway, apron (taxi) or carrier catapult
     startPoint() {
         let w = this.mission ? this.mission.start : this.settings.start || 'auto';
-        if (w === 'auto') w = this.mode === 'freeflight' || this.mode === 'sandbox' || this.mode === 'war' ? (AIRCRAFT[this.aircraftId]?.seaplane ? 'water' : 'runway') : this.mode === 'naval' ? 'carrier' : 'air';
+        if (w === 'auto') w = this.mode === 'freeflight' || this.mode === 'sandbox' || this.mode === 'war' || this.mode === 'multiplayer' ? (AIRCRAFT[this.aircraftId]?.seaplane ? 'water' : 'runway') : this.mode === 'naval' ? 'carrier' : 'air';
+        // multiplayer: the air, the runway or the apron (no carrier there, and nobody would see the Ready Room's driver)
+        if (this.mode === 'multiplayer' && !['air', 'runway', 'apron'].includes(w)) w = 'runway';
         return w;
     }
 
@@ -826,6 +832,8 @@ export class Game {
                 return;
             }
             if (ac.abandoned) return;
+            // a plug-in that keeps its own score and kill lines (multiplayer.js: "VIPER SHOT DOWN MAVERICK")
+            for (const s of this.systems) if (s.onKilled && s.onKilled(ac, source, kind)) return;
             const byPlayer = !!source && (source === this.player || source === this.pilotMode); // rifle kills count too
             const name = ac.spec.name;
             if (ac.team !== this.side && ac.team !== 'neutral') {
@@ -1180,6 +1188,7 @@ export class Game {
     }
 
     pause(on) {
+        if (this.mp && this.mp.active) return this.mp.menu(on); // multiplayer: the menu comes up, the world goes on
         this.state = on ? 'paused' : 'playing';
         this.onPause && this.onPause(on);
         this.input.consumeMouse();
@@ -1351,7 +1360,7 @@ export class Game {
     worldCollisions() {
         const bl = this.world.towns && this.world.towns.buildings;
         for (const a of this.aircraft) {
-            if (!a.alive || a.falling || a.onGround) continue;
+            if (!a.alive || a.falling || a.onGround || a.puppet) continue; // (a puppet's crash is its owner's to call: multiplayer.js)
             const r = a.hitRadius * 0.45;
             if (bl && a.pos.y < bl.maxTop + r) {
                 const b = bl.at(a.pos.x, a.pos.y, a.pos.z, r);
@@ -1377,7 +1386,7 @@ export class Game {
     // ═════════════ Player control ═════════════
     // Stopped on the ground (after a crash landing, or just parked): climb out and walk
     // (on a carrier's deck too: the man on foot rides the deck, pilot.js)
-    canClimbOut(p) { return p.onGround && (p.deck ? p.relSpeed : p.speed) < 0.8 && p.controls.throttle < 0.06 && !p.catapult; }
+    canClimbOut(p) { return !this.cockpitOnly && p.onGround && (p.deck ? p.relSpeed : p.speed) < 0.8 && p.controls.throttle < 0.06 && !p.catapult; } // (cockpitOnly: multiplayer)
     climbOut() {
         const p = this.player;
         const seat = this.wreckage.groundSeat(p);
@@ -1788,7 +1797,7 @@ export class Game {
         }
         // soft combat boundary
         // (the heist's escape target, 22 km from Miramar, is outside the 30 km box on purpose)
-        this.outOfBounds = !['freeflight', 'sandbox', 'naval', 'war'].includes(this.mode) && !(this.mission && this.mission.start === 'heist') && Math.hypot(p.pos.x, p.pos.z - (this.mode === 'strike' ? -8000 : 0)) > 30000;
+        this.outOfBounds = !['freeflight', 'sandbox', 'naval', 'war', 'multiplayer'].includes(this.mode) && !(this.mission && this.mission.start === 'heist') && Math.hypot(p.pos.x, p.pos.z - (this.mode === 'strike' ? -8000 : 0)) > 30000;
         if (p.pos.y > 14000 && p.vel) p.vel.y -= 10 * dt;
     }
 

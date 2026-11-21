@@ -25,6 +25,7 @@ import { WarInteriors } from './warinteriors.js';
 import { Underground } from './underground.js';
 import { WeatherSystem } from './weathersys.js';
 import { SandboxTools } from './sandbox.js';
+import { Multiplayer } from './multiplayer.js';
 
 export const SYSTEMS = [
     ['tacmap', TacticalMap],
@@ -45,4 +46,5 @@ export const SYSTEMS = [
     ['underground', Underground], // hidden mountain complexes: portals, blast doors, tunnels, intel, scrambles
     ['coastal', CoastalDefence], // coastal anti-ship missile batteries (Bastion-P, Harpoon)
     ['sandbox', SandboxTools],    // the sandbox toolkit: place units, missions, the spectator camera, the side swap, scenarios (last: its camera yields to the missile camera)
+    ['mp', Multiplayer],          // multiplayer (docs/MULTIPLAYER.md): other players' aircraft, hit claims, the scoreboard (last: its scoreboard draws over the rest; idle outside the MULTIPLAYER mode)
 ];

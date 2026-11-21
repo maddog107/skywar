@@ -187,7 +187,8 @@ export class Weapons {
                 const vel = dir.multiplyScalar(WEAPONS.bulletSpeed).add(ac.vel);
                 // (two rounds in three a tracer; a shotgun blast's one in four, or its sheet of fire would be a white blur)
                 const tracer = P > 1 ? ac.ammo % 4 === 0 : ac.ammo % 3 !== 0;
-                const b = this.newBullet(muzzle, vel, ac, gun.damage, WEAPONS.bulletLife, tracer, ac.team === 'blue' ? GUN_BLUE : GUN_RED);
+                // (a puppet's rounds, multiplayer.js, are for show: its owner's own rounds decide what they hit)
+                const b = this.newBullet(muzzle, vel, ac, ac.puppet ? 0 : gun.damage, WEAPONS.bulletLife, tracer, ac.team === 'blue' ? GUN_BLUE : GUN_RED);
                 b.flak = false;
                 // (its splash in the water, splash.js: the calibre, and how many real rounds this one stands for)
                 b.cal = gun.cal || (gun.cal = gunCalibre(gun.name));
@@ -862,7 +863,7 @@ export class Weapons {
             if (salvos.has(f.salvo)) continue;
             salvos.add(f.salvo);
             // a good pilot times his flares better; a modern seeker (IRCCM) sees through more of them (stores.js)
-            const chance = flareChance(m.W, f.owner?.isPlayer ? 0.35 : 0.08 + (f.owner?.pilot?.skill ?? 0.5) * 0.25);
+            const chance = flareChance(m.W, f.owner?.isPlayer || f.owner?.puppet?.human ? 0.35 : 0.08 + (f.owner?.pilot?.skill ?? 0.5) * 0.25); // (puppet.human: another player's jet)
             if (Math.random() < chance) {
                 if (m.target.incoming) {
                     const k = m.target.incoming.indexOf(m);
@@ -888,7 +889,7 @@ export class Weapons {
             salvos.add(c.salvo);
             const v = t.vel.length();
             const beam = v > 60 ? 1 - Math.abs(t.vel.dot(los)) / v : 0;
-            const base = c.owner?.isPlayer ? 0.45 : 0.1 + (c.owner?.pilot?.skill ?? 0.5) * 0.3;
+            const base = c.owner?.isPlayer || c.owner?.puppet?.human ? 0.45 : 0.1 + (c.owner?.pilot?.skill ?? 0.5) * 0.3;
             if (Math.random() < chaffChance(m.W, base, beam)) {
                 this.loseLock(m);
                 m.lost = false;

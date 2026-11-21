@@ -941,6 +941,8 @@ export class Aircraft {
     // ── Damage ──
     damage(amount, source, kind = 'gun') {
         if (!this.alive) return;
+        // another player's aircraft (multiplayer.js): the hit is claimed with its owner, who applies it
+        if (this.puppet) return this.puppet.hit(this, amount, source, kind);
         if (this.invincible) { this.lastHitBy = source; this.lastHitTime = this.game.time; this.game.events.emit('hit', this, { source, amount: 0, kind }); return; }
         let mult = this.isPlayer ? this.game.difficulty.dmgTaken : 1;
         // AI cannon is tuned down against the player so fights last long enough to be fun
@@ -993,7 +995,8 @@ export class Aircraft {
         this.alive = false;
         this.health = 0;
         this.game.events.emit('killed', this, { source: source || this.lastHitBy, kind });
-        if (hasEjectionSeat(this.spec) && (this.isPlayer || Math.random() < 0.85)) this.ejectT = rand(0.15, 0.9);
+        // (cockpitOnly: multiplayer, where nobody else would see the man under his parachute)
+        if (hasEjectionSeat(this.spec) && (this.isPlayer || Math.random() < 0.85) && !this.puppet && !this.game.cockpitOnly) this.ejectT = rand(0.15, 0.9);
         // Big hits and missiles blow the jet apart; otherwise it falls burning
         if (kind === 'missile' && Math.random() < 0.55 || kind === 'crash') {
             this.explode(false);
@@ -1059,7 +1062,7 @@ export class Aircraft {
             if (this.ejectT <= 0 && !this.exploded) this.game.wreckage.eject(this);
         }
         if (this.exploded) return;
-        if (this.falling) {
+        if (this.falling && !this.puppet) { // (a puppet's fall, and when it ends, are its owner's)
             // uncontrolled spiral
             this.controls.roll = clamp(this.fallSpin, -1, 1);
             this.controls.pitch = 0.2;
@@ -1078,7 +1081,8 @@ export class Aircraft {
             this.updateGearVisual();
         }
         this.updateSurfaces(dt);
-        this.updateFlight(dt);
+        // a puppet (another player's aircraft, multiplayer.js) has no flight model: it is placed from its owner's snapshots
+        if (this.puppet) this.puppet.place(this, dt); else this.updateFlight(dt);
         this.updateVisuals(dt);
         this.updateLod();
     }

@@ -22,6 +22,7 @@ export class NetLink {
         this.open = false;
         this.rtt = 0;              // ms, smoothed
         this.onMessage = null;     // (msg) every message after the welcome
+        this.backlog = [];         // what arrived after the welcome before anyone was listening (multiplayer.js attach reads it)
         this.onClose = null;       // ({ code, reason, refused }) the connection ended (after it had been open)
         this.queue = [];
         this.sentT = 0; this.sentN = 0;
@@ -55,7 +56,10 @@ export class NetLink {
                     resolve(m);
                     return;
                 }
+                // (welcomed, but the game hasn't taken the connection over yet: kept for it, the newest snapshots dropped
+                // first if that takes long)
                 if (this.onMessage) this.onMessage(m);
+                else if (this.backlog.length < 400 || m.t !== 's') this.backlog.push(m);
             };
             ws.onerror = () => { if (!done) fail(unreachable); };
             ws.onclose = (ev) => {
