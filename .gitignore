@@ -2,3 +2,4 @@ tests/.cache/
 .claude/
 tools/aircraft/shots/
 __pycache__/
+.deploy.env
