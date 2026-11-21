@@ -729,8 +729,12 @@ export function hasFileModel(id) { return !!cache[id]; }
 
 // A type's model as it is kept here (whole, its surfaces cut and stowed; every jet of the type is a copy of it), or
 // null if none has been made yet. Read only: pylons.js measures the stations on it.
-export function modelTemplate(id) {
-    if (cache[id]) { ensureSurfaces(id); return cache[id].object; }
+export function modelTemplate(id, cut = true) {
+    if (cache[id]) {
+        // (cut false: only if its flaps and brakes are cut already: don't do that work now)
+        if (!cache[id].surfacesCut) { if (!cut) return null; ensureSurfaces(id); }
+        return cache[id].object;
+    }
     return cache['proc_' + id] ? cache['proc_' + id].object : null;
 }
 

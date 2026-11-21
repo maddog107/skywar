@@ -21,6 +21,7 @@
 //    its class in the release order (the last station given out first, right and left by turns), which vanishes from
 //    its pylon as the weapon appears there. Rockets come out of their pods, which stay.
 //  • A lost wing: its stores go with it, and their ammunition is gone (the counters are cut by what hung there).
+//  • ?stores=0 in the address turns all of it off (models.js VISIBLE_STORES), to compare with and without.
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
 import { AIRCRAFT } from './config.js';
@@ -143,6 +144,13 @@ class Fit {
             if (y === y && !(top ? y <= best : y >= best)) best = y;
         }
         return best;
+    }
+    // the underside's usual height over a rectangle (the median: a flap fairing or a blister in it doesn't count)
+    typical(x0, x1, z0, z1) {
+        const ys = [];
+        const i0 = this.ix(Math.min(x0, x1)), i1 = this.ix(Math.max(x0, x1)), k0 = this.iz(z0), k1 = this.iz(z1);
+        for (let iz = k0; iz <= k1; iz++) for (let ix = i0; ix <= i1; ix++) { const y = this.cellAt(this.und, ix, iz); if (y === y) ys.push(y); }
+        return ys.length ? ys.sort((a, b) => a - b)[ys.length >> 1] : NaN;
     }
     // the same on one side's own skin (x signed): the lowest of it over a rectangle, or (top) the highest of its underside
     side(x0, x1, z0, z1, top = false) { return this.extreme(x0, x1, z0, z1, this.lo, top); }
@@ -324,24 +332,27 @@ function fitFor(ac) {
     let fit = null;
     try { fit = tpl ? new Fit(tpl, ac.spec.length) : new Fit(ac.model, ac.spec.length, ac.surfaces); } catch (e) { console.warn('[pylons] could not measure', ac.type, e); }
     FITS.set(ac.type, fit);
-    prefit();
+    prefit(ac.game);
     return fit;
 }
-// Measure the other armed types while nothing else is going on (in the menu, mostly), so a type first seen close up
-// mid-sortie doesn't cost a frame
+// Measure the other armed types while the menu is up and nothing else is going on, so a type first seen close up
+// mid-sortie doesn't cost a frame (each takes 10-30 ms). Only models whose flaps are already cut (models.js does
+// that in the background too); a type not reached by the time the sortie starts is measured when it's first needed.
 let prefitting = false;
-function prefit() {
-    if (prefitting || typeof window === 'undefined' || !window.requestIdleCallback) return;
+function prefit(game) {
+    if (prefitting || !game || typeof window === 'undefined' || !window.requestIdleCallback) return;
     prefitting = true;
-    const ids = Object.keys(STATIONS);
+    let ids = Object.keys(STATIONS).filter(id => AIRCRAFT[id]), waits = 0;
+    const later = () => { if (++waits < 600) setTimeout(() => window.requestIdleCallback(next), 500); };
     const next = (deadline) => {
-        while (ids.length && FITS.has(ids[0])) ids.shift();
-        const id = ids.shift();
-        if (!id) return;
-        if (AIRCRAFT[id] && (!deadline || deadline.timeRemaining() > 4)) {
-            const tpl = modelTemplate(id);
-            if (tpl) { let fit = null; try { fit = new Fit(tpl, AIRCRAFT[id].length); } catch (e) { fit = null; } FITS.set(id, fit); }
-        } else ids.push(id);
+        ids = ids.filter(id => !FITS.has(id));
+        if (!ids.length) return;
+        if (game.state !== 'menu' || deadline.timeRemaining() < 3) return later();
+        const id = ids.find(i => modelTemplate(i, false));
+        if (!id) return later();
+        let fit = null;
+        try { fit = new Fit(modelTemplate(id, false), AIRCRAFT[id].length); } catch (e) { fit = null; }
+        FITS.set(id, fit);
         window.requestIdleCallback(next);
     };
     window.requestIdleCallback(next);
@@ -639,7 +650,9 @@ function layout(ac, fit, plan, lost, skinCol) {
                     fz = def.z != null ? def.z * L : ch.le + (def.c ?? 0.42) * (ch.te - ch.le);
                     const low = fit.extreme(x - th / 2, x + th / 2, fz - plen / 2, fz + plen / 2);
                     if (!(low === low)) { miss(pl, n); continue; }
-                    fy = low - (def.drop ?? (def.fix ? 0 : clamp(0.016 * L, 0.2, 0.42)));
+                    // its foot a pylon's depth under the wing's skin there, and under anything that sticks out of it
+                    const drop = def.drop ?? clamp(0.016 * L, 0.2, 0.42);
+                    fy = def.fix ? low : Math.min(fit.typical(x - th / 2, x + th / 2, fz - plen / 2, fz + plen / 2) - drop, low - 0.03);
                 }
                 const key = s + ':' + def.f;
                 if (!pylons.has(key)) { pylons.add(key); hang = stand(fx, fz, plen, th, fy); }
@@ -721,6 +734,7 @@ function plan(ac, v) {
 }
 
 function build(ac, v) {
+    if (orphans.length) sweepOrphans();
     v.built = true;
     v.slots = []; v.seq = {}; v.shown = {}; v.inside = { ...v.plan.inside }; v.meshes = {}; v.count = 0;
     v.lostN = ac.lostRegions ? ac.lostRegions.size : 0;
@@ -731,7 +745,13 @@ function build(ac, v) {
     v.skinMat = v.skin ? v.skin.material : null;
     skinColor(v.skin, fit, _c);
     const skinCol = [Math.round(clamp(_c.r, 0, 1) * 255), Math.round(clamp(_c.g, 0, 1) * 255), Math.round(clamp(_c.b, 0, 1) * 255)];
-    const lay = layout(ac, fit, v.plan, ac.lostRegions || new Set(), skinCol);
+    let lay;
+    try { lay = layout(ac, fit, v.plan, ac.lostRegions || new Set(), skinCol); } catch (e) {
+        // (never take the game down over a pylon: this type flies clean, and says so once)
+        if (!failed.has(ac.type)) { failed.add(ac.type); console.warn('[pylons] could not hang the stores of', ac.type, e); }
+        for (const pl of v.plan.places) if (pl.cls !== 'rkt') v.inside[pl.cls] = (v.inside[pl.cls] || 0) + pl.n;
+        return;
+    }
     v.slots = lay.slots; v.seq = lay.seq; v.inside = lay.inside;
     for (const cls in v.seq) v.shown[cls] = v.seq[cls].length;
     for (const region in lay.meshers) {
@@ -758,9 +778,28 @@ function build(ac, v) {
     }
 }
 
-function unbuild(v) {
-    for (const r in v.meshes) { const e = v.meshes[r]; if (e.mesh.parent) e.mesh.parent.remove(e.mesh); e.mesh.geometry.dispose(); }
+// model: the jet's model, when it is being removed: a section that has left it (wreckage) keeps its stores till it goes
+function unbuild(v, model = null) {
+    for (const r in v.meshes) {
+        const e = v.meshes[r], sec = e.mesh.parent;
+        if (model && sec && sec.parent !== model) { orphans.push(e.mesh); continue; }
+        if (sec) sec.remove(e.mesh);
+        e.mesh.geometry.dispose();
+    }
     v.meshes = {}; v.slots = []; v.seq = {}; v.shown = {}; v.built = false; v.count = 0;
+}
+// Store meshes riding away on wreckage (a wing shot off, a jet blown apart): their geometry is freed once their piece
+// of airframe has been taken out of the scene
+const orphans = [];
+const failed = new Set();
+function sweepOrphans() {
+    for (let i = orphans.length - 1; i >= 0; i--) {
+        let top = orphans[i];
+        while (top.parent) top = top.parent;
+        if (top.isScene) continue;
+        orphans[i].geometry.dispose();
+        orphans.splice(i, 1);
+    }
 }
 
 function setShown(v, slot, on) {
@@ -794,7 +833,7 @@ function loseRegions(ac, v) {
         v.seq[cls] = keep;
     }
     v.slots = v.slots.filter(s => !ac.lostRegions.has(s.region));
-    for (const r of ac.lostRegions) delete v.meshes[r]; // (the mesh rides away on its wing)
+    for (const r of ac.lostRegions) if (v.meshes[r]) { orphans.push(v.meshes[r].mesh); delete v.meshes[r]; } // (the mesh rides away on its wing)
     v.count = v.slots.length;
 }
 
@@ -863,7 +902,8 @@ export function releaseStore(ac, cls, out) {
 
 // free everything (the aircraft is removed)
 export function disposeStores(ac) {
-    if (ac.storesView) { unbuild(ac.storesView); ac.storesView = null; }
+    if (ac.storesView) { unbuild(ac.storesView, ac.model); ac.storesView = null; }
+    if (orphans.length) sweepOrphans();
 }
 
 // ── For tests and tools ──

@@ -256,6 +256,16 @@ describe('firing, dropping, rearming (weapons.js through Aircraft.releaseStore)'
         const e = ac.storesView.meshes[next.region], idx = e.mesh.geometry.index.array;
         for (let i = next.i0; i < next.i0 + next.n; i++) assert.equal(idx[i], 0);
     });
+    test('it leaves as it hung: a banked jet\'s missile and bomb keep their roll on the way out', () => {
+        const { g, ac } = armed('f16', 'balanced');
+        ac.qv.setFromAxisAngle(new THREE.Vector3(0, 0, 1), 1.1); ac.syncBody(); // 63° of bank
+        ac.vel.copy(ac.getForward(new THREE.Vector3())).multiplyScalar(240);
+        const m = g.weapons.fireMissile(ac, null, 'lrm'), b = g.weapons.dropBomb(ac, 'bomb');
+        g.weapons.update(1 / 60);
+        // (pointing along its flight path now: a degree or two off the jet's nose, but not rolled level)
+        assert.ok(m.mesh.quaternion.angleTo(ac.quat) < 0.08, `missile turned ${m.mesh.quaternion.angleTo(ac.quat).toFixed(3)} rad leaving`);
+        assert.ok(b.mesh.quaternion.angleTo(ac.quat) < 0.08, `bomb turned ${b.mesh.quaternion.angleTo(ac.quat).toFixed(3)} rad leaving`);
+    });
     test('right and left by turns; a bomb off its rack; rockets out of pods that stay', () => {
         const { g, ac } = armed('f16', 'balanced');
         const a = g.weapons.fireMissile(ac, null, 'lrm'), xa = a.pos.clone().sub(ac.pos).dot(ac.getRight(new THREE.Vector3()));
