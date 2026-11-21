@@ -528,7 +528,8 @@ export const seekerLabel = (W) => !W ? '' : W.seeker === 'ir' ? 'IR' : W.seeker 
 // options: c (where along the chord the pylon's middle is, 0 leading edge … 1; default 0.42); own (the model has
 //   its own pylon / rail there: the store hangs on that); dx, dy (m: a side rail on the pylon, sideways from it (+ is
 //   outboard) and up from its foot); sink (m: recessed into the skin: semi-conformal carriage); fwd (m: the store
-//   further forward on the pylon); drop (m: the pylon's depth); under (a wingtip rail under the tip: Su-27)
+//   further forward on the pylon); drop (m: the pylon's depth); under (a wingtip rail under the tip: Su-27); fix
+//   (the model's own pylon is exactly at f, and at z of the length if given: hang from whatever is there)
 // use: per class, the stations it hangs on, the preferred first:
 //   '3' one store · '3*2' two side by side (a twin rack, a dual rail) · '3*3' a triple ejector rack or launcher ·
 //   '3*6' two triples in tandem (a multiple ejector rack) · '3+2' two in tandem · a '!' after it: a rack built for
@@ -564,7 +565,7 @@ export const STATIONS = {
     },
     // F-2A: the F-16's layout on a bigger wing, with a fourth pair of pylons for its anti-ship missiles
     f2: {
-        st: { 1: TIP({ own: true }), 2: WING(0.86, { own: true }), 3: WING(0.69, { own: true }), 4: WING(0.52, { own: true }), 5: WING(0.34, { own: true }), 6: FUS(0, 0.04) },
+        st: { 1: TIP({ own: true }), 2: WING(0.86), 3: WING(0.7, { own: true }), 4: WING(0.53, { own: true }), 5: WING(0.34), 6: FUS(0, 0.04) },
         use: { lrm: '1 2 3', srm: '2 1 3', ashm: '4 5', gbu: '5*2 3 6*2', bomb: '5*3 4*3 6*3', agm: '3 4', arm: '3', rkt: '5 4' },
     },
     // F/A-18E: eleven stations. 1/11 wingtip rails, 2/10 3/9 4/8 the wing pylons, 5/7 the nacelle (cheek) stations, 6 centreline
@@ -581,7 +582,7 @@ export const STATIONS = {
     f15: {
         st: {
             ff: FUS(1.66, -0.085, { own: true }), fr: FUS(1.66, 0.17, { own: true }),
-            ro: WING(0.454, { own: true, dx: 0.435, dy: 0.17 }), ri: WING(0.454, { own: true, dx: -0.435, dy: 0.17 }), 2: WING(0.454, { own: true }),
+            ro: WING(0.4541, { fix: true, z: 0.134, dx: 0.455, dy: 0.25, fwd: 1.1 }), ri: WING(0.4541, { fix: true, z: 0.134, dx: -0.455, dy: 0.25, fwd: 1.1 }), 2: WING(0.4541, { fix: true, z: 0.134 }),
         },
         use: { lrm: 'ff fr ri ro', srm: 'ro ri', gbu: '2', bomb: '2*3', rkt: '2', agm: '2', arm: '2' },
     },
@@ -593,25 +594,25 @@ export const STATIONS = {
     // A-10C: eleven stations. 1/11 the outboard dual rail, 2/10, 3/9 (outboard of the gear pods), 4/8, 5/7 beside the
     // centreline, 6 on it
     a10: {
-        st: { 1: WING(0.65, { own: true }), 2: WING(0.53), 3: WING(0.41, { own: true }), 4: WING(0.17, { own: true }), 5: FUS(0.6, 0.0), 6: FUS(0, 0.0, { own: true }) },
-        use: { srm: '1*2', agm: '3*3 4', rkt: '2 4', gbu: '4*2 5 3', bomb: '5 6 4*3 3*3', arm: '3' },
+        st: { o: WING(0.6475, { fix: true, z: -0.029, dx: 0.235, dy: -0.16 }), i: WING(0.6475, { fix: true, z: -0.029, dx: -0.235, dy: -0.16 }), 2: WING(0.526, { own: true }), 3: WING(0.407, { own: true }), 4: WING(0.17), 5: FUS(0.6, 0.0), 6: FUS(0, 0.0) },
+        use: { srm: 'o i', agm: '3*3 4', rkt: '2 4', gbu: '4*2 5 3', bomb: '5 6 4*3 3*3', arm: '3' },
     },
     // F-4E: the four Sparrow wells, the inboard wing pylons (2/8) with a Sidewinder rail on either side, the centreline
     f4: {
         st: {
             ff: FUS(0.52, -0.138, { sink: 0.1 }), fr: FUS(1.05, 0.132, { sink: 0.1 }),
-            so: WING(0.36, { own: true, dx: 0.34, dy: 0.09 }), si: WING(0.36, { own: true, dx: -0.34, dy: 0.09 }), i: WING(0.36, { own: true }), c: FUS(0, 0.055, { own: true }),
+            so: WING(0.361, { fix: true, z: -0.002, dx: 0.34, dy: 0.09 }), si: WING(0.361, { fix: true, z: -0.002, dx: -0.34, dy: 0.09 }), i: WING(0.361, { fix: true, z: -0.002 }), c: FUS(0, 0.055, { own: true }),
         },
         use: { lrm: 'ff fr', srm: 'so si', agm: 'i', gbu: 'i c', bomb: 'c*6 i*3', rkt: 'i', arm: 'i' },
     },
     // F-5E: wingtip rails, two pylons under each wing, the centreline
     f5: {
-        st: { 1: TIP(), 2: WING(0.66), 3: WING(0.42), 4: FUS(0, 0.03) },
+        st: { 1: TIP({ own: true }), 2: WING(0.66), 3: WING(0.42), 4: FUS(0, 0.03) },
         use: { srm: '1 2', rkt: '3 2', bomb: '4*3 2 3', gbu: '3 4', agm: '3' },
     },
     // Su-35S: twelve points. Wingtips, three under each wing, one under each intake, two in tandem between the engines
     su35: {
-        st: { t: TIP({ under: true }), 1: WING(0.8), 2: WING(0.63), 3: WING(0.46), n: FUS(1.62, -0.03), cf: FUS(0, -0.07), cr: FUS(0, 0.13) },
+        st: { t: TIP({ under: true, own: true }), 1: WING(0.8), 2: WING(0.63), 3: WING(0.46), n: FUS(1.62, -0.03), cf: FUS(0, -0.07), cr: FUS(0, 0.13) },
         use: { lrm: 'cf cr n 2 3 1', srm: 't 1', arm: '3 2', ashm: '3 2', agm: '3 2', alcm: '3', gbu: 'n 2 3 1', bomb: '2 n 3 cf', rkt: '2 3' },
     },
     su47: {
@@ -620,12 +621,12 @@ export const STATIONS = {
     },
     // MiG-29 (9.12): three pylons under each wing; the inboard pair takes the R-27s
     mig29: {
-        st: { 1: WING(0.78, { own: true }), 2: WING(0.6, { own: true }), 3: WING(0.42, { own: true }) },
+        st: { 1: WING(0.676, { own: true }), 2: WING(0.549, { own: true }), 3: WING(0.409, { own: true }) },
         use: { lrm: '3', srm: '1 2 3', bomb: '2+2 3+2', rkt: '2 3', gbu: '3 2', agm: '3 2', arm: '3' },
     },
     // MiG-21bis: two pylons under each wing and the centreline
     mig21: {
-        st: { 1: WING(0.62), 2: WING(0.42), c: FUS(0, 0.02) },
+        st: { 1: WING(0.74), 2: WING(0.542, { own: true }), c: FUS(0, 0.02) },
         use: { srm: '1 2', rkt: '2 1', bomb: 'c*2 2 1', gbu: '2', agm: '2' },
         order: ['lrm', 'srm', 'rkt', 'bomb', 'gbu', 'agm'],
     },
@@ -636,7 +637,7 @@ export const STATIONS = {
     },
     // MiG-31BM: four long-range missiles in tandem pairs under the belly, two pylons under each wing
     mig31: {
-        st: { bf: FUS(0.62, -0.06, { sink: 0.12 }), br: FUS(0.62, 0.14, { sink: 0.12 }), 1: WING(0.62), 2: WING(0.52, { own: true }) },
+        st: { bf: FUS(0.62, -0.06, { sink: 0.12 }), br: FUS(0.62, 0.14, { sink: 0.12 }), 1: WING(0.68), 2: WING(0.516, { own: true }) },
         use: { xlr: 'bf br', lrm: '2 1', srm: '1*2 2', arm: '2 bf br', bomb: '2', agm: '2', gbu: '2', rkt: '2' },
     },
     // J-10A: three pylons under each wing, the centreline and the intake sides
@@ -651,17 +652,17 @@ export const STATIONS = {
     },
     // Typhoon: four semi-recessed fuselage stations, four pylons under each wing (the wingtips carry the DASS pods)
     typhoon: {
-        st: { ff: FUS(0.72, -0.06, { sink: 0.07 }), fr: FUS(0.72, 0.16, { sink: 0.07 }), 1: WING(0.82, { own: true }), 2: WING(0.64, { own: true }), 3: WING(0.46, { own: true }), 4: WING(0.3), c: FUS(0, 0.05) },
+        st: { ff: FUS(0.72, -0.06, { sink: 0.07 }), fr: FUS(0.72, 0.16, { sink: 0.07 }), 1: WING(0.816, { own: true }), 2: WING(0.661, { own: true }), 3: WING(0.494, { own: true }), 4: WING(0.31, { own: true }), c: FUS(0, 0.05) },
         use: { lrm: 'ff fr 2', srm: '1 2', agm: '3*3 2*3', alcm: '4 3', gbu: '2 3 4 c', bomb: '3*2 2*2 c', arm: '3', rkt: '3 2' },
     },
     // Rafale: wingtip rails, three pylons under each wing, two rear fuselage stations, the centreline
     rafale: {
-        st: { t: TIP({ own: true }), 1: WING(0.77), 2: WING(0.56), 3: WING(0.35), fr: FUS(0.72, 0.2), c: FUS(0, 0.04) },
+        st: { t: TIP({ own: true }), 1: WING(0.76), 2: WING(0.55), 3: WING(0.36), fr: FUS(0.72, 0.2), c: FUS(0, 0.04) },
         use: { srm: 't 1', lrm: 'fr 1', ashm: 'c 3', alcm: '3 c', gbu: '2*3 3*2 c', bomb: '2*2 3*2 c', agm: '2 3', rkt: '2 3', arm: '2' },
     },
     // Gripen C: wingtip rails, two pylons under each wing, the centreline
     gripen: {
-        st: { t: TIP(), 1: WING(0.72), 2: WING(0.45), c: FUS(0, 0.03) },
+        st: { t: TIP({ own: true }), 1: WING(0.72), 2: WING(0.48), c: FUS(0, 0.03) },
         use: { srm: 't 1', lrm: '2 1', ashm: '2', gbu: '2 1 c', bomb: '2*2 1 c', agm: '2 1', rkt: '2 1', arm: '2' },
     },
     // Jaguar: the overwing Sidewinder rails, two pylons under each wing, the centreline
@@ -676,18 +677,18 @@ export const STATIONS = {
     },
     // MQ-9A: three pylons under each wing: inboard 1500 lb (the Paveways), middle (two Hellfires on a dual rail), outboard
     mq9: {
-        st: { 1: WING(0.28), 2: WING(0.2), 3: WING(0.115) },
+        st: { 1: WING(0.269, { own: true }), 2: WING(0.197, { own: true }), 3: WING(0.117, { own: true }) },
         use: { agm: '2*2 1*2', gbu: '3 1', srm: '1', bomb: '3' },
     },
     // B-52H: the two big wing pylons between the fuselage and the inboard engines (six missiles each), the bomb bay
     b52: {
-        st: { p: WING(0.2, { c: 0.5 }) },
+        st: { p: WING(0.235, { c: 0.5 }) },
         use: { alcm: 'p*6!', ashm: 'p*6!', bomb: '', gbu: '', agm: '' },
         bay: [[0, 0.02]],
     },
-    // Tu-95MSM: four twin pylons for Kh-101s between the fuselage and the engines; the bay
+    // Tu-95MSM: four twin pylons for Kh-101s, between the fuselage and the inner engines and between the engines; the bay
     tu95: {
-        st: { 1: WING(0.105, { c: 0.45 }), 2: WING(0.19, { c: 0.45 }) },
+        st: { 1: WING(0.135, { c: 0.45 }), 2: WING(0.377, { c: 0.45 }) },
         use: { alcm: '1*2! 2*2!', bomb: '', gbu: '' },
         bay: [[0, 0.0]],
     },

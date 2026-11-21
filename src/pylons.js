@@ -23,7 +23,9 @@
 //  • A lost wing: its stores go with it, and their ammunition is gone (the counters are cut by what hung there).
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
-import { CLASSES, CLASS, storeFor, stationPlan, stationsOf, podOf } from './stores.js';
+import { AIRCRAFT } from './config.js';
+import { CLASSES, CLASS, STATIONS, storeFor, stationPlan, stationsOf, podOf } from './stores.js';
+import { modelTemplate } from './models.js';
 import { storeParts } from './weapons.js';
 import { regionAt } from './damage.js';
 
@@ -49,14 +51,17 @@ function storesMaterial() {
 }
 
 // ── The airframe's underside (and top) as a height map, once per type ──
-// Model space: x to the right wing, y up, z aft. `und` is the lowest surface over each cell, `ovr` the highest, both
-// made symmetric (the higher underside of the two sides, so a pylon stood on it never hangs clear of either).
+// Model space: x to the right wing, y up, z aft. `lo` is the lowest surface over each cell and `hi` the highest, as
+// the model has them. `und` and `ovr` are the same made symmetric, for placing things: the lower underside of the two
+// sides (and the higher top), so a store hung from it clears both wings and the left station is the right one's
+// mirror exactly; a pylon then stands on its own side's skin (`lo`), so it never hangs clear of it.
 class Fit {
-    constructor(ac) {
-        const L = ac.spec.length;
+    // root: the model (its damage sections, or the model itself); surfaces: [{ pivot, base }] (aircraft.js) or null
+    constructor(root, L, surfaces = null) {
         const box = new THREE.Box3();
-        const parts = skinParts(ac);
+        const parts = skinParts(root, surfaces);
         for (const p of parts) { p.mesh.geometry.computeBoundingBox(); box.union(_bb.copy(p.mesh.geometry.boundingBox).applyMatrix4(p.m)); }
+        if (box.isEmpty()) throw new Error('no skin');
         this.L = L;
         this.hs = Math.max(-box.min.x, box.max.x);
         this.cell = clamp(L / 240, 0.05, 0.16);
@@ -64,7 +69,7 @@ class Fit {
         this.X0 = this.hs + pad; this.Z0 = Math.max(-box.min.z, box.max.z) + pad;
         this.nx = Math.ceil(2 * this.X0 / this.cell); this.nz = Math.ceil(2 * this.Z0 / this.cell);
         const n = this.nx * this.nz;
-        const lo = new Float32Array(n).fill(Infinity), hi = new Float32Array(n).fill(-Infinity);
+        const lo = this.lo = new Float32Array(n).fill(Infinity), hi = new Float32Array(n).fill(-Infinity);
         const { cell, X0, Z0, nx, nz } = this;
         const put = (x, y, z) => {
             const ix = Math.floor((x + X0) / cell), iz = Math.floor((z + Z0) / cell);
@@ -73,34 +78,38 @@ class Fit {
             if (y < lo[k]) lo[k] = y;
             if (y > hi[k]) hi[k] = y;
         };
-        const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
         const step = cell * 0.5;
-        const edge = (p, q) => {
-            const k = Math.ceil(Math.max(Math.abs(q.x - p.x), Math.abs(q.z - p.z)) / step);
-            for (let i = 1; i < k; i++) { const u = i / k; put(p.x + (q.x - p.x) * u, p.y + (q.y - p.y) * u, p.z + (q.z - p.z) * u); }
+        const edge = (px, py, pz, qx, qy, qz) => {
+            const k = Math.ceil(Math.max(Math.abs(qx - px), Math.abs(qz - pz)) / step);
+            for (let i = 1; i < k; i++) { const u = i / k; put(px + (qx - px) * u, py + (qy - py) * u, pz + (qz - pz) * u); }
         };
         for (const { mesh, m } of parts) {
-            const g = mesh.geometry, P = g.attributes.position, idx = g.index;
-            const cnt = idx ? idx.count : P.count;
+            const g = mesh.geometry, P = g.attributes.position, idx = g.index ? g.index.array : null;
+            // every vertex into model space once, then the triangles
+            const V = new Float32Array(P.count * 3), e = m.elements;
+            for (let i = 0; i < P.count; i++) {
+                const x = P.getX(i), y = P.getY(i), z = P.getZ(i);
+                V[i * 3] = e[0] * x + e[4] * y + e[8] * z + e[12]; V[i * 3 + 1] = e[1] * x + e[5] * y + e[9] * z + e[13]; V[i * 3 + 2] = e[2] * x + e[6] * y + e[10] * z + e[14];
+                put(V[i * 3], V[i * 3 + 1], V[i * 3 + 2]);
+            }
+            const cnt = idx ? idx.length : P.count;
             for (let t = 0; t + 2 < cnt; t += 3) {
-                a.fromBufferAttribute(P, idx ? idx.getX(t) : t).applyMatrix4(m);
-                b.fromBufferAttribute(P, idx ? idx.getX(t + 1) : t + 1).applyMatrix4(m);
-                c.fromBufferAttribute(P, idx ? idx.getX(t + 2) : t + 2).applyMatrix4(m);
-                put(a.x, a.y, a.z); put(b.x, b.y, b.z); put(c.x, c.y, c.z);
-                const i0 = Math.max(0, Math.floor((Math.min(a.x, b.x, c.x) + X0) / cell)), i1 = Math.min(nx - 1, Math.floor((Math.max(a.x, b.x, c.x) + X0) / cell));
-                const k0 = Math.max(0, Math.floor((Math.min(a.z, b.z, c.z) + Z0) / cell)), k1 = Math.min(nz - 1, Math.floor((Math.max(a.z, b.z, c.z) + Z0) / cell));
+                const A = (idx ? idx[t] : t) * 3, B = (idx ? idx[t + 1] : t + 1) * 3, C = (idx ? idx[t + 2] : t + 2) * 3;
+                const ax = V[A], ay = V[A + 1], az = V[A + 2], bx = V[B], by = V[B + 1], bz = V[B + 2], cx = V[C], cy = V[C + 1], cz = V[C + 2];
+                const i0 = Math.max(0, Math.floor((Math.min(ax, bx, cx) + X0) / cell)), i1 = Math.min(nx - 1, Math.floor((Math.max(ax, bx, cx) + X0) / cell));
+                const k0 = Math.max(0, Math.floor((Math.min(az, bz, cz) + Z0) / cell)), k1 = Math.min(nz - 1, Math.floor((Math.max(az, bz, cz) + Z0) / cell));
                 if (i0 >= i1 && k0 >= k1) continue; // (inside one cell: its corners said it all)
                 // its edges (a thin sliver or a wall seen edge-on covers no cell centre), then every cell centre under it
-                edge(a, b); edge(b, c); edge(c, a);
-                const den = (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z);
+                edge(ax, ay, az, bx, by, bz); edge(bx, by, bz, cx, cy, cz); edge(cx, cy, cz, ax, ay, az);
+                const den = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
                 if (Math.abs(den) < 1e-9) continue;
                 for (let iz = k0; iz <= k1; iz++) {
                     const z = (iz + 0.5) * cell - Z0;
                     for (let ix = i0; ix <= i1; ix++) {
                         const x = (ix + 0.5) * cell - X0;
-                        const u = ((b.z - c.z) * (x - c.x) + (c.x - b.x) * (z - c.z)) / den, v = ((c.z - a.z) * (x - c.x) + (a.x - c.x) * (z - c.z)) / den, w = 1 - u - v;
+                        const u = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / den, v = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / den, w = 1 - u - v;
                         if (u < 0 || v < 0 || w < 0) continue;
-                        const y = a.y * u + b.y * v + c.y * w, k = iz * nx + ix;
+                        const y = ay * u + by * v + cy * w, k = iz * nx + ix;
                         if (y < lo[k]) lo[k] = y;
                         if (y > hi[k]) hi[k] = y;
                     }
@@ -111,8 +120,9 @@ class Fit {
         for (let iz = 0; iz < nz; iz++) for (let ix = 0; ix < nx; ix++) {
             const k = iz * nx + ix, q = iz * nx + (nx - 1 - ix);
             const l0 = lo[k], l1 = lo[q], h0 = hi[k], h1 = hi[q];
-            this.und[k] = l0 < Infinity ? (l1 < Infinity ? Math.max(l0, l1) : l0) : (l1 < Infinity ? l1 : NaN);
-            this.ovr[k] = h0 > -Infinity ? (h1 > -Infinity ? Math.min(h0, h1) : h0) : (h1 > -Infinity ? h1 : NaN);
+            this.und[k] = l0 < Infinity ? (l1 < Infinity ? Math.min(l0, l1) : l0) : (l1 < Infinity ? l1 : NaN);
+            this.ovr[k] = h0 > -Infinity ? (h1 > -Infinity ? Math.max(h0, h1) : h0) : (h1 > -Infinity ? h1 : NaN);
+            if (lo[k] === Infinity) lo[k] = NaN;
         }
         this.tip = this.findTip();
         this.skin = skinSample(parts, this.hs, L);
@@ -134,6 +144,8 @@ class Fit {
         }
         return best;
     }
+    // the same on one side's own skin (x signed): the lowest of it over a rectangle, or (top) the highest of its underside
+    side(x0, x1, z0, z1, top = false) { return this.extreme(x0, x1, z0, z1, this.lo, top); }
     // the wing's chord at x: the run of airframe along z there that lies most in the wing's part of the length
     chord(x) {
         const ix = this.ix(Math.abs(x)), lim = 0.32 * this.L;
@@ -172,7 +184,7 @@ class Fit {
             sum += (u + o) / 2; cnt++;
             if (u < low) low = u;
         }
-        return { x: this.xOf(top) + this.cell / 2, y: sum / cnt, low, z0: z0 - this.cell / 2, z1: z1 + this.cell / 2 };
+        return { x: this.hs, y: sum / cnt, low, z0: z0 - this.cell / 2, z1: z1 + this.cell / 2 };
     }
     // A pylon the model already has under its wing near x (± win): a narrow dip below the wing's own underside.
     // { x, y: its foot, z0, z1 } or null
@@ -251,20 +263,21 @@ const _bb = new THREE.Box3();
 // the meshes that are the airframe's skin, each with its matrix into model space: the damage sections' own meshes and
 // the flaps and brakes cut from them (where they lie stowed, whatever they're doing now); not the gear, props, flames,
 // lights, rig parts, glass or the stores themselves
-function skinParts(ac) {
+function skinParts(root, surfaces) {
     const out = [];
     const stowed = new Map();
-    for (const s of ac.surfaces || []) stowed.set(s.pivot, s.base);
+    for (const s of surfaces || []) stowed.set(s.pivot, s.base);
     const take = (mesh, m) => {
-        const mat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
-        if (!mesh.geometry || !mesh.geometry.attributes.position || mesh.userData.stores || mesh.userData.surfaceWell || (mat && mat.transparent)) return;
+        const mat = mesh.userData.origMat || (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material);
+        if (!mesh.geometry || !mesh.geometry.attributes.position || mesh.userData.stores || mesh.userData.surfaceWell || mesh.userData.twoSidedFront) return;
+        // (glass is no skin; but some files draw their whole airframe with one alpha-blended material)
+        if (mat && ((mat.transparent && mat.opacity < 0.9) || /glass|canopy|window/i.test(mat.name || ''))) return;
         out.push({ mesh, m });
     };
-    const regions = Object.values(ac.regions || {});
-    const roots = regions.length ? regions : [ac.model];
-    for (const g of roots) {
+    const regions = root.children.filter(c => c.userData.region);
+    for (const g of regions.length ? regions : [root]) {
         const gm = new THREE.Matrix4();
-        if (g !== ac.model) gm.makeTranslation(g.position.x, g.position.y, g.position.z);
+        if (g !== root) gm.makeTranslation(g.position.x, g.position.y, g.position.z);
         for (const ch of g.children) {
             if (ch.isMesh) { take(ch, new THREE.Matrix4().copy(gm).multiply(_m.compose(ch.position, ch.quaternion, ch.scale))); continue; }
             if (!ch.userData.surface) continue;
@@ -272,7 +285,6 @@ function skinParts(ac) {
             const pm = new THREE.Matrix4().copy(gm).multiply(_m.makeTranslation(base.x, base.y, base.z));
             ch.traverse((o) => {
                 if (!o.isMesh) return;
-                // (a surface's meshes sit directly on its pivot)
                 const local = new THREE.Matrix4();
                 for (let p = o; p && p !== ch; p = p.parent) local.premultiply(_m.compose(p.position, p.quaternion, p.scale));
                 take(o, new THREE.Matrix4().copy(pm).multiply(local));
@@ -303,13 +315,36 @@ function skinSample(parts, hs, L) {
     return best;
 }
 
+// The fit of a type: measured on the type's own model as models.js keeps it (whole, flaps stowed), or on this jet's
+// if models.js has none (then it must be whole)
 function fitFor(ac) {
     if (FITS.has(ac.type)) return FITS.get(ac.type);
-    if (!ac.model || (ac.lostRegions && ac.lostRegions.size)) return null; // (measured on a whole one: wait for it)
+    const tpl = modelTemplate(ac.type);
+    if (!tpl && (!ac.model || (ac.lostRegions && ac.lostRegions.size))) return null;
     let fit = null;
-    try { fit = new Fit(ac); } catch (e) { console.warn('[pylons] could not measure', ac.type, e); }
+    try { fit = tpl ? new Fit(tpl, ac.spec.length) : new Fit(ac.model, ac.spec.length, ac.surfaces); } catch (e) { console.warn('[pylons] could not measure', ac.type, e); }
     FITS.set(ac.type, fit);
+    prefit();
     return fit;
+}
+// Measure the other armed types while nothing else is going on (in the menu, mostly), so a type first seen close up
+// mid-sortie doesn't cost a frame
+let prefitting = false;
+function prefit() {
+    if (prefitting || typeof window === 'undefined' || !window.requestIdleCallback) return;
+    prefitting = true;
+    const ids = Object.keys(STATIONS);
+    const next = (deadline) => {
+        while (ids.length && FITS.has(ids[0])) ids.shift();
+        const id = ids.shift();
+        if (!id) return;
+        if (AIRCRAFT[id] && (!deadline || deadline.timeRemaining() > 4)) {
+            const tpl = modelTemplate(id);
+            if (tpl) { let fit = null; try { fit = new Fit(tpl, AIRCRAFT[id].length); } catch (e) { fit = null; } FITS.set(id, fit); }
+        } else ids.push(id);
+        window.requestIdleCallback(next);
+    };
+    window.requestIdleCallback(next);
 }
 
 // ── The skin's colour where the pylons stand: its material's colour times its texture there ──
@@ -545,7 +580,15 @@ function layout(ac, fit, plan, lost, skinCol) {
         if (!meshers[region]) { const g = regions[region]; meshers[region] = g ? new Mesher(g.position.x, g.position.y, g.position.z) : new Mesher(0, 0, 0); }
         return meshers[region];
     };
-    const pylons = new Set(); // generated pylons, by where they stand (a pylon and its side rails share one)
+    const pylons = new Set(); // pylons seen to, by where they stand (a pylon and its side rails share one)
+    // A pylon from this side's own skin down to a foot at yFoot, if there is a gap to fill (the model's own pylon, or
+    // a store lying against the skin, leaves none)
+    const stand = (px, pz, plen, th, yFoot) => {
+        const low = fit.side(px - th / 2, px + th / 2, pz - plen / 2, pz + plen / 2);
+        if (!(low - yFoot > 0.05)) return null;
+        const top = (z) => fit.side(px - th / 2, px + th / 2, z - 0.02, z + 0.02, true) + 0.04;
+        return (m) => m.pylon(px, pz - plen / 2, pz + plen / 2, yFoot, top, th, skinCol);
+    };
     const miss = (pl, n) => { inside[pl.cls] = (inside[pl.cls] || 0) + (pl.cls === 'rkt' ? 0 : n); };
     for (const pl of plan.places) {
         const t = pl.cls === 'rkt' ? podTemplate(pl.store) : templateOf(pl.store);
@@ -562,9 +605,9 @@ function layout(ac, fit, plan, lost, skinCol) {
                 if (!tip) { miss(pl, n); continue; }
                 fz = (tip.z0 + tip.z1) / 2; railLaunch = true; hardware = false;
                 if (def.under) {
-                    // a rail under the tip, the missile below it
-                    fx = out * (tip.x - 0.1); fy = tip.low - 0.1;
-                    hang = (m) => m.box(fx, tip.low - 0.045, fz, 0.08, 0.11, 2.3, railCol);
+                    // under the tip's rail (the model's own, or one hung there), the missile below it
+                    fx = out * (tip.x - 0.09); fy = tip.low - (def.own ? 0 : 0.1);
+                    if (!def.own) hang = (m) => m.box(fx, tip.low - 0.045, fz, 0.08, 0.11, 2.3, railCol);
                     rack.spots[0] = { dx: 0, dy: -t.R - 0.008, dz: -0.04 * t.len };
                 } else {
                     // the missile outboard of the tip rail, in the wing's plane
@@ -588,26 +631,21 @@ function layout(ac, fit, plan, lost, skinCol) {
                 const x = own ? own.x : x0, ch = fit.chord(x);
                 if (!ch) { miss(pl, n); continue; }
                 fx = out * x;
+                // the pylon: long enough for what hangs on it, under the model's own if it has one there
+                const plen = own ? own.z1 - own.z0 : Math.min(clamp(0.56 * Math.max(rack.hwLen, t.len * 0.9), 0.8, pl.cap >= 6 ? 9 : 2.4), 0.9 * (ch.te - ch.le));
+                const th = clamp(0.006 * L, 0.07, 0.2);
                 if (own) { fz = (own.z0 + own.z1) / 2; fy = own.y; } else {
                     fz = def.z != null ? def.z * L : ch.le + (def.c ?? 0.42) * (ch.te - ch.le);
-                    // the pylon: long enough for what hangs on it, standing on the skin along its whole length
-                    const plen = Math.min(clamp(0.56 * Math.max(rack.hwLen, t.len * 0.9), 0.8, pl.cap >= 6 ? 9 : 2.4), 0.9 * (ch.te - ch.le));
-                    const z0 = fz - plen / 2, z1 = fz + plen / 2, th = clamp(0.006 * L, 0.07, 0.2);
-                    const low = fit.extreme(x - th / 2, x + th / 2, z0, z1);
+                    const low = fit.extreme(x - th / 2, x + th / 2, fz - plen / 2, fz + plen / 2);
                     if (!(low === low)) { miss(pl, n); continue; }
-                    const drop = def.drop ?? (def.fix ? 0 : clamp(0.016 * L, 0.2, 0.42));
-                    fy = low - drop;
-                    const key = s + ':' + def.f;
-                    if (drop > 0 && !pylons.has(key)) {
-                        pylons.add(key);
-                        const yf = fy, top = (z) => fit.extreme(x - th / 2, x + th / 2, z - 0.02, z + 0.02, fit.und, true) + 0.04;
-                        hang = (m) => m.pylon(fx, z0, z1, yf, top, th, skinCol);
-                    }
+                    fy = low - (def.drop ?? (def.fix ? 0 : clamp(0.016 * L, 0.2, 0.42)));
                 }
+                const key = s + ':' + def.f;
+                if (!pylons.has(key)) { pylons.add(key); hang = stand(fx, fz, plen, th, fy); }
                 if (def.dx) {
                     // a launch rail on the pylon's side: the missile beside it
                     const bx = fx + out * def.dx, by = fy + (def.dy || 0);
-                    if (!def.own) { const h0 = hang; hang = (m) => { if (h0) h0(m); m.box((fx + bx) / 2, by, fz, Math.abs(def.dx), 0.07, 1.3, railCol); }; }
+                    if (!def.own && !def.fix) { const h0 = hang, px = fx; hang = (m) => { if (h0) h0(m); m.box((px + bx) / 2, by, fz, Math.abs(def.dx), 0.07, 1.3, railCol); }; }
                     fx = bx; fy = by; railLaunch = true; hardware = false;
                     rack.spots[0] = { dx: 0, dy: 0, dz: -0.04 * t.len };
                 }
@@ -617,13 +655,10 @@ function layout(ac, fit, plan, lost, skinCol) {
                 const w = Math.max(rack.w * 0.6, 0.06);
                 const low = fit.extreme(x - w, x + w, fz + rack.z0 * 0.8, fz + rack.z1 * 0.8);
                 if (!(low === low)) { miss(pl, n); continue; }
-                const sink = def.sink || 0, drop = def.own || sink ? 0 : (def.drop ?? 0.07);
-                fy = low + sink - drop;
-                if (drop > 0) {
-                    const plen = clamp(0.5 * Math.max(rack.hwLen, t.len * 0.8), 0.6, 2.2), th = 0.09, yf = fy;
-                    const top = (z) => fit.extreme(x - th / 2, x + th / 2, z - 0.02, z + 0.02, fit.und, true) + 0.04;
-                    hang = (m) => m.pylon(fx, fz - plen / 2, fz + plen / 2, yf, top, th, skinCol);
-                }
+                const sink = def.sink || 0;
+                fy = low + sink - (def.own || sink ? 0 : (def.drop ?? 0.07));
+                // (a short adapter between the belly and the rack, unless the store lies in the skin)
+                if (!sink) hang = stand(fx, fz, clamp(0.5 * Math.max(rack.hwLen, t.len * 0.8), 0.6, 2.2), 0.09, fy);
             }
             if (def.fwd) fz -= def.fwd;
             // the section it rides on (a wing that's gone has nothing)
@@ -828,6 +863,8 @@ export function disposeStores(ac) {
 }
 
 // ── For tests and tools ──
+// (tests: forget what was measured)
+export function resetFits() { FITS.clear(); }
 // what hangs on the jet now: { cls: shown }, and every slot (model space)
 export function storesShown(ac) {
     const v = ac.storesView, out = {};
