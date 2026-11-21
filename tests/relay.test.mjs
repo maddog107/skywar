@@ -8,7 +8,7 @@ import net from 'node:net';
 import { randomBytes, createHash } from 'node:crypto';
 import { src } from './helpers/setup.mjs';
 
-const { createRelay, PROTOCOL, cleanName, cleanRoom, validState, validEvent, DEFAULTS } = await import(new URL('../relay.mjs', import.meta.url).href);
+const { createRelay, PROTOCOL, cleanName, cleanRoom, validState, validEvent, DEFAULTS, addressKey, isLoopbackAddress } = await import(new URL('../relay.mjs', import.meta.url).href);
 const proto = await src('netproto.js');
 
 const ORIGIN = 'http://localhost:8080';
@@ -168,6 +168,7 @@ describe('relay: names and message shapes', () => {
         assert.ok(DEFAULTS.maxMsg <= 2048); assert.equal(DEFAULTS.maxRate, 80);
         assert.ok(DEFAULTS.pingMs < 100000, 'pings well inside Cloudflare\'s 100 s idle limit');
         assert.ok(DEFAULTS.origins.includes('maddog107.com') && DEFAULTS.origins.includes('localhost') && !DEFAULTS.allowNoOrigin);
+        assert.equal(DEFAULTS.trustProxy, false, 'no proxy header is believed unless the relay is told it is behind one');
     });
 });
 
@@ -478,25 +479,83 @@ describe('relay: caps and time-outs', { skip: !HAS_WS && 'no global WebSocket in
         } finally { await R.stop(); }
     });
 
-    test('connections per address: the socket\'s, or CF-Connecting-IP / X-Forwarded-For behind a local proxy', async () => {
+    // is the next connection (with these headers) let in, or refused as one too many from its address?
+    const admitted = async (R, headers, keep) => {
+        const c = client(R.url, { headers }); await c.ready;
+        c.send({ t: 'hello', v: PROTOCOL, name: 'P', room: 'IP' });
+        const m = await Promise.race([c.next('welcome').catch(() => null), c.next('err').catch(() => null)]);
+        if (m && m.t === 'welcome') { keep.push(c); return true; }
+        assert.equal(m && m.code, 'address');
+        return false;
+    };
+
+    test('connections per address: without TRUST_PROXY no header is read (the socket\'s address counts)', async () => {
         const R = await startRelay({ maxPerIp: 2 });
+        const keep = [];
         try {
-            const a = await join(R.url, { room: 'IP', name: 'A' }), b = await join(R.url, { room: 'IP', name: 'B' });
-            const c = client(R.url); await c.ready;
-            assert.equal((await c.next('err')).code, 'address');
-            await c.untilClosed();
-            // other addresses behind the proxy are counted on their own
-            const cf = { headers: { 'CF-Connecting-IP': '203.0.113.7' } };
-            const d = await join(R.url, { room: 'IP', name: 'D' }, cf), e = await join(R.url, { room: 'IP', name: 'E' }, cf);
-            const f = client(R.url, cf); await f.ready;
-            assert.equal((await f.next('err')).code, 'address');
-            // the last X-Forwarded-For entry is the one our own proxy added; what a client put in front of it is ignored
-            const xf = (v) => ({ headers: { 'X-Forwarded-For': v } });
-            const g = await join(R.url, { room: 'IP', name: 'G' }, xf('1.1.1.1, 198.51.100.9')), h = await join(R.url, { room: 'IP', name: 'H' }, xf('2.2.2.2, 198.51.100.9'));
-            const i = client(R.url, xf('3.3.3.3, 198.51.100.9')); await i.ready;
-            assert.equal((await i.next('err')).code, 'address');
-            for (const x of [a, b, d, e, g, h]) x.close();
-        } finally { await R.stop(); }
+            // every one of these comes from 127.0.0.1, whatever it claims
+            assert.ok(await admitted(R, { 'X-Real-IP': '203.0.113.1' }, keep));
+            assert.ok(await admitted(R, { 'CF-Connecting-IP': '203.0.113.2', 'X-Forwarded-For': '203.0.113.3' }, keep));
+            assert.ok(!await admitted(R, { 'X-Real-IP': '203.0.113.4' }, keep), 'a third, claiming another address, is still the third from this one');
+            assert.ok(!await admitted(R, { 'CF-Connecting-IP': '203.0.113.5' }, keep));
+            assert.ok(!await admitted(R, { 'X-Forwarded-For': '203.0.113.6' }, keep));
+        } finally { for (const c of keep) c.close(); await R.stop(); }
+    });
+
+    test('connections per address: with TRUST_PROXY a local proxy\'s X-Real-IP counts, and only that header', async () => {
+        const R = await startRelay({ maxPerIp: 2, trustProxy: true });
+        const keep = [];
+        try {
+            assert.ok(await admitted(R, { 'X-Real-IP': '203.0.113.7' }, keep));
+            assert.ok(await admitted(R, { 'X-Real-IP': '203.0.113.7' }, keep));
+            assert.ok(!await admitted(R, { 'X-Real-IP': '203.0.113.7' }, keep), 'the third from that address');
+            assert.ok(await admitted(R, { 'X-Real-IP': '203.0.113.8' }, keep), 'another address has its own count');
+            // an IPv4-mapped IPv6 address is that IPv4 address
+            assert.ok(await admitted(R, { 'X-Real-IP': '::ffff:203.0.113.8' }, keep));
+            assert.ok(!await admitted(R, { 'X-Real-IP': '::ffff:203.0.113.8' }, keep));
+            // CF-Connecting-IP and X-Forwarded-For are never read: with no X-Real-IP these are the proxy's own address
+            assert.ok(await admitted(R, { 'CF-Connecting-IP': '198.51.100.1', 'X-Forwarded-For': '198.51.100.2' }, keep));
+            assert.ok(await admitted(R, { 'CF-Connecting-IP': '198.51.100.3', 'X-Forwarded-For': '198.51.100.4' }, keep));
+            assert.ok(!await admitted(R, { 'CF-Connecting-IP': '198.51.100.5', 'X-Forwarded-For': '198.51.100.6' }, keep), 'they did not make three addresses');
+            // and X-Real-IP wins over whatever those two say
+            assert.ok(!await admitted(R, { 'X-Real-IP': '203.0.113.7', 'CF-Connecting-IP': '198.51.100.9', 'X-Forwarded-For': '198.51.100.9' }, keep));
+        } finally { for (const c of keep) c.close(); await R.stop(); }
+    });
+
+    test('connections per address: an X-Real-IP that is not an address falls back to the socket\'s', async () => {
+        const R = await startRelay({ maxPerIp: 2, trustProxy: true });
+        const keep = [];
+        try {
+            assert.ok(await admitted(R, { 'X-Real-IP': 'not-an-address' }, keep));
+            assert.ok(await admitted(R, { 'X-Real-IP': '999.1.1.1' }, keep));
+            for (const bad of ['203.0.113.7, 203.0.113.8', '203.0.113.7:8080', '2001:db8::zz', 'x']) assert.ok(!await admitted(R, { 'X-Real-IP': bad }, keep), JSON.stringify(bad) + ' counted as the socket\'s address');
+            assert.ok(await admitted(R, { 'X-Real-IP': '203.0.113.7' }, keep), 'a real address still has its own count');
+        } finally { for (const c of keep) c.close(); await R.stop(); }
+    });
+
+    test('connections per address: IPv6 clients are counted by /64', async () => {
+        const R = await startRelay({ maxPerIp: 2, trustProxy: true });
+        const keep = [];
+        try {
+            assert.ok(await admitted(R, { 'X-Real-IP': '2001:db8:1:2::1' }, keep));
+            assert.ok(await admitted(R, { 'X-Real-IP': '2001:db8:1:2:aaaa:bbbb:cccc:dddd' }, keep));
+            assert.ok(!await admitted(R, { 'X-Real-IP': '2001:0db8:0001:0002:ffff:ffff:ffff:ffff' }, keep), 'three addresses in one /64 are one client');
+            assert.ok(await admitted(R, { 'X-Real-IP': '2001:db8:1:3::1' }, keep), 'the next /64 is someone else');
+        } finally { for (const c of keep) c.close(); await R.stop(); }
+    });
+
+    test('addressKey / isLoopbackAddress', () => {
+        assert.equal(addressKey('203.0.113.7'), '203.0.113.7');
+        assert.equal(addressKey('::ffff:203.0.113.7'), '203.0.113.7');
+        assert.equal(addressKey('::ffff:cb00:7107'), '203.0.113.7');
+        assert.equal(addressKey('2001:db8:1:2:3:4:5:6'), '2001:db8:1:2::/64');
+        assert.equal(addressKey('2001:DB8:1:2::9'), '2001:db8:1:2::/64');
+        assert.equal(addressKey('2001:db8::1'), '2001:db8:0:0::/64');
+        assert.equal(addressKey('fe80::1%en0'), 'fe80:0:0:0::/64');
+        assert.equal(addressKey('64:ff9b::192.0.2.1'), '64:ff9b:0:0::/64');
+        for (const bad of ['', 'x', '1.2.3', '1.2.3.4.5', '256.1.1.1', '1.2.3.4, 5.6.7.8', '1.2.3.4:80', '2001:db8::zz', ':::', null, undefined, 7, {}]) assert.equal(addressKey(bad), null, String(bad));
+        for (const lo of ['127.0.0.1', '127.9.9.9', '::1', '::ffff:127.0.0.1', '0:0:0:0:0:0:0:1']) assert.ok(isLoopbackAddress(lo), lo);
+        for (const no of ['126.0.0.1', '10.0.0.1', '203.0.113.7', '::2', '::', '2001:db8::1', '::ffff:10.0.0.1', 'localhost', '', null]) assert.ok(!isLoopbackAddress(no), String(no));
     });
 
     test('an Origin the relay does not know never gets a connection', async () => {

@@ -2,8 +2,8 @@
 // SKYWAR multiplayer relay (docs/MULTIPLAYER.md): a small WebSocket server written directly on node:http and
 // node:crypto (RFC 6455), with no npm packages, so it can run on a production box where nothing gets installed.
 //
-//   development   node server.mjs                              static files + the relay at /ws, one port
-//   production    HOST=127.0.0.1 PORT=8377 node relay.mjs      behind nginx (which proxies /skywar/ws to it)
+//   development   node server.mjs                                            static files + the relay at /ws, one port
+//   production    TRUST_PROXY=1 HOST=127.0.0.1 PORT=8377 node relay.mjs      behind nginx (which proxies /skywar/ws to it)
 //
 // What it does: rooms keyed by a short code; every client gets a small numeric id, is told who is in the room and who
 // the host is (the longest-connected client; the next one when it leaves); each client's latest state snapshot is kept
@@ -15,10 +15,13 @@
 // every message validated (type whitelist, finite numbers in range, short strings from a safe alphabet, 2 KB), a
 // connection that sends rubbish or floods is dropped, silent ones time out, and nothing is logged or stored
 // (no message contents, no addresses). Environment: HOST, PORT, ALLOWED_ORIGINS (comma-separated host names or
-// origins), ALLOW_NO_ORIGIN=1 (clients that are not browsers), RELAY_STATS=1 (a line of counts a minute).
+// origins), ALLOW_NO_ORIGIN=1 (clients that are not browsers), RELAY_STATS=1 (a line of counts a minute),
+// TRUST_PROXY=1 (behind a reverse proxy on this machine: count connections by the X-Real-IP header it sets; without
+// it, and from any peer that is not this machine, no header is ever read and the socket's own address counts).
 // Needs Node 18+ (written for Node 20: no global WebSocket is used).
 // ═══════════════════════════════════════════════════════════════
 import http from 'node:http';
+import net from 'node:net';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
@@ -38,6 +41,7 @@ export const DEFAULTS = {
     maxBuffered: 262144, // bytes waiting to be written to a slow client before it is dropped
     origins: ['localhost', '127.0.0.1', '[::1]', 'maddog107.com', 'www.maddog107.com'],
     allowNoOrigin: false,
+    trustProxy: false,   // believe X-Real-IP from a peer on this machine (a reverse proxy in front): off unless asked for
     path: null,          // only this URL path upgrades (null: any)
 };
 
@@ -84,7 +88,7 @@ export function validEvent(m) {
     if (!Array.isArray(e) || e.length < 1 || e.length > 24 || !EVENTS.has(e[0])) return false;
     for (let i = 1; i < e.length; i++) {
         const x = e[i];
-        if (typeof x === 'string' ? !EVENT_STR.test(x) : !isNum(x, 1e9)) return false;
+        if (typeof x === 'string' ? !EVENT_STR.test(x) : !isNum(x, 1e13)) return false; // (1e13: a sender's clock in ms fits)
     }
     return m.to === undefined || (Number.isInteger(m.to) && m.to > 0 && m.to < 1e6);
 }
@@ -107,9 +111,34 @@ function closeFrame(code, reason = '') {
 }
 const utf8 = new TextDecoder('utf-8', { fatal: true });
 
-const normIp = (ip) => String(ip || '').replace(/^::ffff:/, '');
-const isLoopback = (ip) => ip === '127.0.0.1' || ip === '::1' || ip.startsWith('127.');
-const IP_RE = /^[0-9a-fA-F:.]{2,45}$/;
+// ── Addresses ──
+// An address as the per-address cap counts it: an IPv4 address as it is (an IPv4-mapped IPv6 one, ::ffff:1.2.3.4, is
+// that IPv4 address), an IPv6 address by its /64 prefix (one customer line is a whole /64: counting single addresses
+// would let it open as many connections as it has addresses). Anything net.isIP() doesn't know: null.
+export function addressKey(ip) { const a = readAddress(ip); return a ? a.key : null; }
+// is it this machine (127.0.0.0/8, ::1, or either written as an IPv4-mapped IPv6 address)?
+export function isLoopbackAddress(ip) { const a = readAddress(ip); return !!a && a.loopback; }
+function readAddress(ip) {
+    if (typeof ip !== 'string') return null;
+    ip = ip.trim().replace(/%.*$/, ''); // (a link-local zone: fe80::1%en0)
+    const v = net.isIP(ip);
+    if (v === 4) return { key: ip, loopback: ip.startsWith('127.') };
+    if (v !== 6) return null;
+    // the eight groups: a dotted quad at the end is two of them, '::' is the run of zeros that fills the rest
+    if (ip.includes('.')) {
+        const at = ip.lastIndexOf(':') + 1, q = ip.slice(at).split('.').map(Number);
+        ip = ip.slice(0, at) + ((q[0] << 8) | q[1]).toString(16) + ':' + ((q[2] << 8) | q[3]).toString(16);
+    }
+    const [head, tail] = ip.split('::');
+    const h = head ? head.split(':') : [], t = tail ? tail.split(':') : [];
+    const g = (tail === undefined ? h : [...h, ...new Array(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t]).map(x => parseInt(x, 16) || 0);
+    if (g.length !== 8) return null;
+    if (!g[0] && !g[1] && !g[2] && !g[3] && !g[4] && g[5] === 0xffff) {
+        const key = (g[6] >> 8) + '.' + (g[6] & 255) + '.' + (g[7] >> 8) + '.' + (g[7] & 255);
+        return { key, loopback: key.startsWith('127.') };
+    }
+    return { key: g.slice(0, 4).map(x => x.toString(16)).join(':') + '::/64', loopback: g.slice(0, 7).every(x => !x) && g[7] === 1 };
+}
 
 // ═════════════ The relay ═════════════
 export function createRelay(options = {}) {
@@ -125,16 +154,16 @@ export function createRelay(options = {}) {
         if (!origin) return !!opt.allowNoOrigin;
         try { const u = new URL(origin); return allowed.has(u.hostname.toLowerCase()) || allowed.has(u.origin.toLowerCase()); } catch (e) { return false; }
     };
-    // the client's address: the socket's, or behind a reverse proxy on this machine (nginx behind Cloudflare) the one
-    // the proxy names: CF-Connecting-IP, else the last X-Forwarded-For entry (the one our own proxy appended)
+    // The client's address, for the per-address cap: the socket's own. Only when the relay is told it sits behind a
+    // reverse proxy (trustProxy: TRUST_PROXY=1) AND the socket's peer is this machine is one header believed:
+    // X-Real-IP, which the production nginx sets itself to the address it verified (and nothing a client sends can
+    // change). CF-Connecting-IP and X-Forwarded-For are never read: a client can write those. A header that isn't an
+    // address is ignored (the socket's address counts).
     const clientIp = (req) => {
-        const ip = normIp(req.socket.remoteAddress);
-        if (!isLoopback(ip)) return ip;
-        const cf = req.headers['cf-connecting-ip'];
-        if (typeof cf === 'string' && IP_RE.test(cf.trim())) return normIp(cf.trim());
-        const xff = req.headers['x-forwarded-for'];
-        if (typeof xff === 'string') { const last = xff.split(',').pop().trim(); if (IP_RE.test(last)) return normIp(last); }
-        return ip;
+        const own = addressKey(req.socket.remoteAddress) || 'unknown';
+        if (!opt.trustProxy || !isLoopbackAddress(req.socket.remoteAddress)) return own;
+        const real = req.headers['x-real-ip'];
+        return (typeof real === 'string' && addressKey(real)) || own;
     };
 
     const write = (c, buf) => {
@@ -365,6 +394,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const relay = createRelay({
         ...(env.ALLOWED_ORIGINS ? { origins: env.ALLOWED_ORIGINS.split(',') } : {}),
         allowNoOrigin: env.ALLOW_NO_ORIGIN === '1',
+        trustProxy: env.TRUST_PROXY === '1',
     });
     const server = http.createServer((req, res) => {
         // (a health check for a monitor: counts only)
