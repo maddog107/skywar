@@ -196,10 +196,14 @@ def window_of(alpha, dx, floor):
     return [(x0 + x1) / 2, (z0 + z1) / 2, max(x1 - x0, z1 - z0)]
 
 
-def cubic_weights(t):
-    # cubic B-spline: smooth (no ringing on a density field)
+def cubic_weights(t, B=1 / 3, C=1 / 3):
+    # Mitchell-Netravali: the early frames are a few times finer than the simulation's cells, and a B-spline (B = 1,
+    # C = 0) blurs them more than it needs to; this keeps the billows' edges without ringing
     t2, t3 = t * t, t * t * t
-    return [(1 - 3 * t + 3 * t2 - t3) / 6, (4 - 6 * t2 + 3 * t3) / 6, (1 + 3 * t + 3 * t2 - 3 * t3) / 6, t3 / 6]
+    return [((-B - 6 * C) * t3 + (3 * B + 12 * C) * t2 + (-3 * B - 6 * C) * t + B) / 6,
+            ((12 - 9 * B - 6 * C) * t3 + (-18 + 12 * B + 6 * C) * t2 + (6 - 2 * B)) / 6,
+            ((-12 + 9 * B + 6 * C) * t3 + (18 - 15 * B - 12 * C) * t2 + (3 * B + 6 * C) * t + B) / 6,
+            ((B + 6 * C) * t3 - 6 * C * t2) / 6]
 
 
 def resample(img, win, dx, N, fill=0.0):

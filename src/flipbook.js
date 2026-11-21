@@ -290,6 +290,7 @@ export class FlipbookSystem {
         this.mesh.name = 'flipbook:' + name;
         this.mesh.frustumCulled = false;
         this.mesh.renderOrder = renderOrder;
+        this.mesh.visible = false;
         scene.add(this.mesh);
         flipbooks.systems.push(this);
         const b = flipbooks.get(name);
@@ -360,7 +361,8 @@ export class FlipbookSystem {
     // fl: firelight.js fireLights (or null)
     update(dt, camera, fog, wind, fl) {
         const L = this.list;
-        if (!L.length && !this.geo.instanceCount) return;
+        // (nothing alive: not even an empty draw)
+        if (!L.length) { this.geo.instanceCount = 0; this.mesh.visible = false; return; }
         const book = this.book, m = book.meta, times = m.times, glow = book.glow;
         const cam = camera.position;
         const wx = wind ? wind.x : 0, wz = wind ? wind.z : 0;
@@ -407,11 +409,12 @@ export class FlipbookSystem {
             // the light it throws follows the fire as it was simulated: bright, then dying as the soot closes in
             if (p.key && fl) {
                 const g = (glow[_o.i] + (glow[Math.min(_o.i + 1, glow.length - 1)] - glow[_o.i]) * _o.f) * Math.min(1, heat);
-                if (g > 0.02) fl.keep(p.key, p.lp.set(p.pos.x, p.pos.y + rise + (m.ground ? _w.e * sc * 0.35 : 0), p.pos.z), p.light * g, { vel: p.vel, core: Math.max(2, _w.e * sc * 0.2), flicker: 0.25 });
+                if (g > 0.02) fl.keep(p.key, p.lp.set(p.pos.x, p.pos.y + rise + (m.ground ? _w.e * sc * 0.35 : 0), p.pos.z), p.light * g, { vel: p.vel, core: Math.max(2, _w.e * sc * 0.2), flicker: 0.25, glow: 0.35 });
                 else p.key = null;
             }
         }
         this.geo.instanceCount = order.length;
+        this.mesh.visible = order.length > 0;
         for (const [a, n] of this.attrs) {
             a.needsUpdate = true;
             a.clearUpdateRanges?.();
@@ -439,5 +442,6 @@ export class FlipbookSystem {
         for (const p of this.list) this.pool.push(p);
         this.list.length = 0;
         this.geo.instanceCount = 0;
+        this.mesh.visible = false;
     }
 }

@@ -321,7 +321,7 @@ describe('explosion() and its relatives', () => {
         const { e } = stage();
         e.megaBlast(new THREE.Vector3(0, 0, 0), 2.5);
         // (the main burst on the ground, five more round it a few metres up)
-        assert.ok(e.books.ground.count >= 2 && sprites(e) >= 8, `${e.books.ground.count} ground-burst sprites, ${sprites(e)} in all`);
+        assert.ok(e.books.ground.count >= 2 && sprites(e) >= 7, `${e.books.ground.count} ground-burst sprites, ${sprites(e)} in all`);
         assert.ok(e.emitters.some(x => x.kind === 'mushroom') && e.emitters.some(x => x.kind === 'column'));
         // the main burst is slower than a bomb's as well as larger
         const main = e.books.ground.list[0], bomb = stage().e;
@@ -342,9 +342,10 @@ describe('explosion() and its relatives', () => {
         step(c, camera(), 2.5);
         assert.ok(fireLights.pool.some(l => l.used && l.kind === 'keep'), 'still burning 2.5 s on');
 
+        // the bunker buster's fire stays under the earth it throws: puffs, no flipbook drawn over the fountain
         const { e: f } = stage();
         f.earthFountain(new THREE.Vector3(0, 0, 0), 1.7);
-        assert.ok(f.books.ground.count >= 1 && f.smoke.count > 200);
+        assert.ok(sprites(f) === 0 && f.flame.count > 20 && f.smoke.count > 200);
     });
     test('overdraw: the flipbook fireball covers less than the puffs it replaces, at every moment of the first seconds', () => {
         const cam = camera();

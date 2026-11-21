@@ -18,7 +18,7 @@ import { terrainHeight } from './world.js';
 import { fireLights, FIRE_VIEW_GLSL, fireUniforms } from './firelight.js'; // [night] light from fires, motors, flashes
 import { splitTwoSided } from './meshmerge.js';
 import { WaterFX, explosionKg } from './splash.js'; // what hits the water: spouts, columns, slicks (splash.js)
-import { FlipbookSystem, FLIPBOOK_EVENTS, FLIPBOOK_MIN_SIZE, fireballSpec, flipbooks } from './flipbook.js'; // simulated fireballs
+import { FlipbookSystem, FLIPBOOK_EVENTS, FLIPBOOK_MIN_SIZE, fireballSpec } from './flipbook.js'; // simulated fireballs
 
 // Squash HDR colours from other systems (muzzle flashes of ~6) into a soft knee that tops out ~2.4:
 // hot enough to bloom, not enough to blow a white halo over half the screen. Keeps the hue.
@@ -29,6 +29,8 @@ function kneeColour(src, out) {
     return out;
 }
 const _k0 = [0, 0, 0], _k1 = [0, 0, 0];
+const FIVE_ROUND = { single: true }; // (megaBlast's bursts round the main one: one flipbook sprite each)
+const BURIED = { puffs: true };      // (earthFountain: the old puff fireball, under the dirt)
 const SOOT_C = [0.26, 0.25, 0.24], QUENCH_C = [0.62, 0.63, 0.64], SOOT0_C = [0.1, 0.085, 0.075], SOOT1_C = [0.2, 0.19, 0.185];
 
 // ── Textures ──
@@ -651,6 +653,7 @@ export class Effects {
             const sys = this.books[k];
             if (!sys.ready) continue;
             if (!sys.count) sys.emit(this._tmpP.set(0, -500, 0), { diameter: 1, burn: 0.05 });
+            sys.mesh.visible = true; // (for the compile that follows; it hides itself again when the sprite is gone)
             if (renderer && renderer.initTexture) try { renderer.initTexture(sys.book.texA); renderer.initTexture(sys.book.texB); } catch (e) { /* non-fatal */ }
         }
     }
@@ -675,12 +678,14 @@ export class Effects {
         const q = o.quench ? 0.6 : 1;
         const main = {
             diameter: spec.diameter * q, burn: spec.burn * (o.quench ? 0.5 : 1), vel: o.vel || null, drag: 2.2,
-            // (high explosive burns white-hot, fuel orange; water takes the heat out of it and leaves steam)
-            // on the black-body ramp: a flash near the top of it that settles into orange within a quarter of the burn
-            heat: (sooty ? 0.55 : fuel ? 0.7 : 1.15) * (o.quench ? 0.8 : 1), heat1: (sooty ? 0.5 : fuel ? 0.55 : 0.9) * (o.quench ? 0.8 : 1), heatT: 0.3,
+            // on the black-body ramp: high explosive flashes near the top of it and settles into orange within a
+            // third of the burn, fuel stays orange (its own simulation's heat is baked lower, under its soot); water
+            // takes the heat out of it and leaves steam
+            heat: (sooty ? 0.55 : fuel ? 0.7 : 1.15) * (o.quench ? 0.8 : 1), heat1: (sooty ? 0.5 : fuel ? 0.55 : 0.75) * (o.quench ? 0.8 : 1), heatT: 0.3,
             c0: SOOT0_C, c1: o.quench ? QUENCH_C : SOOT1_C, alpha: o.quench ? 0.85 : 1,
             hold: o.hold || 0,
-            light: o.light === false ? 0 : 8000 * size * (fuel ? 0.8 : 0.6),
+            // (the light it throws after the flash: a share of the flash's, following the simulated fire down)
+            light: o.light === false ? 0 : (fuel ? 2600 : 3200) * size,
         };
         sys.emit(pos, main);
         // a second, smaller one behind it, turned the other way and a moment later: depth, and no two blasts alike
@@ -699,7 +704,8 @@ export class Effects {
 
     // ── Composite effects ──
     // opts: { noWater: true: no splash of its own (splash.js asked for this fireball), quench: as on the water,
-    //         kind: 'fuel' for a fuel fire (orange, sooty, slow: aircraft, fuel trucks) rather than high explosive }
+    //         kind: 'fuel' for a fuel fire (orange, sooty, slow: aircraft, fuel trucks) rather than high explosive,
+    //         single: one flipbook sprite, puffs: no flipbook (a burst buried in something else) }
     explosion(pos, size = 1, vel = null, opts = null) {
         const V = this._tmpV, P = this._tmpP, s = size;
         const base = this._base.set(0, 0, 0);
@@ -725,7 +731,8 @@ export class Effects {
         // air, on the water or in a column of it, the air burst
         const onGround = low && !water && agl < 0.35 * spec.diameter;
         if (onGround) P.set(pos.x, Math.min(pos.y, gh + 0.5), pos.z); else P.copy(pos);
-        const book = this.fireball(P, s * (water && !quench ? 0.85 : 1), { kind, ground: onGround, vel: vel ? base : null, quench });
+        if (onWater && !quench) P.y = Math.max(P.y, Math.max(gh, 0) + 0.3 * spec.diameter); // (most of the ball above the water)
+        const book = !(opts && opts.puffs) && this.fireball(P, s * (water && !quench ? 0.85 : 1), { kind, ground: onGround, vel: vel ? base : null, quench, single: !!(opts && opts.single) });
         if (book) {
             // the smoke that outlasts it: a few puffs that go up with the cloud and hang there as it thins
             const up = 2.6 * spec.diameter / (spec.burn / 0.16); // (about how fast the simulated cloud climbs)
@@ -829,7 +836,7 @@ export class Effects {
         this.explosion(pos, 2.4 * k);
         for (let i = 0; i < 5; i++) {
             const a = (i / 5) * Math.PI * 2 + rand(-0.3, 0.3);
-            this.explosion(P.set(pos.x + Math.cos(a) * 9 * k, pos.y + rand(3, 10) * k, pos.z + Math.sin(a) * 9 * k).clone(), 1.3 * k);
+            this.explosion(P.set(pos.x + Math.cos(a) * 9 * k, pos.y + rand(3, 10) * k, pos.z + Math.sin(a) * 9 * k).clone(), 1.3 * k, null, FIVE_ROUND);
         }
         this.sprite(this.ringTex, pos, 10 * k, 0.7, 160 * k, 0.45, [1, 0.95, 0.88]); // (the shock front)
         if (this.shockPass) this.shockPass.add(pos, 6 * k * k);
@@ -908,7 +915,7 @@ export class Effects {
     // and rock well over 100 m high that falls back, clods arcing out, a surge of dust round its foot
     earthFountain(pos, k = 1) {
         const V = this._tmpV, P = this._tmpP;
-        this.explosion(P.set(pos.x, pos.y + 2, pos.z).clone(), 2.2 * k);
+        this.explosion(P.set(pos.x, pos.y + 2, pos.z).clone(), 2.2 * k, null, BURIED); // (its fire stays in the earth it throws)
         this.light(pos, 50 * k, 0.5);
         for (let i = 0; i < 150; i++) {
             const c = rand(0.12, 0.24), up = rand(50, 180);
