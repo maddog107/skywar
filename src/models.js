@@ -115,6 +115,110 @@ export const MODEL_FILES = {
     },
 };
 
+// Stores modelled into a third-party airframe file (missiles, bombs, drop tanks on a station the loadouts use): taken
+// out at load, so the loadout's own stores hang there instead (pylons.js) and leave when they're fired. The file's
+// pylons and launch rails stay. Rules, model space (metres, after scaling; boxes are [x0, y0, z0, x1, y1, z1] with x
+// the distance from the centreline, so one box covers both sides):
+//   { mat }       every triangle of the materials matching
+//   { mat, box }  those of them wholly inside the box
+//   { box }       every shell (connected piece of mesh) wholly inside the box, whatever its material
+// (?stores=0 in the address switches the visible stores off, for comparing: the files' own stores stay, nothing hangs)
+export const VISIBLE_STORES = !(typeof location !== 'undefined' && /[?&]stores=0\b/.test(location.search || ''));
+const STRIP = {
+    // the Tomcat's six Phoenixes / Sparrows and two Sidewinders
+    f14: [{ mat: /^White_[01]$/ }],
+    // the Eagle's four fuselage Sparrows and the four Sidewinders on the wing pylons' side rails (the centreline tank,
+    // the pylons and the rails' crossbars stay)
+    f15: [{ box: [1.24, -2.1, -1.85, 2.1, -1.2, 5.1] }, { box: [2.2, -1.2, -0.25, 2.75, -0.6, 2.95] }, { box: [3.08, -1.2, -0.25, 3.62, -0.6, 2.95] }],
+    // the Super Hornet's tanks and missiles (its pylons and wingtip rails are another material)
+    fa18: [{ mat: /^Material$/ }],
+    // the Phantom's four Sparrows, four Sidewinders and centreline tank (the wing tanks stay: a Phantom is seldom without)
+    f4: [{ mat: /^(Cylinder48|air_10|Cylinder27)-FACES$/ }],
+    // the Tiger's wingtip Sidewinders (tools/aircraft/f5_stores.py) and centreline tank
+    f5: [{ mat: /^(Store|Seeker|StoreBand|StoreMotor|Launcher|bak-FACES)$/ }],
+    // the Jaguar's overwing Sidewinders (their launchers stay)
+    jaguar: [{ mat: /^(Store|Seeker|StoreBand|StoreMotor)$/ }],
+    a10: [{ mat: /^Alternatefile5Material$/ }],
+    gripen: [{ mat: /weapons/ }],
+    // the Reaper's Hellfires and Paveways (their racks stay)
+    mq9: [{ mat: /^(Rocket_mat|Big_Rocket_mat)$/ }],
+    // the Growler's HARMs and AMRAAMs (tools/aircraft/ea18g.py); its jamming pods and tanks stay
+    ea18g: [{ box: [4.0, -1.65, -0.7, 4.9, -0.8, 3.5] }, { box: [1.0, -2.0, -1.0, 1.4, -1.6, 2.7] }],
+    // the kit-built jets' missiles (tools/aircraft/<id>.py: bodies and fins in the trim atlas) and the J-8's tank
+    mig31: [{ mat: /^Nozzle_Trim$/, box: [2.9, -2.0, 0.8, 3.9, -1.0, 5.4] }],
+    mig25: [{ mat: /^Nozzle_Trim$/, box: [2.9, -2.3, 0.3, 5.45, -1.0, 6.4] }],
+    j10: [{ mat: /^Nozzle_Trim$/, box: [2.3, -2.2, 1.4, 4.0, -1.6, 5.7] }],
+    j8: [{ mat: /^Nozzle_Trim$/, box: [2.2, -1.65, 0.7, 3.75, -1.15, 5.2] }, { box: [0, -2.4, -1.5, 0.35, -1.7, 4.2] }],
+};
+
+// Apply a type's STRIP rules to its file's scene (already scaled into model space under `holder`). Exported for the
+// tests' headless loader.
+export function stripBakedStores(holder, id) {
+    const rules = VISIBLE_STORES && STRIP[id];
+    if (!rules) return 0;
+    holder.updateMatrixWorld(true);
+    const v = new THREE.Vector3();
+    const inBox = (b, p) => { const ax = Math.abs(p.x); return ax >= b[0] && ax <= b[3] && p.y >= b[1] && p.y <= b[4] && p.z >= b[2] && p.z <= b[5]; };
+    const meshes = [];
+    holder.traverse((o) => { if (o.isMesh && o.geometry && o.geometry.attributes.position) meshes.push(o); });
+    let removed = 0;
+    for (const o of meshes) {
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        const name = (mats[0] && mats[0].name) || '';
+        const g = o.geometry, P = g.attributes.position;
+        const mine = rules.filter(r => !r.mat || (mats.length === 1 && r.mat.test(name)));
+        if (!mine.length) continue;
+        if (mine.some(r => r.mat && !r.box)) { removed += (g.index ? g.index.count : P.count) / 3; o.parent.remove(o); continue; }
+        // which vertices lie in a box: bit 1 a material rule's (its triangles go one by one), bit 2 a shell rule's
+        const flag = new Uint8Array(P.count);
+        let any = false;
+        for (let i = 0; i < P.count; i++) {
+            v.fromBufferAttribute(P, i).applyMatrix4(o.matrixWorld);
+            for (const r of mine) if (inBox(r.box, v)) { flag[i] |= r.mat ? 1 : 2; any = true; }
+        }
+        if (!any) continue;
+        const idx = g.index ? g.index.array : null, n = idx ? idx.length : P.count;
+        const vi = idx ? (k) => idx[k] : (k) => k;
+        // shells: the box's vertices welded by position and joined through their triangles; a shell with a triangle
+        // that reaches outside the box stays whole
+        const rep = new Int32Array(P.count).fill(-1), par = new Int32Array(P.count);
+        const byPos = new Map();
+        for (let i = 0; i < P.count; i++) {
+            par[i] = i;
+            if (!(flag[i] & 2)) continue;
+            v.fromBufferAttribute(P, i).applyMatrix4(o.matrixWorld);
+            const k = Math.round(v.x * 2000) + ',' + Math.round(v.y * 2000) + ',' + Math.round(v.z * 2000);
+            const r = byPos.get(k);
+            if (r === undefined) { byPos.set(k, i); rep[i] = i; } else rep[i] = r;
+        }
+        const find = (a) => { while (par[a] !== a) { par[a] = par[par[a]]; a = par[a]; } return a; };
+        const keep = new Uint8Array(P.count); // by shell root: 1 = reaches outside
+        for (let t = 0; t + 2 < n; t += 3) {
+            const a = vi(t), b = vi(t + 1), c = vi(t + 2);
+            const inside = (flag[a] & 2) && (flag[b] & 2) && (flag[c] & 2);
+            if (inside) { const ra = find(rep[a]); par[find(rep[b])] = ra; par[find(rep[c])] = ra; }
+        }
+        for (let t = 0; t + 2 < n; t += 3) {
+            const a = vi(t), b = vi(t + 1), c = vi(t + 2);
+            if ((flag[a] & 2) && (flag[b] & 2) && (flag[c] & 2)) continue;
+            for (const q of [a, b, c]) if (flag[q] & 2) keep[find(rep[q])] = 1;
+        }
+        const out = [];
+        for (let t = 0; t + 2 < n; t += 3) {
+            const a = vi(t), b = vi(t + 1), c = vi(t + 2);
+            const byMat = (flag[a] & 1) && (flag[b] & 1) && (flag[c] & 1);
+            const byShell = (flag[a] & 2) && (flag[b] & 2) && (flag[c] & 2) && !keep[find(rep[a])];
+            if (byMat || byShell) removed++; else out.push(a, b, c);
+        }
+        if (out.length === n) continue;
+        if (!out.length) { o.parent.remove(o); continue; }
+        o.geometry = g.clone();
+        o.geometry.setIndex(out);
+        o.geometry.clearGroups();
+    }
+    return removed;
+}
+
 const cache = {};
 
 export async function preloadModels(onProgress) {
@@ -163,6 +267,8 @@ function normaliseGLTF(root, id, info) {
     inner.position.copy(center).multiplyScalar(-scale);
     inner.scale.setScalar(scale);
     holder.updateMatrixWorld(true);
+    // (after scaling and centring on the file as it came, so the model sits where it always did)
+    stripBakedStores(holder, id);
 
     root.traverse((o) => {
         if (o.isMesh) {
@@ -620,6 +726,17 @@ export function createAircraftModel(id) {
 }
 
 export function hasFileModel(id) { return !!cache[id]; }
+
+// A type's model as it is kept here (whole, its surfaces cut and stowed; every jet of the type is a copy of it), or
+// null if none has been made yet. Read only: pylons.js measures the stations on it.
+export function modelTemplate(id, cut = true) {
+    if (cache[id]) {
+        // (cut false: only if its flaps and brakes are cut already: don't do that work now)
+        if (!cache[id].surfacesCut) { if (!cut) return null; ensureSurfaces(id); }
+        return cache[id].object;
+    }
+    return cache['proc_' + id] ? cache['proc_' + id].object : null;
+}
 
 // ── Paint schemes ──
 export const LIVERIES = {

@@ -18,7 +18,7 @@ import { Input } from './input.js';
 import { HUD } from './hud.js';
 import { Cockpit } from './cockpit.js';
 import { Game, LOADOUT_LABELS } from './game.js';
-import { loadoutOf } from './stores.js';
+import { loadoutOf, armAircraft } from './stores.js';
 import { applyLivery, LIVERIES } from './models.js';
 import { MISSIONS, dailyMission } from './missions.js';
 import { Career, RANKS, MEDALS } from './career.js';
@@ -309,7 +309,7 @@ function buildMenu() {
     seg('segWingmen', [[0, 'SOLO'], [1, '1'], [2, '2']], 'wingmen');
     seg('segWeather', [['clear', 'CLEAR'], ['cloudy', 'CLOUDY'], ['grey', 'OVERCAST'], ['rain', 'RAIN'], ['storm', 'STORM'], ['fog', 'FOG'], ['overcast', 'LOW']], 'weather', () => world.setWeather(settings.weather));
     seg('segStart', [['auto', 'AUTO'], ['air', 'AIR'], ['runway', 'RWY'], ['apron', 'TAXI'], ['carrier', 'CVN'], ['water', 'WATER'], ['barracks', 'BARRACKS']], 'start'); // WATER: seaplanes afloat by a jetty
-    seg('segLoadout', Object.entries(LOADOUT_LABELS).map(([k, v]) => [k, v.label.split(' ')[0]]), 'loadout', () => { const el = $('acLoadout'); if (el) el.innerHTML = loadoutLine(settings.aircraft); });
+    seg('segLoadout', Object.entries(LOADOUT_LABELS).map(([k, v]) => [k, v.label.split(' ')[0]]), 'loadout', () => { const el = $('acLoadout'); if (el) el.innerHTML = loadoutLine(settings.aircraft); armShowcase(); });
     seg('segLivery', Object.entries(LIVERIES).map(([k, v]) => [k, v.label]), 'livery', () => { if (showcase) applyLivery(showcase.model, settings.livery, showcase.type); });
     seg('setFuel', [[true, 'ON'], [false, 'OFF']], 'fuel');
     const controlOpts = [['mouseaim', 'MOUSE-AIM'], ['mousestick', 'MOUSE STICK'], ['keyboard', 'KEYS/PAD']];
@@ -516,8 +516,13 @@ function updateBest() {
 function spawnShowcase(id) {
     if (showcase) showcase.remove();
     showcase = new Aircraft(game, id, { team: 'blue' });
+    armShowcase();
     applyLivery(showcase.model, settings.livery, id);
     resetShowcase();
+}
+// the hangar's jet carries the loadout picked in the menu (pylons.js hangs it under the wings)
+function armShowcase() {
+    if (showcase) armAircraft(showcase, LOADOUT_LABELS[settings.loadout] ? settings.loadout : 'balanced');
 }
 function resetShowcase() {
     // cruise along the coast near home base
