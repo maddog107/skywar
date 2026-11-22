@@ -255,6 +255,7 @@ const SEA_KEYS = { fog: 'clear', overcast: 'cloudy' };
 const seaKey = (w) => SEA_KEYS[w] || w;
 // [weather] the sky's scratch: the sun's direction, the sky colour a lightning flash lifts it toward
 const _sunDir = new THREE.Vector3(), _flashSky = new THREE.Color(0.8, 0.82, 0.95), _sunRGB = [0, 0, 0];
+const ENV_HEIGHT = 1000; // the height the environment map's sky is drawn for (m)
 
 // Exposure adapting to the low sun, as an eye or a camera does: the scene's light falls at dawn and dusk (the beam
 // through ~10-38 air masses, much of the ground in long shadows) and the exposure opens up to +18 % between ~14° and
@@ -364,10 +365,19 @@ export class World {
         const wx = this.wx;
         wx.update(dt, camera);
         this.weather = wx.kind;
-        // the sky: uniforms at up to 10 Hz while the time runs or the weather changes (the environment map is re-baked
-        // only when the palette has moved on enough, see applySky)
+        // the sky: applied ten times a second while the time runs or the weather changes; when a step that size would
+        // show (the clock run fast, a front crossed at speed) more often, down to every frame, so the sky never moves
+        // in visible steps (the environment map is re-baked only when the palette has moved on enough, see applySky)
         this.skyT = (this.skyT || 0) - dt;
-        if (wx.dirty && this.skyT <= 0) { this.skyT = 0.1; this.applySky(false, camera.position); }
+        if (wx.dirty && this.skyT <= 0) {
+            const P = this.P, lum = (c) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+            const level = () => lum(P.zenith) + lum(P.horizon) + P.hemiI + 0.1 * P.sunI;
+            const before = level();
+            this.applySky(false, camera.position);
+            const after = level(), step = Math.abs(after - before) / Math.max(after, before, 1e-6);
+            this.skyDt = clamp((this.skyDt || 0.1) * (step > 0.004 ? 0.5 : step < 0.0012 ? 2 : 1), 1 / 240, 0.1);
+            this.skyT = this.skyDt;
+        }
         const L = wx.local, cp = camera.position;
         // the stars fade out looking up through a ground fog (the sky dome does the same in its shader)
         if (this.starsBase > 0.01) {
@@ -531,8 +541,10 @@ export class World {
         // penumbra radius per metre of blocker height, the sun's own angular radius in clear air)
         CSM.info[1] = SUN_TAN_RADIUS * (1 + this.overcast * 6);
 
-        // [night] the ambient light the fire lights are weighed against (sun + sky, as irradiance)
-        fireLights.ambient = P.sunI * Math.max(this.sunDir.y, 0.1) * (1 - (P.overcast || 0) * 0.6) + P.hemiI + P.envI * 0.3;
+        // [night] the ambient light the fire lights are weighed against (sun + sky, as irradiance; on the scale of the
+        // old palettes' sunI + hemiI + 0.3 envI, which the fires' strengths were set against: 3.4 at noon, 0.7 at night)
+        const sunLum = (0.2126 * P.sun.r + 0.7152 * P.sun.g + 0.0722 * P.sun.b) * P.sunI;
+        fireLights.ambient = sunLum * Math.max(this.sunDir.y, 0.1) * (1 - (P.overcast || 0) * 0.6) + 0.36 * P.hemiI + 0.6;
         fireLights.night = nightK;
         this.terrainMat.emissive.setRGB(0.0006 * nightK, 0.001 * nightK, 0.0018 * nightK); // (0x020306 at night, linear)
         this.syncCraterMat();
@@ -580,13 +592,21 @@ export class World {
         // Ground hemisphere for the lower half of the reflection
         const ground = new THREE.Mesh(
             new THREE.SphereGeometry(90, 32, 16, 0, Math.PI * 2, Math.PI / 2 + 0.02, Math.PI / 2),
-            new THREE.MeshBasicMaterial({ color: this.palette.hemiGround.clone().multiplyScalar(0.8), side: THREE.BackSide })
+            new THREE.MeshBasicMaterial({ color: this.palette.hemiGround.clone().multiplyScalar(this.palette.hemiI), side: THREE.BackSide }) // (the light the ground sends back up)
         );
         envScene.add(ground);
         const saved = this.skyMat.uniforms.camPos.value.clone();
         this.skyMat.uniforms.camPos.value.set(0, 0, 0);
         this.skyMat.uniforms.domeCentered.value = 1;
+        // (the sky as seen from ENV_HEIGHT, whatever height the camera happens to be at when it is baked: the light it
+        // gives the ground and the jets doesn't then depend on where the last bake caught the camera)
+        this.atm.setCover(this.domeCover(ENV_HEIGHT));
+        this.atm.update(ENV_HEIGHT, true);
+        this.syncSunDisc();
         const rt = pmrem.fromScene(envScene, 0.02);
+        this.atm.setCover(this.domeCover(this.camY ?? 800));
+        this.atm.update(this.camY ?? 800, true);
+        this.syncSunDisc();
         this.skyMat.uniforms.camPos.value.copy(saved);
         this.skyMat.uniforms.domeCentered.value = 0;
         dome.geometry.dispose(); ground.geometry.dispose(); ground.material.dispose();
@@ -705,8 +725,10 @@ export class World {
                     // them, thinning as the ray climbs out of them; lowT: what they leave of the sun, the moon, the stars
                     float lowT = 1.0;
                     if (domeCentered < 0.5) {
-                        vec3 ray = dir * (skyFogA.w / max(length(dir.xz), 0.05));
-                        float rl = length(ray);
+                        float rl = skyFogA.w / max(length(dir.xz), 0.05);
+                        // (below the horizon the ray runs on down to the sea: a fog bank carries on to the horizon)
+                        if (h < 0.0) rl = max(rl, min(camPos.y / -h, 4.0e5));
+                        vec3 ray = dir * rl;
                         float mist = skyFogLayer(skyFogD.x, skyFogD.y, camPos.y, camPos.y + ray.y, rl);
                         float gf = groundFogTau(camPos, camPos + ray, rl);
                         vec4 air = skyFogAir(ray, camPos, gf);

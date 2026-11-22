@@ -271,13 +271,13 @@ export const CLOUD_H = 2;          // ... and the clouds' (km)
 export const MIE_PER_HAZE = 1200;
 // The exposure: the factor from the sun's irradiance above the air (1) to the game's light units.
 export const SUN_DAY = 2.94;       // from 22° up: whatever draws the sun's beam at this on a surface facing it in the clear day's air (the old 3.3 of warm white)
-export const TWILIGHT_K = 8.5;     // 6° up and lower: this (noon's is 3.8; between the two the beam's brightness is blended)
-export const TWILIGHT_EL = 2;      // below this the exposure follows the sky's light, not the sun's beam (deg)
-export const TWILIGHT_FOLD = 5.5;  // ... which is let fall to 1/e for every so many degrees the sun sinks
+export const TWILIGHT_K = 9;       // 6° up and lower: this (noon's is 3.8; between the two the beam's brightness is blended)
+export const TWILIGHT_EL = 2;      // below this the exposure opens as the light goes (deg)
+export const TWILIGHT_OPEN = [2.2, -5, 1.2]; // ... e-fold for every 2.2° the sun sinks, for every 1.2° once it is 5° down
 // The hemisphere light, as a multiple of the sky's own irradiance. The sky lights the materials once already through
 // the environment map (the dome as drawn: envI is 1); this is the fill on top of it that the old exposure had (the
 // light the surroundings bounce back, a camera's lifted shadows).
-export const FILL = 1.05;
+export const FILL = 0.7;
 // the moon's light on the ground in clear air (the old night palette's light: a pale blue, 0.35), and how much of the
 // sky it would light is drawn (the night's exposure for the sky: the old night was darker than its own moonlight)
 export const MOON_GROUND = [0x9f, 0xb6, 0xe0].map(v => Math.pow((v / 255 + 0.055) / 1.055, 2.4) * 0.35);
@@ -289,25 +289,27 @@ const NIGHT_FLOOR = [0.00035, 0.0005, 0.0009];
 const OLD_DAY = { ground: [0.051, 0.042, 0.0185], cloudShadow: 0.33 };
 const AIR0 = makeAir(PALETTES.day.fogDensity * MIE_PER_HAZE, 1.3); // the clear day's air: the exposure's reference
 const MOON_EL = Math.asin(MOON_DIR.y) / DEG;
-const _T = [0, 0, 0], _T2 = [0, 0, 0], _sl = {}, _slm = {}, _sl0 = {}, _e = [0, 0, 0], _z = [0, 0, 0], _hz = [0, 0, 0], _u = [0, 0, 0], _amb = [0, 0, 0], _dir = [0, 0, 0];
+const _T = [0, 0, 0], _T2 = [0, 0, 0], _sl = {}, _slm = {}, _e = [0, 0, 0], _z = [0, 0, 0], _hz = [0, 0, 0], _u = [0, 0, 0], _amb = [0, 0, 0], _dir = [0, 0, 0];
 const _grey = new THREE.Color();
 let _moon0 = null; // the moon's beam through the reference air
-const _tw = { L6: 0, B: 0 };
+let _L6 = 0;
 // The exposure for a sun `el` degrees up. From 22° up, what draws its beam at SUN_DAY in the reference air (the sun is
 // drawn equally bright all through the day); 6° up and lower, TWILIGHT_K (the beam then reddens and dims into the
-// horizon as the air makes it); from TWILIGHT_EL down, what lets the sky's light fall gently (TWILIGHT_FOLD) while
-// the real one collapses a hundredfold by the end of civil twilight: eyes and cameras adapt.
+// horizon as the air makes it); from TWILIGHT_EL down it opens e-fold for every 2.2° the sun sinks, which is as fast
+// as the zenith darkens just after sunset (so the sky holds its brightness for the first ten minutes and then
+// fades, the glow in the west faster than the sky overhead), and faster from 5° down, where the real light collapses
+// by a factor of thousands: a faint glow is left on the horizon at the end of nautical twilight. Eyes and cameras
+// adapt.
 export function sunExposure(el) {
     if (el >= 22) return SUN_DAY / lum3(atmSunT(AIR0, el, REF_H, _T));
     if (el >= 6) {
-        if (!_tw.L6) _tw.L6 = TWILIGHT_K * lum3(atmSunT(AIR0, 6, REF_H, _T));
-        return (_tw.L6 + (SUN_DAY - _tw.L6) * smooth(6, 22, el)) / lum3(atmSunT(AIR0, el, REF_H, _T));
+        if (!_L6) _L6 = TWILIGHT_K * lum3(atmSunT(AIR0, 6, REF_H, _T));
+        return (_L6 + (SUN_DAY - _L6) * smooth(6, 22, el)) / lum3(atmSunT(AIR0, el, REF_H, _T));
     }
     if (el >= TWILIGHT_EL) return TWILIGHT_K;
     if (el < -18) return 0;
-    if (!_tw.B) _tw.B = lum3(skyLight(AIR0, REF_H, Math.sin(TWILIGHT_EL * DEG), _sl0).E);
-    const B = lum3(skyLight(AIR0, REF_H, Math.sin(el * DEG), _sl0).E);
-    return Math.min(TWILIGHT_K * _tw.B / Math.max(B, 1e-12) * Math.exp((el - TWILIGHT_EL) / TWILIGHT_FOLD), 1e6);
+    const [f0, deep, f1] = TWILIGHT_OPEN;
+    return Math.min(TWILIGHT_K * Math.exp((TWILIGHT_EL - Math.max(el, deep)) / f0 + Math.max(deep - el, 0) / f1), 2e5);
 }
 // the scale of the model's light at noon in clear air against the old palette's (worked out once)
 let _cal = null;
@@ -354,7 +356,7 @@ export function sunLightAt(S, h, out = [0, 0, 0]) {
 //                the sun does the day's (a moonlit sky is a dim blue one)
 //   the sky      its light on the ground from the same model (irradiance: the hemisphere light), the zenith's and
 //                the horizon's radiance (the sea's and the canopy's reflections; the dome itself reads the table)
-//   overcast     a deck over `cover` of the sky that lets 0.6 … 0.22 of the light above it through as a flat grey:
+//   overcast     a deck over `cover` of the sky that lets 0.6 … 0.12 of the light above it through as a flat grey:
 //                the dome, the haze and the sky's light go grey and dim with it
 //   fog, clouds  thick fog's own colour (white droplets under that sun and sky); the clouds' sunlit and shaded sides
 export function skyPalette(hour, W, P = newPalette(), S = newSky()) {
@@ -370,20 +372,25 @@ export function skyPalette(hour, W, P = newPalette(), S = newSky()) {
     S.el = el; S.K = K;
     // (the sky is covered by the weather's own deck, seen from under it, and by the high cloud that comes with bad
     // weather, seen from anywhere: world.js picks between the two by the camera's height for the dome)
-    const cloudDim = 1 - 0.65 * k, moonFade = smooth(-3, -7, el), high = 0.9 * k * k, cover = Math.max(W.overcast || 0, high), deck = 0.6 - 0.38 * k;
+    const cloudDim = 1 - 0.65 * k, moonFade = smooth(-3, -7, el), high = 0.9 * k * k, cover = Math.max(W.overcast || 0, high), deck = 0.6 - 0.48 * k;
     S.cover = cover; S.coverHigh = high; S.sev = k;
+    // Under an overcast with the light low, the exposure opens to make up for what the deck takes, for the sky's
+    // light only: the beam that still finds its way through the cloud is not drawn brighter for it. (A storm deck lets
+    // an eighth of the light through: at midday that is a dark day; at dusk or by the moon it would be all but black,
+    // which no eye or camera leaves it at.)
+    const open = 1 + (1 / (1 - cover * (1 - deck)) - 1) * (1 - smooth(2, 22, el)), Ks = K * open;
     // the sun's beam at the ground and at the clouds
     const sun = S.sunRGB, moon = S.moonRGB, lit = _T2;
     render3(atmSunT(air, el, REF_H, sun)); render3(atmSunT(air, el, CLOUD_H, lit));
-    for (let i = 0; i < 3; i++) { sun[i] *= K; lit[i] *= K; _u[i] = sun[i] * Math.max(mu, 0); }
+    for (let i = 0; i < 3; i++) { sun[i] *= K; lit[i] *= K; _u[i] = sun[i] * Math.max(mu, 0) * open; }
     // the sky under it: irradiance, zenith, horizon
     _e[0] = _e[1] = _e[2] = 0; _z[0] = _z[1] = _z[2] = 0; _hz[0] = _hz[1] = _hz[2] = 0;
     if (K > 0) {
         skyLight(air, REF_H, mu, _sl);
-        for (let i = 0; i < 3; i++) { _e[i] = _sl.E[i] * K; _z[i] = _sl.zenith[i] * K; _hz[i] = _sl.horizon[i] * K; }
+        for (let i = 0; i < 3; i++) { _e[i] = _sl.E[i] * Ks; _z[i] = _sl.zenith[i] * Ks; _hz[i] = _sl.horizon[i] * Ks; }
         render3(_e); render3(_z); render3(_hz);
     }
-    S.lights[0].E[0] = S.lights[0].E[1] = S.lights[0].E[2] = K;
+    S.lights[0].E[0] = S.lights[0].E[1] = S.lights[0].E[2] = Ks;
     // the moon: its irradiance above the air from what reaches the ground in the reference air (ME: what lights
     // the sky, MOON_SKY of it)
     const ME = S.lights[1].E;
@@ -393,10 +400,10 @@ export function skyPalette(hour, W, P = newPalette(), S = newSky()) {
         if (air.key !== _slm.key) { skyLight(air, REF_H, MOON_DIR.y, _slm); _slm.key = air.key; }
         for (let i = 0; i < 3; i++) {
             const m = MOON_GROUND[i] / _moon0[i] * moonFade;
-            ME[i] = m * MOON_SKY;
+            ME[i] = m * MOON_SKY * open;
             lit[i] += _T[i] * m;
             moon[i] *= m;
-            _u[i] += moon[i] * MOON_DIR.y;
+            _u[i] += moon[i] * MOON_DIR.y * open;
         }
         const add = (dst, src) => { for (let i = 0; i < 3; i++) _dir[i] = src[i] * ME[i]; render3(_dir); for (let i = 0; i < 3; i++) dst[i] += _dir[i]; };
         add(_e, _slm.E); add(_z, _slm.zenith); add(_hz, _slm.horizon);
@@ -438,8 +445,8 @@ export function skyPalette(hour, W, P = newPalette(), S = newSky()) {
     setC(P.clouds, lit);
     const ll = lum3(lit) * 0.36;
     P.clouds.lerp(_grey.setRGB(0.95 * ll, ll, 1.06 * ll), 0.7 * k);
-    setC(P.cloudShadow, _e, C.cloudShadow);
-    const sl = lum3(_e) * C.cloudShadow * 0.17;
+    setC(P.cloudShadow, _e, C.cloudShadow / open);
+    const sl = lum3(_e) * C.cloudShadow * 0.17 / open;
     P.cloudShadow.lerp(_grey.setRGB(0.9 * sl, sl, 1.1 * sl), 0.8 * k);
     return P;
 }

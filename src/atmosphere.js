@@ -183,28 +183,33 @@ export function multiScatter(air, h, muL, out = [0, 0, 0], dirsSqrt = MS_DIRS, s
     return out;
 }
 
-// The table of it (x: the light's cosine -1..1, y: the height as h = 100 km × y²: rows where the haze layer is). A
-// coarse one here for this file's own marches (the GPU draws its own, MS_SIZE square, with the same mapping).
+// The table of it. x: the light's cosine as mu = x |x|, x from -1 to 1 (its samples crowd round the terminator, where
+// the light falls by orders of magnitude within a few degrees of sun); y: the height as h = 100 km × y² (rows where
+// the haze layer is). It holds the logarithm, so that reading between two samples follows that fall instead of
+// drawing a straight line over it (which, with the sun 6° down, put fifty times the light into the twilight sky).
+// A coarse one here for this file's own marches (the GPU draws its own, MS_SIZE square, with the same mapping).
 export const MS_SIZE = 32;
-const JS_MS_W = 9, JS_MS_H = 7;
+const MS_FLOOR = 1e-12;
+const JS_MS_W = 13, JS_MS_H = 7;
 function msTable(air) {
     if (air._ms && air._msKey === air.key) return air._ms;
     const T = air._ms || (air._ms = new Float32Array(JS_MS_W * JS_MS_H * 3));
     const o = [0, 0, 0];
     for (let j = 0; j < JS_MS_H; j++) for (let i = 0; i < JS_MS_W; i++) {
-        const v = j / (JS_MS_H - 1);
-        multiScatter(air, H_ATM * v * v, -1 + 2 * i / (JS_MS_W - 1), o, 4, 8);
-        T.set(o, (j * JS_MS_W + i) * 3);
+        const v = j / (JS_MS_H - 1), x = -1 + 2 * i / (JS_MS_W - 1);
+        multiScatter(air, H_ATM * v * v, x * Math.abs(x), o, 4, 8);
+        for (let k = 0; k < 3; k++) T[(j * JS_MS_W + i) * 3 + k] = Math.log(Math.max(o[k], MS_FLOOR));
     }
     air._msKey = air.key;
     return T;
 }
 function msAt(air, h, muL, out) {
     const T = msTable(air);
-    const x = Math.max(0, Math.min(1, (muL + 1) / 2)) * (JS_MS_W - 1), y = Math.sqrt(Math.max(0, Math.min(1, h / H_ATM))) * (JS_MS_H - 1);
+    const xm = Math.sign(muL) * Math.sqrt(Math.abs(muL));
+    const x = Math.max(0, Math.min(1, (xm + 1) / 2)) * (JS_MS_W - 1), y = Math.sqrt(Math.max(0, Math.min(1, h / H_ATM))) * (JS_MS_H - 1);
     const x0 = Math.min(Math.floor(x), JS_MS_W - 2), y0 = Math.min(Math.floor(y), JS_MS_H - 2), fx = x - x0, fy = y - y0;
     const a = (y0 * JS_MS_W + x0) * 3, b = a + 3, c = a + JS_MS_W * 3, e = c + 3;
-    for (let k = 0; k < 3; k++) out[k] = (T[a + k] * (1 - fx) + T[b + k] * fx) * (1 - fy) + (T[c + k] * (1 - fx) + T[e + k] * fx) * fy;
+    for (let k = 0; k < 3; k++) out[k] = Math.exp((T[a + k] * (1 - fx) + T[b + k] * fx) * (1 - fy) + (T[c + k] * (1 - fx) + T[e + k] * fx) * fy);
     return out;
 }
 
@@ -245,10 +250,18 @@ export function skyRadiance(air, h, mu, az, muL, out = [0, 0, 0], steps = SKY_ST
 }
 // What the sky-view table holds for that direction: the sky's radiance where the ray leaves the atmosphere; where it
 // ends on the ground, the radiance of that air were it thick enough to hide the ground (its in-scatter over what it
-// hides: the colour distant ground fades to). Equal at the horizon, where the air does hide what's behind it.
+// hides: the colour distant ground fades to), running into the horizon's own sky just under it (HORIZON_BLEND), so
+// that the two halves meet without a step.
+const _hz = [0, 0, 0];
 export function skyTable(air, h, mu, az, muL, out = [0, 0, 0], steps = SKY_STEPS) {
     skyRadiance(air, h, mu, az, muL, out, steps);
-    if (out.ground) for (let k = 0; k < 3; k++) out[k] /= Math.max(1 - out.T[k], 1e-5);
+    if (!out.ground) return out;
+    for (let k = 0; k < 3; k++) out[k] /= Math.max(1 - out.T[k], 1e-5);
+    const thH = PI - horizonBeta(Math.max(h, 0.001)), w = Math.exp(-(Math.acos(Math.max(-1, Math.min(1, mu))) - thH) / HORIZON_BLEND);
+    if (w > 0.01) {
+        skyRadiance(air, h, Math.cos(thH - 1e-4), az, muL, _hz, steps);
+        for (let k = 0; k < 3; k++) out[k] += (_hz[k] - out[k]) * w;
+    }
     return out;
 }
 
@@ -374,7 +387,7 @@ const MS_FRAG = /* glsl */`
     ${ATM_GLSL}
     void main() {
         vec2 uv = (gl_FragCoord.xy - 0.5) / ${g(MS_SIZE - 1)};
-        float muL = uv.x * 2.0 - 1.0, h0 = max(H_ATM * uv.y * uv.y, 0.001), r0 = RG + h0;
+        float xm = uv.x * 2.0 - 1.0, muL = xm * abs(xm), h0 = max(H_ATM * uv.y * uv.y, 0.001), r0 = RG + h0;
         float lx = sqrt(max(1.0 - muL * muL, 0.0));
         vec3 L2 = vec3(0.0), F = vec3(0.0);
         for (int a = 0; a < ${MS_DIRS}; a++) for (int b = 0; b < ${MS_DIRS}; b++) {
@@ -398,8 +411,10 @@ const MS_FRAG = /* glsl */`
             }
         }
         float n = ${g(MS_DIRS * MS_DIRS)};
-        gl_FragColor = vec4((L2 / n) / (1.0 - min(F / n, 0.999)), 1.0);
+        gl_FragColor = vec4(log(max((L2 / n) / (1.0 - min(F / n, 0.999)), ${g(MS_FLOOR)})), 1.0);
     }`;
+// how far below the horizon the haze's colour runs into the horizon's own (rad: it is all but gone 5° down)
+export const HORIZON_BLEND = 0.02;
 const SKY_FRAG = /* glsl */`
     ${ATM_GLSL}
     uniform sampler2D msLut;
@@ -409,24 +424,20 @@ const SKY_FRAG = /* glsl */`
     uniform vec4 veil;                     // the overcast above: its radiance at the zenith, how much of the sky it covers
     uniform vec3 floorL;                   // the night's own glow
     vec3 msAt(float h, float muL) {
-        vec2 x = clamp(vec2(muL * 0.5 + 0.5, sqrt(h / H_ATM)), 0.0, 1.0);
-        return texture2D(msLut, (x * ${g(MS_SIZE - 1)} + 0.5) / ${g(MS_SIZE)}).rgb;
+        vec2 x = clamp(vec2(sign(muL) * sqrt(abs(muL)) * 0.5 + 0.5, sqrt(h / H_ATM)), 0.0, 1.0);
+        return exp(texture2D(msLut, (x * ${g(MS_SIZE - 1)} + 0.5) / ${g(MS_SIZE)}).rgb);
     }
     float phaseR(float c) { return 3.0 / (16.0 * PI) * (1.0 + c * c); }
     float phaseM(float c, float g) { float g2 = g * g; return 3.0 / (8.0 * PI) * (1.0 - g2) * (1.0 + c * c) / ((2.0 + g2) * pow(1.0 + g2 - 2.0 * g * c, 1.5)); }
-    void main() {
-        vec2 uv = gl_FragCoord.xy / lutSize;
-        float v = clamp((uv.y - 0.5 / lutSize.y) / (1.0 - 1.0 / lutSize.y), 0.0, 1.0);
-        float h0 = max(camH, 0.001), r0 = RG + h0;
-        float beta = acos(min(sqrt(h0 * (2.0 * RG + h0)) / r0, 1.0)), thH = PI - beta;
-        float th = v < 0.5 ? thH * (1.0 - (1.0 - 2.0 * v) * (1.0 - 2.0 * v)) : thH + beta * (2.0 * v - 1.0) * (2.0 * v - 1.0);
-        float az = (uv.x - 0.5) * 2.0 * PI, mu = cos(th), st = sin(th);
-        vec3 d = vec3(st * cos(az), mu, st * sin(az));
-        float tg = distGround(h0, mu), tMax = tg >= 0.0 ? tg : distTop(h0, mu);
+    // The light the air scatters toward the eye, h0 km up, along the ray with cosine mu from the zenith for tMax km
+    // (the direction d: its cosines with the two lights give the phase functions); thr: what is left of a background
+    vec3 march(float h0, float mu, vec3 d, float tMax, out vec3 thr) {
+        float r0 = RG + h0;
         bool on0 = dot(lightE[0], vec3(1.0)) > 0.0, on1 = dot(lightE[1], vec3(1.0)) > 0.0;
         float c0 = dot(d, lightDir[0]), c1 = dot(d, lightDir[1]);
         float pR0 = phaseR(c0), pM0 = phaseM(c0, mieG), pR1 = phaseR(c1), pM1 = phaseM(c1, mieG);
-        vec3 L = vec3(0.0), thr = vec3(1.0);
+        vec3 L = vec3(0.0);
+        thr = vec3(1.0);
         for (int i = 0; i < ${SKY_STEPS}; i++) {
             float a0 = float(i) / ${g(SKY_STEPS)}, a1 = float(i + 1) / ${g(SKY_STEPS)};
             a0 *= a0; a1 *= a1;
@@ -448,8 +459,30 @@ const SKY_FRAG = /* glsl */`
             L += thr * S * (1.0 - stepT) / max(ext, 1e-9);
             thr *= stepT;
         }
-        // (below the horizon: the colour of that air were it thick enough to hide the ground, see skyTable)
-        if (tg >= 0.0) L /= max(1.0 - thr, 1e-5);
+        return L;
+    }
+    void main() {
+        vec2 uv = gl_FragCoord.xy / lutSize;
+        float v = clamp((uv.y - 0.5 / lutSize.y) / (1.0 - 1.0 / lutSize.y), 0.0, 1.0);
+        float h0 = max(camH, 0.001), r0 = RG + h0;
+        float beta = acos(min(sqrt(h0 * (2.0 * RG + h0)) / r0, 1.0)), thH = PI - beta;
+        float th = v < 0.5 ? thH * (1.0 - (1.0 - 2.0 * v) * (1.0 - 2.0 * v)) : thH + beta * (2.0 * v - 1.0) * (2.0 * v - 1.0);
+        float az = (uv.x - 0.5) * 2.0 * PI, mu = cos(th), st = sin(th);
+        float tg = distGround(h0, mu);
+        vec3 thr;
+        vec3 L = march(h0, mu, vec3(st * cos(az), mu, st * sin(az)), tg >= 0.0 ? tg : distTop(h0, mu), thr);
+        if (tg >= 0.0) {
+            // below the horizon: the colour of that air were it thick enough to hide the ground (see skyTable), running
+            // into the horizon's own sky just under it: the table has no step where the two meet
+            L /= max(1.0 - thr, 1e-5);
+            float w = exp(-(th - thH) / ${g(HORIZON_BLEND)});
+            if (w > 0.01) {
+                float muH = cos(thH - 1e-4), sH = sin(thH - 1e-4);
+                vec3 thrH;
+                vec3 Hz = march(h0, muH, vec3(sH * cos(az), muH, sH * sin(az)), distTop(h0, muH), thrH);
+                L = mix(L, Hz, w);
+            }
+        }
         // colour rendering (render3), then the overcast and the night's glow (already display colours)
         L = max(mix(vec3(dot(L, vec3(0.2126, 0.7152, 0.0722))), L, sat), 0.0);
         L = mix(L, veil.rgb * (0.5 + 0.5 * max(mu, 0.0)), veil.a) + floorL;
@@ -527,7 +560,9 @@ export class Atmosphere {
     // needed: a 32 × 32 and a 192 × 128 pass.
     update(camY, force = false) {
         const h = Math.max(camY, 1) / 1000;
-        if (!force && !this.dirty && !this.msDirty && Math.abs(h - this.camH) < 0.002 + 0.002 * this.camH) return false;
+        // (a climb or a dive redraws it every 5 m + half a percent of height: a few times a second in a dogfight, a
+        // step far too small to see)
+        if (!force && !this.dirty && !this.msDirty && Math.abs(h - this.camH) < 0.005 + 0.005 * this.camH) return false;
         const r = this.renderer;
         if (!r) return false;
         const prevRT = r.getRenderTarget(), face = r.getActiveCubeFace(), mip = r.getActiveMipmapLevel(), prevAuto = r.autoClear, prevXr = r.xr.enabled;
