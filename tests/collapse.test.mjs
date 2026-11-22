@@ -143,4 +143,42 @@ describe('collapse: a building coming down', () => {
         im.getMatrixAt(0, m); m.decompose(p, q, s);
         assert.ok(Math.abs(s.y - 30) < 1e-3 && Math.abs(p.y - 15) < 1e-3, 'standing again');
     });
+
+    test('what hangs on a building (roof, plant, balconies) is scorched with it, comes down with it and is put back', () => {
+        const { bl, b, im } = oneBuilding(30);
+        // a roof, a rooftop unit and a balcony: instances of another mesh, registered as parts that aren't walls
+        const more = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial(), 3);
+        more.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array([0.3, 0.3, 0.32, 0.6, 0.62, 0.64, 0.7, 0.7, 0.68]), 3);
+        const M = [[0, 30.5, 0, 21, 1, 17], [3, 31.5, -2, 2, 1.4, 2], [0, 12, 8.6, 6, 1, 1.3]].map(([x, y, z, sx, sy, sz]) => new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion(), new THREE.Vector3(sx, sy, sz)));
+        M.forEach((mm, i) => { more.setMatrixAt(i, mm); bl.part(b, more, i); });
+        const m = new THREE.Matrix4(), c = new THREE.Color();
+        // hit hard but standing: every part darkened by the same factor
+        bl.damage(b, b.hp * 0.8, null, null);
+        const k = 0.45 + 0.55 * b.hp / b.maxHp;
+        more.getColorAt(1, c);
+        assert.ok(Math.abs(c.r - 0.6 * k) < 1e-5 && Math.abs(c.b - 0.64 * k) < 1e-5, 'the rooftop unit is scorched too');
+        im.getColorAt(0, c);
+        assert.ok(Math.abs(c.r - 0.8 * k) < 1e-5);
+        // down: the parts fall with the walls, and only the walls leave a stub
+        bl.destroy(b, null, null);
+        const dur = bl.collapsing[0].dur;
+        run(bl, dur * 0.5);
+        for (let i = 0; i < 3; i++) { more.getMatrixAt(i, m); assert.ok(m.elements[13] < M[i].elements[13] - 1, `part ${i} is coming down`); }
+        run(bl, dur * 0.6 + 1);
+        for (let i = 0; i < 3; i++) { more.getMatrixAt(i, m); assert.ok(m.elements[0] === 0 && m.elements[5] === 0 && m.elements[10] === 0, `part ${i} is gone`); }
+        im.getMatrixAt(0, m);
+        assert.ok(m.elements[5] > 0 && m.elements[5] < 6, 'the wall is a stub');
+        im.getColorAt(0, c);
+        assert.ok(Math.abs(c.r - 0.8 * 0.28) < 1e-5, 'burnt: 0.28 of the colour it was built with');
+        // the next sortie
+        bl.reset();
+        for (let i = 0; i < 3; i++) {
+            more.getMatrixAt(i, m);
+            assert.ok(m.elements.every((v, k2) => Math.abs(v - M[i].elements[k2]) < 1e-5), `part ${i} back where it was`);
+        }
+        more.getColorAt(2, c);
+        assert.ok(Math.abs(c.r - 0.7) < 1e-6 && Math.abs(c.b - 0.68) < 1e-6, 'and in its own colour');
+        im.getColorAt(0, c);
+        assert.ok(Math.abs(c.r - 0.8) < 1e-6);
+    });
 });
