@@ -8,7 +8,7 @@ import net from 'node:net';
 import { randomBytes, createHash } from 'node:crypto';
 import { src } from './helpers/setup.mjs';
 
-const { createRelay, PROTOCOL, cleanName, cleanRoom, validState, validEvent, DEFAULTS, addressKey, isLoopbackAddress } = await import(new URL('../relay.mjs', import.meta.url).href);
+const { createRelay, PROTOCOL, cleanName, cleanRoom, validState, validEvent, DEFAULTS, MAX_EVENT, addressKey, isLoopbackAddress } = await import(new URL('../relay.mjs', import.meta.url).href);
 const proto = await src('netproto.js');
 
 const ORIGIN = 'http://localhost:8080';
@@ -162,7 +162,27 @@ describe('relay: names and message shapes', () => {
         assert.ok(!validEvent({ e: ['hit', [1, 2]] }));
         assert.ok(!validEvent({ e: ['hit', 1], to: 'everyone' }));
         assert.ok(!validEvent({ e: [] }));
-        assert.ok(!validEvent({ e: ['hit', ...new Array(24).fill(1)] }));
+        // (an event is at most 64 long, its name included: a rocket pod's salvo, a list of buildings)
+        assert.ok(validEvent({ e: ['bld', ...new Array(63).fill(1)] }));
+        assert.ok(!validEvent({ e: ['hit', ...new Array(64).fill(1)] }));
+        assert.ok(validEvent({ e: ['ord', 0, 'zuni', 4, 0, 12345.6, 1, 2, 3, 4, 5, 6, 7, 8, 9] }) && validEvent({ e: ['blast', 1, 2, 3, 4, 5, 1] }) && validEvent({ e: ['sync', 0], to: 4 }));
+    });
+
+    test('the longest bomb, rocket and building messages a client sends fit in one', async () => {
+        const proto = await import(new URL('../src/netproto.js', import.meta.url).href);
+        const big = -123456.78, clock = 9999999999.9;
+        const ord = ['ord', proto.NMAX - 1, 'gbu43x', 4, 1, clock];
+        for (let k = 0; k < proto.ORD_PER_EVENT; k++) ord.push(65535, big, 54321.12, big, -2499.9, -2499.9, -2499.9, 2000, -628);
+        const blast = ['blast', clock];
+        for (let k = 0; k < proto.BLAST_PER_EVENT; k++) blast.push(65535, big, 54321.12, big, 7);
+        const bld = ['bld', clock, ...new Array(proto.BLD_PER_EVENT).fill(6000 * 256 + 255)];
+        const sync = ['sync', 1, 999999, 3, 4, 5917, 4294967295, ...new Array(proto.SYNC_WORDS).fill(4294967295)];
+        for (const e of [ord, blast, bld, sync]) {
+            assert.ok(e.length <= proto.MAX_EVENT && proto.MAX_EVENT === MAX_EVENT, e[0] + ': ' + e.length + ' long');
+            assert.ok(validEvent({ e, to: 9999 }), e[0] + ' passes');
+            const bytes = JSON.stringify({ t: 'e', e, to: 9999 }).length;
+            assert.ok(bytes <= DEFAULTS.maxMsg, e[0] + ': ' + bytes + ' bytes');
+        }
     });
 
     test('the limits asked for', () => {

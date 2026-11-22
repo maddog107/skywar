@@ -2,7 +2,7 @@
 // side (multiplayer.js) with two or three headless games (real Aircraft and Weapons, no-op effects) joined through an
 // in-memory stand-in for the relay that stamps and routes messages as relay.mjs does and refuses, with the relay's own
 // validators, anything the real relay would drop a connection for.
-import { test, describe } from 'node:test';
+import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { src } from './helpers/setup.mjs';
 import { noop } from './helpers/arena.mjs';
@@ -16,7 +16,11 @@ const { Aircraft } = await src('aircraft.js');
 const { Pilot } = await src('ai.js');
 const { Weapons } = await src('weapons.js');
 const { SYSTEMS } = await src('systems.js');
-const { MODES } = await src('config.js');
+const { MODES, WEAPONS } = await src('config.js');
+const { Buildings, WORLD_BUILDINGS } = await src('buildings.js');
+const { terrainHeight } = await src('world.js');
+const { STORES } = await src('stores.js');
+const { ORD_LIMITS } = await src('netordnance.js');
 const relay = await import(new URL('../relay.mjs', import.meta.url).href);
 // (never assert.equal on a game object: a failure would try to print the whole scene graph)
 const same = (a, b, msg) => assert.ok(a === b, msg || 'the same object');
@@ -273,16 +277,34 @@ class Hub {
 
 const clock = { t: 100 };
 
-// a headless game: the real Aircraft / Weapons / Multiplayer, effects and sound that do nothing
-function makeGame(hub, hello, { at = [0, 3000, 0], heading = 0 } = {}) {
+// A small town on flat open land, the same records on every client (as towns.js builds the real ones, in the same
+// order): 7 × 7 houses 30 m apart, a tower block 200 m east, an airbase hangar 200 m west (not a town building)
+const TOWN = { x: -12000, z: -20000 };
+function makeTown() {
+    const bl = new Buildings({ add() {} });
+    for (let i = 0; i < 7; i++) for (let j = 0; j < 7; j++) {
+        const x = TOWN.x + (i - 3) * 30, z = TOWN.z + (j - 3) * 30;
+        bl.add({ x, z, y: terrainHeight(x, z), w: 12, d: 10, ht: 8, yaw: 0.2, kind: 'house' });
+    }
+    bl.add({ x: TOWN.x + 200, z: TOWN.z, y: terrainHeight(TOWN.x + 200, TOWN.z), w: 20, d: 20, ht: 60, yaw: 0, kind: 'tower' });
+    bl.add({ x: TOWN.x - 200, z: TOWN.z, y: terrainHeight(TOWN.x - 200, TOWN.z), w: 40, d: 30, ht: 12, yaw: 0, kind: 'hangar' });
+    bl.index();
+    return bl;
+}
+const groundAt = (x, z) => { const h = terrainHeight(x, z); return { h: Math.max(h, 0), water: h < -0.5, ship: null, bridge: false, runway: null }; };
+const quietTraffic = () => ({ blast() {}, nearAny: () => false, hitAt: () => false });
+
+// a headless game: the real Aircraft / Weapons / Multiplayer, effects and sound that do nothing (town: its own copy
+// of the town, and the real ground under it)
+function makeGame(hub, hello, { at = [0, 3000, 0], heading = 0, town = false } = {}) {
     const g = {
         scene: { add() {}, remove() {} }, events: new Events(), settings: { fuel: false, controlMode: 'keyboard' },
-        audio: noop(), effects: noop(), wreckage: noop(), world: { weather: null, towns: null }, wind: null,
+        audio: noop(), effects: noop(), wreckage: noop(), world: { weather: null, towns: town ? { buildings: makeTown(), bridges: [], traffic: quietTraffic() } : null }, wind: null,
         camera: { position: new THREE.Vector3() }, input: { down: () => false, consumeMouse() {}, lock() {}, unlock() {} },
         time: 0, state: 'playing', deathT: 0, aircraft: [], player: null, pilotMode: null, ground: null, lockTarget: null,
         difficulty: { skill: 0.6, dmgTaken: 1, enemyMissileRate: 0.7 }, feed: [], banners: [], kills: 0, score: 0,
         addFeed(text) { g.feed.push(text); }, showBanner(a, b) { g.banners.push(a + ' / ' + b); },
-        surfaceAt: () => ({ h: -1e6 }), startPoint: () => 'air', atFriendlyPad: () => false,
+        surfaceAt: town ? groundAt : () => ({ h: -1e6 }), startPoint: () => 'air', atFriendlyPad: () => false,
         aimDir: new THREE.Vector3(), camQuat: new THREE.Quaternion(), camPos: new THREE.Vector3(),
     };
     g.weapons = new Weapons(g);
@@ -697,6 +719,203 @@ describe('multiplayer: missiles and flares', () => {
     });
 });
 
+// ═════════════ Bombs, rockets and the towns' buildings (netordnance.js, networld.js) ═════════════
+// A (blue) and B (red) over open country 3 km from the town, each with its own copy of it
+function overTown(opts = {}) {
+    const hub = new Hub();
+    const A = makeGame(hub, { name: 'VIPER', team: 'blue', ac: 'f16' }, { at: [TOWN.x + 3000, 3000, TOWN.z], town: true });
+    const B = makeGame(hub, { name: 'MAVERICK', team: opts.teamB || 'red', ac: 'f15' }, { at: [TOWN.x + 3000, 3000, TOWN.z - 400], town: true });
+    run([A, B], 0.5); unsafe(A, B); run([A, B], 0.2);
+    return { hub, A, B, a: A.mp.me.id, b: B.mp.me.id };
+}
+const blOf = (g) => g.world.towns.buildings;
+const downOf = (g) => g.mp.net.downList();
+// a bomb from g's jet, put where it should fall from (the launch message says where it really is)
+const drop = (g, kind, x, y, z, vy = -60, vx = 0, target = null) => { const b = g.weapons.dropBomb(g.player, kind, target); b.pos.set(x, y, z); b.vel.set(vx, vy, 0); return b; };
+const level = (...games) => { for (const g of games) { const p = g.player; if (p.alive) { p.controls.pitch = 0; p.controls.roll = 0; p.controls.throttle = 0.8; } } };
+// A's weapon's track by A's frame clock, and how far B's ghost of it is from it at the moment B draws it
+function follow(A, B, obj, ghostOf) {
+    const track = [], err = { worst: 0, n: 0 };
+    return {
+        err,
+        each() {
+            if (A.weapons.bombs.includes(obj) || A.weapons.missiles.includes(obj)) track.push([A.mp.frameNow(), obj.pos.clone()]);
+            const gh = ghostOf();
+            if (!gh || !gh.shown || !gh.mesh.visible || !B.mp.ord.ghosts.has(gh)) return;
+            const T = B.mp.ord.drawn(gh, clock.t), i = track.findIndex(r => r[0] >= T);
+            if (i < 1) return;
+            const [t0, p0] = track[i - 1], [t1, p1] = track[i], at = p0.clone().lerp(p1, (T - t0) / (t1 - t0));
+            err.worst = Math.max(err.worst, at.distanceTo(gh.pos)); err.n++;
+        },
+    };
+}
+
+describe('multiplayer: bombs, rockets and the towns', () => {
+    after(() => { WORLD_BUILDINGS.current = null; });
+
+    test('a bomb: B draws it leaving where A released it and falling on A\'s path, and its burst where A\'s went off', () => {
+        const S = overTown(), { hub, A, B } = S;
+        const target = blOf(A).list[24]; // (the middle house)
+        const b = drop(A, 'bomb', target.x, target.top + 400, target.z);
+        run([A, B], 1 / 60);
+        const ord = hub.events('ord');
+        assert.equal(ord.length, 1);
+        const e = ord[0][1].e;
+        assert.deepEqual([e[1], e[2], e[3], e[4]], [0, b.W.id, P.ORD_KINDS.indexOf('bomb'), 0], 'our jet, its store, a plain bomb');
+        assert.equal(B.mp.ord.ghosts.size, 1);
+        const gh = [...B.mp.ord.ghosts][0];
+        same(gh.W, b.W, 'the same store (' + b.W.short + ')');
+        assert.ok(!gh.mesh.visible, 'not yet: B draws A a moment in the past');
+        let bursts = 0;
+        const burst = B.weapons.bombBurst.bind(B.weapons);
+        B.weapons.bombBurst = (x, ...r) => { if (x.show) bursts++; return burst(x, ...r); };
+        const f = follow(A, B, b, () => gh);
+        run([A, B], 12, () => { level(A, B); f.each(); });
+        assert.ok(!A.weapons.bombs.includes(b), 'A\'s bomb went off');
+        assert.ok(f.err.n > 200, 'B drew it falling (' + f.err.n + ' frames)');
+        assert.ok(f.err.worst < 0.5, 'on A\'s bomb\'s own path, where A had it at the moment B draws: worst ' + f.err.worst.toFixed(3) + ' m');
+        assert.equal(B.mp.ord.ghosts.size, 0, 'and it is gone');
+        assert.equal(bursts, 1, 'B played the burst once, with the game\'s own bombBurst');
+        assert.equal(hub.events('blast').length, 1);
+        assert.equal(hub.events('blast')[0][1].e[6], P.HOW.WORLD, 'on the house\'s roof (no crater)');
+        console.log(`    bomb ghost: ${f.err.n} frames drawn, worst ${(f.err.worst * 100).toFixed(1)} cm off A's bomb at the moment drawn`);
+    });
+
+    test('the buildings it brings down on A come down on B, and only once B\'s picture of the bomb gets there', () => {
+        const S = overTown(), { hub, A, B } = S;
+        const target = blOf(A).list[24];
+        drop(A, 'bomb', target.x, target.top + 300, target.z);
+        let fellA = -1, fellB = -1, burstB = -1, frame = 0;
+        run([A, B], 10, () => {
+            frame++; level(A, B);
+            if (fellA < 0 && !blOf(A).list[24].alive) fellA = frame;
+            if (fellB < 0 && !blOf(B).list[24].alive) fellB = frame;
+            if (burstB < 0 && B.mp.ord.bursts) burstB = frame;
+        });
+        const da = downOf(A), db = downOf(B);
+        assert.ok(da.includes(24) && da.length >= 5, 'a block down on A: ' + da.join(','));
+        assert.deepEqual(db, da, 'the same buildings down on B');
+        assert.ok(fellA > 0 && burstB > fellA && fellB >= burstB, `A's at frame ${fellA}; on B the burst at ${burstB}, the house at ${fellB}`);
+        assert.ok(hub.events('bld').length >= 1 && hub.events('bld').every(([from]) => from === S.a), 'A told the room');
+        assert.equal(B.mp.net.out.length, 0, 'B tells nobody: not its bomb');
+        assert.ok(blOf(B).list[49].alive && blOf(A).list[49].alive, 'the tower 200 m off stands on both');
+        assert.equal(B.feed.filter(x => /BUILDING|COLLATERAL/.test(x)).length + A.feed.filter(x => /BUILDING|COLLATERAL/.test(x)).length, 0, 'no feed lines for scenery');
+    });
+
+    test('damage adds up between pilots, but a building only falls on its owner\'s word', () => {
+        const S = overTown(), { hub, A, B } = S;
+        const tA = blOf(A).list[49], tB = blOf(B).list[49]; // the tower: 1800 + 60 × 6 hp
+        drop(A, 'bomb', tA.x, tA.top + 200, tA.z);
+        run([A, B], 8, () => level(A, B));
+        assert.ok(tA.alive && tB.alive, 'one bomb doesn\'t bring it down');
+        assert.ok(tA.hp < tA.maxHp - 500 && Math.abs(tA.hp - tB.hp) < 1, `the same damage on both: ${tA.hp.toFixed(0)} / ${tB.hp.toFixed(0)} of ${tA.maxHp}`);
+        // B's own two bombs: on B the third hit is the last blow; on A, A's count says it still stands — B's word brings it down
+        drop(B, 'bomb', tB.x, tB.top + 200, tB.z);
+        run([A, B], 8, () => level(A, B));
+        assert.ok(tA.alive && tB.alive && tA.hp >= 1 && tB.hp >= 1, `two bombs: ${tA.hp.toFixed(0)} / ${tB.hp.toFixed(0)}`);
+        drop(B, 'bomb', tB.x, tB.top + 200, tB.z);
+        run([A, B], 8, () => level(A, B));
+        assert.ok(!tB.alive, 'down on B (its own bomb)');
+        assert.ok(!tA.alive, 'and on A, on B\'s word');
+        assert.ok(hub.events('bld').every(([from]) => from === S.b), 'told by B only');
+        assert.deepEqual(downOf(A), downOf(B));
+    });
+
+    test('a newcomer gets the buildings down so far from the host, as ruins at once; after the host leaves, from the next one', () => {
+        const S = overTown(), { hub, A, B } = S;
+        drop(A, 'moab', TOWN.x, terrainHeight(TOWN.x, TOWN.z) + 500, TOWN.z, -80);
+        run([A, B], 14, () => level(A, B));
+        const down = downOf(A);
+        assert.ok(down.length >= 40, 'the MOAB flattened the town: ' + down.length);
+        assert.deepEqual(downOf(B), down);
+        assert.ok(blOf(A).list[50].alive && blOf(B).list[50].alive, 'the airbase hangar is not a town building: it stands');
+        const C = makeGame(hub, { name: 'GHOST', team: 'blue', ac: 'f14' }, { at: [TOWN.x + 4000, 3000, TOWN.z], town: true });
+        const asks = hub.events('sync').filter(([from]) => from === C.mp.me.id);
+        assert.equal(asks.length, 1, 'it asked'); assert.equal(asks[0][1].to, S.a, 'the host');
+        assert.deepEqual(downOf(C), down, 'the same buildings down, as soon as it is in');
+        assert.equal(blOf(C).collapsing.length, 0, 'ruins already: nothing collapsing');
+        assert.equal(blOf(C).rubble.count, down.length, 'a heap on each');
+        assert.equal(hub.events('sync').filter(([from, m]) => from === S.a && m.to === C.mp.me.id).length, 1, 'one part for this small town');
+        // the host leaves; another pilot comes: the new host answers
+        hub.leave(S.a);
+        assert.ok(B.mp.isHost);
+        const D = makeGame(hub, { name: 'ICEMAN', team: 'red', ac: 'mig29' }, { at: [TOWN.x + 4000, 3000, TOWN.z + 500], town: true });
+        assert.deepEqual(downOf(D), down);
+    });
+
+    test('a rocket salvo is one message, its rockets fly on B along A\'s, and end where A\'s did', () => {
+        const S = overTown(), { hub, A, B } = S;
+        // A dives on the town: six rockets from 700 m out, 400 m up
+        const h = terrainHeight(TOWN.x, TOWN.z), from = new THREE.Vector3(TOWN.x + 700, h + 400, TOWN.z), dir = new THREE.Vector3(-700, -400, 0).normalize();
+        const rs = [];
+        for (let i = 0; i < 6; i++) {
+            const m = A.weapons.fireMissile(A.player, null, 'rkt');
+            m.pos.copy(from).add(new THREE.Vector3(0, i * 0.5, (i - 2.5) * 2)); m.vel.copy(dir).multiplyScalar(300);
+            rs.push(m);
+        }
+        run([A, B], 1 / 60);
+        assert.equal(hub.events('ord').length, 1, 'the salvo in one message');
+        assert.equal(hub.events('ord')[0][1].e.length, P.ORD_HEAD + 6 * P.ORD_ITEM);
+        assert.equal(B.mp.ord.ghosts.size, 6);
+        const ghosts = [...B.mp.ord.ghosts];
+        assert.ok(ghosts.every(gh => gh.rkt && gh.W === rs[0].W), 'rockets of A\'s store');
+        const f = follow(A, B, rs[0], () => ghosts[0]);
+        run([A, B], 5, () => { level(A, B); f.each(); });
+        assert.ok(rs.every(m => !A.weapons.missiles.includes(m)), 'A\'s rockets ended');
+        assert.equal(B.mp.ord.ghosts.size, 0, 'and B\'s with them');
+        assert.ok(f.err.n > 30 && f.err.worst < 1, 'the first one on A\'s path: ' + f.err.n + ' frames, worst ' + f.err.worst.toFixed(2) + ' m');
+        const ends = hub.events('blast');
+        assert.ok(ends.length >= 1 && ends.length <= 3, ends.length + ' end messages for 6 rockets');
+        assert.equal(ends.reduce((n, [, m]) => n + (m.e.length - P.BLAST_HEAD) / P.BLAST_ITEM, 0), 6);
+        assert.equal(B.mp.ord.bursts, 6);
+        assert.deepEqual(downOf(B), downOf(A), 'what they brought down, on both');
+        console.log(`    rocket ghost: ${f.err.n} frames, worst ${f.err.worst.toFixed(2)} m off A's rocket; ${ends.length} end message(s); ${downOf(A).length} buildings down`);
+    });
+
+    test('remote impacts never hurt our jet a second time: a bomb\'s blast reaches us once, as its owner\'s claim', () => {
+        const S = overTown(), { hub, A, B } = S;
+        const h = terrainHeight(TOWN.x, TOWN.z) + 0.5, spot = new THREE.Vector3(TOWN.x + 120, h, TOWN.z + 120);
+        // B hangs 30 m over where A's bomb will go off
+        const hold = () => { level(A); const p = B.player; p.pos.set(spot.x, spot.y + 30, spot.z); p.vel.set(0, 0, -1); };
+        run([A, B], 0.3, hold);
+        const hp = B.player.health;
+        drop(A, 'bomb', spot.x, spot.y + 250, spot.z);
+        run([A, B], 8, hold);
+        const claims = hub.events('hit').filter(([from, m]) => from === S.a && m.to === S.b);
+        const hits = B.events.log.filter(([k, ac]) => k === 'hit' && ac === B.player);
+        assert.equal(claims.length, 1, 'A\'s bomb hurt B\'s puppet: one claim');
+        assert.equal(hits.length, 1, 'B took it once (its own ghost\'s burst did nothing to it)');
+        assert.ok(B.player.health < hp, 'hurt: ' + hp.toFixed(0) + ' → ' + B.player.health.toFixed(0));
+        assert.equal(B.mp.ord.bursts, 1);
+    });
+
+    test('a cluster bomb opens on B where it opened on A (bomblets that do nothing there); a guided bomb rides in A\'s snapshots', () => {
+        const S = overTown(), { hub, A, B } = S;
+        const h = terrainHeight(TOWN.x, TOWN.z);
+        A.player.stores = { ...(A.player.stores || {}), bomb: 'cbu87', gbu: 'gbu38' };
+        const c = drop(A, 'bomb', TOWN.x + 120, h + 500, TOWN.z + 120);
+        assert.ok(c.W === STORES.cbu87, 'A drops a CBU-87');
+        run([A, B], 8, () => level(A, B));
+        assert.ok(hub.events('blast').some(([, m]) => m.e[6] === P.HOW.OPEN), 'it opened');
+        assert.ok(B.weapons.bomblets.length === 0 && B.mp.ord.bursts === 1, 'B opened its ghost; its bomblets have come down');
+        assert.deepEqual(downOf(B), downOf(A));
+        // a GPS-guided bomb with a target: no ballistics, rows like a missile's
+        const tgt = { pos: new THREE.Vector3(TOWN.x - 60, h, TOWN.z), alive: true };
+        const g = drop(A, 'gbu', TOWN.x + 1500, h + 1500, TOWN.z, 0, -200, tgt);
+        assert.ok(g.W.guided && g.aim, 'a GPS bomb on a point');
+        run([A, B], 0.3, () => level(A, B));
+        assert.equal(hub.events('ord').slice(-1)[0][1].e[4], 1, 'released as guided');
+        const rows = hub.sent.filter(([from, m]) => from === S.a && m.t === 's' && m.m && m.m.some(r => r[7] === 2));
+        assert.ok(rows.length >= 4, rows.length + ' snapshots carried its row');
+        const gh = [...B.mp.ord.ghosts].find(x => x.guided);
+        assert.ok(gh && gh.mesh.visible, 'B draws it');
+        assert.equal(B.mp.ghosts.size, 0, 'not as a missile');
+        run([A, B], 25, () => level(A, B));
+        assert.ok(!A.weapons.bombs.includes(g) && B.mp.ord.ghosts.size === 0, 'it ended on both');
+        assert.equal(B.mp.ord.bursts, 2);
+    });
+});
+
 describe('multiplayer: AI bandits are the host\'s', () => {
     function withBandit() {
         const S = pair(), { A, B } = S;
@@ -935,11 +1154,11 @@ describe('multiplayer: outside the mode', () => {
 // validState), delivered as the relay would deliver it, stamped with the sender's id.
 describe('multiplayer: a peer is not trusted', () => {
     // A (blue, host), B (red), C (blue) in one room, all past their spawn protection
-    function trio() {
+    function trio(town = false) {
         const hub = new Hub();
-        const A = makeGame(hub, { name: 'VIPER', team: 'blue', ac: 'f16' }, { at: [0, 3000, 0] });
-        const B = makeGame(hub, { name: 'MAVERICK', team: 'red', ac: 'f15' }, { at: [0, 3000, -300] });
-        const C = makeGame(hub, { name: 'GHOST', team: 'blue', ac: 'f14' }, { at: [3000, 3500, 2000] });
+        const A = makeGame(hub, { name: 'VIPER', team: 'blue', ac: 'f16' }, { at: [0, 3000, 0], town });
+        const B = makeGame(hub, { name: 'MAVERICK', team: 'red', ac: 'f15' }, { at: [0, 3000, -300], town });
+        const C = makeGame(hub, { name: 'GHOST', team: 'blue', ac: 'f14' }, { at: [3000, 3500, 2000], town });
         run([A, B, C], 0.6); unsafe(A, B, C); run([A, B, C], 0.2);
         return { hub, A, B, C, a: A.mp.me.id, b: B.mp.me.id, c: C.mp.me.id };
     }

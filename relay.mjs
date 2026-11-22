@@ -29,8 +29,8 @@ import { pathToFileURL } from 'node:url';
 import { chmodSync, unlinkSync } from 'node:fs';
 
 // the protocol version (src/netproto.js PROTOCOL must match: tests/relay.test.mjs checks it); a client with another
-// one is refused with a message telling the player to reload
-export const PROTOCOL = 1;
+// one is refused with a message telling the player to reload (2: bombs, rockets and town buildings for everyone)
+export const PROTOCOL = 2;
 
 export const DEFAULTS = {
     maxMsg: 2048,        // bytes in one client message (a frame, or a fragmented message in all)
@@ -51,8 +51,10 @@ export const DEFAULTS = {
     path: null,          // only this URL path upgrades (null: any)
 };
 
-// the events a client may send (src/multiplayer.js): the relay passes them on without reading them
-export const EVENTS = new Set(['hit', 'die', 'boom', 'part', 'ml', 'mx', 'fl', 'st', 'ai', 'gone', 'away', 'blast', 'bld', 'eject', 'sync']);
+// the events a client may send (src/multiplayer.js, netordnance.js, networld.js): the relay passes them on without
+// reading them; at most MAX_EVENT long, the name included (a rocket pod's salvo, a list of buildings: src/netproto.js)
+export const EVENTS = new Set(['hit', 'die', 'boom', 'part', 'ml', 'mx', 'fl', 'st', 'ai', 'gone', 'away', 'ord', 'blast', 'bld', 'eject', 'sync']);
+export const MAX_EVENT = 64;
 const TIMES = new Set(['dawn', 'day', 'dusk', 'night']);
 const WEATHERS = new Set(['clear', 'cloudy', 'grey', 'rain', 'storm', 'fog', 'overcast']);
 const TOKEN = /^[a-z0-9_]{1,16}$/;                 // an aircraft type, a livery
@@ -92,7 +94,7 @@ export function validState(m) {
 // an event: { t: 'e', e: [name, ...numbers and short strings], to: a client id (optional) }
 export function validEvent(m) {
     const e = m.e;
-    if (!Array.isArray(e) || e.length < 1 || e.length > 24 || !EVENTS.has(e[0])) return false;
+    if (!Array.isArray(e) || e.length < 1 || e.length > MAX_EVENT || !EVENTS.has(e[0])) return false;
     for (let i = 1; i < e.length; i++) {
         const x = e[i];
         if (typeof x === 'string' ? !EVENT_STR.test(x) : !isNum(x, 1e13)) return false; // (1e13: a sender's clock in ms fits)

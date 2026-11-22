@@ -11,7 +11,7 @@
 // Everything a peer sends is checked again here on the way in (decodeEntity): a peer is not trusted either.
 // ═══════════════════════════════════════════════════════════════
 
-export const PROTOCOL = 1;          // relay.mjs PROTOCOL must be the same number
+export const PROTOCOL = 2;          // relay.mjs PROTOCOL must be the same number (2: bombs, rockets, buildings)
 export const SEND_HZ = 20;          // state snapshots a second
 export const INTERP_DELAY = 0.1;    // s: remote aircraft are drawn this far in the past, between two snapshots
 export const EXTRAP_MAX = 0.5;      // s: how long a remote aircraft coasts on its last velocity when snapshots stop
@@ -20,6 +20,7 @@ export const MAX_ENTITIES = 12, MAX_MISSILES = 12;   // rows in one state messag
 export const MAX_PLAYERS = 16;
 export const MAX_MISSILE_ID = 65535;                 // a missile's id with its owner: 1 … this (anything else is refused)
 export const MAX_LIFE = 1e6;                         // airframe counts beyond this are refused
+export const MAX_EVENT = 64;                         // an event's length, its name included (the relay's limit)
 
 // an entity's id across the room: its owner's client id and its number with that owner
 export const NMAX = 4096;
@@ -74,10 +75,10 @@ export function decodeEntity(row, out = {}) {
     return out;
 }
 
-// m: { id, pos, vel, tracking }
+// m: { id, pos, vel, tracking, bomb }  (bomb: a guided bomb's row, not a missile's: the last number is 2)
 export function encodeMissile(m) {
     const p = m.pos, v = m.vel;
-    return [m.id, r2(p.x), r2(p.y), r2(p.z), Math.round(v.x), Math.round(v.y), Math.round(v.z), m.tracking ? 1 : 0];
+    return [m.id, r2(p.x), r2(p.y), r2(p.z), Math.round(v.x), Math.round(v.y), Math.round(v.z), m.bomb ? 2 : m.tracking ? 1 : 0];
 }
 export function decodeMissile(row, out = {}) {
     if (!Array.isArray(row) || row.length < 8) return null;
@@ -88,7 +89,52 @@ export function decodeMissile(row, out = {}) {
     out.px = row[1]; out.py = row[2]; out.pz = row[3];
     out.vx = clamp(row[4], -4000, 4000); out.vy = clamp(row[5], -4000, 4000); out.vz = clamp(row[6], -4000, 4000);
     out.tracking = row[7] === 1;
+    out.bomb = row[7] === 2;
     return out;
+}
+
+// ── Bombs and rockets (netordnance.js) ──
+// 'ord' [name, n, store, kind, guided, clock, …items]: what one aircraft released in one frame, ORD_ITEM numbers each
+//   item [id, x, y, z, vx, vy, vz, age (ms), twist (rad × 100)]
+// 'blast' [name, clock, …ends]: what of ours ended in one frame, BLAST_ITEM numbers each: [id, x, y, z, how]
+export const ORD_KINDS = ['bomb', 'gbu', 'buster', 'moab', 'rkt'];   // weapons.js dropBomb kinds, and a rocket
+export const ORD_HEAD = 6, ORD_ITEM = 9, BLAST_HEAD = 2, BLAST_ITEM = 5;
+export const ORD_PER_EVENT = Math.floor((MAX_EVENT - ORD_HEAD) / ORD_ITEM);        // 6: a rocket pod's whole salvo
+export const BLAST_PER_EVENT = Math.floor((MAX_EVENT - BLAST_HEAD) / BLAST_ITEM);  // 12
+// How a bomb, a rocket or a missile ended (its owner's word: every client plays the same end from it)
+//   HIT     a missile or rocket went off on its target or by its proximity fuse; a bomb on a ship (no crater)
+//   GROUND  a bomb burst on the ground; a missile or rocket came to the end of its flight (into the ground or the sea,
+//           out of fuel or life): where exactly it was says which, as in weapons.js
+//   WATER   a bomb into the sea          WORLD  into a building (or an air target): no crater
+//   OPEN    a cluster bomb opened        BURIED, BURIED_IN  a bunker buster went into the ground / a building (its
+//           delay fuse follows)          QUIET  taken out of the game without a bang
+export const HOW = { HIT: 0, GROUND: 1, WATER: 2, WORLD: 3, OPEN: 4, BURIED: 5, BURIED_IN: 6, QUIET: 7 };
+
+// ── Town buildings (networld.js) ──
+// A building on the wire is its place in the towns' list (the same on every client: tests/towns.test.mjs pins it)
+// with a byte of its position, so a client whose list were different would ignore it rather than knock the wrong
+// one down: entry = index × 256 + check
+export const bldCheck = (b) => ((Math.round(b.x) * 31) ^ Math.round(b.z)) & 255;
+export const bldEntry = (index, b) => index * 256 + bldCheck(b);
+// 'bld' [name, clock, …entries]
+export const BLD_HEAD = 2, BLD_PER_EVENT = MAX_EVENT - BLD_HEAD;
+// 'sync' [name, 0]: a newcomer asks the host. The host's answer: the destroyed ones as a bitset, in parts
+//   [name, 1, epoch, part, parts, count, digest, …32-bit words] (bit i of word k: building 32 k + i)
+//   [name, 2, epoch, …bridge entries] (networld.js)
+export const SYNC_HEAD = 7, SYNC_WORDS = MAX_EVENT - SYNC_HEAD - 1;   // 56 words: 1792 buildings a part
+// a digest of the list (where each building stands): two clients with the same one have the same towns
+export function listDigest(list) {
+    let h = 0x811c9dc5 ^ list.length;
+    for (const b of list) {
+        for (const v of [Math.round(b.x * 10), Math.round(b.z * 10)]) for (let k = 0; k < 4; k++) { h ^= (v >> (k * 8)) & 0xff; h = Math.imul(h, 0x01000193); }
+    }
+    return h >>> 0;
+}
+// n flags (isSet(i)) as 32-bit words
+export function packBits(n, isSet) {
+    const words = new Array(Math.ceil(n / 32)).fill(0);
+    for (let i = 0; i < n; i++) if (isSet(i)) words[i >> 5] = (words[i >> 5] | (1 << (i & 31))) >>> 0;
+    return words;
 }
 
 // ── Names (the relay enforces the same rules: relay.mjs cleanName / cleanRoom) ──
