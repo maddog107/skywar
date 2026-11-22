@@ -295,7 +295,9 @@ try {
         const re = await until('B respawns', async () => { const v = await view(B); return v.me && v.me.alive && v.me.life === 2 && v.state === 'playing' ? v : null; }, 15000);
         const np = await until('A sees B\'s new jet', async () => { const v = await view(A); const p = v.peers[0] && v.peers[0].puppet; return p && p.alive && p.life === 2 ? p : null; }, 8000);
         check(!!re && !!np, 'B respawns in a new airframe, and A sees it', np ? `life ${np.life}, health ${np.health}/${np.maxHealth}, protected: ${np.safe}` : '');
-        check(!!np && np.health === np.maxHealth && np.safe, 'the new jet is whole and spawn-protected');
+        // (the protection flag rides in the state snapshots, which the puppet is drawn a moment behind: give it that moment)
+        const prot = np && await until('B\'s new jet shows its spawn protection on A', async () => { const v = await view(A); const p = v.peers[0] && v.peers[0].puppet; return p && p.life === 2 && p.safe && p.health === p.maxHealth ? p : null; }, 3000);
+        check(!!prot, 'the new jet is whole and spawn-protected');
     }
 
     // ── 5b. A's connection drops: it reconnects by itself, and the two see each other again ──
