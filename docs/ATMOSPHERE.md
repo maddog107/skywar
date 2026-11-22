@@ -102,9 +102,15 @@ What is still set by hand, and why:
 
 ## Costs
 
+Measured in the page (the development MacBook, 1280 × 720, high):
+
 - Per pixel: built-in materials no texture fetch (one per vertex), one extra exponential for the molecules in
   place of two `pow`. The dome, sea and clouds one fetch.
-- Per change: the sky-view pass (24,576 texels × 32 steps, plus a second march for the rows just under the
-  horizon), and the 32 × 32 multiple-scattering pass when the aerosol changes.
-- CPU: `skyPalette` about 0.3 ms, at most ten times a second and only while the clock runs or the weather changes;
-  about 1.5 ms more when the aerosol moves to its next 2 % step.
+- Redrawing the sky-view table: 0.01 ms of CPU and about 0.02 ms of GPU (24,576 texels × 32 steps, plus a second
+  march for the rows just under the horizon); with the 32 × 32 multiple-scattering pass, 0.06 ms. Nothing is drawn
+  in level flight with the clock stopped; a climb or dive redraws it a few times a second.
+- `skyPalette` on the CPU: 0.10 – 0.16 ms, at most ten times a second and only while the clock runs or the
+  weather changes (more often, down to every frame, only while the sky is changing fast enough for a tenth of a
+  second's step to show); about 1 ms more when the aerosol moves to its next 2 % step.
+- The whole frame (tools/perf/bench.mjs, dogfight and war, three runs each on a shared machine): no difference
+  outside the noise.

@@ -448,6 +448,10 @@ export function skyPalette(hour, W, P = newPalette(), S = newSky()) {
     setC(P.cloudShadow, _e, C.cloudShadow / open);
     const sl = lum3(_e) * C.cloudShadow * 0.17 / open;
     P.cloudShadow.lerp(_grey.setRGB(0.9 * sl, sl, 1.1 * sl), 0.8 * k);
+    // (by night the exposure that opened for the sky under an overcast shows the clouds too: a storm's clouds and its
+    // rain are dim shapes under the moon, not black)
+    const openC = 1 + (open - 1) * moonFade;
+    P.clouds.multiplyScalar(openC); P.cloudShadow.multiplyScalar(openC);
     return P;
 }
 
