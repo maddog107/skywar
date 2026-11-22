@@ -12,9 +12,13 @@
 //   4. A shoots B: B's health drops on B, and the same on A's puppet of B; a missile from A is an incoming ghost on B
 //      with its launch warning, and B's flares are dropped in A's world
 //   5. B dies: both show "VIPER SHOT DOWN MAVERICK", both scoreboards agree, B gets a new jet that A sees
+//   5c. A drops a bomb on a town building: B sees the bomb fall and go off where A's did, and the same buildings come
+//      down on both; a rocket salvo from A is six rockets in flight on B (screenshots of the building from A and B
+//      before, during and after: --shots)
 //   6. a screenshot from A of B's jet with its name tag, and one with the scoreboard up (--shots)
 //   7. B leaves: gone from A; a third page in another room sees nobody, and A doesn't see it
-//   8. the third page leaves through the menu and joins A's room without a reload; a dropped connection (5b) reconnects by itself
+//   8. the third page leaves through the menu and joins A's room without a reload; a dropped connection (5b) reconnects by itself;
+//      it has the same buildings down as A (the host's state, as ruins at once), and a screenshot of the ruin from it
 //   9. co-op: the host turns AI bandits on, the guest sees them as puppets and shoots one down (a claim the host applies)
 //  10. the host leaves: the guest becomes the host and flies what is left of the bandits
 //  11. a page served without a relay: the lobby reports that the server can't be reached, and stays in the menu
@@ -136,6 +140,27 @@ const view = (P) => P.ev(() => {
         kills: mp.kills, deaths: mp.deaths, feed: window.__feed.slice().reverse(), score: mp.scoreRows().map(r => [r.name, r.team, r.kills, r.deaths]), ping: Math.round(mp.link ? mp.link.rtt : -1), offline: !!mp.offline, time: g.world.timeKey, weather: g.world.weather };
 });
 const until = async (what, fn, ms = 30000) => { const t = Date.now(); for (;;) { const v = await fn(); if (v) return v; if (Date.now() - t > ms) { check(false, what, 'timed out after ' + ms / 1000 + ' s'); return null; } await sleep(100); } };
+
+// the camera held on a point (t: { x, y, z, top }: a building), the HUD off; null: the game's own camera again
+const holdCamera = (P, t) => P.ev(async (t) => {
+    const THREE = await import('three');
+    const g = window.skywar.game;
+    if (!window.__holdCam) {
+        const orig = g.updateCamera.bind(g), v = new THREE.Vector3();
+        g.updateCamera = (dt, m) => {
+            orig(dt, m);
+            const h = window.__holdCam;
+            if (!h || !h.on) return;
+            const cam = g.camera;
+            cam.position.set(h.x + 95, h.top + 75, h.z + 115);
+            cam.up.set(0, 1, 0); cam.lookAt(v.set(h.x, h.y + 2, h.z)); cam.fov = 50; cam.updateProjectionMatrix();
+            g.shake = 0; if (g.cockpit) g.cockpit.enabled = false;
+        };
+        window.__holdCam = { on: false };
+    }
+    Object.assign(window.__holdCam, t ? { ...t, on: true } : { on: false });
+    g.hideHud = !!t;
+}, t);
 
 // a fingerprint of the world a page built: terrain heights on a grid, every town building, the bridges, the runways
 const fingerprint = (P) => P.ev(async () => {
@@ -312,6 +337,73 @@ try {
         check(!!seen && seen.feed.some(f => f === 'VIPER LEFT') && seen.feed.some(f => /^VIPER JOINED/.test(f)), 'B saw A leave and join again', seen ? seen.feed.slice(0, 4).join(' | ') : '');
     }
 
+    // ── 5c. A bombs a town building: B sees the bomb fall and go off, and the same buildings come down on both; a rocket
+    // salvo from A is six rockets in flight on B ──
+    let ruin = null;
+    {
+        // the target: a house among many, with nothing tall within 150 m (to be seen from the camera), the same record on
+        // both pages (the fingerprint said so)
+        ruin = await A.ev(() => {
+            const list = window.skywar.game.mp.net.list;
+            let best = -1, most = 0;
+            for (let i = 0; i < list.length; i += 3) {
+                const b = list[i];
+                if (!b.alive || (b.kind !== 'house' && b.kind !== 'town')) continue;
+                let near = 0, tall = false;
+                for (const o of list) {
+                    const d = Math.abs(o.x - b.x) + Math.abs(o.z - b.z);
+                    if (d < 200 && o.top - o.y > 16) { tall = true; break; }
+                    if (d < 55) near++;
+                }
+                if (!tall && near > most) { most = near; best = i; }
+            }
+            const i = best >= 0 ? best : list.findIndex(b => b.alive), b = list[i];
+            return { i, x: b.x, y: b.y, z: b.z, top: b.top, kind: b.kind, n: list.length, near: most };
+        });
+        const same0 = await B.ev((i) => { const b = window.skywar.game.mp.net.list[i]; return b && b.alive ? { x: b.x, z: b.z, top: b.top } : null; }, ruin.i);
+        check(!!same0 && Math.abs(same0.x - ruin.x) < 0.01 && Math.abs(same0.z - ruin.z) < 0.01, 'the same building is number ' + ruin.i + ' of ' + ruin.n + ' on both pages', `${ruin.kind} at ${ruin.x.toFixed(0)}, ${ruin.z.toFixed(0)}, ${(ruin.top - ruin.y).toFixed(0)} m high`);
+        // B notes every burst of someone else's bomb it plays (weapons.js bombBurst with a drawn-only bomb)
+        await B.ev(() => { const w = window.skywar.game.weapons, bb = w.bombBurst.bind(w); window.__bursts = []; w.bombBurst = (b, at, ...r) => { if (b.show) window.__bursts.push({ x: at.x, y: at.y, z: at.z, store: b.W.short || '' }); return bb(b, at, ...r); }; });
+        if (SHOTS) {
+            mkdirSync(SHOTS, { recursive: true });
+            await holdCamera(A, ruin); await holdCamera(B, ruin);
+            await sleep(2500);
+            await A.page.screenshot({ path: SHOTS + '/mp-building-before-A.png' });
+        }
+        // A's bomb, released 600 m over the roof (where A's jet happens to be doesn't matter: the release says where)
+        const store = await A.ev((t) => { const g = window.skywar.game, b = g.weapons.dropBomb(g.player, 'bomb'); b.pos.set(t.x, t.top + 600, t.z); b.vel.set(0, -60, 0); return b.W.short || b.W.name; }, ruin);
+        const ys = [];
+        const fall = await until('B sees A\'s bomb fall', async () => {
+            const v = await B.ev(() => { const gh = [...window.skywar.game.mp.ord.ghosts].find(x => !x.rkt); return gh ? { y: gh.pos.y, vis: gh.mesh.visible, store: gh.W.short || gh.W.name } : null; });
+            if (v && v.vis) ys.push(v.y);
+            return ys.length >= 6 && ys[ys.length - 1] < ys[0] - 40 ? v : null;
+        }, 20000);
+        check(!!fall && fall.store === store, 'A drops a ' + store + ' on it: B draws the bomb falling', fall ? `B saw it at ${ys.map(y => (y - ruin.top).toFixed(0)).slice(0, 8).join(', ')}… m over the roof` : '');
+        if (SHOTS) {
+            await until('B\'s bomb near the roof', () => B.ev((top) => { const gh = [...window.skywar.game.mp.ord.ghosts].find(x => !x.rkt); return !gh || gh.pos.y < top + 140; }, ruin.top), 15000);
+            await B.page.screenshot({ path: SHOTS + '/mp-bomb-falling-B.png' });
+        }
+        const boom = await until('B sees it go off', () => B.ev(() => window.__bursts.length ? window.__bursts[0] : null), 20000);
+        const downA = await until('the building is down on A', () => A.ev((i) => { const net = window.skywar.game.mp.net; return net.list[i].alive ? null : net.downList(); }, ruin.i), 10000);
+        await sleep(1500);
+        const downB = await B.ev(() => window.skywar.game.mp.net.downList());
+        const off = boom ? Math.hypot(boom.x - ruin.x, boom.z - ruin.z) : Infinity;
+        check(!!boom && off < 25 && boom.store === store, 'B plays its burst where A\'s went off, with the game\'s own bomb burst', boom ? `${off.toFixed(1)} m from the building's middle, ${(boom.y - ruin.y).toFixed(1)} m up` : '');
+        check(!!downA && JSON.stringify(downA) === JSON.stringify(downB) && downB.includes(ruin.i), 'the same buildings are down on both', downA ? `${downA.length} down on A [${downA.slice(0, 12).join(', ')}${downA.length > 12 ? '…' : ''}], ${downB.length} on B` : '');
+        // a salvo of rockets from A's jet: one message, six rockets in flight on B, and their ends
+        const fired = await A.ev(() => { const g = window.skywar.game; let n = 0; for (let k = 0; k < 6; k++) if (g.weapons.fireMissile(g.player, null, 'rkt')) n++; return n; });
+        const rk = await until('B sees the salvo', () => B.ev(() => { const r = [...window.skywar.game.mp.ord.ghosts].filter(gh => gh.rkt && gh.mesh.visible); return r.length >= 6 ? { n: r.length, store: r[0].W.short || 'RKT', speed: Math.round(r[0].vel.length()) } : null; }), 8000);
+        const rkEnd = await until('the salvo ends on B', () => B.ev(() => ![...window.skywar.game.mp.ord.ghosts].some(gh => gh.rkt)), 15000);
+        check(fired === 6 && !!rk && !!rkEnd, 'A fires a salvo of six rockets: B has the six in flight, and they end', rk ? `${rk.n} ${rk.store} rockets at ${rk.speed} m/s on B` : '');
+        if (SHOTS) {
+            await sleep(4000); // (the collapse, and the worst of its dust)
+            await A.page.screenshot({ path: SHOTS + '/mp-building-down-A.png' });
+            await B.page.screenshot({ path: SHOTS + '/mp-building-down-B.png' });
+            await holdCamera(A, null); await holdCamera(B, null);
+            log('     screenshots: ' + SHOTS + '/mp-building-before-A.png, mp-bomb-falling-B.png, mp-building-down-A.png, mp-building-down-B.png');
+        }
+    }
+
     // ── 6. screenshots from A: B's jet with its name tag; the scoreboard ──
     if (SHOTS) {
         mkdirSync(SHOTS, { recursive: true });
@@ -371,6 +463,19 @@ try {
     await C.page.waitForFunction(() => window.skywar.game.state === 'playing' && window.skywar.game.mode === 'multiplayer' && window.skywar.game.mp.link, null, { timeout: 300000 });
     const cIn = await until('C and A see each other', async () => { const c = await view(C), a = await view(A); return c.room === ROOM && c.peers.length === 1 && c.peers[0].puppet && a.peers.length === 1 && a.peers[0].puppet ? { c, a } : null; }, 20000);
     check(!!cIn && cIn.c.host === cIn.a.id && cIn.a.isHost && !cIn.c.isHost && cIn.a.peers[0].name === 'GHOST', 'C joined A\'s room from the menu; A is its host', cIn ? `room ${cIn.c.room}, host ${cIn.c.host}` : '');
+    // the buildings A bombed before C came: down on C too, as ruins at once (the host's state, asked for on joining)
+    if (ruin) {
+        const downA = await A.ev(() => window.skywar.game.mp.net.downList());
+        const got = await until('C has the buildings down', async () => { const v = await C.ev(() => ({ down: window.skywar.game.mp.net.downList(), collapsing: window.skywar.game.world.towns.buildings.collapsing.length })); return JSON.stringify(v.down) === JSON.stringify(downA) ? v : null; }, 10000);
+        check(!!got && got.down.includes(ruin.i) && got.collapsing === 0, 'a pilot who joins later has the same buildings down, as ruins already', got ? `${got.down.length} down on C as on A, none collapsing` : '');
+        if (SHOTS) {
+            await holdCamera(C, ruin);
+            await sleep(6000); // (a page that has only just launched draws the town's ground a moment later)
+            await C.page.screenshot({ path: SHOTS + '/mp-building-down-C.png' });
+            await holdCamera(C, null);
+            log('     screenshot: ' + SHOTS + '/mp-building-down-C.png');
+        }
+    }
 
     // ── 9. co-op: the host calls in AI bandits; the guest sees them and shoots one down ──
     await A.ev(() => { const g = window.skywar.game; window.__god = true; g.player.spawnAir(new (g.player.pos.constructor)(0, 3000, 0), 0, 0.6); window.__ctl = { pitch: 0, roll: 0, yaw: 0, throttle: 0.85 }; g.mp.toggleBandits(); });

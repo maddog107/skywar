@@ -1141,7 +1141,7 @@ describe('multiplayer: outside the mode', () => {
             mp.start(mode, {});
             assert.equal(mp.active, false); assert.equal(g.cockpitOnly, false);
             mp.update(1 / 60);
-            assert.equal(mp.onAction('pause'), false); assert.equal(mp.onAction('photo'), false);
+            assert.equal(mp.onAction('pause'), false); assert.equal(mp.onAction('photo'), false); assert.equal(mp.onAction('scores'), false);
             assert.equal(mp.respawnPoint(), null); assert.equal(mp.onKilled(), false);
             mp.flyJet(1 / 60, {}, {}); mp.drawHud({}, {});
             mp.clear();
@@ -1188,6 +1188,17 @@ describe('multiplayer: outside the mode', () => {
         assert.ok(!A.mp.menuOpen && shown === false);
         assert.equal(A.mp.onAction('photo'), true, 'photo mode is refused');
         assert.equal(A.mp.onAction('eject'), true, 'so is ejecting');
+        // a touch screen's SCORE button (no Tab key there): the scoreboard up, and down again
+        let drawn = 0;
+        const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : typeof k === 'string' && /^(fill|stroke)(Rect|Text)$/.test(k) ? () => { drawn++; } : () => {}), set: (t, k, v) => { t[k] = v; return true; } });
+        A.mp.drawHud(ctx, { w: 1280, h: 720 });
+        const idle = drawn;
+        assert.equal(A.mp.onAction('scores'), true);
+        A.mp.drawHud(ctx, { w: 1280, h: 720 });
+        assert.ok(A.mp.board && drawn - idle > 8, 'the board is drawn (' + (drawn - idle) + ' strokes)');
+        A.mp.onAction('scores');
+        drawn = 0; A.mp.drawHud(ctx, { w: 1280, h: 720 });
+        assert.ok(!A.mp.board && drawn === idle, 'and gone');
         assert.ok(A.feed.some(f => /PHOTO/.test(f)) && A.feed.some(f => /EJECT/.test(f)));
     });
 });

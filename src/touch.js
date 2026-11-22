@@ -24,6 +24,7 @@ export function setupTouch(input) {
             <button data-act="flaps">FLAP</button>
             <button data-act="gear">GEAR</button>
             <button data-act="target">TGT</button>
+            <button data-act="scores" class="t-mp">SCORE</button>
             <button data-act="pause">II</button>
         </div>`;
     document.body.appendChild(root);

@@ -139,6 +139,7 @@ export class Multiplayer {
         this.kills = 0; this.deaths = 0;
         this.sendT = 0; this.statT = 0; this.sentStat = '';
         this.menuOpen = false;
+        this.board = false;            // the scoreboard held up (the touch screens' SCORE button; Tab holds it on a keyboard)
         this.away = false; this.wasHidden = false; this.awaySince = 0; this.lastTick = 0; this.t0 = 0;
         this.offline = null;           // { since, tries, nextAt, msg }: the connection dropped, we're trying again
         this.connecting = false;
@@ -269,6 +270,7 @@ export class Multiplayer {
             case 'eject': g.addFeed('NO EJECTING IN MULTIPLAYER — STAY WITH THE JET', DIM); return true;
             case 'target': return g.input.down('Tab'); // Tab holds the scoreboard up here; T still cycles targets
             case 'spawn': this.toggleBandits(); return true;
+            case 'scores': this.board = !this.board; return true; // (touch.js: no Tab key on a touch screen)
             case 'confirm':
                 // stuck (belly-landed, or stopped somewhere that isn't one of our pads): a new jet
                 if (p && p.alive && p.onGround && p.speed < 2 && (p.bellied || !g.atFriendlyPad(p))) { this.respawn('NEW JET'); return true; }
@@ -1242,7 +1244,7 @@ export class Multiplayer {
             ctx.fillText(isFinite(this.offline.nextAt) ? 'CONNECTION LOST — RECONNECTING' + (this.offline.tries ? ' (TRY ' + (this.offline.tries + 1) + ')' : '') : 'NOT CONNECTED — FLYING ALONE', W / 2, H * 0.2);
             if (this.offline.msg) { mono('600', 11); ctx.fillStyle = DIM; ctx.fillText(this.offline.msg.toUpperCase().slice(0, 110), W / 2, H * 0.2 + 18, W * 0.9); }
         }
-        if (!g.input || !g.input.down('Tab')) return;
+        if (!this.board && (!g.input || !g.input.down('Tab'))) return;
         const rows = this.scoreRows(), rh = 22, w = Math.min(560, W - 24), x = (W - w) / 2, h = 74 + rows.length * rh, y = Math.max(10, (H - h) / 2);
         ctx.fillStyle = 'rgba(6,12,18,0.92)'; ctx.fillRect(x, y, w, h);
         ctx.strokeStyle = 'rgba(93,255,160,0.35)'; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
