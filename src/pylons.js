@@ -8,11 +8,13 @@
 //    model's own pylon is found and used), a fuselage station is hung from the belly under it, a wingtip rail from the
 //    tip. Left is the mirror of right exactly (the height map is made symmetric first). A store that would hang into
 //    the ground on the gear, or through a gear leg, is left off.
-//  • Drawing: one mesh per damage section (damage.js: centre, left wing, right wing) holding that section's pylons,
-//    racks and stores, colours per vertex (the pylons in the skin's colour where they stand, the stores in their own),
-//    one material for all of them, hung on the section so a wing that's shot off takes its stores with it. A store
-//    that has gone is taken out of the index buffer (and put back by a rearm). Built only for a jet close enough to
-//    see them (storesNear: by its size on screen, well before farmodel.js takes over) and freed again when it isn't.
+//  • Drawing: one mesh per jet holding all its pylons, racks and stores, colours per vertex (the pylons in the
+//    skin's colour where they stand, the stores in their own), one material for every jet's: one draw call a jet,
+//    and one in each shadow pass. A store that has gone is taken out of the index buffer (and put back by a rearm).
+//    Inside the mesh each damage section's hardware (damage.js: centre, left wing, right wing) is a block of its
+//    own: when a section leaves the jet its block is cut out into a mesh that rides away on it (castOff). Built only
+//    for a jet close enough to see them (storesNear: by its size on screen, well before farmodel.js takes over) and
+//    freed again when it isn't.
 //  • Counting: nothing here owns ammunition. syncStores compares what hangs with the aircraft's own counters
 //    (ac.missiles, ac.bombs, ...) every frame it is shown, so a rearm, a resupply or a sandbox top-up puts stores back
 //    and anything that spends them takes them off. What a type can't hang outside (a bay carrier's whole load, a
@@ -588,16 +590,16 @@ function layout(ac, fit, plan, lost, skinCol) {
     // (the ground under the parked jet, and where a leg's top is: the generic legs hang from the model's lowest point)
     const legs = gearLegs(ac), floor = -ac.gearOffset + 0.12, legTop = (ac.rig.minY ?? -1) + 0.2;
     const rackCol = rgb(RACK_COLOR), railCol = [Math.round(skinCol[0] * 0.8), Math.round(skinCol[1] * 0.8), Math.round(skinCol[2] * 0.8)];
-    const mesherOf = (region) => {
-        if (!meshers[region]) { const g = regions[region]; meshers[region] = g ? new Mesher(g.position.x, g.position.y, g.position.z) : new Mesher(0, 0, 0); }
-        return meshers[region];
-    };
+    const mesherOf = (region) => meshers[region] || (meshers[region] = new Mesher(0, 0, 0)); // (model space)
     const pylons = new Set(); // pylons seen to, by where they stand (a pylon and its side rails share one)
+    const stood = [];         // the depth of every pylon stood here (m)
     // A pylon from this side's own skin down to a foot at yFoot, if there is a gap to fill (the model's own pylon, or
-    // a store lying against the skin, leaves none)
-    const stand = (px, pz, plen, th, yFoot) => {
+    // a store lying against the skin, leaves none; a gap deeper than any pylon means the skin over it isn't what the
+    // station hangs from, a fuselage corner beside a wing say: no blade is stood in it)
+    const stand = (px, pz, plen, th, yFoot, deepest = 1.0) => {
         const low = fit.side(px - th / 2, px + th / 2, pz - plen / 2, pz + plen / 2);
-        if (!(low - yFoot > 0.05)) return null;
+        if (!(low - yFoot > 0.05) || low - yFoot > deepest) return null;
+        stood.push(low - yFoot);
         const top = (z) => fit.side(px - th / 2, px + th / 2, z - 0.02, z + 0.02, true) + 0.04;
         return (m) => m.pylon(px, pz - plen / 2, pz + plen / 2, yFoot, top, th, skinCol);
     };
@@ -671,8 +673,9 @@ function layout(ac, fit, plan, lost, skinCol) {
                 if (!(low === low)) { miss(pl, n); continue; }
                 const sink = def.sink || 0;
                 fy = low + sink - (def.own || sink ? 0 : (def.drop ?? 0.07));
-                // (a short adapter between the belly and the rack, unless the store lies in the skin)
-                if (!sink) hang = stand(fx, fz, clamp(0.5 * Math.max(rack.hwLen, t.len * 0.8), 0.6, 2.2), 0.09, fy);
+                // (a short adapter between the belly and the rack, unless the store lies in the skin or on the model's
+                // own launcher)
+                if (!sink && !def.own) hang = stand(fx, fz, clamp(0.5 * Math.max(rack.hwLen, t.len * 0.8), 0.6, 2.2), 0.09, fy, 0.45);
             }
             if (def.fwd) fz -= def.fwd;
             // the section it rides on (a wing that's gone has nothing)
@@ -705,12 +708,12 @@ function layout(ac, fit, plan, lost, skinCol) {
     // a class's stores come back in the order of its stations (the preferred first) and leave in the reverse: the
     // last station given out empties first
     for (const cls in seq) seq[cls] = seq[cls].flatMap(group => group.slice().reverse());
-    return { slots, meshers, seq, inside };
+    return { slots, meshers, seq, inside, stood };
 }
 
 // ── The view on an aircraft ──
 function newView() {
-    return { lc: undefined, full: {}, plan: null, built: false, slots: [], seq: {}, shown: {}, inside: {}, meshes: {}, lostN: 0, cycle: 0, bayN: 0, skin: null, skinMat: null, count: 0 };
+    return { lc: undefined, full: {}, plan: null, built: false, slots: [], seq: {}, shown: {}, inside: {}, mesh: null, index0: null, blocks: {}, lostN: 0, cycle: 0, bayN: 0, skin: null, skinMat: null, count: 0 };
 }
 
 // what the jet carries now, class by class, as the plan wants it: [{ cls, store, n }]
@@ -736,7 +739,7 @@ function plan(ac, v) {
 function build(ac, v) {
     if (orphans.length) sweepOrphans();
     v.built = true;
-    v.slots = []; v.seq = {}; v.shown = {}; v.inside = { ...v.plan.inside }; v.meshes = {}; v.count = 0;
+    v.slots = []; v.seq = {}; v.shown = {}; v.inside = { ...v.plan.inside }; v.mesh = null; v.index0 = null; v.blocks = {}; v.count = 0;
     v.lostN = ac.lostRegions ? ac.lostRegions.size : 0;
     v.bay = null;
     const fit = v.plan.places.length || v.plan.bay ? fitFor(ac) : null;
@@ -752,19 +755,26 @@ function build(ac, v) {
         for (const pl of v.plan.places) if (pl.cls !== 'rkt') v.inside[pl.cls] = (v.inside[pl.cls] || 0) + pl.n;
         return;
     }
-    v.slots = lay.slots; v.seq = lay.seq; v.inside = lay.inside;
+    v.slots = lay.slots; v.seq = lay.seq; v.inside = lay.inside; v.stood = lay.stood;
     for (const cls in v.seq) v.shown[cls] = v.seq[cls].length;
+    // One mesh for the whole jet, hung on its model (one draw, and one in each shadow pass). Each damage section's
+    // pylons and stores are a block of it, so a section that leaves the jet can take its block along (castOff).
+    const all = new Mesher(0, 0, 0);
     for (const region in lay.meshers) {
         const m = lay.meshers[region];
         if (!m.idx.length) continue;
-        const geo = m.geometry();
-        const mesh = new THREE.Mesh(geo, storesMaterial());
-        mesh.name = 'stores';
-        mesh.userData.stores = true;
-        mesh.castShadow = true; mesh.receiveShadow = true;
-        mesh.matrixAutoUpdate = false; // (it never moves on its section)
-        (ac.regions && ac.regions[region] ? ac.regions[region] : ac.model).add(mesh);
-        v.meshes[region] = { mesh, full: geo.index.array.slice() };
+        const v0 = all.verts, i0 = all.idx.length, sec = ac.regions && ac.regions[region];
+        for (let i = 0; i < m.pos.length; i++) { all.pos.push(m.pos[i]); all.nor.push(m.nor[i]); all.col.push(m.col[i]); }
+        for (let i = 0; i < m.idx.length; i++) all.idx.push(m.idx[i] + v0);
+        // (o: the section's origin in the model, the frame its own meshes are in)
+        v.blocks[region] = { v0, vn: m.verts, i0, n: m.idx.length, o: sec ? sec.position.clone() : new THREE.Vector3() };
+    }
+    for (const sl of v.slots) sl.i0 += v.blocks[sl.region].i0;
+    if (all.idx.length) {
+        const geo = all.geometry();
+        v.mesh = storesMesh(geo);
+        ac.model.add(v.mesh);
+        v.index0 = geo.index.array.slice();
     }
     v.count = v.slots.length;
     // where the weapons carried inside drop from: the bays under the belly
@@ -778,15 +788,18 @@ function build(ac, v) {
     }
 }
 
-// model: the jet's model, when it is being removed: a section that has left it (wreckage) keeps its stores till it goes
-function unbuild(v, model = null) {
-    for (const r in v.meshes) {
-        const e = v.meshes[r], sec = e.mesh.parent;
-        if (model && sec && sec.parent !== model) { orphans.push(e.mesh); continue; }
-        if (sec) sec.remove(e.mesh);
-        e.mesh.geometry.dispose();
-    }
-    v.meshes = {}; v.slots = []; v.seq = {}; v.shown = {}; v.built = false; v.count = 0;
+function storesMesh(geo) {
+    const mesh = new THREE.Mesh(geo, storesMaterial());
+    mesh.name = 'stores';
+    mesh.userData.stores = true;
+    mesh.castShadow = true; mesh.receiveShadow = true;
+    mesh.matrixAutoUpdate = false; // (it never moves on what it hangs from)
+    return mesh;
+}
+
+function unbuild(v) {
+    if (v.mesh) { if (v.mesh.parent) v.mesh.parent.remove(v.mesh); v.mesh.geometry.dispose(); }
+    v.mesh = null; v.index0 = null; v.blocks = {}; v.slots = []; v.seq = {}; v.shown = {}; v.built = false; v.count = 0;
 }
 // Store meshes riding away on wreckage (a wing shot off, a jet blown apart): their geometry is freed once their piece
 // of airframe has been taken out of the scene
@@ -805,11 +818,40 @@ function sweepOrphans() {
 function setShown(v, slot, on) {
     if (slot.shown === on) return;
     slot.shown = on;
-    const e = v.meshes[slot.region];
-    if (!e) return;
-    const index = e.mesh.geometry.index, a = index.array;
-    if (on) for (let i = slot.i0; i < slot.i0 + slot.n; i++) a[i] = e.full[i]; else a.fill(0, slot.i0, slot.i0 + slot.n);
+    if (!v.mesh) return;
+    const index = v.mesh.geometry.index, a = index.array;
+    if (on) for (let i = slot.i0; i < slot.i0 + slot.n; i++) a[i] = v.index0[i]; else a.fill(0, slot.i0, slot.i0 + slot.n);
     index.addUpdateRange(slot.i0, slot.n);
+    index.needsUpdate = true;
+}
+
+// A damage section has left the jet (a wing shot off, the jet blown apart): its block of the stores mesh becomes a
+// mesh of its own riding on that section, as it hangs at that moment (what was spent stays off), and is blanked in
+// the jet's
+function castOff(ac, v, region) {
+    const b = v.blocks[region];
+    if (!b || !v.mesh) return;
+    delete v.blocks[region];
+    const src = v.mesh.geometry, index = src.index, a = index.array, sec = ac.regions && ac.regions[region];
+    if (sec) {
+        const g = new THREE.BufferGeometry();
+        // (into the section's own frame: it keeps the origin it was cut out round as it falls)
+        const P = src.attributes.position.array.slice(b.v0 * 3, (b.v0 + b.vn) * 3);
+        for (let i = 0; i < P.length; i += 3) { P[i] -= b.o.x; P[i + 1] -= b.o.y; P[i + 2] -= b.o.z; }
+        g.setAttribute('position', new THREE.BufferAttribute(P, 3));
+        g.setAttribute('normal', new THREE.BufferAttribute(src.attributes.normal.array.slice(b.v0 * 3, (b.v0 + b.vn) * 3), 3));
+        g.setAttribute('color', new THREE.BufferAttribute(src.attributes.color.array.slice(b.v0 * 3, (b.v0 + b.vn) * 3), 3, true));
+        const I = new a.constructor(b.n);
+        for (let i = 0; i < b.n; i++) { const k = a[b.i0 + i]; I[i] = k >= b.v0 ? k - b.v0 : 0; }
+        g.setIndex(new THREE.BufferAttribute(I, 1));
+        g.computeBoundingSphere();
+        const mesh = storesMesh(g);
+        sec.add(mesh);
+        orphans.push(mesh);
+    }
+    a.fill(0, b.i0, b.i0 + b.n);
+    v.index0.fill(0, b.i0, b.i0 + b.n);
+    index.addUpdateRange(b.i0, b.n);
     index.needsUpdate = true;
 }
 
@@ -833,7 +875,7 @@ function loseRegions(ac, v) {
         v.seq[cls] = keep;
     }
     v.slots = v.slots.filter(s => !ac.lostRegions.has(s.region));
-    for (const r of ac.lostRegions) if (v.meshes[r]) { orphans.push(v.meshes[r].mesh); delete v.meshes[r]; } // (the mesh rides away on its wing)
+    for (const r of ac.lostRegions) castOff(ac, v, r); // (its stores ride away on it)
     v.count = v.slots.length;
 }
 
@@ -850,6 +892,8 @@ export function storesNear(ac, cam) {
 // is kept). Returns the number of stores hanging (shown or spent).
 export function syncStores(ac, near = true) {
     let v = ac.storesView;
+    // a section that has left the jet takes its stores with it, whatever else is going on (the jet may be blowing apart)
+    if (v && v.built && ac.lostRegions && ac.lostRegions.size !== v.lostN) loseRegions(ac, v);
     if (!near || !VISIBLE_STORES) { if (v && v.built) unbuild(v); return 0; }
     if (!v) v = ac.storesView = newView();
     // plan again after a rearm (armAircraft makes a new loadCounts) or when something grew past what was planned
@@ -858,7 +902,6 @@ export function syncStores(ac, near = true) {
     if (again) plan(ac, v);
     if (!v.built) build(ac, v);
     else if (v.skin && v.skin.material !== v.skinMat) { unbuild(v); build(ac, v); } // (a new livery: the pylons' colour)
-    if (ac.lostRegions && ac.lostRegions.size !== v.lostN) loseRegions(ac, v);
     for (const cls in v.seq) {
         if (cls === 'rkt') continue; // (the pods stay)
         const seq = v.seq[cls], want = clamp((ac[CLASS[cls].ammo] | 0) - (v.inside[cls] | 0), 0, seq.length);
@@ -902,7 +945,7 @@ export function releaseStore(ac, cls, out) {
 
 // free everything (the aircraft is removed)
 export function disposeStores(ac) {
-    if (ac.storesView) { unbuild(ac.storesView, ac.model); ac.storesView = null; }
+    if (ac.storesView) { unbuild(ac.storesView); ac.storesView = null; }
     if (orphans.length) sweepOrphans();
 }
 

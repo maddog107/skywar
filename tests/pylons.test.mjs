@@ -110,11 +110,21 @@ describe('the stores on every type (procedural models, headless)', () => {
                 const t = twins[0];
                 assert.ok(Math.abs(t.pos.x + s.pos.x) < 1e-9 && Math.abs(t.pos.y - s.pos.y) < 1e-9 && Math.abs(t.pos.z - s.pos.z) < 1e-9, `${type} ${pre} ${s.cls}@${s.st}: mirrored`);
             }
-            if (BAY_ONLY.includes(type)) { assert.equal(slotsOf(ac).length, 0, `${type} shows nothing`); assert.equal(Object.keys(v.meshes).length, 0); }
+            if (BAY_ONLY.includes(type)) { assert.equal(slotsOf(ac).length, 0, `${type} shows nothing`); assert.equal(v.mesh, null, 'no mesh at all'); }
             else built += slotsOf(ac).length;
-            // one mesh a damage section it hangs on (the wings and the centre; a swept wing's tips can be the tail's)
-            assert.ok(Object.keys(v.meshes).length <= 4, `${type} ${pre}: ${Object.keys(v.meshes).length} meshes`);
-            for (const e of Object.values(v.meshes)) { assert.equal(e.mesh.material.name, 'stores'); assert.ok(e.mesh.castShadow && e.mesh.receiveShadow); }
+            // one mesh for the whole jet (one draw), on its model, with every jet's the same material; a block of it
+            // for each damage section something hangs on
+            let stores = 0;
+            ac.model.traverse(o => { if (o.userData.stores) stores++; });
+            assert.equal(stores, slotsOf(ac).length ? 1 : 0, `${type} ${pre}: ${stores} meshes`);
+            if (v.mesh) {
+                assert.equal(v.mesh.parent, ac.model);
+                assert.equal(v.mesh.material.name, 'stores');
+                assert.ok(v.mesh.castShadow && v.mesh.receiveShadow);
+                const blocks = Object.values(v.blocks);
+                assert.equal(blocks.reduce((n, b) => n + b.n, 0), v.mesh.geometry.index.count, 'the blocks are the whole mesh');
+                for (const sl of slotsOf(ac)) { const b = v.blocks[sl.region]; assert.ok(sl.i0 >= b.i0 && sl.i0 + sl.n <= b.i0 + b.n, 'a store lies in its section\'s block'); }
+            }
             ac.remove();
             assert.equal(ac.storesView, null, 'freed with the jet');
         }
@@ -193,7 +203,10 @@ describe('fitted to the real models (the GLB files, headless)', () => {
                     const d = Math.hypot(a.pos.x - b.pos.x, a.pos.y - b.pos.y);
                     if (!(d > (ra + rb) * 0.95)) bad.push(tag + `${a.store.short}@${a.st} and ${b.store.short}@${b.st} overlap (${d.toFixed(2)} m apart)`);
                 }
-                rows.push(`${type.padEnd(8)} ${pre.padEnd(9)} ${String(slots.length).padStart(2)} stores, deepest ${worst.toFixed(2)} m under the skin, ${Object.keys(ac.storesView.meshes).length} meshes`);
+                // the pylons stood under it are pylons, not walls: none deeper than a real one (a bomber's is the biggest)
+                const deep = Math.max(0, ...(ac.storesView.stood || []));
+                if (deep > (ac.spec.length > 30 ? 0.9 : 0.7)) bad.push(tag + `a pylon ${deep.toFixed(2)} m deep`);
+                rows.push(`${type.padEnd(8)} ${pre.padEnd(9)} ${String(slots.length).padStart(2)} stores, deepest ${worst.toFixed(2)} m under the skin, pylons to ${deep.toFixed(2)} m, ${ac.storesView.mesh.geometry.index.count / 3} triangles`);
                 ac.remove();
             }
         }
@@ -216,7 +229,7 @@ describe('fitted to the real models (the GLB files, headless)', () => {
         for (const type of ['f22', 'b2']) {
             const { ac, fit } = await real(type, 'balanced');
             assert.equal(slotsOf(ac).length, 0);
-            assert.equal(Object.keys(ac.storesView.meshes).length, 0, 'no mesh at all');
+            assert.equal(ac.storesView.mesh, null, 'no mesh at all');
             const out = { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), rail: false };
             const cls = type === 'b2' ? 'gbu' : 'lrm';
             assert.ok(ac.releaseStore(cls, out), `${type}: a bay`);
@@ -253,7 +266,7 @@ describe('firing, dropping, rearming (weapons.js through Aircraft.releaseStore)'
         ac.lrm--; ac.updateStores(); // (game.js counts it down after firing)
         assert.deepEqual(shownOf(ac), { ...before, lrm: before.lrm - 1 }, 'the count agrees: nothing more goes');
         // its triangles are out of the index buffer
-        const e = ac.storesView.meshes[next.region], idx = e.mesh.geometry.index.array;
+        const idx = ac.storesView.mesh.geometry.index.array;
         for (let i = next.i0; i < next.i0 + next.n; i++) assert.equal(idx[i], 0);
     });
     test('it leaves as it hung: a banked jet\'s missile and bomb keep their roll on the way out', () => {
@@ -332,11 +345,11 @@ describe('level of detail and damage', () => {
         assert.equal(px(8), false, 'a speck: nothing built');
         assert.equal(ac.storesView, undefined, 'nor anything kept');
         assert.equal(px(200), true);
-        const meshes = Object.values(ac.storesView.meshes).map(e => e.mesh);
-        assert.ok(meshes.length >= 2 && meshes.every(m => m.parent && m.parent.userData.region), 'hung on the damage sections');
+        const mesh = ac.storesView.mesh;
+        assert.ok(mesh && mesh.parent === ac.model && Object.keys(ac.storesView.blocks).length >= 2, 'one mesh on the jet, a block a section');
         assert.equal(px(P.HIDE_PX + 2), true, 'kept a little past where it appeared');
         assert.equal(px(P.HIDE_PX - 4), false);
-        assert.ok(meshes.every(m => !m.parent), 'meshes gone');
+        assert.ok(!mesh.parent && ac.storesView.mesh === null, 'the mesh gone');
         assert.equal(px(P.SHOW_PX - 2), false, 'and not back until clearly bigger');
         assert.equal(px(P.SHOW_PX + 4), true);
         // hidden with the far model
@@ -355,20 +368,52 @@ describe('level of detail and damage', () => {
         const onLeft = (cls) => slotsOf(ac, cls).filter(s => s.region === 'wingL').length;
         const lost = { srm: onLeft('srm'), lrm: onLeft('lrm') };
         assert.ok(lost.srm >= 1 && lost.lrm >= 1, 'something hangs on the left wing');
-        const mesh = ac.storesView.meshes.wingL.mesh;
-        assert.equal(mesh.parent, ac.regions.wingL, 'its mesh rides on the wing');
+        // where the left wing's stores hang (model space), and their triangles in the jet's mesh
+        const v = ac.storesView, left = slotsOf(ac).filter(s => s.region === 'wingL'), block = { ...v.blocks.wingL };
+        const drawn = (idx, i0, n) => { let k = 0; for (let i = i0; i < i0 + n; i += 3) if (idx[i] !== idx[i + 1]) k++; return k; };
+        const trisBefore = drawn(v.mesh.geometry.index.array, block.i0, block.n);
+        assert.ok(trisBefore > 500, 'the wing\'s block is drawn');
+        const onWing = () => ac.regions.wingL.children.filter(o => o.userData.stores);
+        assert.equal(onWing().length, 0, 'nothing of it on the wing itself while the wing is on the jet');
         ac.lostRegions.add('wingL'); // (damage.js Wreckage.detach)
         ac.updateStores();
+        // the block went from the jet's mesh into a mesh on the wing, the same triangles in the same place
+        assert.equal(drawn(v.mesh.geometry.index.array, block.i0, block.n), 0, 'blanked in the jet\'s mesh');
+        assert.equal(v.blocks.wingL, undefined);
+        const [piece] = onWing();
+        assert.ok(piece && piece.material === v.mesh.material && piece.castShadow, 'a mesh of its own on the wing');
+        assert.equal(drawn(piece.geometry.index.array, 0, piece.geometry.index.count), trisBefore, 'the same triangles');
+        piece.geometry.computeBoundingBox();
+        const bb = piece.geometry.boundingBox.clone().translate(ac.regions.wingL.position);
+        for (const s of left) assert.ok(bb.containsPoint(s.pos), `${s.store.short} is where it hung`);
+        assert.ok(bb.max.x < 0, 'all of it on the left');
         assert.equal(ac.missiles, total.srm - lost.srm);
         assert.equal(ac.lrm, total.lrm - lost.lrm);
         assert.deepEqual(shownOf(ac), { srm: before.srm - lost.srm, lrm: before.lrm - lost.lrm });
         assert.ok(slotsOf(ac).every(s => s.region !== 'wingL'));
-        assert.equal(mesh.parent, ac.regions.wingL, 'and stays on it as it falls');
         // what's left still fires from the right
         const out = { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), rail: false };
         for (let k = 0; k < before.srm - lost.srm; k++) { assert.ok(ac.releaseStore('srm', out)); assert.ok(out.pos.clone().sub(ac.pos).dot(ac.getRight(new THREE.Vector3())) > 0); ac.missiles--; }
         ac.updateStores();
         assert.equal(shownOf(ac).srm, 0);
+    });
+    test('a jet blown apart: every section takes its stores, spent ones stay off, the jet\'s own mesh is freed', () => {
+        const ac = jet('su35', 'air');
+        const v = ac.storesView, out = { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), rail: false };
+        ac.releaseStore('lrm', out); ac.lrm--; // one spent first
+        const hanging = slotsOf(ac).filter(s => s.shown).length, sections = Object.keys(v.blocks);
+        const tris = (g) => { const a = g.index.array; let k = 0; for (let i = 0; i < a.length; i += 3) if (a[i] !== a[i + 1]) k++; return k; };
+        const whole = tris(v.mesh.geometry), mesh = v.mesh;
+        for (const r of Object.keys(ac.regions)) ac.lostRegions.add(r); // (Wreckage.breakup)
+        ac.exploded = true;
+        ac.update(1 / 60); // (an exploded jet's update does nothing but this)
+        assert.ok(!mesh.parent && v.mesh === null && !v.built, 'the jet\'s mesh is gone');
+        let pieces = 0, drawn = 0;
+        for (const r of sections) for (const o of ac.regions[r].children) if (o.userData.stores) { pieces++; drawn += tris(o.geometry); }
+        assert.equal(pieces, sections.length, 'a piece on every section that carried something');
+        assert.equal(drawn, whole, 'every triangle that was drawn rides on a piece, and no more');
+        assert.ok(hanging > 0);
+        ac.update(1 / 60); ac.update(1 / 60); // (and nothing more happens)
     });
     test('stores already spent on the lost wing cost nothing more', () => {
         const ac = jet('su35', 'air', { isPlayer: true });

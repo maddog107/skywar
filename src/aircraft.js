@@ -1060,7 +1060,7 @@ export class Aircraft {
             this.ejectT -= dt;
             if (this.ejectT <= 0 && !this.exploded) this.game.wreckage.eject(this);
         }
-        if (this.exploded) return;
+        if (this.exploded) { if (this.storesView && this.storesView.built) this.updateStores(); return; } // (its stores go with the pieces)
         if (this.falling) {
             // uncontrolled spiral
             this.controls.roll = clamp(this.fallSpin, -1, 1);
@@ -1092,7 +1092,7 @@ export class Aircraft {
     updateStores() {
         const cam = this.game && this.game.camera;
         if (!cam || !cam.isPerspectiveCamera) return;
-        const near = this.isPlayer || storesNear(this, cam);
+        const near = !this.exploded && (this.isPlayer || storesNear(this, cam));
         if (near || this.storesView) syncStores(this, near);
     }
     // where a weapon of this class starts from: its station (pylons.js), or null to drop it from under the wing
