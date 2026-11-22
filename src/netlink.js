@@ -80,8 +80,14 @@ export class NetLink {
         try { ws.send(JSON.stringify(obj)); return true; } catch (e) { return false; }
     }
 
-    // the 20-a-second snapshot: c = our clock (ms), e = entity rows, m = missile rows
-    state(c, e, m) { return this.send(m && m.length ? { t: 's', c, e, m } : { t: 's', c, e }); }
+    // the 20-a-second snapshot: c = our clock (ms), e = entity rows, m = missile rows. Not sent while earlier ones are
+    // still waiting to leave (a stalled line): a snapshot is only worth anything fresh, and when the line comes back
+    // the relay should get the newest one, not seconds of old ones in a burst that looks like a flood.
+    state(c, e, m) {
+        const ws = this.ws;
+        if (ws && ws.bufferedAmount > 8192) return false;
+        return this.send(m && m.length ? { t: 's', c, e, m } : { t: 's', c, e });
+    }
 
     // an event for the room, or for one client (`to`); held back when this second's budget is spent
     event(e, to) {

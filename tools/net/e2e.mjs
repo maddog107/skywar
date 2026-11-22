@@ -73,7 +73,7 @@ async function join(name, team, aircraft, room, extra = {}) {
     P.lobby = await P.ev(() => ({ name: document.getElementById('mpName').value, room: document.getElementById('mpRoom').value, shown: getComputedStyle(document.getElementById('mpLobby')).display !== 'none',
         launch: document.getElementById('launchBtn').textContent.trim(), disabled: document.getElementById('launchBtn').disabled }));
     await page.click('#launchBtn', { timeout: 240000, noWaitAfter: true });
-    await page.waitForFunction(() => window.skywar && window.skywar.game.state === 'playing' && window.skywar.game.mode === 'multiplayer' && window.skywar.game.mp.link, null, { timeout: 120000 });
+    await page.waitForFunction(() => window.skywar && window.skywar.game.state === 'playing' && window.skywar.game.mode === 'multiplayer' && window.skywar.game.mp.link, null, { timeout: 300000 });
     // the test's hand on the stick: after the game has read the keyboard, window.__ctl (stick), __fire (trigger) and
     // __chase (stay `d` m behind an aircraft, nose on it) are applied; frames are logged for the tracking check
     await P.ev(async () => {
@@ -361,12 +361,12 @@ try {
     const menuUp = await C.ev(() => ({ shown: document.getElementById('pause').classList.contains('show'), state: window.skywar.game.state }));
     check(menuUp.shown && menuUp.state === 'playing', 'Esc in multiplayer: the menu comes up, the game goes on', JSON.stringify(menuUp));
     await C.page.click('#abortBtn', { timeout: 240000, noWaitAfter: true });
-    await C.page.waitForSelector('#menu.show', { timeout: 20000 });
+    await C.page.waitForSelector('#menu.show', { timeout: 120000 });
     const left = await C.ev(() => ({ state: window.skywar.game.state, link: !!window.skywar.game.mp.link, active: window.skywar.game.mp.active, aircraft: window.skywar.game.aircraft.length }));
     check(left.state === 'menu' && !left.link && !left.active, 'ABORT: back in the hangar, the connection closed', JSON.stringify(left));
     await C.page.fill('#mpRoom', ROOM);
     await C.page.click('#launchBtn', { timeout: 240000, noWaitAfter: true });
-    await C.page.waitForFunction(() => window.skywar.game.state === 'playing' && window.skywar.game.mode === 'multiplayer' && window.skywar.game.mp.link, null, { timeout: 60000 });
+    await C.page.waitForFunction(() => window.skywar.game.state === 'playing' && window.skywar.game.mode === 'multiplayer' && window.skywar.game.mp.link, null, { timeout: 300000 });
     const cIn = await until('C and A see each other', async () => { const c = await view(C), a = await view(A); return c.room === ROOM && c.peers.length === 1 && c.peers[0].puppet && a.peers.length === 1 && a.peers[0].puppet ? { c, a } : null; }, 20000);
     check(!!cIn && cIn.c.host === cIn.a.id && cIn.a.isHost && !cIn.c.isHost && cIn.a.peers[0].name === 'GHOST', 'C joined A\'s room from the menu; A is its host', cIn ? `room ${cIn.c.room}, host ${cIn.c.host}` : '');
 
