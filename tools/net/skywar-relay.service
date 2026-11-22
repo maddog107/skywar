@@ -1,0 +1,71 @@
+# SKYWAR multiplayer relay: a WebSocket relay for the browser game at https://maddog107.com/skywar/ (nginx proxies
+# /skywar/ws to its Unix socket). One Node file with no dependencies; it stores nothing and logs no message contents.
+# Locked down hard because this machine runs production services: no network of its own, no access to /data, /home or
+# /var, a throwaway user, small memory and CPU limits.
+[Unit]
+Description=SKYWAR multiplayer relay (WebSocket, behind nginx at /skywar/ws)
+After=network.target
+# if it ever fails to start five times in a minute, stay down (no crash loop on a production machine)
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/opt/skywar-relay/node /opt/skywar-relay/relay.mjs
+Environment=TRUST_PROXY=1
+Environment=SOCKET=/run/skywar-relay/relay.sock
+Environment=NODE_OPTIONS=--max-old-space-size=160
+Restart=always
+RestartSec=2
+
+# its own throwaway user and a runtime directory for the socket (nginx connects to it)
+DynamicUser=yes
+RuntimeDirectory=skywar-relay
+RuntimeDirectoryMode=0755
+
+# resource limits: it must never crowd the machine's real work
+MemoryMax=300M
+CPUQuota=50%
+TasksMax=48
+Nice=10
+LimitNOFILE=2048
+
+# no network at all (clients reach it only through nginx and the socket file)
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+
+# filesystem: read-only system, and the machine's data is not even visible
+ProtectSystem=strict
+ProtectHome=yes
+InaccessiblePaths=-/data -/var -/srv -/mnt -/media -/boot
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectProc=invisible
+ProcSubset=pid
+
+# nothing it could use to gain privileges
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+# (a call outside the filter fails with EPERM rather than killing the process: Node raises its own file limit at start)
+SystemCallErrorNumber=EPERM
+LimitCORE=0
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

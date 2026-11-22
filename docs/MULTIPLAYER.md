@@ -285,12 +285,14 @@ The page finds the relay from its own address: `new URL('ws', document.baseURI)`
 file, `relay.mjs`, run by Node 18+ (written for Node 20; no global WebSocket needed, no packages to install):
 
 ```bash
-TRUST_PROXY=1 HOST=127.0.0.1 PORT=8377 node relay.mjs
+TRUST_PROXY=1 SOCKET=/run/skywar-relay/relay.sock node relay.mjs      # as it runs in production: a Unix socket, no TCP port
+TRUST_PROXY=1 HOST=127.0.0.1 PORT=8377 node relay.mjs                 # or on a loopback port
 ```
 
 | variable | default | |
 |---|---|---|
-| `HOST`, `PORT` | `127.0.0.1`, `8377` | where it listens (keep it on loopback: nginx is the way in) |
+| `SOCKET` | none | a Unix socket path to listen on instead of a port (made mode 0666 so the proxy's user can connect) |
+| `HOST`, `PORT` | `127.0.0.1`, `8377` | where it listens when there is no `SOCKET` (keep it on loopback: nginx is the way in) |
 | `TRUST_PROXY` | off | `1`: behind nginx on this machine, count connections by the `X-Real-IP` it sets |
 | `ALLOWED_ORIGINS` | localhost, 127.0.0.1, maddog107.com, www.maddog107.com | comma-separated host names or origins |
 | `ALLOW_NO_ORIGIN` | off | `1`: accept clients that send no Origin (tools, not browsers) |
@@ -298,33 +300,38 @@ TRUST_PROXY=1 HOST=127.0.0.1 PORT=8377 node relay.mjs
 
 nginx (inside the site's `server` block; `X-Real-IP` must be the address nginx verified, i.e. `$remote_addr` after the
 real-IP module has resolved the client from Cloudflare's ranges — without that header every player would count as one
-address and the ninth would be refused):
+address and the ninth would be refused; the other two headers are overwritten so nothing a client wrote gets through):
 
 ```nginx
 location = /skywar/ws {
-    proxy_pass http://127.0.0.1:8377;
+    proxy_pass http://unix:/run/skywar-relay/relay.sock;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
-    proxy_read_timeout 120s;      # the relay pings every 25 s
-    proxy_send_timeout 120s;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header CF-Connecting-IP $remote_addr;
+    proxy_read_timeout 300s;      # the relay pings every 25 s
+    proxy_send_timeout 300s;
+    proxy_buffering off;
+}
+# the game's files: always revalidated, so a new deploy is never mixed with cached old modules ("private" keeps
+# Cloudflare from caching them and from replacing the header with its own browser-cache time)
+location ^~ /skywar/ {
+    add_header Cache-Control "private, no-cache";
 }
 ```
 
-A systemd unit:
+The service: `tools/net/skywar-relay.service` (systemd), as installed on the server. The machine it runs on does
+other, more important work, so the relay is boxed in: a throwaway user, **no network at all** (`PrivateNetwork=yes`:
+nginx reaches it through the socket file and nothing else can; it could not open a connection to anything even if it
+were taken over), the machine's data directories not visible, a read-only system, no privileges, 300 MB and half a
+core at most, and it stays down rather than loop if it can't start (`systemd-analyze security` rates it 0.5, "safe").
+It needs only a Node binary and `relay.mjs` in `/opt/skywar-relay/`. `tools/deploy.sh` sends a changed `relay.mjs`
+there and restarts the service (see the variables at the top of that script).
 
-```ini
-[Service]
-Environment=TRUST_PROXY=1 HOST=127.0.0.1 PORT=8377
-ExecStart=/usr/bin/node /var/www/skywar/relay.mjs
-Restart=always
-User=www-data
-NoNewPrivileges=true
-```
-
-`GET /health` on the relay's port answers `{"ok":true,"rooms":n,"players":n}` (for a monitor); anything else that
+`GET /health` on the relay's port or socket (`curl --unix-socket /run/skywar-relay/relay.sock http://x/health`) answers `{"ok":true,"rooms":n,"players":n}` (for a monitor); anything else that
 isn't a WebSocket upgrade gets `426`. Cloudflare: WebSockets must be on for the zone (they are by default). Restarting
 the relay drops everyone; their pages reconnect by themselves within a few seconds. Deploying a build with a new
 `PROTOCOL`: restart the relay with the new `relay.mjs` at the same time as the files go out (pages still on the old
