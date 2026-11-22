@@ -152,8 +152,11 @@ const holdCamera = (P, t) => P.ev(async (t) => {
             const h = window.__holdCam;
             if (!h || !h.on) return;
             const cam = g.camera;
-            cam.position.set(h.x + 95, h.top + 75, h.z + 115);
-            cam.up.set(0, 1, 0); cam.lookAt(v.set(h.x, h.y + 2, h.z)); cam.fov = 50; cam.updateProjectionMatrix();
+            // (h.bomb: close on the bomb as it falls, the town below: our own, or the ghost of someone else's)
+            const b = h.bomb && ([...g.mp.ord.ghosts].find(x => !x.rkt && x.mesh.visible) || (window.__bomb && g.weapons.bombs.includes(window.__bomb) ? window.__bomb : null));
+            if (b) { cam.position.copy(b.pos).add(v.set(9, 3, 12)); cam.up.set(0, 1, 0); cam.lookAt(b.pos); }
+            else { cam.position.set(h.x + 95, h.top + 75, h.z + 115); cam.up.set(0, 1, 0); cam.lookAt(v.set(h.x, h.y + 2, h.z)); }
+            cam.fov = 50; cam.updateProjectionMatrix();
             g.shake = 0; if (g.cockpit) g.cockpit.enabled = false;
         };
         window.__holdCam = { on: false };
@@ -341,6 +344,9 @@ try {
     // salvo from A is six rockets in flight on B ──
     let ruin = null;
     {
+        // (A was left diving after its chase of B's falling jet in 5: level again, high up, or it flies into the ground)
+        await until('A has a jet', () => A.ev(() => window.skywar.game.player.alive), 15000);
+        await A.ev(() => { const g = window.skywar.game; g.player.spawnAir(new (g.player.pos.constructor)(0, 3000, 3000), 0, 0.6); window.__ctl = { pitch: 0, roll: 0, yaw: 0, throttle: 0.85 }; });
         // the target: a house among many, with nothing tall within 150 m (to be seen from the camera), the same record on
         // both pages (the fingerprint said so)
         ruin = await A.ev(() => {
@@ -371,7 +377,9 @@ try {
             await A.page.screenshot({ path: SHOTS + '/mp-building-before-A.png' });
         }
         // A's bomb, released 600 m over the roof (where A's jet happens to be doesn't matter: the release says where)
-        const store = await A.ev((t) => { const g = window.skywar.game, b = g.weapons.dropBomb(g.player, 'bomb'); b.pos.set(t.x, t.top + 600, t.z); b.vel.set(0, -60, 0); return b.W.short || b.W.name; }, ruin);
+        const whereA = async () => A.ev(async () => { const { terrainHeight } = await import('./src/world.js'); const p = window.skywar.game.player; return { alive: p.alive, y: Math.round(p.pos.y), agl: Math.round(p.pos.y - terrainHeight(p.pos.x, p.pos.z)), deaths: window.skywar.game.mp.deaths }; });
+        log('     A\'s jet before: ' + JSON.stringify(await whereA()));
+        const store = await A.ev((t) => { const g = window.skywar.game, b = window.__bomb = g.weapons.dropBomb(g.player, 'bomb'); b.pos.set(t.x, t.top + 600, t.z); b.vel.set(0, -60, 0); return b.W.short || b.W.name; }, ruin);
         const ys = [];
         const fall = await until('B sees A\'s bomb fall', async () => {
             const v = await B.ev(() => { const gh = [...window.skywar.game.mp.ord.ghosts].find(x => !x.rkt); return gh ? { y: gh.pos.y, vis: gh.mesh.visible, store: gh.W.short || gh.W.name } : null; });
@@ -380,8 +388,11 @@ try {
         }, 20000);
         check(!!fall && fall.store === store, 'A drops a ' + store + ' on it: B draws the bomb falling', fall ? `B saw it at ${ys.map(y => (y - ruin.top).toFixed(0)).slice(0, 8).join(', ')}… m over the roof` : '');
         if (SHOTS) {
-            await until('B\'s bomb near the roof', () => B.ev((top) => { const gh = [...window.skywar.game.mp.ord.ghosts].find(x => !x.rkt); return !gh || gh.pos.y < top + 140; }, ruin.top), 15000);
-            await B.page.screenshot({ path: SHOTS + '/mp-bomb-falling-B.png' });
+            // close on the bomb: A's own, and B's ghost of it (B draws it a moment later, a little higher)
+            await holdCamera(A, { ...ruin, bomb: true }); await holdCamera(B, { ...ruin, bomb: true });
+            await until('the bomb 250 m over the roof', () => A.ev((top) => !window.skywar.game.weapons.bombs.includes(window.__bomb) || window.__bomb.pos.y < top + 250, ruin.top), 15000);
+            await Promise.all([A.page.screenshot({ path: SHOTS + '/mp-bomb-falling-A.png' }), B.page.screenshot({ path: SHOTS + '/mp-bomb-falling-B.png' })]);
+            await holdCamera(A, ruin); await holdCamera(B, ruin);
         }
         const boom = await until('B sees it go off', () => B.ev(() => window.__bursts.length ? window.__bursts[0] : null), 20000);
         const downA = await until('the building is down on A', () => A.ev((i) => { const net = window.skywar.game.mp.net; return net.list[i].alive ? null : net.downList(); }, ruin.i), 10000);
@@ -394,14 +405,16 @@ try {
         const fired = await A.ev(() => { const g = window.skywar.game; let n = 0; for (let k = 0; k < 6; k++) if (g.weapons.fireMissile(g.player, null, 'rkt')) n++; return n; });
         const rk = await until('B sees the salvo', () => B.ev(() => { const r = [...window.skywar.game.mp.ord.ghosts].filter(gh => gh.rkt && gh.mesh.visible); return r.length >= 6 ? { n: r.length, store: r[0].W.short || 'RKT', speed: Math.round(r[0].vel.length()) } : null; }), 8000);
         const rkEnd = await until('the salvo ends on B', () => B.ev(() => ![...window.skywar.game.mp.ord.ghosts].some(gh => gh.rkt)), 15000);
-        check(fired === 6 && !!rk && !!rkEnd, 'A fires a salvo of six rockets: B has the six in flight, and they end', rk ? `${rk.n} ${rk.store} rockets at ${rk.speed} m/s on B` : '');
+        check(fired === 6 && !!rk && !!rkEnd, 'A fires a salvo of six rockets: B has the six in flight, and they end', `${fired} fired on A` + (rk ? `; ${rk.n} ${rk.store} rockets at ${rk.speed} m/s on B` : ''));
         if (SHOTS) {
-            await sleep(4000); // (the collapse, and the worst of its dust)
-            await A.page.screenshot({ path: SHOTS + '/mp-building-down-A.png' });
-            await B.page.screenshot({ path: SHOTS + '/mp-building-down-B.png' });
+            await sleep(2000); // (coming down in its dust)
+            await Promise.all([A.page.screenshot({ path: SHOTS + '/mp-building-dust-A.png' }), B.page.screenshot({ path: SHOTS + '/mp-building-dust-B.png' })]);
+            await sleep(32000); // (the dust that stands over a ruin for half a minute has drifted off)
+            await Promise.all([A.page.screenshot({ path: SHOTS + '/mp-building-down-A.png' }), B.page.screenshot({ path: SHOTS + '/mp-building-down-B.png' })]);
             await holdCamera(A, null); await holdCamera(B, null);
-            log('     screenshots: ' + SHOTS + '/mp-building-before-A.png, mp-bomb-falling-B.png, mp-building-down-A.png, mp-building-down-B.png');
+            log('     screenshots: ' + SHOTS + '/mp-building-before-A.png, mp-bomb-falling-A.png / -B.png, mp-building-dust-A.png / -B.png, mp-building-down-A.png / -B.png');
         }
+        log('     A\'s jet after: ' + JSON.stringify(await whereA()));
     }
 
     // ── 6. screenshots from A: B's jet with its name tag; the scoreboard ──

@@ -136,7 +136,10 @@ other client draws a **ghost**: the store's own mesh (a rocket with its flame, s
 burns), flown with weapons.js's own equations (updateBombs, updateMissiles) in steps of 1/60 s, in the owner's past
 like his jet (the same clock and drawing delay), so it leaves the puppet's pylon as the puppet passes the release point,
 and that store goes from the puppet. Measured without network (tests/multiplayer.test.mjs): a bomb ghost stays within
-0.25 m of the owner's bomb over a 9 s fall, a rocket within 0.5 m.
+0.25 m of the owner's bomb over a 9 s fall, a rocket within 0.5 m. Through the real relay (tools/net/e2e.mjs): the
+other page played the burst of a Mk 82 dropped on a house 0.0 m from where the owner's went off, the same 14 houses
+came down on both, and a pilot who joined two minutes later had the same 14 as ruins; a six-rocket salvo was six
+rockets in flight on the other page.
 
 A **guided bomb** with a target steers on its owner's laser spot or GPS point: it rides in the owner's snapshots as a
 missile row marked 2 (by turns when there are more than fit) and is drawn between them.
