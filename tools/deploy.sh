@@ -23,15 +23,16 @@ trap 'rm -rf "$TMP"' EXIT
 git archive "$REF" | tar -x -C "$TMP"
 echo "deploying $(git rev-parse --short "$REF") ($REF) to $DEPLOY_SSH:$DEPLOY_DIR"
 
-# the site: only what the browser loads (no tests, tools, docs or server code; no Markdown)
-rsync -az --delete --chmod=D755,F644 -e "$SSH" \
+# the site: only what the browser loads (no tests, tools, docs or server code; no Markdown). By checksum: a file whose
+# content hasn't changed keeps its date on the server, so returning players' browsers don't download it again
+rsync -az --checksum --delete --chmod=D755,F644 -e "$SSH" \
     --exclude='.DS_Store' --exclude='*.md' \
     --include='index.html' --include='style.css' --include='src/***' --include='models/***' --include='music/***' --exclude='*' \
     "$TMP/" "$DEPLOY_SSH:$DEPLOY_DIR"
 
 # the multiplayer relay, if this server runs one
 if [ -n "${DEPLOY_RELAY_DIR:-}" ] && [ -f "$TMP/relay.mjs" ]; then
-    CHANGED="$(rsync -az --itemize-changes --chmod=F644 -e "$SSH" "$TMP/relay.mjs" "$DEPLOY_SSH:$DEPLOY_RELAY_DIR" | grep -c '^<' || true)"
+    CHANGED="$(rsync -az --checksum --itemize-changes --chmod=F644 -e "$SSH" "$TMP/relay.mjs" "$DEPLOY_SSH:$DEPLOY_RELAY_DIR" | grep -c '^<' || true)"
     if [ "$CHANGED" != "0" ] && [ -n "${DEPLOY_RELAY_RESTART:-}" ]; then
         echo "relay.mjs changed: restarting the relay (connected players are dropped and reconnect)"
         $SSH "$DEPLOY_SSH" "$DEPLOY_RELAY_RESTART"
