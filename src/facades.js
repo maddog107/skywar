@@ -210,12 +210,12 @@ const WALL_FRAG_PARS = /* glsl */`
         float avgWin = (ww / fwS) * ((wt - wb) / fhS) * (1.0 - party);
         // lit windows: about a third of homes in the evening; offices by the storey (a floor working late)
         float pLit = 0.3;
-        if (officeSt) pLit = hash11(sto * 7.3 + seed * 31.0) > 0.66 ? 0.78 : 0.06;
+        if (officeSt) pLit = hash11(sto * 7.3 + seed * 31.0) > 0.7 ? 0.55 : 0.09;
         if (churchSt) pLit = 0.12;
         float dark = 1.0 - smoothstep(0.0, 0.15, burn); // nothing lit in a burning building
         vec3 warm = mix(vec3(1.0, 0.68, 0.36), vec3(1.0, 0.84, 0.62), hw.y);
         if (hw.z > 0.9) warm = vec3(0.72, 0.84, 1.0);
-        if (officeSt) warm = mix(vec3(0.86, 0.92, 1.0), vec3(1.0, 0.9, 0.74), step(0.7, hw.y));
+        if (officeSt) warm = mix(vec3(0.9, 0.94, 1.0), vec3(1.0, 0.88, 0.7), step(0.55, hw.y)) * (0.6 + 0.4 * hw.w);
 
         if (px > 2.4) {
             // too far for a window to be a pixel: the facade's average, and nothing more
@@ -404,7 +404,7 @@ const WALL_FRAG_PARS = /* glsl */`
             fcTilt = (hw.zw - 0.5) * 0.02 * pane;
         } else {
             alb = mix(wc, inside, win);
-            emit = warm * (win * lit * (glassSt ? 0.62 : 0.6));
+            emit = warm * (win * lit * (glassSt ? 0.5 : 0.6));
             if (glassSt) {
                 // spandrels: opaque glass or metal panels, flatter than the vision glass; louvres on the plant floor
                 vec3 sp = mix(tint * 0.3 + 0.03, wc * 0.6, step(0.5, hb2.x));
@@ -472,7 +472,7 @@ const WALL_FRAG_PARS = /* glsl */`
                 float open_ = step(0.28, hs5.z) * step(hs5.w, 0.8);
                 vec3 rl = vec3(0.75);
                 if (px < 0.15 && open_ > 0.0) rl = mix(rl, roomLight(vec2(sx, yg), vec3(-par, 1.0), sw, 3.6, hs4), 1.0 - smoothstep(0.08, 0.15, px));
-                emit = mix(vec3(1.0, 0.93, 0.8), vec3(0.85, 0.92, 1.0), hs5.x) * rl * (glass * max(uNight, 0.2) * dark * open_ * 0.95);
+                emit = mix(vec3(1.0, 0.93, 0.8), vec3(0.85, 0.92, 1.0), hs5.x) * rl * (glass * max(uNight * 0.8, 0.2) * dark * open_);
                 // the sign lit from inside or from above
                 emit += mix(sc_ * 1.6 + 0.04, ink, txt) * (signB * uNight * dark * step(hs4.w, 0.6) * 0.5 * (1.0 - far2 * 0.5));
                 fcRough = mix(fcRough, 0.5, signB);
@@ -516,14 +516,15 @@ const WALL_FRAG_PARS = /* glsl */`
         }
 
         // the street lamps' light on the lower wall of the street side
-        emit += alb * vec3(1.0, 0.74, 0.44) * (uNight * (0.012 + 0.03 * front) * exp(-max(yg, 0.0) * 0.22) * (1.0 - glass));
+        emit += alb * vec3(1.0, 0.74, 0.44) * (uNight * (0.035 + 0.1 * front) * exp(-max(yg, 0.0) * 0.2) * (1.0 - glass));
 
         // ── burnt: soot spreading from the openings, the glass gone, nothing lit ──
         if (burn > 0.0) {
-            float sootN = nz.r * 0.55 + nz2.b * 0.3 + nz.g * 0.15 + 0.35 * win;
-            float soot = smoothstep(1.05 - burn * 1.1, 1.3 - burn * 0.9, sootN + 0.25);
+            float lick = pulseW(cu, aX - 0.06, 1.06 - aX, wu) * smoothstep(wtE - 0.4, wtE, fy) * (1.0 - smoothstep(wtE + 0.2, sh_ + 0.9, fy)) * present;
+            float sootN = nz.r * 0.55 + nz2.b * 0.3 + nz.g * 0.15 + 0.3 * win + 0.45 * lick;
+            float soot = smoothstep(1.3 - burn * 1.05, 1.62 - burn * 0.95, sootN + 0.25);
             alb = mix(alb, vec3(0.022, 0.02, 0.018), max(soot, glass * 0.9) * min(1.0, burn * 1.6));
-            alb *= 1.0 - 0.45 * burn;
+            alb *= 1.0 - 0.4 * burn * burn;
             glass *= 1.0 - min(1.0, burn * 2.0);
             emit *= dark;
         }
@@ -678,9 +679,9 @@ const ROOF_FRAG_PARS = /* glsl */`
     varying vec3 vRuv; // on the roof's plane: along the eave, up the pitch from the eave (m); z: metres below the ridge
     varying vec3 vRn;  // the face's true normal in the instance's frame
     ${FACADE_GLSL}
-    vec3 rfAlb; float rfRough; float rfGlass; float rfMetal;
+    vec3 rfAlb; float rfRough; float rfGlass; float rfGlassR; float rfMetal;
     void roofEval(vec3 inCol) {
-        rfRough = 0.86; rfGlass = 0.0; rfMetal = 0.0;
+        rfRough = 0.86; rfGlass = 0.0; rfGlassR = 0.1; rfMetal = 0.0;
         float kind = floor(vRoof.x + 0.5), seed = vRoof.y;
         float kb = clamp(dot(inCol, vec3(1.0)) / max(vRoof.z, 1e-4), 0.0, 1.0);
         float burn = clamp((0.98 - kb) * 1.55, 0.0, 1.0);
@@ -690,7 +691,7 @@ const ROOF_FRAG_PARS = /* glsl */`
         vec4 nz = texture2D(tFacNoise, (uv + seed * 37.0) * 0.06);
         vec4 nz2 = texture2D(tFacNoise, vec2(uv.x * 0.11 + seed * 11.0, uv.y * 0.045));
         vec4 hr = hash42(vec2(seed * 733.1 + 2.0, 5.7 + kind));
-        float ny = vRn.y, pyl = fwidth(vLp.y);
+        float ny = vRn.y, pyl = fwidth(vLp.y), pxl = fwidth(vLp.x);
         bool spire = kind > 6.5;
         float d2 = 1.0 - smoothstep(0.5, 1.2, px), d3 = 1.0 - smoothstep(0.05, 0.13, px);
         vec3 alb;
@@ -698,12 +699,12 @@ const ROOF_FRAG_PARS = /* glsl */`
             // ── a pitched roof ──
             if (ny < -0.5) { alb = vec3(0.5, 0.49, 0.46); }                   // the soffit
             else if (ny < 0.12 && !spire) {
-                // a gable end: the wall carried up (rendered or boarded), or the fascia board along the eaves
-                float fascia = step(vLp.y, vScale.y * 0.065 + 0.01);
-                alb = mix(wallC * (0.9 + 0.2 * nz.r) * (1.0 - 0.25 * smoothstep(0.4, 0.8, nz2.b)), hr.x < 0.6 ? vec3(0.74, 0.74, 0.72) : vec3(0.13, 0.12, 0.11), fascia);
+                // a gable end: the wall carried up under the verge, a barge board along the roof's edge
+                float barge = 1.0 - boxW(abs(vLp.x) / max(vScale.x * 0.5, 0.1) + vLp.y / max(vScale.y, 0.1), -1.0, 1.0 - 0.22 / max(vScale.y, 1.0), pxl / max(vScale.x * 0.5, 0.1) + pyl / max(vScale.y, 0.1));
+                alb = mix(wallC * (0.9 + 0.2 * nz.r) * (1.0 - 0.25 * smoothstep(0.4, 0.8, nz2.b)), hr.x < 0.6 ? vec3(0.74, 0.74, 0.72) : vec3(0.13, 0.12, 0.11), barge * d2);
                 // an attic window in a big gable
                 vec2 q = vec2(vLp.x, vLp.y - vScale.y * 0.3);
-                float aw = boxW(q.x, -0.45, 0.45, px) * boxW(q.y, 0.0, 1.0, px) * step(4.2, vScale.y) * step(hr.z, 0.5) * d2 * (1.0 - fascia);
+                float aw = boxW(q.x, -0.45, 0.45, px) * boxW(q.y, 0.0, 1.0, px) * step(4.2, vScale.y) * step(hr.z, 0.5) * d2;
                 alb = mix(alb, vec3(0.03, 0.035, 0.04), aw); rfGlass = aw;
             } else {
                 float age = hr.x;
@@ -773,7 +774,7 @@ const ROOF_FRAG_PARS = /* glsl */`
                     float fine = 1.0 - 0.25 * d3 * (1.0 - pulseW(q.x / 0.13, 0.0, 0.9, pu / 0.13) * pulseW(q.y / 0.13, 0.0, 0.9, pv / 0.13));
                     alb = mix(alb, mix(vec3(0.5, 0.5, 0.52), vec3(0.012, 0.018, 0.045) * fine, cell), arr * d2);
                     alb = mix(alb, vec3(0.03, 0.035, 0.06), arr * (1.0 - d2));
-                    rfGlass = max(rfGlass, arr * cell * 0.8);
+                    rfGlass = max(rfGlass, arr * cell * 0.8); rfGlassR = mix(rfGlassR, 0.34, arr);
                 }
             }
         } else {
@@ -818,9 +819,9 @@ const ROOF_FRAG_PARS = /* glsl */`
             }
         }
         if (burn > 0.0) {
-            float soot = smoothstep(1.05 - burn * 1.1, 1.3 - burn * 0.9, nz.r * 0.6 + nz2.b * 0.4 + 0.25);
+            float soot = smoothstep(1.2 - burn * 1.05, 1.5 - burn * 0.95, nz.r * 0.6 + nz2.b * 0.4 + 0.25);
             alb = mix(alb, vec3(0.022, 0.02, 0.018), soot * min(1.0, burn * 1.6));
-            alb *= 1.0 - 0.45 * burn;
+            alb *= 1.0 - 0.4 * burn * burn;
             rfGlass *= 1.0 - min(1.0, burn * 2.0);
         }
         rfAlb = alb;
@@ -845,7 +846,7 @@ export function makeRoofMaterial() {
                     vRn = rn;
                     if (rl > 0.02) {
                         rs /= rl;
-                        vRuv = vec3(dot(vLp, cross(rs, rn)), (vLp.y - sc.y * 0.065) / max(rs.y, 0.05), (1.0 - position.y) * sc.y);
+                        vRuv = vec3(dot(vLp, cross(rs, rn)), vLp.y / max(rs.y, 0.05), (1.0 - position.y) * sc.y);
                     } else vRuv = vec3(vLp.x, vLp.z, 0.0);
                 }`);
         sh.fragmentShader = sh.fragmentShader
@@ -854,7 +855,7 @@ export function makeRoofMaterial() {
                 roofEval(diffuseColor.rgb);
                 diffuseColor.rgb = rfAlb;`)
             .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-                roughnessFactor = mix(rfRough, 0.1, rfGlass);`)
+                roughnessFactor = mix(rfRough, rfGlassR, rfGlass);`)
             .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
                 metalnessFactor = rfMetal * (1.0 - rfGlass);`)
             .replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>
@@ -911,7 +912,7 @@ const BIT_FRAG_PARS = /* glsl */`
             if (top) {
                 float cell = pulseW((uv.x + hs.x) / 1.04, 0.03, 0.97, pu / 1.04) * pulseW((uv.y + hs.y) / 1.7, 0.02, 0.98, pv / 1.7);
                 c = mix(vec3(0.45, 0.45, 0.47), vec3(0.012, 0.018, 0.045), mix(0.9, cell, d2));
-                btGlass = 0.8;
+                btGlass = 0.8; btRough = 0.34;
             } else c = vec3(0.3);
         } else if (kind < 4.5) {
             // a clipped hedge: leaves and the dark between them
@@ -992,6 +993,8 @@ export function makeBitMaterial() {
 }
 
 // ═════════════ Geometry: unit shapes, base at y = 0, outward-facing ═════════════
+// Every triangle here is drawn for every building of the map, and again in the sun's shadow passes: faces nobody
+// sees are left out (a wall box has no top or bottom: a roof sits on it, and a ruin's shell stands open).
 function triGeo(tris) {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(tris.flat(2), 3));
@@ -999,30 +1002,35 @@ function triGeo(tris) {
     return g;
 }
 const quad = (a, b, c, d) => [[a, b, c], [a, c, d]];
-// the height of the fascia board under the eaves, as a share of the roof's height (the roof shader knows it: 0.065)
-const FASCIA = 0.065;
-// Gable roof: a prism with its ridge along z, a fascia under the eaves and a soffit, so the overhang has thickness
+// the four walls of a unit box (x, z: ±0.5, y: 0..1)
+export function wallGeometry() {
+    const P = [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]], tris = [];
+    for (let i = 0; i < 4; i++) { const a = P[i], b = P[(i + 1) % 4]; tris.push(...quad([b[0], 0, b[1]], [a[0], 0, a[1]], [a[0], 1, a[1]], [b[0], 1, b[1]])); }
+    return triGeo(tris);
+}
+// a unit box without its underside (things that stand on something)
+export function boxGeometry() {
+    const g = wallGeometry(), top = triGeo(quad([-0.5, 1, -0.5], [-0.5, 1, 0.5], [0.5, 1, 0.5], [0.5, 1, -0.5]));
+    return joinGeo([g, top]);
+}
+function joinGeo(list) {
+    const pos = [], nor = [];
+    for (const g of list) { pos.push(...g.attributes.position.array); nor.push(...g.attributes.normal.array); }
+    const out = new THREE.BufferGeometry();
+    out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    out.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+    return out;
+}
+// Gable roof: a prism with its ridge along z (two pitches and the gable ends: the eaves' gutter line and the ridge
+// are drawn by the roof shader)
 export function gableGeometry() {
-    const f = FASCIA;
-    const A = [-0.5, 0, -0.5], B = [0.5, 0, -0.5], C = [0.5, 0, 0.5], D = [-0.5, 0, 0.5];
-    const A1 = [-0.5, f, -0.5], B1 = [0.5, f, -0.5], C1 = [0.5, f, 0.5], D1 = [-0.5, f, 0.5], T = [0, 1, -0.5], T2 = [0, 1, 0.5];
-    return triGeo([
-        ...quad(A1, D1, T2, T), ...quad(C1, B1, T, T2),                 // the two pitches
-        [B1, A1, T], [D1, C1, T2],                                      // gable ends
-        ...quad(B, A, A1, B1), ...quad(D, C, C1, D1), ...quad(A, D, D1, A1), ...quad(C, B, B1, C1), // fascia
-        ...quad(A, B, C, D),                                            // soffit
-    ]);
+    const A = [-0.5, 0, -0.5], B = [0.5, 0, -0.5], C = [0.5, 0, 0.5], D = [-0.5, 0, 0.5], T = [0, 1, -0.5], T2 = [0, 1, 0.5];
+    return triGeo([...quad(A, D, T2, T), ...quad(C, B, T, T2), [B, A, T], [D, C, T2]]);
 }
 // Hip roof: a shorter ridge along z, the ends pitched too
 export function hipGeometry() {
-    const f = FASCIA;
-    const A = [-0.5, 0, -0.5], B = [0.5, 0, -0.5], C = [0.5, 0, 0.5], D = [-0.5, 0, 0.5];
-    const A1 = [-0.5, f, -0.5], B1 = [0.5, f, -0.5], C1 = [0.5, f, 0.5], D1 = [-0.5, f, 0.5], R0 = [0, 1, -0.22], R1 = [0, 1, 0.22];
-    return triGeo([
-        [D1, C1, R1], [B1, A1, R0], ...quad(A1, D1, R1, R0), ...quad(C1, B1, R0, R1),
-        ...quad(B, A, A1, B1), ...quad(D, C, C1, D1), ...quad(A, D, D1, A1), ...quad(C, B, B1, C1),
-        ...quad(A, B, C, D),
-    ]);
+    const A = [-0.5, 0, -0.5], B = [0.5, 0, -0.5], C = [0.5, 0, 0.5], D = [-0.5, 0, 0.5], R0 = [0, 1, -0.22], R1 = [0, 1, 0.22];
+    return triGeo([[D, C, R1], [B, A, R0], ...quad(A, D, R1, R0), ...quad(C, B, R0, R1)]);
 }
 // Flat roof: a tray. The outer face up to the coping, the coping's top, the upstand's inner face down to the roof
 // deck. The upstand is 2.5% of each side wide (0.3 m on a 12 m block, most of a metre on a tower).
@@ -1038,22 +1046,27 @@ export function trayGeometry() {
         tris.push(...quad([ib[0], 1, ib[1]], [ia[0], 1, ia[1]], [ia[0], d, ia[1]], [ib[0], d, ib[1]])); // inner face
     }
     tris.push(...quad([-k, d, -k], [-k, d, k], [k, d, k], [k, d, -k]));                                // the deck
-    tris.push(...quad([-0.5, 0, -0.5], [0.5, 0, -0.5], [0.5, 0, 0.5], [-0.5, 0, 0.5]));                // underside
     return triGeo(tris);
 }
-// A balcony: a slab, a balustrade on three sides (the open side at -z, against the wall). x: ±0.5, z: -0.5..0.5,
-// the slab's top at y = 0, the rail at y = 1 (scale: width, rail height, depth)
+// A balcony: a slab and a balustrade on three sides (the open side at -z, against the wall). x: ±0.5, z: -0.5..0.5,
+// the slab's top at y = 0, the rail at y = 1 (scale: width, rail height, depth). The balustrade is a sheet seen from
+// both sides.
 export function balconyGeometry() {
-    const parts = [];
-    const box = (w, h, d, x, y, z) => { const g = new THREE.BoxGeometry(w, h, d).toNonIndexed(); g.deleteAttribute('uv'); g.translate(x, y, z); parts.push(g); };
-    box(1, 0.16, 1, 0, -0.08, 0);
-    box(1, 1, 0.05, 0, 0.5, 0.475);
-    box(0.03, 1, 0.95, -0.485, 0.5, -0.025);
-    box(0.03, 1, 0.95, 0.485, 0.5, -0.025);
-    const pos = [], nor = [];
-    for (const g of parts) { pos.push(...g.attributes.position.array); nor.push(...g.attributes.normal.array); }
-    const out = new THREE.BufferGeometry();
-    out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    out.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
-    return out;
+    const s = -0.16, tris = [];
+    const F = [-0.5, 0.5], L = -0.5, R = 0.5;
+    // the slab: top, underside, front and side edges
+    tris.push(...quad([L, 0, -0.5], [L, 0, 0.5], [R, 0, 0.5], [R, 0, -0.5]), ...quad([L, s, -0.5], [R, s, -0.5], [R, s, 0.5], [L, s, 0.5]));
+    tris.push(...quad([L, s, 0.5], [R, s, 0.5], [R, 0, 0.5], [L, 0, 0.5]), ...quad([L, s, -0.5], [L, s, 0.5], [L, 0, 0.5], [L, 0, -0.5]), ...quad([R, s, 0.5], [R, s, -0.5], [R, 0, -0.5], [R, 0, 0.5]));
+    // the balustrade: front and two sides, outside and inside
+    const sheet = (a, b) => { tris.push(...quad([a[0], 0, a[1]], [b[0], 0, b[1]], [b[0], 1, b[1]], [a[0], 1, a[1]]), ...quad([b[0], 0, b[1]], [a[0], 0, a[1]], [a[0], 1, a[1]], [b[0], 1, b[1]])); };
+    sheet([L, F[1]], [R, F[1]]); sheet([L, F[0]], [L, F[1]]); sheet([R, F[1]], [R, F[0]]);
+    return triGeo(tris);
+}
+// round things: flues, chimney pots, vent cowls, dishes (1 across, 1 high, base at y = 0; six sides and a top)
+export function drumGeometry() {
+    const N = 6, tris = [], P = [];
+    for (let i = 0; i < N; i++) { const a = i / N * Math.PI * 2; P.push([Math.cos(a) * 0.5, Math.sin(a) * 0.5]); }
+    for (let i = 0; i < N; i++) { const a = P[i], b = P[(i + 1) % N]; tris.push(...quad([a[0], 0, a[1]], [a[0], 1, a[1]], [b[0], 1, b[1]], [b[0], 0, b[1]])); }
+    for (let i = 1; i + 1 < N; i++) tris.push([[P[0][0], 1, P[0][1]], [P[i + 1][0], 1, P[i + 1][1]], [P[i][0], 1, P[i][1]]]);
+    return triGeo(tris);
 }
