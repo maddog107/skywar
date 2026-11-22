@@ -227,12 +227,12 @@ try {
             log(`       of B's ${r.all} frames, ${r.smooth} had both pages running smoothly, ${r.between} of those with the puppet between two snapshots`);
             log(`       the puppet against where A was at the moment B was drawing: between snapshots ${r.eb.mean.toFixed(2)} m mean / ${r.eb.worst.toFixed(2)} m worst; all smooth frames (some coasting past the newest snapshot) ${r.es.mean.toFixed(2)} / ${r.es.worst.toFixed(2)} m; every frame ${r.ea.mean.toFixed(2)} / ${r.ea.worst.toFixed(2)} m`);
             if (!m || (r.between > 60 && (m.between <= 60 || r.eb.mean < m.eb.mean))) m = r;
-            if (r.between > 60 && r.eb.mean < 0.5 && r.eb.worst < 3) break; // a clean measurement
+            if (r.between > 60 && r.between > r.smooth * 0.9 && r.eb.mean < 0.5 && r.eb.worst < 3) break; // a clean measurement
         }
         check(!!m && m.between > 60, 'enough frames to compare (both pages running smoothly, the puppet between two snapshots)', m ? m.between + ' frames' : '');
         if (m) {
             check(m.lag >= 60 && m.lag <= 450, 'the puppet is drawn the drawing delay plus the network behind', m.lag.toFixed(0) + ' ms');
-            check(m.eb.mean < 1 && m.eb.worst < 5, 'B\'s puppet of A follows A\'s track within a small error', `mean ${m.eb.mean.toFixed(2)} m, worst ${m.eb.worst.toFixed(2)} m at ${m.speed.toFixed(0)} m/s`);
+            check(m.eb.mean < 1 && m.eb.worst < m.speed * 0.05, 'B\'s puppet of A follows A\'s track within a small error', `mean ${m.eb.mean.toFixed(2)} m, worst ${m.eb.worst.toFixed(2)} m at ${m.speed.toFixed(0)} m/s (a twentieth of a second of flight is ${(m.speed * 0.05).toFixed(0)} m)`);
             check(m.es.mean < 5, 'also on the frames where it coasts past the newest snapshot', `mean ${m.es.mean.toFixed(2)} m, worst ${m.es.worst.toFixed(2)} m`);
         }
     }

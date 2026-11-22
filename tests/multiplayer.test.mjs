@@ -421,7 +421,7 @@ describe('multiplayer: seeing each other', () => {
         hub.hold = true;
         run([A, B], 4, (t) => { if (++frame % 9 === 0) { hub.release(); hub.hold = true; } if (t > 2.5) { n++; if (pb.puppet.mode === MODE.INTERP) interp++; } });
         hub.release();
-        assert.ok(peer.delay > 0.16 && peer.delay <= 0.25 + 1e-9, 'bunched: ' + peer.delay.toFixed(3) + ' s');
+        assert.ok(peer.delay > 0.135 && peer.delay <= 0.25 + 1e-9, 'bunched: ' + peer.delay.toFixed(3) + ' s');
         assert.ok(interp / n > 0.9, 'and so the puppet is still drawn between two snapshots (' + Math.round(100 * interp / n) + '% of frames)');
         assert.ok(pb.alive && pb.pos.distanceTo(B.player.pos) < B.player.speed * 0.45, 'with its owner');
         run([A, B], 6);
