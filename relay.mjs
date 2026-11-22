@@ -4,6 +4,8 @@
 //
 //   development   node server.mjs                                            static files + the relay at /ws, one port
 //   production    TRUST_PROXY=1 HOST=127.0.0.1 PORT=8377 node relay.mjs      behind nginx (which proxies /skywar/ws to it)
+//                 TRUST_PROXY=1 SOCKET=/run/skywar-relay/relay.sock node relay.mjs    the same on a Unix socket: the
+//                 process then needs no network at all (systemd PrivateNetwork=yes), only nginx reaching its socket
 //
 // What it does: rooms keyed by a short code; every client gets a small numeric id, is told who is in the room and who
 // the host is (the longest-connected client; the next one when it leaves); each client's latest state snapshot is kept
@@ -24,6 +26,7 @@ import http from 'node:http';
 import net from 'node:net';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import { chmodSync, unlinkSync } from 'node:fs';
 
 // the protocol version (src/netproto.js PROTOCOL must match: tests/relay.test.mjs checks it); a client with another
 // one is refused with a message telling the player to reload
@@ -152,7 +155,7 @@ export function createRelay(options = {}) {
     const conns = new Set();
     const perIp = new Map();
     let nextId = 1, closed = false;
-    const stats = { accepted: 0, refused: 0, dropped: 0 };
+    const stats = { accepted: 0, refused: 0, dropped: 0, errors: 0 };
 
     const originOk = (origin) => {
         if (!origin) return !!opt.allowNoOrigin;
@@ -163,9 +166,11 @@ export function createRelay(options = {}) {
     // X-Real-IP, which the production nginx sets itself to the address it verified (and nothing a client sends can
     // change). CF-Connecting-IP and X-Forwarded-For are never read: a client can write those. A header that isn't an
     // address is ignored (the socket's address counts).
+    // (a connection over a Unix socket has no address at all: only a process on this machine, the proxy, can reach it)
     const clientIp = (req) => {
         const own = addressKey(req.socket.remoteAddress) || 'unknown';
-        if (!opt.trustProxy || !isLoopbackAddress(req.socket.remoteAddress)) return own;
+        const local = req.socket.remoteAddress === undefined ? typeof (req.socket.server && req.socket.server.address()) === 'string' : isLoopbackAddress(req.socket.remoteAddress);
+        if (!opt.trustProxy || !local) return own;
         const real = req.headers['x-real-ip'];
         return (typeof real === 'string' && addressKey(real)) || own;
     };
@@ -357,13 +362,16 @@ export function createRelay(options = {}) {
         conns.add(c);
         perIp.set(ip, (perIp.get(ip) || 0) + 1);
         stats.accepted++;
+        // (whatever a client sends, the worst it can do is lose its own connection: an error nobody foresaw must not
+        // take the process, and every other player, down with it)
+        const feed = () => { try { parse(c); } catch (e) { stats.errors++; try { drop(c, 1011, 'error'); } catch (e2) { c.gone = true; socket.destroy(); leave(c); } } };
         socket.on('data', (d) => {
             if (c.gone) return;
             c.buf = c.buf.length ? Buffer.concat([c.buf, d]) : d;
-            parse(c);
+            feed();
         });
         socket.on('close', () => { c.gone = true; leave(c); });
-        if (c.buf.length) parse(c);
+        if (c.buf.length) feed();
     }
 
     // ── Clocks: the combined state message, and housekeeping ──
@@ -428,9 +436,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     });
     server.headersTimeout = 10000; server.requestTimeout = 10000; server.keepAliveTimeout = 5000;
     relay.attach(server);
-    const host = env.HOST || '127.0.0.1', port = +(env.PORT || 8377);
-    server.listen(port, host, () => console.log(`SKYWAR relay (protocol ${PROTOCOL}) listening on ${host}:${port}`));
-    if (env.RELAY_STATS === '1') setInterval(() => { const n = relay.counts(); console.log(`rooms ${n.rooms} players ${n.players} connections ${n.connections} refused ${n.refused} dropped ${n.dropped}`); }, 60000).unref();
+    const host = env.HOST || '127.0.0.1', port = +(env.PORT || 8377), sock = env.SOCKET || '';
+    if (sock) {
+        // a Unix socket (no TCP port at all): the reverse proxy's user must be able to connect to it
+        try { unlinkSync(sock); } catch (e) { /* none left over */ }
+        server.listen(sock, () => { chmodSync(sock, 0o666); console.log(`SKYWAR relay (protocol ${PROTOCOL}) listening on ${sock}`); });
+    } else server.listen(port, host, () => console.log(`SKYWAR relay (protocol ${PROTOCOL}) listening on ${host}:${port}`));
+    if (env.RELAY_STATS === '1') setInterval(() => { const n = relay.counts(); console.log(`rooms ${n.rooms} players ${n.players} connections ${n.connections} refused ${n.refused} dropped ${n.dropped} errors ${n.errors}`); }, 60000).unref();
     const stop = () => { relay.close(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 1500).unref(); };
     process.on('SIGTERM', stop); process.on('SIGINT', stop);
 }

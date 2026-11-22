@@ -644,3 +644,55 @@ describe('relay: caps and time-outs', { skip: !HAS_WS && 'no global WebSocket in
         assert.equal((await a.untilClosed()).code, 1001);
     });
 });
+
+// ── Production shape: its own process on a Unix socket (systemd PrivateNetwork=yes: no TCP at all), a reverse proxy in
+// front setting X-Real-IP ──
+describe('relay: standalone on a Unix socket', { skip: process.platform === 'win32' }, () => {
+    test('listens on SOCKET, lets the proxy\'s user connect, and counts clients by the proxy\'s X-Real-IP', async () => {
+        const { spawn } = await import('node:child_process');
+        const { mkdtempSync, statSync, rmSync } = await import('node:fs');
+        const { tmpdir } = await import('node:os');
+        const { join: pjoin } = await import('node:path');
+        const dir = mkdtempSync(pjoin(tmpdir(), 'skywar-relay-')), sock = pjoin(dir, 'relay.sock');
+        const child = spawn(process.execPath, [new URL('../relay.mjs', import.meta.url).pathname], { env: { ...process.env, SOCKET: sock, TRUST_PROXY: '1' }, stdio: ['ignore', 'pipe', 'inherit'] });
+        try {
+            await new Promise((resolve, reject) => {
+                let out = '';
+                child.stdout.on('data', d => { out += d; if (out.includes('listening on ' + sock)) resolve(); });
+                child.on('exit', (code) => reject(new Error('relay exited ' + code + ': ' + out)));
+                setTimeout(() => reject(new Error('relay did not start: ' + out)), 20000).unref();
+            });
+            assert.equal(statSync(sock).mode & 0o777, 0o666, 'the proxy (another user) can connect to the socket');
+            // an upgrade through the socket, as the proxy would send it: resolves with what came back first
+            const open = (ip) => new Promise((resolve, reject) => {
+                const s = net.connect(sock);
+                let got = Buffer.alloc(0);
+                s.on('error', reject);
+                s.on('connect', () => s.write('GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n'
+                    + 'Sec-WebSocket-Key: ' + randomBytes(16).toString('base64') + '\r\nOrigin: ' + ORIGIN + '\r\nX-Real-IP: ' + ip + '\r\n\r\n'));
+                s.on('data', d => { got = Buffer.concat([got, d]); });
+                // (a refusal is written straight after the 101, and the socket closed; an accepted one just stays open)
+                setTimeout(() => resolve({ s, text: got.toString('latin1') }), 400);
+            });
+            const held = [];
+            for (let i = 0; i < DEFAULTS.maxPerIp; i++) {
+                const r = await open('203.0.113.9');
+                assert.match(r.text, /^HTTP\/1\.1 101 /, 'connection ' + (i + 1) + ' from one address is let in');
+                assert.ok(!r.text.includes('"address"'));
+                held.push(r.s);
+            }
+            const over = await open('203.0.113.9');
+            assert.ok(over.text.includes('"code":"address"'), 'one more from that address is refused');
+            held.push(over.s);
+            const other = await open('2001:db8::7');
+            assert.match(other.text, /^HTTP\/1\.1 101 /);
+            assert.ok(!other.text.includes('"address"'), 'another address (through the same proxy) has its own count');
+            held.push(other.s);
+            for (const s of held) s.destroy();
+        } finally {
+            child.kill('SIGTERM');
+            await new Promise(r => { child.on('exit', r); setTimeout(r, 3000).unref(); });
+            rmSync(dir, { recursive: true, force: true });
+        }
+    });
+});
