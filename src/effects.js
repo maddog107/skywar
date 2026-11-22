@@ -8,6 +8,9 @@
 //   fire   — additive glows (muzzle flashes, missile motors, hit flashes)
 //   sparks — additive streaks stretched along their velocity (embers, shrapnel, grinding sparks)
 // Only genuinely hot things go above 1.0 (the bloom threshold): lit smoke is kept below it.
+// The fireball of anything bigger than a cannon hit is a flipbook (flipbook.js): a real fluid simulation of an air
+// burst, a ground burst or a fuel fire played back on one or two big quads, lit by the same sun, sky and fires as
+// the puffs; the puffs are what's round it (dust, tendrils, the smoke that lingers) and the fallback without it.
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
 import { rand, clamp, smoothstep, fbm, makeRadialTexture } from './util.js';
@@ -15,6 +18,7 @@ import { terrainHeight } from './world.js';
 import { fireLights, FIRE_VIEW_GLSL, fireUniforms } from './firelight.js'; // [night] light from fires, motors, flashes
 import { splitTwoSided } from './meshmerge.js';
 import { WaterFX, explosionKg } from './splash.js'; // what hits the water: spouts, columns, slicks (splash.js)
+import { FlipbookSystem, FLIPBOOK_EVENTS, FLIPBOOK_MIN_SIZE, fireballSpec } from './flipbook.js'; // simulated fireballs
 
 // Squash HDR colours from other systems (muzzle flashes of ~6) into a soft knee that tops out ~2.4:
 // hot enough to bloom, not enough to blow a white halo over half the screen. Keeps the hue.
@@ -25,7 +29,9 @@ function kneeColour(src, out) {
     return out;
 }
 const _k0 = [0, 0, 0], _k1 = [0, 0, 0];
-const SOOT_C = [0.26, 0.25, 0.24], QUENCH_C = [0.62, 0.63, 0.64];
+const FIVE_ROUND = { single: true }; // (megaBlast's bursts round the main one: one flipbook sprite each)
+const BURIED = { puffs: true };      // (earthFountain: the old puff fireball, under the dirt)
+const SOOT_C = [0.26, 0.25, 0.24], QUENCH_C = [0.62, 0.63, 0.64], SOOT0_C = [0.1, 0.085, 0.075], SOOT1_C = [0.2, 0.19, 0.185];
 
 // ── Textures ──
 // 2×2 atlas of smoke puffs. RG: tangent-space normal (so puffs are lit by the real sun), B: thickness
@@ -522,6 +528,11 @@ export class Effects {
         this.flame = new ParticleSystem(scene, 3500, { texture: puffs, lit: true, atlas: true, heat: true, renderOrder: 7, wind: 1, light: this.lightU, addK: 0.45 });
         this.fire = new ParticleSystem(scene, 4000, { additive: true, texture: fireTex, renderOrder: 8, knee: true });
         this.sparks = new ParticleSystem(scene, 3000, { additive: true, texture: sparkTex, renderOrder: 8, stretch: true, knee: true });
+        // fireballs: one system per simulated burst (flipbook.js), drawn over the smoke and the flame puffs. Until
+        // their atlases are loaded (main.js preloads them), or if they aren't there, the flame puffs are the fireball
+        this.quality = 'high';
+        this.books = {};
+        for (const name of FLIPBOOK_EVENTS) this.books[name] = new FlipbookSystem(scene, name, { light: this.lightU, renderOrder: 7.5, max: 96 });
 
         this.trails = [];
         this.trailMats = new Map();
@@ -627,15 +638,74 @@ export class Effects {
         return t;
     }
 
-    // particle budgets and the water's detail by the quality setting (main.js)
-    setQuality(q) { this.water.setQuality(q); }
+    // particle budgets and the water's detail by the quality setting (main.js); on low a fireball is one flipbook
+    // sprite, cross-faded without its motion vectors
+    setQuality(q) {
+        this.quality = q;
+        this.water.setQuality(q);
+        for (const k in this.books) this.books[k].setMotion(q !== 'low');
+    }
+
+    // at launch (main.js): one sprite of every flipbook, out of sight, so their shader is compiled with the scene's
+    // and their atlases are on the GPU before the first explosion of the sortie
+    warm(renderer) {
+        for (const k in this.books) {
+            const sys = this.books[k];
+            if (!sys.ready) continue;
+            if (!sys.count) sys.emit(this._tmpP.set(0, -500, 0), { diameter: 1, burn: 0.05 });
+            sys.mesh.visible = true; // (for the compile that follows; it hides itself again when the sprite is gone)
+            if (renderer && renderer.initTexture) try { renderer.initTexture(sys.book.texA); renderer.initTexture(sys.book.texB); } catch (e) { /* non-fatal */ }
+        }
+    }
+
+    // A fireball from the flipbooks (flipbook.js): `size` as explosion()'s. opts: {
+    //   kind    'he' (white-hot, out in a moment, the default) | 'fuel' (orange, sooty, three times as long)
+    //   ground  it stands on the ground at pos (a hemisphere that mushrooms up) rather than hanging in the air
+    //   vel     carried along (m/s);  quench: inside a column of water (smaller, short, it leaves steam)
+    //   hold    seconds before it appears;  light: false for no light of its own
+    // }
+    // Returns false when there is no flipbook to show it with (too small, not loaded): the caller's puffs then.
+    fireball(pos, size, opts = null) {
+        const o = opts || {};
+        if (size < FLIPBOOK_MIN_SIZE) return false;
+        const fuel = o.kind === 'fuel';
+        // (fuel going up off the ground has its own simulation; in the air it is the air burst, burning as fuel does)
+        let sys = this.books[o.ground ? (fuel ? 'fuel' : 'ground') : 'air'];
+        if (fuel && o.ground && !(sys && sys.ready)) sys = this.books.ground;
+        if (!sys || !sys.ready) return false;
+        const sooty = sys === this.books.fuel; // (its heat is baked lower: orange under its own soot)
+        const spec = fireballSpec(size, fuel ? 'fuel' : 'he');
+        const q = o.quench ? 0.6 : 1;
+        const main = {
+            diameter: spec.diameter * q, burn: spec.burn * (o.quench ? 0.5 : 1), vel: o.vel || null, drag: 2.2,
+            // on the black-body ramp: high explosive flashes near the top of it and settles into orange within a
+            // third of the burn, fuel stays orange (its own simulation's heat is baked lower, under its soot); water
+            // takes the heat out of it and leaves steam
+            heat: (sooty ? 0.55 : fuel ? 0.7 : 1.15) * (o.quench ? 0.8 : 1), heat1: (sooty ? 0.5 : fuel ? 0.55 : 0.75) * (o.quench ? 0.8 : 1), heatT: 0.3,
+            c0: SOOT0_C, c1: o.quench ? QUENCH_C : SOOT1_C, alpha: o.quench ? 0.85 : 1,
+            hold: o.hold || 0,
+            // (the light it throws after the flash: a share of the flash's, following the simulated fire down)
+            light: o.light === false ? 0 : (fuel ? 2600 : 3200) * size,
+        };
+        sys.emit(pos, main);
+        // a second, smaller one behind it, turned the other way and a moment later: depth, and no two blasts alike
+        if (this.quality !== 'low' && size >= 1.2 && !o.quench && !o.single) {
+            const P = this._v3.copy(pos), r = spec.diameter * 0.22, a = Math.random() * Math.PI * 2;
+            P.x += Math.cos(a) * r; P.z += Math.sin(a) * r;
+            if (!o.ground) P.y += rand(-0.5, 0.5) * r;
+            sys.emit(P, { ...main, diameter: main.diameter * rand(0.62, 0.78), burn: main.burn * rand(0.8, 1.05), hold: main.hold + 0.04 * spec.burn, start: rand(0.004, 0.012), light: 0 });
+        }
+        return true;
+    }
 
     // true when there is open water under this point (effects then splash instead of throwing dirt)
     isWater(x, z) { return terrainHeight(x, z) < -0.5; }
     heightAt(x, z) { return this.groundHeight ? this.groundHeight(x, z) : Math.max(terrainHeight(x, z), 0); }
 
     // ── Composite effects ──
-    // opts: { noWater: true: no splash of its own (splash.js asked for this fireball), quench: as on the water }
+    // opts: { noWater: true: no splash of its own (splash.js asked for this fireball), quench: as on the water,
+    //         kind: 'fuel' for a fuel fire (orange, sooty, slow: aircraft, fuel trucks) rather than high explosive,
+    //         single: one flipbook sprite, puffs: no flipbook (a burst buried in something else) }
     explosion(pos, size = 1, vel = null, opts = null) {
         const V = this._tmpV, P = this._tmpP, s = size;
         const base = this._base.set(0, 0, 0);
@@ -645,6 +715,10 @@ export class Effects {
         const low = agl < 5 + 6 * s;
         const onWater = low && this.isWater(pos.x, pos.z);
         const water = onWater || !!(opts && opts.quench);
+        const quench = !!(opts && opts.quench); // (splash.js: a burst inside its own column of water: a flash, little smoke)
+        // (something big blowing up in the air with a speed of its own is an airframe: its fuel)
+        const kind = opts && opts.kind ? opts.kind : (vel && !low && s >= 1.3 ? 'fuel' : 'he');
+        const spec = fireballSpec(s, kind);
 
         // flash + shockwave + light (a big one's shock front bends the light it passes through: shockfx.js)
         this.sprite(this.flashTex, pos, 16 * s, 0.13, 0.5, 1, [1, 0.9, 0.75]);
@@ -652,30 +726,49 @@ export class Effects {
         if (s >= 1.3 && this.shockPass && !water) this.shockPass.add(pos, s);
         this.light(pos, 40 * s, 0.6);
 
-        // lingering smoke that rises and drifts (emitted first so the fireball draws over it)
-        const quench = !!(opts && opts.quench); // (splash.js: a burst inside its own column of water: a flash, little smoke)
-        const nm = Math.round((3 + 3 * s) * (quench ? 0.2 : water ? 0.4 : 1));
-        for (let i = 0; i < nm; i++) {
-            V.set(rand(-1, 1), rand(-0.2, 1), rand(-1, 1)).normalize().multiplyScalar(rand(3, 12) * s).add(base);
-            P.copy(pos).addScaledVector(V, 0.15);
-            this.flame.emit(P, V, rand(6, 11), rand(8, 12) * s, rand(26, 40) * s, [0.16, 0.15, 0.14], [0.4, 0.39, 0.38], 0.5, 0, 1.2, 3, 0, 0.5, 0.5);
+        // the fireball: a simulated one (flipbook.js) for anything bigger than a cannon hit. On or just over the
+        // ground it is the ground burst, standing on the ground (a hemisphere that mushrooms up on a stem); in the
+        // air, on the water or in a column of it, the air burst
+        const onGround = low && !water && agl < 0.35 * spec.diameter;
+        if (onGround) P.set(pos.x, Math.min(pos.y, gh + 0.5), pos.z); else P.copy(pos);
+        if (onWater && !quench) P.y = Math.max(P.y, Math.max(gh, 0) + 0.3 * spec.diameter); // (most of the ball above the water)
+        const book = !(opts && opts.puffs) && this.fireball(P, s * (water && !quench ? 0.85 : 1), { kind, ground: onGround, vel: vel ? base : null, quench, single: !!(opts && opts.single) });
+        if (book) {
+            // the smoke that outlasts it: a few puffs that go up with the cloud and hang there as it thins
+            const up = 2.6 * spec.diameter / (spec.burn / 0.16); // (about how fast the simulated cloud climbs)
+            const nm = Math.round((2 + 1.6 * s) * (quench ? 0.2 : water ? 0.4 : 1));
+            for (let i = 0; i < nm; i++) {
+                V.set(rand(-1, 1) * 1.5 * s, up * rand(0.45, 1), rand(-1, 1) * 1.5 * s).add(base);
+                P.set(pos.x + rand(-1, 1) * 2 * s, pos.y + rand(0, 3) * s, pos.z + rand(-1, 1) * 2 * s);
+                this.smoke.emit(P, V, rand(6, 11) * Math.max(1, spec.burn), rand(8, 11) * s, rand(24, 36) * s, [0.14, 0.13, 0.12], [0.4, 0.39, 0.38], 0.42, 0, 0.3, 0.2, 0, 0.5, 0.5);
+            }
+        } else {
+            // without one (a small burst, or no atlas): lingering smoke that rises and drifts (emitted first so the
+            // fireball draws over it)
+            const nm = Math.round((3 + 3 * s) * (quench ? 0.2 : water ? 0.4 : 1));
+            for (let i = 0; i < nm; i++) {
+                V.set(rand(-1, 1), rand(-0.2, 1), rand(-1, 1)).normalize().multiplyScalar(rand(3, 12) * s).add(base);
+                P.copy(pos).addScaledVector(V, 0.15);
+                this.flame.emit(P, V, rand(6, 11), rand(8, 12) * s, rand(26, 40) * s, [0.16, 0.15, 0.14], [0.4, 0.39, 0.38], 0.5, 0, 1.2, 3, 0, 0.5, 0.5);
+            }
+            // and the fireball as hot billows that cool into a dark, lit smoke cloud (a ground burst mushrooms upward)
+            const nf = Math.round((9 + 6 * s) * (quench ? 0.3 : water ? 0.6 : 1)); // water quenches a surface burst
+            const lift = low ? Math.max(0, 5 * s - agl * 0.5) : 0;
+            for (let i = 0; i < nf; i++) {
+                V.set(rand(-1, 1), rand(low ? 0 : -0.6, 1), rand(-1, 1)).normalize().multiplyScalar(rand(4, 20) * s).add(base);
+                P.copy(pos).addScaledVector(V, 0.05);
+                P.y += lift;
+                const life = rand(1.8, 3.2) * (0.85 + 0.15 * s) * (quench ? 0.4 : 1);
+                // (quenched: smaller, it cools into steam, not soot)
+                const qs = quench ? 0.6 : 1;
+                this.flame.emit(P, V, life, rand(7, 11) * s * qs, rand(18, 30) * s * qs, SOOT0_C, quench ? QUENCH_C : SOOT_C, 0.95, 0, 2.6, 4, rand(0.85, 1), rand(0.22, 0.38), 1.4);
+            }
         }
-        // fireball: hot billows that cool into a dark, lit smoke cloud (a ground burst mushrooms upward)
-        const nf = Math.round((9 + 6 * s) * (quench ? 0.3 : water ? 0.6 : 1)); // water quenches a surface burst
-        const lift = low ? Math.max(0, 5 * s - agl * 0.5) : 0;
-        for (let i = 0; i < nf; i++) {
-            V.set(rand(-1, 1), rand(low ? 0 : -0.6, 1), rand(-1, 1)).normalize().multiplyScalar(rand(4, 20) * s).add(base);
-            P.copy(pos).addScaledVector(V, 0.05);
-            P.y += lift;
-            const life = rand(1.8, 3.2) * (0.85 + 0.15 * s) * (quench ? 0.4 : 1);
-            // (quenched: smaller, it cools into steam, not soot)
-            const qs = quench ? 0.6 : 1;
-            this.flame.emit(P, V, life, rand(7, 11) * s * qs, rand(18, 30) * s * qs, [0.1, 0.085, 0.075], quench ? QUENCH_C : SOOT_C, 0.95, 0, 2.6, 4, rand(0.85, 1), rand(0.22, 0.38), 1.4);
-        }
-        // hot core flare (brief additive pop)
+        // hot core flare (brief additive pop; briefer over a simulated fireball, which is there to be seen)
         for (let i = 0; i < 3; i++) {
             V.set(rand(-1, 1), rand(-1, 1), rand(-1, 1)).multiplyScalar(4 * s).add(base);
-            this.fire.emit(pos, V, rand(0.18, 0.3), 8 * s, 22 * s, [2.2, 1.5, 0.7], [1.2, 0.4, 0.08], 0.5, 0, 3, 0);
+            if (book) this.fire.emit(pos, V, rand(0.1, 0.16), 7 * s, 15 * s, [2.2, 1.5, 0.7], [1.2, 0.4, 0.08], 0.5, 0, 3, 0);
+            else this.fire.emit(pos, V, rand(0.18, 0.3), 8 * s, 22 * s, [2.2, 1.5, 0.7], [1.2, 0.4, 0.08], 0.5, 0, 3, 0);
         }
         // sparks and burning fragments
         const ns = Math.round(22 * Math.min(s, 2.5));
@@ -743,7 +836,7 @@ export class Effects {
         this.explosion(pos, 2.4 * k);
         for (let i = 0; i < 5; i++) {
             const a = (i / 5) * Math.PI * 2 + rand(-0.3, 0.3);
-            this.explosion(P.set(pos.x + Math.cos(a) * 9 * k, pos.y + rand(3, 10) * k, pos.z + Math.sin(a) * 9 * k).clone(), 1.3 * k);
+            this.explosion(P.set(pos.x + Math.cos(a) * 9 * k, pos.y + rand(3, 10) * k, pos.z + Math.sin(a) * 9 * k).clone(), 1.3 * k, null, FIVE_ROUND);
         }
         this.sprite(this.ringTex, pos, 10 * k, 0.7, 160 * k, 0.45, [1, 0.95, 0.88]); // (the shock front)
         if (this.shockPass) this.shockPass.add(pos, 6 * k * k);
@@ -769,22 +862,34 @@ export class Effects {
         const k = clamp(L / 18, 0.5, 3); // (the fuel aboard: a fighter ~1, a bomber or an airliner 2-3)
         const s = clamp(1.4 * Math.sqrt(k), 1, 2.6);
         const gh = this.heightAt(pos.x, pos.z);
-        this.explosion(new THREE.Vector3(pos.x, Math.max(pos.y, gh + 2), pos.z), 1.8 * s);
+        this.explosion(new THREE.Vector3(pos.x, Math.max(pos.y, gh + 2), pos.z), 1.8 * s, null, { kind: 'fuel' });
         // the fuel: fireballs strung out along the path, thrown on at a share of the speed, rolling up off the ground
         const D = clamp(vh * 0.45 * (1 - 0.6 * steep), 10, 180);
-        const n = Math.round(14 + 14 * k);
-        for (let i = 0; i < n; i++) {
-            const f = Math.pow(Math.random(), 0.7), d = f * D, carry = vh * rand(0.08, 0.25) * (1 - f);
-            P.set(pos.x + dx * d + rand(-6, 6) * s, gh + rand(1, 6) * s, pos.z + dz * d + rand(-6, 6) * s);
-            V.set(dx * carry + rand(-6, 6), rand(4, 16) * s * 0.6, dz * carry + rand(-6, 6));
-            this.flame.emit(P, V, rand(2.6, 4.2), rand(10, 15) * s, rand(28, 42) * s, [0.1, 0.085, 0.075], SOOT_C, 0.95, 0, 1.6, 4.5, rand(0.9, 1), rand(0.35, 0.5), 1.4);
-        }
-        // and the heart of it rolling up off the ground on its own heat
-        for (let i = 0; i < 6 + 4 * k; i++) {
-            const d = rand(0.1, 0.5) * D;
-            P.set(pos.x + dx * d + rand(-5, 5), gh + rand(4, 10), pos.z + dz * d + rand(-5, 5));
-            V.set(dx * vh * 0.05 + rand(-4, 4), rand(14, 26) * Math.sqrt(s), dz * vh * 0.05 + rand(-4, 4));
-            this.flame.emit(P, V, rand(3.2, 4.6), rand(14, 18) * s, rand(36, 50) * s, [0.1, 0.085, 0.075], SOOT_C, 0.95, 0, 0.9, 3, 1, rand(0.3, 0.42), 1);
+        if (this.books.fuel.ready) {
+            // simulated ones (flipbook.js): a few along the path, each lit a moment after the one before it as the
+            // spray of fuel catches, sliding on and rolling up on their own heat
+            const n = Math.round(clamp(2 + 1.6 * k + D / 60, 3, 7));
+            for (let i = 0; i < n; i++) {
+                const f = (i + rand(0.2, 0.9)) / n, d = f * D, carry = vh * rand(0.1, 0.25) * (1 - f);
+                P.set(pos.x + dx * d + rand(-5, 5) * s, gh + 0.3, pos.z + dz * d + rand(-5, 5) * s);
+                V.set(dx * carry, 0, dz * carry);
+                this.fireball(P, s * rand(0.75, 1.15) * (1 - 0.3 * f), { kind: 'fuel', ground: true, vel: V, hold: f * 0.3, single: true, light: i === 1 });
+            }
+        } else {
+            const n = Math.round(14 + 14 * k);
+            for (let i = 0; i < n; i++) {
+                const f = Math.pow(Math.random(), 0.7), d = f * D, carry = vh * rand(0.08, 0.25) * (1 - f);
+                P.set(pos.x + dx * d + rand(-6, 6) * s, gh + rand(1, 6) * s, pos.z + dz * d + rand(-6, 6) * s);
+                V.set(dx * carry + rand(-6, 6), rand(4, 16) * s * 0.6, dz * carry + rand(-6, 6));
+                this.flame.emit(P, V, rand(2.6, 4.2), rand(10, 15) * s, rand(28, 42) * s, SOOT0_C, SOOT_C, 0.95, 0, 1.6, 4.5, rand(0.9, 1), rand(0.35, 0.5), 1.4);
+            }
+            // and the heart of it rolling up off the ground on its own heat
+            for (let i = 0; i < 6 + 4 * k; i++) {
+                const d = rand(0.1, 0.5) * D;
+                P.set(pos.x + dx * d + rand(-5, 5), gh + rand(4, 10), pos.z + dz * d + rand(-5, 5));
+                V.set(dx * vh * 0.05 + rand(-4, 4), rand(14, 26) * Math.sqrt(s), dz * vh * 0.05 + rand(-4, 4));
+                this.flame.emit(P, V, rand(3.2, 4.6), rand(14, 18) * s, rand(36, 50) * s, SOOT0_C, SOOT_C, 0.95, 0, 0.9, 3, 1, rand(0.3, 0.42), 1);
+            }
         }
         this.light(P.set(pos.x + dx * D * 0.3, gh + 8, pos.z + dz * D * 0.3), 70 * s, 1.1);
         // sparks and burning scraps sprayed on ahead, low
@@ -810,7 +915,7 @@ export class Effects {
     // and rock well over 100 m high that falls back, clods arcing out, a surge of dust round its foot
     earthFountain(pos, k = 1) {
         const V = this._tmpV, P = this._tmpP;
-        this.explosion(P.set(pos.x, pos.y + 2, pos.z).clone(), 2.2 * k);
+        this.explosion(P.set(pos.x, pos.y + 2, pos.z).clone(), 2.2 * k, null, BURIED); // (its fire stays in the earth it throws)
         this.light(pos, 50 * k, 0.5);
         for (let i = 0; i < 150; i++) {
             const c = rand(0.12, 0.24), up = rand(50, 180);
@@ -1057,6 +1162,7 @@ export class Effects {
         if (this.shockPass) this.shockPass.update(dt);
         this.smoke.update(dt, fog, this.wind);
         this.flame.update(dt, fog, this.wind);
+        for (const k in this.books) this.books[k].update(dt, camera, fog, this.wind, fireLights);
         this.fire.update(dt, fog, null);
         this.sparks.update(dt, fog, null);
         for (const m of this.trailMats.values()) {
@@ -1113,6 +1219,7 @@ export class Effects {
 
     clear() {
         this.smoke.clear(); this.fire.clear(); this.flame.clear(); this.sparks.clear();
+        for (const k in this.books) this.books[k].clear();
         this.water.clear();
         this.trails.forEach(t => t.dispose()); this.trails = [];
         this.debris.forEach(d => this.scene.remove(d.mesh)); this.debris = [];
