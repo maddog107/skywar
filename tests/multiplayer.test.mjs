@@ -10,6 +10,7 @@ import { noop } from './helpers/arena.mjs';
 const THREE = await import('three');
 const P = await src('netproto.js');
 const { InterpBuffer, ClockSync, MODE, slerp } = await src('netinterp.js');
+const { NetLink } = await src('netlink.js');
 const { Multiplayer, SPAWN_SAFE, RESPAWN_DELAY, LIMITS } = await src('multiplayer.js');
 const { Aircraft } = await src('aircraft.js');
 const { Pilot } = await src('ai.js');
@@ -777,6 +778,117 @@ describe('multiplayer: AI bandits are the host\'s', () => {
         assert.ok(B.feed.some(f => /AI BANDITS ON/.test(f)));
         A.mp.toggleBandits();
         assert.ok(!A.aircraft.includes(ai) && puppetOf(B, a, 1) === null && B.aircraft.length === 2);
+    });
+});
+
+// ═════════════ netlink.js: one connection, against a WebSocket that is only a recorder ═════════════
+describe('multiplayer: the connection (netlink.js)', () => {
+    class FakeWS {
+        constructor(url) { this.url = url; this.readyState = 0; this.sent = []; this.bufferedAmount = 0; FakeWS.last = this; queueMicrotask(() => { if (this.readyState === 0 && !FakeWS.dead) { this.readyState = 1; this.onopen && this.onopen(); } else if (FakeWS.dead) this.fail(); }); }
+        send(d) { this.sent.push(JSON.parse(d)); }
+        close() { if (this.readyState === 3) return; this.readyState = 3; this.onclose && this.onclose({ code: 1000, reason: '' }); }
+        deliver(o) { this.onmessage && this.onmessage({ data: typeof o === 'string' ? o : JSON.stringify(o) }); }
+        fail() { this.readyState = 3; this.onerror && this.onerror({}); this.onclose && this.onclose({ code: 1006, reason: '' }); }
+    }
+    const tick = () => new Promise(r => setTimeout(r, 0));
+    const WELCOME = { t: 'welcome', v: P.PROTOCOL, id: 7, name: 'VIPER', room: 'X', host: 7, set: { time: 'day', weather: 'clear', ai: false }, peers: [] };
+    const HELLO = { name: 'viper', room: 'x', team: 'blue', ac: 'f16', lv: 'default', time: 'day', weather: 'clear' };
+    async function linked(now = { t: 1000 }) {
+        FakeWS.dead = false;
+        const link = new NetLink('ws://test/ws', { WebSocket: FakeWS, now: () => now.t });
+        const p = link.connect(HELLO);
+        await tick();
+        const ws = FakeWS.last;
+        ws.deliver(WELCOME);
+        return { link, ws, welcome: await p, now };
+    }
+
+    test('hello with the protocol number, then the welcome', async () => {
+        const { link, ws, welcome } = await linked();
+        assert.deepEqual(ws.sent[0], { t: 'hello', v: P.PROTOCOL, ...HELLO });
+        assert.equal(welcome.id, 7); assert.ok(link.open);
+        assert.equal(ws.sent[1].t, 'ping', 'and the first ping');
+        link.close();
+        assert.ok(!link.open);
+    });
+
+    test('refused: the relay\'s reason is the error; unreachable: a message that says so', async () => {
+        FakeWS.dead = false;
+        const a = new NetLink('ws://test/ws', { WebSocket: FakeWS });
+        const pa = a.connect(HELLO);
+        await tick();
+        FakeWS.last.deliver({ t: 'err', code: 'version', msg: 'Your copy of the game is out of date: reload the page to play multiplayer.' });
+        await assert.rejects(pa, /reload the page/);
+        FakeWS.dead = true;
+        const b = new NetLink('ws://test/ws', { WebSocket: FakeWS });
+        await assert.rejects(b.connect(HELLO), /Can't reach the multiplayer server/);
+        FakeWS.dead = false;
+        const c = new NetLink('ws://test/ws', { WebSocket: FakeWS });
+        await assert.rejects(c.connect(HELLO, 30), /didn't answer in time/, 'no welcome');
+        const d = new NetLink('ws://test/ws', { WebSocket: undefined });
+        d.WS = undefined;
+        await assert.rejects(d.connect(HELLO), /WebSocket/);
+    });
+
+    test('messages after the welcome wait in the backlog until someone listens; rubbish is skipped', async () => {
+        const { link, ws } = await linked();
+        ws.deliver({ t: 'join', p: [9, 'GHOST', 'red', 'f14', 'default'] });
+        ws.deliver('not json at all');
+        ws.deliver('null');
+        ws.deliver({ t: 'e', f: 9, e: ['st', 1, 0, 30] });
+        assert.deepEqual(link.backlog.map(m => m.t), ['join', 'e']);
+        const got = [];
+        link.onMessage = (m) => got.push(m.t);
+        ws.deliver({ t: 'leave', id: 9, host: 7 });
+        assert.deepEqual(got, ['leave']);
+        link.close();
+    });
+
+    test('the ping is the quickest of the last few round trips', async () => {
+        const now = { t: 1000 }, { link, ws } = await linked(now);
+        for (const [sent, back] of [[1000, 1180], [3000, 3040], [5000, 5350], [7000, 7055]]) { now.t = back; ws.deliver({ t: 'pong', n: sent }); }
+        assert.equal(link.rtt, 40);
+        for (let i = 0; i < 8; i++) { now.t = 10000 + i * 2000 + 90; ws.deliver({ t: 'pong', n: 10000 + i * 2000 }); }
+        assert.equal(link.rtt, 90, 'the old quick one has dropped out of the window');
+        link.close();
+    });
+
+    test('events over the budget wait for the next second, in order; snapshots always go, unless the line is stalled', async () => {
+        const now = { t: 5000 }, { link, ws } = await linked(now);
+        ws.sent.length = 0;
+        for (let i = 0; i < 70; i++) link.event(['st', i, 0, 0]);
+        assert.equal(ws.sent.length, 45, 'this second\'s budget');
+        assert.equal(link.queue.length, 25);
+        for (let i = 0; i < 20; i++) assert.ok(link.state(i, [], []), 'a snapshot is not held back by events');
+        link.pump();
+        assert.equal(ws.sent.filter(m => m.t === 'e').length, 45, 'still nothing more this second');
+        now.t += 1001;
+        link.event(['st', 70, 0, 0], 9);          // (a new one goes behind the ones waiting)
+        link.pump();
+        const ev = ws.sent.filter(m => m.t === 'e');
+        assert.deepEqual(ev.map(m => m.e[1]), [...Array(71).keys()], 'all of them, in order');
+        assert.equal(ev[70].to, 9); assert.equal(ev[0].to, undefined);
+        // a stalled line: no snapshots are queued behind it
+        ws.sent.length = 0;
+        ws.bufferedAmount = 50000;
+        assert.equal(link.state(99, [[0]], []), false);
+        assert.equal(ws.sent.length, 0);
+        ws.bufferedAmount = 0;
+        assert.ok(link.state(100, [[0]], [[1, 2, 3, 4, 5, 6, 7, 1]]));
+        assert.deepEqual(ws.sent, [{ t: 's', c: 100, e: [[0]], m: [[1, 2, 3, 4, 5, 6, 7, 1]] }]);
+        link.close();
+    });
+
+    test('a connection that ends is reported once, and not when we closed it ourselves', async () => {
+        const { link, ws } = await linked();
+        let ended = 0;
+        link.onClose = () => ended++;
+        ws.close();
+        assert.equal(ended, 1); assert.ok(!link.open);
+        const again = await linked();
+        again.link.onClose = () => ended++;
+        again.link.close();
+        assert.equal(ended, 1);
     });
 });
 
