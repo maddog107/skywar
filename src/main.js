@@ -39,6 +39,7 @@ import { Aircraft, refSpeeds } from './aircraft.js';
 import { Pilot } from './ai.js';
 import { preloadModels, hasFileModel, precutSurfaces } from './models.js';
 import { clamp, damp, DEPTH } from './util.js';
+import { setupLobby } from './mplobby.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -244,6 +245,7 @@ async function boot() {
 const COUNTRY = { USA: 'US', RUS: 'RU', CHN: 'CN', EU: 'EU', FRA: 'FR', SWE: 'SE', JPN: 'JP', SKYWAR: 'SW' };
 let showcase = null;
 let orbit = 0;
+let lobby = null; // the multiplayer lobby (mplobby.js)
 
 function buildMenu() {
     // aircraft list (a type's `group` overrides its category's heading: the EA-18G is a fighter listed with support)
@@ -299,11 +301,13 @@ function buildMenu() {
         b.addEventListener('click', () => {
             settings.mode = k; save();
             mc.querySelectorAll('.mode-card').forEach(x => x.classList.toggle('sel', x === b));
-            audio.uiClick(); updateBest(); buildMissionList(); updateLaunch();
+            audio.uiClick(); updateBest(); buildMissionList(); lobby.refresh(); refreshLocks();
         });
         mc.appendChild(b);
     }
     buildMissionList();
+    lobby = setupLobby({ game, settings, save, audio, seg });
+    lobby.refresh();
     seg('segDifficulty', Object.entries(DIFFICULTY).map(([k, v]) => [k, v.label]), 'difficulty', updateBest);
     seg('segTime', Object.entries(TIMES).map(([k, v]) => [k, v.label]), 'time', () => world.setTime(settings.time));
     seg('segWingmen', [[0, 'SOLO'], [1, '1'], [2, '2']], 'wingmen');
@@ -333,7 +337,7 @@ function buildMenu() {
     $('setVolume').oninput = (e) => { settings.volume = +e.target.value; audio.setVolume(settings.volume); save(); };
     syncControlHint();
 
-    $('launchBtn').onclick = launch;
+    $('launchBtn').onclick = () => launch();
     $('resumeBtn').onclick = () => game.pause(false);
     document.querySelectorAll('[data-qp]').forEach(b => b.addEventListener('click', () => { audio.uiConfirm(); game.quickPosition(b.dataset.qp); }));
     $('abortBtn').onclick = () => { $('pause').classList.remove('show'); toMenu(); };
@@ -383,18 +387,19 @@ function refreshLocks() {
         const l = el.querySelector('.lock');
         if (l) l.textContent = ok ? '' : '🔒 ' + RANKS[career.aircraftRank(id)].name.split(' ').map(w => w[0]).join('');
     });
+    const mp = settings.mode === 'multiplayer'; // (multiplayer: every jet and paint is open)
     document.querySelectorAll('#segLivery button').forEach(b => {
-        const ok = career.liveryUnlocked(b.dataset.val);
+        const ok = mp || career.liveryUnlocked(b.dataset.val);
         b.disabled = !ok; b.classList.toggle('locked', !ok);
         b.title = ok ? '' : 'Unlocks at ' + RANKS[career.liveryRank(b.dataset.val)].name;
     });
-    if (!career.liveryUnlocked(settings.livery)) { settings.livery = 'default'; save(); if (showcase) applyLivery(showcase.model, 'default'); }
+    if (!mp && !career.liveryUnlocked(settings.livery)) { settings.livery = 'default'; save(); if (showcase) applyLivery(showcase.model, 'default'); document.querySelectorAll('#segLivery button').forEach(b => b.classList.toggle('sel', b.dataset.val === 'default')); }
     updateLaunch();
 }
 
 function updateLaunch() {
     const daily = settings.mode === 'missions' && (settings.missionId === 'daily' || !settings.missionId);
-    const ok = daily || career.aircraftUnlocked(settings.aircraft);
+    const ok = daily || settings.mode === 'multiplayer' || career.aircraftUnlocked(settings.aircraft);
     const btn = $('launchBtn');
     btn.disabled = !ok;
     btn.classList.toggle('locked', !ok);
@@ -544,6 +549,7 @@ function toMenu() {
     game.cleanup();
     game.state = 'menu';
     world.setTime(settings.time);
+    if (game.mode === 'multiplayer') world.setWeather(settings.weather || 'clear'); // (the room's weather was not ours)
     cockpitPass.enabled = false;
     cockpit.enabled = false;
     spawnShowcase(settings.aircraft);
@@ -552,13 +558,19 @@ function toMenu() {
     input.unlock();
 }
 
-function launch() {
+// room: a multiplayer room already joined (mplobby.js); the launch of that mode joins one first
+function launch(room = null) {
     if ($('launchBtn').disabled) return;
     audio.init();
+    if (settings.mode === 'multiplayer' && !room) {
+        // the room decides the time of day and the weather: connect, then launch into it (or stay in the menu with the reason)
+        lobby.join().then((r) => { if (r && game.state === 'menu' && settings.mode === 'multiplayer') launch(r); else if (r) game.mp.dropPending(); });
+        return;
+    }
     career.startSortie();
     audio.uiConfirm();
     if (showcase) { showcase.remove(); showcase = null; }
-    world.setTime(settings.time);
+    world.setTime(room ? room.time : settings.time);
     $('menu').classList.remove('show');
     input.consumeMouse();
     if (settings.mode === 'missions') {
@@ -566,6 +578,9 @@ function launch() {
         if (daily) world.setTime(daily.time);
         game.start({ mode: 'missions', aircraft: daily ? daily.aircraft : settings.aircraft, mission: daily ? daily.id : settings.missionId, daily: !!daily });
         game.dailyKey = daily ? daily.key : null;
+    } else if (room) {
+        // (no AWACS / tanker / ground forces of our own dice: only what every client has the same is in a multiplayer world)
+        game.start({ mode: 'multiplayer', aircraft: settings.aircraft, weather: room.weather, airSupport: false, forces: false });
     } else game.start({ mode: settings.mode, aircraft: settings.aircraft });
     // compile every material now so ships, targets and explosions don't hitch on first sight
     try {

@@ -151,6 +151,26 @@ input[type=range] { accent-color: var(--accent); width: 170px; }
 .mission .md { font-size: 11.5px; color: var(--dim); line-height: 1.25; margin-top: 2px; }
 .mission.daily { border-color: rgba(255, 181, 71, 0.5); background: linear-gradient(90deg, rgba(255, 181, 71, 0.12), transparent); }
 
+/* ── Multiplayer lobby (src/mplobby.js): shown with the MULTIPLAYER mode; the single-player-only rows go ── */
+.mp-lobby { display: none; padding: 2px 0 6px; margin: 0 0 4px; border-bottom: 1px solid var(--line); }
+.setup.mp .mp-lobby { display: block; }
+.setup.mp .sp-only, .setup.mp #best { display: none; }
+/* (no carrier, seaplane jetty or Ready Room drive-in in a multiplayer world: air, runway or taxi) */
+.setup.mp #segStart button[data-val="carrier"], .setup.mp #segStart button[data-val="water"], .setup.mp #segStart button[data-val="barracks"] { display: none; }
+.mp-input { width: 190px; padding: 6px 9px; background: rgba(0, 0, 0, 0.35); border: 1px solid var(--line-2); color: var(--text); font-family: 'Share Tech Mono', monospace; font-size: 14px; letter-spacing: 0.12em; text-transform: uppercase; outline: none; user-select: text; }
+.mp-input:focus { border-color: var(--accent); }
+.mp-input::placeholder { color: rgba(143, 160, 178, 0.55); }
+#segTeam button[data-val="blue"].sel { background: var(--blue); }
+#segTeam button[data-val="red"].sel { background: var(--red); color: #1c0806; }
+.mp-hint { padding: 2px 18px 0; line-height: 1.35; font-size: 11px; }
+.mp-status { padding: 4px 18px 0; min-height: 0; line-height: 1.35; color: var(--hud); white-space: normal; }
+.mp-status.err { color: var(--red); }
+.mp-status:empty { display: none; }
+.launch.busy { background: #6b6048; cursor: progress; letter-spacing: 0.2em; }
+/* (multiplayer: every jet and paint is open, whatever the career has unlocked) */
+#menu.mp-open .ac-item.locked { opacity: 1; }
+#menu.mp-open .ac-item .lock { display: none; }
+
 .ac-item.locked { opacity: 0.55; }
 .ac-item .lock { grid-column: 1 / 3; font-family: 'Share Tech Mono', monospace; font-size: 10px; color: var(--accent); letter-spacing: 0.1em; }
 .ac-item .lock:empty { display: none; }

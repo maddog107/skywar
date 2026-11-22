@@ -461,6 +461,7 @@ export const MODES = {
     survival: { label: 'SURVIVAL', desc: 'Endless escalating waves. No repairs, no mercy. How long can you last?' },
     sandbox: { label: 'SANDBOX', desc: 'Just have fun: unlimited ammo & fuel, invincible, bombs, spawn bandits with N.' },
     freeflight: { label: 'FREE FLIGHT', desc: 'Taxi, take off, explore and land. Unarmed target ships offshore to sink for fun.' },
+    multiplayer: { label: 'MULTIPLAYER', desc: 'Fly with friends online: pick a callsign, a room code and a side. Dogfight each other, or call in AI bandits together.' },
 };
 
 export const TIMES = {

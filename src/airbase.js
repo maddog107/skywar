@@ -14,7 +14,7 @@ import { createAircraftModel } from './models.js';
 import { mergeStaticModel, mergeInPlace, weldGeometry, sightDistance } from './meshmerge.js';
 import { AIRCRAFT } from './config.js';
 import { propInstance, propSize, hasProp } from './props.js';
-import { makeRadialTexture, clamp, rand, freezeStatic, freezeLocal, offsetUnits } from './util.js';
+import { makeRadialTexture, clamp, rand, freezeStatic, freezeLocal, offsetUnits, mulberry32 } from './util.js';
 import { roadMaterial } from './roads.js';
 import { registerAirTarget, Downed, AIR } from './softtargets.js';
 import { WORLD_BUILDINGS } from './buildings.js';
@@ -691,16 +691,19 @@ export class Airbases {
         });
         const padMat = new THREE.MeshStandardMaterial({ map: padTex, roughness: 0.9, polygonOffset: true, polygonOffsetFactor: -3 });
         info.parkedHelis = [];
+        // (seeded, like the rest of the world: a parked helicopter is a solid thing, and in multiplayer every client
+        // must have the same ones standing the same way)
+        const dice = mulberry32(4100 + BASES.indexOf(b));
         for (const [x, z] of [[250, -470], [250, -540], [305, -505]]) {
             const pad = new THREE.Mesh(new THREE.CircleGeometry(13, 32), padMat);
             pad.rotation.x = -Math.PI / 2; pad.position.set(x, 0.12, z);
             pad.receiveShadow = true;
             g.add(pad);
             this.near(b, pad);
-            const hid = b.friendly || Math.random() < 0.5 ? 'heli_military' : 'heli_civil';
+            const hid = b.friendly || dice() < 0.5 ? 'heli_military' : 'heli_civil';
             const h = makeHelicopter(hid);
             h.position.set(x, 0.1, z);
-            h.rotation.y = Math.PI / 2 + rand(-0.3, 0.3);
+            h.rotation.y = Math.PI / 2 + (dice() * 0.6 - 0.3);
             g.add(h);
             info.parkedHelis.push(h);
             this.parkedSolid(b, hid, x, z, h.rotation.y, [h], 0.1);
