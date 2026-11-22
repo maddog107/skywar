@@ -43,9 +43,13 @@ frames, fragments, 16-bit lengths, ping / pong, close), no npm packages. It neve
 - **Ids**: every client gets a small number. Everything the relay passes on is stamped with the sender's id, so a client
   can only ever speak as itself.
 - **Host**: the longest-connected client of the room; when it leaves, the next longest-connected one (told in `leave`).
-- **State is batched**: the relay keeps each client's latest snapshot and sends the whole room one combined message
-  every 50 ms (20 a second) with the snapshots that changed. **Events** are relayed at once, in order, to the room or to
-  one client (`to`).
+- **State is batched**: the relay keeps each client's latest snapshot and sends the whole room one combined message,
+  at most once every 50 ms (20 a second), with the snapshots that changed: at once when nothing has gone out to the
+  room for 50 ms, otherwise when 50 ms have passed since the last message, so no snapshot waits longer than that.
+  ("Latest" is normally one snapshot per client; when the relay or a client was held up for a moment and two or three
+  came in between messages, the newest three go out in order rather than only the last: they are stamped, and a
+  receiver draws a truer curve through all of them.) **Events** are relayed at once, in order, to the room or to one
+  client (`to`).
 - It attaches to `server.mjs` for development (`node server.mjs`: static files + relay at `/ws`, one port) and runs
   alone in production (below).
 
@@ -65,9 +69,10 @@ what the aircraft are moved by each frame, held on the wall clock by a slowly co
 read wherever in a frame a client happens to be, is off by a few milliseconds each time, a metre or more of a jet).
 `ClockSync` maps a sender's clock onto ours from the quickest deliveries. A puppet is drawn **~100 ms in the past**
 (`INTERP_DELAY`), between two snapshots: position on a cubic Hermite curve through both positions and velocities (a
-turn stays an arc), orientation by slerp. When a peer's snapshots arrive late or in bunches the delay for that peer
-grows (to at most 0.25 s, a tenth of a second per second; it shrinks back at half that rate), so there is still a snapshot either
-side of the moment drawn. When the newest snapshot is nevertheless older than that moment the puppet coasts on its
+turn stays an arc), orientation by slerp. The delay is per peer: the spacing of its snapshots plus how late they have
+been arriving lately, never under 0.1 s and never over 0.25 s. It grows by at most a tenth of a second per second and
+shrinks back at half that rate (the puppets must not lurch), so that there is still a snapshot either side of the
+moment drawn when a peer's snapshots come late, in bunches, or sparsely (a slow machine sends fewer). When the newest snapshot is nevertheless older than that moment the puppet coasts on its
 last velocity and the turn it was in for at most 0.5 s (`EXTRAP_MAX`), then holds still; after 3 s without a snapshot
 (`STALE_AFTER`) it is **stale**: hidden, `alive = false` (can't be hit, locked or chased by a missile) until snapshots
 resume. When snapshots come back after coasting, the step between where it was drawn and where it really was is eased
@@ -169,7 +174,7 @@ Relay → client:
 |---|---|
 | `{t:'welcome', v, id, name, room, host, set:{time, weather, ai}, peers:[[id, name, team, ac, lv]…], max}` | you are in (`name` may have been cleaned or numbered) |
 | `{t:'join', p:[id, name, team, ac, lv]}` · `{t:'leave', id, host}` | the roster; `host` = the host after the leave |
-| `{t:'s', s:[[id, c, e, m]…]}` | the combined state, 20 a second (your own comes back too: skip your id) |
+| `{t:'s', s:[[id, c, e, m]…]}` | the combined state, at most 20 a second (your own comes back too: skip your id; a client may appear more than once, oldest first) |
 | `{t:'e', f, e}` | an event from client `f` |
 | `{t:'set', set}` · `{t:'pong', n}` | |
 | `{t:'err', code, msg}` then close | `version` (reload the page), `full`, `rooms`, `busy`, `address`, `idle`; `msg` is shown to the player |

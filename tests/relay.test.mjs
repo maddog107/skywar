@@ -340,17 +340,22 @@ describe('relay: rooms', { skip: !HAS_WS && 'no global WebSocket in this Node' }
         b.close();
     });
 
-    test('state is batched: the latest snapshot of everyone, in one message, ~20 times a second', async () => {
+    test('state is batched: everyone\'s newest snapshots in one message, at most 20 times a second, none held longer than a tick', async () => {
         const a = await join(R.url, { room: 'BATCH', name: 'A' }), b = await join(R.url, { room: 'BATCH', name: 'B' }), c = await join(R.url, { room: 'BATCH', name: 'C' });
         const row = (x) => [0, 1, x, 100, 0, 0, 0, 0, 32767, 0, 0, 0, 50, 8, 100, 10];
-        await wait(60); c.got.length = 0;
-        for (let i = 1; i <= 5; i++) a.send({ t: 's', c: i, e: [row(i)] });
+        await wait(80); c.got.length = 0;
+        const t1 = Date.now();
+        for (let i = 1; i <= 6; i++) a.send({ t: 's', c: i, e: [row(i)] });
         b.send({ t: 's', c: 77, e: [row(500)], m: [[1, 2, 3, 4, 5, 6, 7, 1]] });
-        const s = await c.next('s');
-        assert.equal(s.s.length, 2, 'both pilots in one message');
-        const sa = s.s.find(x => x[0] === a.me.id), sb = s.s.find(x => x[0] === b.me.id);
-        assert.deepEqual(sa, [a.me.id, 5, [row(5)]], 'only the latest of A\'s five');
-        assert.deepEqual(sb, [b.me.id, 77, [row(500)], [[1, 2, 3, 4, 5, 6, 7, 1]]]);
+        // the room had been quiet: the first snapshot goes out at once…
+        const s1 = await c.next('s');
+        assert.deepEqual(s1.s, [[a.me.id, 1, [row(1)]]]);
+        assert.ok(Date.now() - t1 < 40, 'without waiting for a tick');
+        // …and what came in behind it is one message a tick later: both pilots, A's newest three in order (its older ones dropped)
+        const s2 = await c.next('s');
+        assert.ok(Date.now() - t1 >= 40 && Date.now() - t1 < 200, 'a tick later: ' + (Date.now() - t1) + ' ms');
+        assert.deepEqual(s2.s, [[a.me.id, 4, [row(4)]], [a.me.id, 5, [row(5)]], [a.me.id, 6, [row(6)]], [b.me.id, 77, [row(500)], [[1, 2, 3, 4, 5, 6, 7, 1]]]]);
+        await wait(80);
         // a steady 100 snapshots a second from A come out at the relay's rate, not A's
         c.got.length = 0;
         const t0 = Date.now();

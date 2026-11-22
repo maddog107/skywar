@@ -217,11 +217,14 @@ export class Multiplayer {
         // flying while we were gone. (Not the first frame after the launch, however long that one took.)
         const gap = this.lastTick ? now - this.lastTick : 0;
         this.lastTick = now;
-        // The frame clock stays on the wall clock. A few milliseconds apart is only where in its frame this was read:
-        // eased out. More is time the simulation really lost (a frame longer than the game steps in one go, a stall):
-        // the jet hung in the air that long, and the clock says so at once.
+        // The frame clock stays on the wall clock. Time the simulation really lost (a frame longer than the game steps in
+        // one go: the jet hung in the air for the difference) goes on at once. What is left is only where in its frame
+        // each reading of the wall clock fell, tens of milliseconds either way on a busy machine: eased out slowly (a
+        // correction per frame would put that jitter straight back into the stamps), or set after a real jump (the tab
+        // was hidden).
+        if (dt >= 0.0495 && gap > dt) this.t0 += gap - dt;
         const slip = now - this.frameNow();
-        if (Math.abs(slip) > 0.015) this.t0 += slip; else this.t0 += slip * 0.05;
+        if (Math.abs(slip) > 0.25) this.t0 += slip; else this.t0 += slip * 0.02;
         if ((this.wasHidden && gap > AWAY_RESPAWN) || gap > STALL_RESPAWN) this.backFromAway(gap);
         this.wasHidden = false;
         if (this.link) this.link.pump();
@@ -670,7 +673,7 @@ export class Multiplayer {
     onState(list) {
         if (!Array.isArray(list)) return;
         const now = this.now();
-        for (let i = 0; i < list.length && i < MAX_PLAYERS * 2; i++) {
+        for (let i = 0; i < list.length && i < MAX_PLAYERS * 4; i++) { // (a client may have a few snapshots in one message)
             const s = list[i];
             if (!Array.isArray(s)) continue;
             const peer = this.peers.get(s[0]); // (ours comes back too: the relay sends the room one message)

@@ -7,8 +7,8 @@
 //
 // What it does: rooms keyed by a short code; every client gets a small numeric id, is told who is in the room and who
 // the host is (the longest-connected client; the next one when it leaves); each client's latest state snapshot is kept
-// and sent to the whole room in one combined message 20 times a second; events (hit claims, launches, deaths…) are
-// relayed at once, in order. It never interprets game state: it checks the shape and the size of a message and
+// and sent to the whole room in one combined message, at most 20 times a second; events (hit claims, launches,
+// deaths…) are relayed at once, in order. It never interprets game state: it checks the shape and the size of a message and
 // passes it on stamped with the sender's id, so nobody can speak for another player.
 //
 // A public server, so: an Origin allowlist, caps (players per room, rooms, connections, connections per address),
@@ -35,7 +35,8 @@ export const DEFAULTS = {
     burst: 240,          // …with this many saved up: a client held up for a few seconds (its machine, the network, this
                          // process) delivers what it owed in one go, and that is not a flood
     maxPerRoom: 16, maxRooms: 64, maxConns: 256, maxPerIp: 8,
-    tickMs: 50,          // the combined state message: 20 a second
+    tickMs: 50,          // the combined state message: at most 20 a second to a room
+    keep: 3,             // a client's snapshots kept for the next combined message (the newest ones)
     pingMs: 25000,       // a ping this often (Cloudflare closes a WebSocket idle for ~100 s)
     deadMs: 70000,       // nothing at all heard for this long (not even a pong): gone
     helloMs: 10000,      // connected but no hello yet
@@ -197,7 +198,7 @@ export function createRelay(options = {}) {
         if (!room) return;
         c.room = null;
         room.clients.delete(c.id);
-        if (!room.clients.size) { rooms.delete(room.code); return; }
+        if (!room.clients.size) { if (room.timer) clearTimeout(room.timer); rooms.delete(room.code); return; }
         if (room.host === c.id) room.host = room.clients.keys().next().value; // the longest-connected one left
         toRoom(room, { t: 'leave', id: c.id, host: room.host });
     }
@@ -215,7 +216,7 @@ export function createRelay(options = {}) {
         if (!room) {
             if (rooms.size >= opt.maxRooms) return refuse(c, 'rooms', 'The server has no free rooms right now: join the PUBLIC room or try again later.');
             // the room's world: whoever opens it chooses; everyone who joins flies in that
-            room = { code, clients: new Map(), host: 0, set: { time: TIMES.has(m.time) ? m.time : 'day', weather: WEATHERS.has(m.weather) ? m.weather : 'clear', ai: false } };
+            room = { code, clients: new Map(), host: 0, flushed: 0, timer: null, set: { time: TIMES.has(m.time) ? m.time : 'day', weather: WEATHERS.has(m.weather) ? m.weather : 'clear', ai: false } };
             rooms.set(code, room);
         }
         if (room.clients.size >= opt.maxPerRoom) return refuse(c, 'full', 'Room ' + code + ' is full (' + opt.maxPerRoom + ' pilots): try another room code.');
@@ -246,9 +247,13 @@ export function createRelay(options = {}) {
         switch (m.t) {
             case 's':
                 if (!validState(m)) return drop(c, 4000, 'malformed');
-                c.state = m.m && m.m.length ? [c.id, m.c, m.e, m.m] : [c.id, m.c, m.e];
-                c.dirty = true; c.active = Date.now();
-                return;
+                // kept for the room's next combined message: the newest few (normally there is one; more only when this
+                // process, or the client, was held up for a moment: they are stamped, and a receiver draws a better curve
+                // through all of them than through the last alone)
+                c.states.push(m.m && m.m.length ? [c.id, m.c, m.e, m.m] : [c.id, m.c, m.e]);
+                if (c.states.length > opt.keep) c.states.shift();
+                c.active = Date.now();
+                return schedule(room, c.active);
             case 'e': {
                 if (!validEvent(m)) return drop(c, 4000, 'malformed');
                 c.active = Date.now();
@@ -340,7 +345,7 @@ export function createRelay(options = {}) {
         socket.setNoDelay(true);
         const c = { socket, ip, id: 0, room: null, name: '', team: 'blue', ac: 'f16', lv: 'default', buf: head && head.length ? head : Buffer.alloc(0),
             frag: null, fragLen: 0, rateT: Date.now(), tokens: opt.burst, seen: Date.now(), born: Date.now(), active: Date.now(), pinged: Date.now(),
-            state: null, dirty: false, gone: false };
+            states: [], gone: false };
         // full: say so in a message the page can show, then close (a refused upgrade gives the page no reason at all)
         if (conns.size >= opt.maxConns || (perIp.get(ip) || 0) >= opt.maxPerIp) {
             stats.refused++;
@@ -362,13 +367,22 @@ export function createRelay(options = {}) {
     }
 
     // ── Clocks: the combined state message, and housekeeping ──
-    const tick = setInterval(() => {
-        for (const room of rooms.values()) {
-            let s = null;
-            for (const c of room.clients.values()) if (c.dirty) { c.dirty = false; (s || (s = [])).push(c.state); }
-            if (s) toRoom(room, { t: 's', s });
-        }
-    }, opt.tickMs);
+    // A room's combined state message: every client's snapshots since the last one, to the whole room, at most once
+    // every tickMs (20 a second). At once when nothing has gone out for that long; otherwise when that long has passed
+    // since the last, so a snapshot never waits more than one tick.
+    function flush(room, now) {
+        if (room.timer) { clearTimeout(room.timer); room.timer = null; }
+        let s = null;
+        for (const c of room.clients.values()) if (c.states.length) { for (const st of c.states) (s || (s = [])).push(st); c.states.length = 0; }
+        if (!s) return;
+        room.flushed = now;
+        toRoom(room, { t: 's', s });
+    }
+    function schedule(room, now) {
+        const wait = opt.tickMs - (now - room.flushed);
+        if (wait <= 0) flush(room, now);
+        else if (!room.timer) { room.timer = setTimeout(() => { room.timer = null; flush(room, Date.now()); }, wait); room.timer.unref(); }
+    }
     const keep = setInterval(() => {
         const now = Date.now(), ping = frame(9, Buffer.alloc(0));
         for (const c of [...conns]) {
@@ -378,7 +392,7 @@ export function createRelay(options = {}) {
             else if (now - c.pinged >= opt.pingMs) { c.pinged = now; write(c, ping); }
         }
     }, Math.max(20, Math.min(5000, opt.pingMs / 2, opt.helloMs / 2, opt.deadMs / 2, opt.idleMs / 2)));
-    tick.unref(); keep.unref();
+    keep.unref();
 
     return {
         options: opt, handleUpgrade,
@@ -387,7 +401,8 @@ export function createRelay(options = {}) {
         counts: () => ({ rooms: rooms.size, players: [...rooms.values()].reduce((n, r) => n + r.clients.size, 0), connections: conns.size, ...stats }),
         close() {
             closed = true;
-            clearInterval(tick); clearInterval(keep);
+            clearInterval(keep);
+            for (const room of rooms.values()) if (room.timer) clearTimeout(room.timer);
             for (const c of [...conns]) drop(c, 1001, 'server closing');
         },
     };
