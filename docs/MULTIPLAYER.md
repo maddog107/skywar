@@ -65,24 +65,37 @@ aircraft. It has no flight model and no pilot: `Aircraft.update` calls `puppet.p
 
 ### Interpolation (`src/netinterp.js`)
 Snapshots are stamped with their sender's **frame clock** (`mp.frameNow()`: `game.time`, which advances by exactly
-what the aircraft are moved by each frame, held on the wall clock by a slowly corrected offset; the wall clock itself,
-read wherever in a frame a client happens to be, is off by a few milliseconds each time, a metre or more of a jet).
-`ClockSync` maps a sender's clock onto ours from the quickest deliveries. A puppet is drawn **~100 ms in the past**
-(`INTERP_DELAY`), between two snapshots: position on a cubic Hermite curve through both positions and velocities (a
-turn stays an arc), orientation by slerp. The delay is per peer: the spacing of its snapshots plus how late they have
-been arriving lately, never under 0.1 s and never over 0.25 s. It grows by at most 60 ms per second and
-shrinks back at 20 ms per second (while it changes the puppet plays that much slow or fast: it must not lurch), so that there is still a snapshot either side of the
-moment drawn when a peer's snapshots come late, in bunches, or sparsely (a slow machine sends fewer). When the newest snapshot is nevertheless older than that moment the puppet coasts on its
-last velocity and the turn it was in for at most 0.5 s (`EXTRAP_MAX`), then holds still; after 3 s without a snapshot
-(`STALE_AFTER`) it is **stale**: hidden, `alive = false` (can't be hit, locked or chased by a missile) until snapshots
-resume. When snapshots come back after coasting, the step between where it was drawn and where it really was is eased
-out over ~0.15 s. A sender whose machine can't keep up (below ~20 frames a second the game steps less time than
-passes, so its jet covers less ground than its speed says) is drawn at the pace it really moves: the curve's tangents
-and the coasting are scaled to the ground covered between its snapshots, so its puppet doesn't run ahead and jump back.
+what the aircraft are moved by each frame, held on the wall clock by a slowly eased offset; time the simulation lost
+in a frame longer than the game steps in one go is added at once). The wall clock itself, read wherever in its frame a
+client happens to be, is off by milliseconds each time: a metre or more of a jet.
 
-Measured (tests/multiplayer.test.mjs, no network): through a roll and a 6 g pull a puppet is within 1 cm and 1.2° of
-where its owner was 100 ms earlier. Through the real relay between two browser pages: see the numbers
-`tools/net/e2e.mjs` prints.
+`ClockSync` maps a sender's clock onto ours from the quickest deliveries. A puppet is drawn **in the past**, between
+two snapshots: position on a cubic Hermite curve through both positions and velocities (a turn stays an arc),
+orientation by slerp.
+
+How far in the past is per peer: the spacing of its snapshots plus how late they have been arriving lately (estimates
+that go a fifth of the way up to a higher reading and creep down, so one hitch doesn't hold everyone back), never
+under 0.1 s (`INTERP_DELAY`) and never over 0.25 s. It grows by at most 60 ms per second and shrinks at 20 ms per
+second (while it changes, the puppet plays that much slow or fast: it must not lurch). So there is still a snapshot
+either side of the moment drawn when a peer's snapshots come late, in bunches, or sparsely (a slow machine sends
+fewer).
+
+When the newest snapshot is nevertheless older than the moment drawn, the puppet coasts on its last velocity and the
+turn it was in for at most 0.5 s (`EXTRAP_MAX`), then holds still; after 3 s without a snapshot (`STALE_AFTER`) it is
+**stale**: hidden, `alive = false` (can't be hit, locked or chased by a missile) until snapshots resume. When they
+come back after coasting, the step between where it was drawn and where it really was is eased out over ~0.15 s.
+
+A sender whose machine can't keep up (below ~20 frames a second the game steps less time than passes, so its jet
+covers less ground than its speed says) is drawn at the pace it really moves: the curve's tangents and the coasting are
+scaled to the ground covered between its snapshots, so its puppet doesn't run ahead and jump back.
+
+Measured:
+
+| | |
+|---|---|
+| No network (tests/multiplayer.test.mjs), a roll and a 6 g pull at 265 m/s | the puppet is within 1 cm and 1.2° of where its owner was 100 ms earlier |
+| Two browser pages through the real relay on one machine (tools/net/e2e.mjs), two rolls and two pulls at ~275 m/s, three passes | against where the owner was at the moment being drawn: 0.14–0.47 m mean, 3.8–7.2 m worst on frames drawn between two snapshots (73–91 % of them); drawn 235–270 ms behind the owner's present (the drawing delay was 175–250 ms there: both pages and the relay shared a machine that other work was loading heavily) |
+| The netcode's own cost for one client in a room of 8 (node, no rendering) | 76 µs a frame: 0.5 % of a 60 fps frame |
 
 ### Damage: the shooter decides, the owner applies
 - **Guns.** The shooter's rounds hit-test the puppet as they do any aircraft. `Aircraft.damage()` on a puppet does not
