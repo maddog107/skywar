@@ -708,6 +708,27 @@ describe('multiplayer: missiles and flares', () => {
         assert.ok(B.events.log.some(([k, o, d]) => k === 'decoyed' && d.victim === B.player));
     });
 
+    test('a missile\'s end says how it ended; its last snapshot, overtaken by that, doesn\'t bring the ghost back; the puppet\'s rail empties', () => {
+        const S = pair(), { hub, A, B, b } = S, pa = puppetOf(B, S.a);
+        const before = pa.missiles;
+        const m = A.weapons.fireMissile(A.player, null, 'aam');
+        run([A, B], 0.4, () => level(A, B));
+        const gh = [...B.mp.ghosts][0];
+        assert.ok(gh && gh.mesh.visible);
+        same(pa.missiles, before - 1, 'the puppet carries one fewer (pylons.js takes it off its station)');
+        const last = hub.sent.filter(([from, x]) => from === S.a && x.t === 's' && x.m).pop()[1];
+        // into the ground, by its owner's word
+        const i = A.weapons.missiles.indexOf(m);
+        m.how = 1; A.weapons.removeMissile(i);
+        run([A, B], 1 / 60);
+        const mx = hub.events('mx')[0][1].e;
+        assert.equal(mx.length, 6); assert.equal(mx[5], P.HOW.GROUND);
+        same(B.mp.ghosts.size, 0);
+        B.mp.onMessage({ t: 's', s: [[S.a, last.c + 1, last.e, last.m]] }); // (its last snapshot, late)
+        same(B.mp.ghosts.size, 0, 'not drawn again');
+        void b;
+    });
+
     test('a missile nobody saw launched (we joined while it flew) is still drawn', () => {
         const hub = new Hub();
         const A = makeGame(hub, { name: 'VIPER', team: 'blue', ac: 'f16' }, { at: [0, 3000, 0] });
@@ -1129,6 +1150,28 @@ describe('multiplayer: outside the mode', () => {
         g.events.emit('killed', {}, {}); g.events.emit('flares', {}); g.events.emit('missileLaunch', {}, { missile: {} });
     });
 
+    test('buildings are the game\'s own outside the mode: nothing wrapped, and a sortie in it leaves them as they were', () => {
+        const hub = new Hub();
+        const A = makeGame(hub, { name: 'VIPER', team: 'blue', ac: 'f16' }, { at: [TOWN.x + 3000, 3000, TOWN.z], town: true });
+        const bl = A.world.towns.buildings, has = (k) => Object.prototype.hasOwnProperty.call(bl, k);
+        A.mp.clear();
+        assert.ok(!has('damage') && !has('destroy'), 'left as it was');
+        const hook = bl.destroy = function (b, g, s) { return Object.getPrototypeOf(bl).destroy.call(bl, b, g, s); }; // (the game's own scoring hook, as game.js puts it)
+        A.mp.start('multiplayer', { start: 'air' });
+        assert.ok(has('damage') && bl.destroy !== hook, 'in the mode: watched');
+        A.mp.clear();
+        A.mp.start('freeflight', {});
+        assert.ok(!has('damage') && bl.destroy === hook, 'back to the game\'s own');
+        // the single-player bomb: the house falls by its own damage, nobody is told, nothing is drawn-only
+        const house = bl.list[24];
+        const b = A.weapons.dropBomb(A.player, 'bomb');
+        b.pos.set(house.x, house.top + 100, house.z); b.vel.set(0, -60, 0);
+        for (let t = 0; t < 4 && A.weapons.bombs.includes(b); t += 1 / 60) { clock.t += 1 / 60; A.step(1 / 60); }
+        assert.ok(!house.alive && !b.show && b.endHow === P.HOW.WORLD, 'down, the single-player way');
+        same(hub.events('ord').length, 0); same(hub.events('bld').length, 0);
+        WORLD_BUILDINGS.current = null;
+    });
+
     test('pause can\'t stop the world: the menu flag goes up, the jet holds its wings level', () => {
         const { A } = pair();
         let shown = null;
@@ -1364,5 +1407,137 @@ describe('multiplayer: a peer is not trusted', () => {
         for (const m of [null, 5, 'x', [], {}, { t: 's' }, { t: 's', s: 'x' }, { t: 's', s: [5, null, [b], [b, 'x'], [b, -1, []], [b, 5, 'rows'], [b, 5, [null, 5, 'x', []]]] }, { t: 'e' }, { t: 'e', f: b }, { t: 'e', f: b, e: 'x' },
             { t: 'e', f: b, e: ['hit', {}, []] }, { t: 'e', f: b, e: ['die', [0], null] }, { t: 'e', f: 12345, e: ['die', 0, 1, 0, 0] }, { t: 'join' }, { t: 'join', p: 'x' }, { t: 'join', p: [-1] }, { t: 'leave' }, { t: 'leave', id: 'x', host: {} }, { t: 'set' }, { t: 'set', set: 5 }]) C.mp.onMessage(m);
         assert.ok(puppetOf(C, b).alive);
+    });
+
+    // ── bombs, rockets, buildings ──
+    const BOMB = Object.keys(STORES).find(k => STORES[k].cls === 'bomb' && !STORES[k].cluster), ROCKET = Object.keys(STORES).find(k => STORES[k].cls === 'rkt');
+    const item = (id, x = TOWN.x, y = 3000, z = TOWN.z, vx = 0, vy = -50, vz = 0) => [id, x, y, z, vx, vy, vz, 16, 0];
+    const ord = (store, kind, n, items, guided = 0) => ['ord', n, store, kind, guided, stateClock(), ...items.flat()];
+    const KIND = (k) => P.ORD_KINDS.indexOf(k);
+
+    test('a bomb or rocket launch must name a real store of its own kind, a jet of its own, a place in the world; ghosts are capped however they are asked for', () => {
+        const { C, b } = trio(true);
+        const pb = C.mp.peers.get(b);
+        for (const e of [
+            ord('nope', KIND('bomb'), 0, [item(1)]), ord('aim9x', KIND('bomb'), 0, [item(2)]), ord(BOMB, KIND('rkt'), 0, [item(3)]), ord(ROCKET, KIND('moab'), 0, [item(4)]),
+            ord('constructor', KIND('bomb'), 0, [item(5)]), ord('__proto__', KIND('bomb'), 0, [item(6)]), ord('toString', KIND('rkt'), 0, [item(7)]),
+            ord('', 9, 0, [item(8)]), ord('', -1, 0, [item(9)]), ord('', 0.5, 0, [item(10)]), ord('', 'bomb', 0, [item(11)]),
+            ord('', KIND('bomb'), 3, [item(12)]),                                          // an AI aircraft's, from a peer who isn't the host
+            ord('', KIND('bomb'), 0, [item(0)]), ord('', KIND('bomb'), 0, [item(65536)]), ord('', KIND('bomb'), 0, [item(1.5)]), ord('', KIND('bomb'), 0, [item(-4)]),
+            ord('', KIND('bomb'), 0, [item(13, 9e5)]), ord('', KIND('bomb'), 0, [item(14, 0, -5000)]), ord('', KIND('bomb'), 0, [item(15, 0, 3000, 0, 9000)]),
+            ord('', KIND('bomb'), 0, [[16, 'x', 3000, 0, 0, 0, 0, 0, 0]]), ['ord', 0, 7, KIND('bomb'), 0, stateClock(), ...item(17)], ['ord', 0, '', KIND('bomb'), 0, -5, ...item(18)],
+        ]) forge(C, b, e);
+        same(C.mp.ord.ghosts.size, 0, 'nothing built');
+        // a thousand salvos in one instant: no more than a peer's burst; kept up for seconds: no more than a peer's share
+        let id = 100;
+        for (let i = 0; i < 1000; i++) forge(C, b, ord('', KIND('rkt'), 0, [0, 1, 2, 3, 4, 5].map(() => item(id++))));
+        assert.ok(pb.ord.size <= ORD_LIMITS.ORD_BURST, pb.ord.size + ' ghosts from 6000 rockets in one instant');
+        run([C], 3, () => { for (let k = 0; k < 6; k++) forge(C, b, ord('', KIND('rkt'), 0, [item(id++ % 60000 + 1)])); });
+        assert.ok(pb.ord.size <= ORD_LIMITS.PEER_ORD, pb.ord.size + ' of one peer\'s');
+        // many peers at it together: so many in all
+        for (let p = 0; p < 12; p++) {
+            C.mp.onMessage({ t: 'join', p: [800 + p, 'X' + p, 'red', 'f16', 'default'] });
+            for (let k = 0; k < 10; k++) forge(C, 800 + p, ord('', KIND('rkt'), 0, [1, 2, 3, 4, 5, 6].map(i => item(k * 6 + i))));
+        }
+        assert.ok(C.mp.ord.ghosts.size <= ORD_LIMITS.MAX_ORD, 'in all: ' + C.mp.ord.ghosts.size);
+        for (const peer of C.mp.peers.values()) assert.ok(peer.ord.size <= ORD_LIMITS.PEER_ORD);
+        // and they go when their owners never say how they ended (rockets: their life and a few seconds)
+        run([C], 11);
+        same(C.mp.ord.ghosts.size, 0);
+        for (const peer of C.mp.peers.values()) same(peer.ord.size, 0);
+    });
+
+    test('an end is a peer\'s own ghost\'s, played once, and where the ghost can have got to', () => {
+        const { A, B, C, a, b } = trio(true);
+        const at = [];
+        const burst = C.weapons.bombBurst.bind(C.weapons);
+        C.weapons.bombBurst = (x, p, ...r) => { at.push(p.clone()); return burst(x, p, ...r); };
+        // A's real bomb: a ghost of it on C, which B tries to end
+        const bomb = A.weapons.dropBomb(A.player, 'bomb');
+        bomb.pos.set(TOWN.x, 3000, TOWN.z + 3000); bomb.vel.set(0, -40, 0);
+        run([A, B, C], 0.2);
+        const pa = C.mp.peers.get(a), pb = C.mp.peers.get(b), mine = [...pa.ord.values()][0];
+        assert.ok(mine && mine.shown);
+        for (const forged of [mine.id, mine.id + 65536, 0, -1]) forge(C, b, ['blast', stateClock(), forged, TOWN.x, 100, TOWN.z, P.HOW.GROUND]);
+        run([C], 0.3);
+        assert.ok(pa.ord.get(mine.id) === mine && C.mp.ord.ghosts.has(mine), 'A\'s ghost flies on');
+        // B's own, ended a hundred times: one burst; and where B says it ended, 200 km off: where it really is
+        forge(C, b, ord(BOMB, KIND('bomb'), 0, [item(7, TOWN.x + 1000, 2000, TOWN.z)]));
+        run([C], 0.3);
+        const gh = pb.ord.get(7), where = gh.pos.clone();
+        for (let i = 0; i < 100; i++) forge(C, b, ['blast', stateClock(), 7, 200000, 50, 200000, P.HOW.GROUND]);
+        run([C], 1.5);
+        same(at.length, 1, 'one burst');
+        const off = Math.hypot(at[0].x - where.x, at[0].z - where.z);
+        assert.ok(off < 100, 'on the ground under where the ghost was: ' + off.toFixed(0) + ' m from it');
+        same(pb.ord.size, 0);
+        // an end that names a way of ending that doesn't exist: gone quietly
+        forge(C, b, ord(BOMB, KIND('bomb'), 0, [item(8, TOWN.x + 1000, 2000, TOWN.z)]));
+        forge(C, b, ['blast', stateClock(), 8, TOWN.x + 1000, 1900, TOWN.z, 99]);
+        run([C], 1.5);
+        same(at.length, 1); same(pb.ord.size, 0);
+        void B;
+    });
+
+    test('a peer\'s blast never brings a building down, however big: only its owner\'s word does', () => {
+        const { C, b } = trio(true);
+        const bl = C.world.towns.buildings, h = terrainHeight(TOWN.x, TOWN.z);
+        // a MOAB (the biggest blast there is) going off in the middle of the town, said to be B's
+        forge(C, b, ord('gbu43x', KIND('moab'), 0, [item(9, TOWN.x, h + 60, TOWN.z, 0, -60)]));
+        run([C], 0.2);
+        forge(C, b, ['blast', stateClock(), 9, TOWN.x, h, TOWN.z, P.HOW.GROUND]);
+        run([C], 1.5);
+        same(C.mp.ord.bursts, 1);
+        const hurt = C.mp.net.list.filter(x => x.hp < x.maxHp).length;
+        assert.ok(hurt >= 40, hurt + ' buildings hurt by it');
+        same(C.mp.net.downList().length, 0, 'none down');
+        same(C.mp.net.out.length, 0, 'and C tells nobody anything');
+        assert.ok(C.mp.net.list.every(x => x.hp >= 1));
+        void bl;
+    });
+
+    test('a building on the wire must be one of our towns\', each once; a flood comes down a few a frame and never outgrows the list', () => {
+        const { C, b } = trio(true);
+        const net = C.mp.net, n = net.list.length, bl = C.world.towns.buildings;
+        const entry = (i) => P.bldEntry(i, net.list[i]);
+        const hangar = bl.list.findIndex(x => x.kind === 'hangar');
+        for (const e of [['bld', stateClock(), n * 256 + 3], ['bld', stateClock(), entry(3) ^ 1], ['bld', stateClock(), entry(3) + 0.5], ['bld', stateClock(), -256], ['bld', stateClock(), 'x'],
+            ['bld', stateClock(), 1e12], ['bld', stateClock(), hangar * 256 + P.bldCheck(bl.list[hangar])], ['bld', 'soon', entry(4) ^ 7]]) forge(C, b, e);
+        run([C], 1.2);
+        same(net.downList().length, 0, 'nothing down');
+        // every building, a thousand times over
+        const all = [...Array(n).keys()].map(entry);
+        for (let k = 0; k < 1000; k++) for (let i = 0; i < all.length; i += P.BLD_PER_EVENT) forge(C, b, ['bld', stateClock(), ...all.slice(i, i + P.BLD_PER_EVENT)]);
+        assert.ok(net.due.size <= n, 'one entry a building: ' + net.due.size);
+        let most = 0, before = 0;
+        run([C], 1.5, () => { const d = net.downList().length; most = Math.max(most, d - before); before = d; });
+        same(net.downList().length, n, 'all of them came down (they are real buildings)');
+        assert.ok(most <= 30, 'at most 30 in one frame: ' + most);
+        assert.ok(bl.list[hangar].alive, 'the airbase hangar is no town building');
+        same(net.due.size, 0);
+    });
+
+    test('the buildings\' state comes only from the host, only when asked for, only for our very towns; a flood of questions gets a couple of answers', () => {
+        const { hub, A, B, C, a, b, c } = trio(true);
+        const net = C.mp.net, n = net.list.length, all = P.packBits(n, () => true), parts = Math.ceil(n / (32 * P.SYNC_WORDS));
+        const part = (p = 0, count = n, dig = net.digest, words = all) => ['sync', 1, 7, p, parts, count, dig, ...words];
+        forge(C, b, part());
+        same(net.downList().length, 0, 'not from a peer who isn\'t the host');
+        forge(C, a, part());
+        same(net.downList().length, 0, 'not unasked (C\'s own question was answered long ago)');
+        net.ask();
+        for (const e of [part(0, n + 1), part(0, n, net.digest ^ 1), part(parts), part(-1), part(0.5), ['sync', 1, 7, 0, parts + 1, n, net.digest, ...all], ['sync', 2, 7, 0], ['sync', 'x']]) forge(C, a, e);
+        same(net.downList().length, 0, 'not for other towns, nor parts that don\'t exist');
+        forge(C, a, part(0, n, net.digest, ['x', -1, 2.5, 4294967296]));
+        same(net.downList().length, 0, 'words that aren\'t words');
+        assert.equal(net.want, null, 'and that was its answer');
+        // questions: the host answers twice in a burst, then at its pace; nobody else answers
+        const answers = () => hub.events('sync').filter(([from]) => from === a).length;
+        const before = answers();
+        for (let i = 0; i < 300; i++) forge(A, c, ['sync', 0]);
+        assert.ok(answers() - before <= 2 * parts, (answers() - before) + ' answers to 300 questions');
+        const fromB = hub.events('sync').filter(([from]) => from === b).length;
+        for (let i = 0; i < 50; i++) forge(B, c, ['sync', 0]);
+        same(hub.events('sync').filter(([from]) => from === b).length, fromB, 'B isn\'t the host');
     });
 });
