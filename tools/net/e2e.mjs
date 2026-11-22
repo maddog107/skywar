@@ -112,10 +112,12 @@ async function join(name, team, aircraft, room, extra = {}) {
         };
         const upd = g.mp.update.bind(g.mp);
         g.mp.update = (dt) => {
+            // (what placePuppet used this frame: read before the update moves the clock and the delay on)
+            const peer0 = [...g.mp.peers.values()][0], drew = peer0 ? g.mp.frameNow() - (peer0.clock.offset ?? 0) - peer0.delay : NaN, delay = peer0 ? peer0.delay : NaN;
             upd(dt);
             if (!window.__rec) return;
             const p = g.player, peer = [...g.mp.peers.values()][0], rec = peer && peer.ents.get(0);
-            window.__track.push([performance.timeOrigin + g.mp.frameNow() * 1000, p.pos.x, p.pos.y, p.pos.z, rec && rec.ac ? rec.ac.pos.x : NaN, rec && rec.ac ? rec.ac.pos.y : NaN, rec && rec.ac ? rec.ac.pos.z : NaN, rec ? rec.mode : 0]);
+            window.__track.push([performance.timeOrigin + g.mp.frameNow() * 1000, p.pos.x, p.pos.y, p.pos.z, rec && rec.ac ? rec.ac.pos.x : NaN, rec && rec.ac ? rec.ac.pos.y : NaN, rec && rec.ac ? rec.ac.pos.z : NaN, rec ? rec.mode : 0, g.mp.frameNow(), drew, delay]);
         };
         document.getElementById('clickToFly').style.display = 'none';
     });
@@ -186,10 +188,9 @@ try {
     await B.ev(() => { const g = window.skywar.game; g.player.spawnAir(new (g.player.pos.constructor)(3000, 3000, 0), 0, 0.6); window.__ctl = { pitch: 0, roll: 0, yaw: 0, throttle: 0.85 }; });
     await sleep(1500);
     // A flies a programme on its own game clock (level, roll in, pull, roll out, pull) and records its own track; B
-    // records where it draws A. For each of B's frames: where A really was `lag` earlier. The lag that fits best is
-    // how far behind B draws A (the drawing delay plus the network). Frames count where both pages were running
-    // smoothly (a page that stalls doesn't fly: its jet stands still while the clock runs) and, for the error that
-    // matters, where the puppet was placed between two snapshots (the rest: it coasted past the newest for a moment).
+    // records where it draws A, and which moment of A's clock each frame was drawing (its clock offset and drawing
+    // delay for that frame). The error is the puppet against A's own track at that moment: on the frames where both
+    // pages were running smoothly, and of those the ones drawn between two snapshots (the rest coasted past the newest).
     // A busy machine stalls the pages, so the measurement is taken up to three times and judged on the best.
     const measure = async () => {
         await B.ev(() => { window.__track.length = 0; window.__rec = true; });
@@ -198,37 +199,41 @@ try {
         await sleep(600);
         const ta = await A.ev(() => window.__track.splice(0)), tb = await B.ev(() => { window.__rec = false; return window.__track.splice(0); });
         if (ta.length < 10 || tb.length < 10) return null;
-        const gapA = (T) => { let i = 1; while (i < ta.length - 1 && ta[i][0] < T) i++; return ta[i][0] - ta[i - 1][0]; };
-        const at = (T) => { let i = 1; while (i < ta.length - 1 && ta[i][0] < T) i++; const p = ta[i - 1], q = ta[i], u = (T - p[0]) / Math.max(q[0] - p[0], 1e-6); return [p[1] + (q[1] - p[1]) * u, p[2] + (q[2] - p[2]) * u, p[3] + (q[3] - p[3]) * u]; };
-        const all = tb.filter((r, i) => i > 0 && isFinite(r[4]) && r[0] > ta[0][0] + 600 && r[0] < ta[ta.length - 1][0] - 50);
-        const errOf = (rows, lag) => { let worst = 0, sum = 0; for (const r of rows) { const p = at(r[0] - lag), e = Math.hypot(r[4] - p[0], r[5] - p[1], r[6] - p[2]); worst = Math.max(worst, e); sum += e; } return { worst, mean: sum / Math.max(rows.length, 1), n: rows.length }; };
+        // A's own track by A's frame clock (ta[i][8]); each of B's frames says which moment of A's clock it drew (tb[i][9])
+        const gapA = (T) => { let i = 1; while (i < ta.length - 1 && ta[i][8] < T) i++; return (ta[i][8] - ta[i - 1][8]) * 1000; };
+        const at = (T) => { let i = 1; while (i < ta.length - 1 && ta[i][8] < T) i++; const p = ta[i - 1], q = ta[i], u = (T - p[8]) / Math.max(q[8] - p[8], 1e-6); return [p[1] + (q[1] - p[1]) * u, p[2] + (q[2] - p[2]) * u, p[3] + (q[3] - p[3]) * u]; };
+        const all = tb.filter((r, i) => i > 0 && isFinite(r[4]) && isFinite(r[9]) && r[9] > ta[0][8] + 0.3 && r[9] < ta[ta.length - 1][8] - 0.05);
+        const errOf = (rows) => { let worst = 0, sum = 0; for (const r of rows) { const p = at(r[9]), e = Math.hypot(r[4] - p[0], r[5] - p[1], r[6] - p[2]); worst = Math.max(worst, e); sum += e; } return { worst, mean: sum / Math.max(rows.length, 1), n: rows.length }; };
         const index = new Map(tb.map((r, i) => [r, i]));
-        const calm = (r, lag) => r[0] - tb[index.get(r) - 1][0] < 45 && gapA(r[0] - lag) < 45 && gapA(r[0] - lag - 150) < 45 && gapA(r[0] - lag + 150) < 45;
-        // the lag, fitted on the frames drawn between two snapshots (those are on A's track; the coasting ones are a guess ahead of it)
-        const inter = all.filter(r => r[7] === 1);
-        let best = { lag: 0, mean: Infinity };
-        for (let d = 0; d <= 600; d += 2) { const e = errOf(inter.length > 20 ? inter : all, d); if (e.mean < best.mean) best = { lag: d, ...e }; }
-        const smooth = all.filter(r => calm(r, best.lag)), between = smooth.filter(r => r[7] === 1);
+        // frames where both pages were running smoothly (a page that stalls doesn't fly: its jet stands still while the clock runs)
+        const smooth = all.filter(r => r[0] - tb[index.get(r) - 1][0] < 45 && gapA(r[9]) < 45 && gapA(r[9] - 0.15) < 45 && gapA(r[9] + 0.15) < 45);
+        const between = smooth.filter(r => r[7] === 1);
+        // how far behind A's present B draws it: A's position now against the puppet (by the wall clocks of both pages)
+        const nowOf = (T) => { let i = 1; while (i < ta.length - 1 && ta[i][0] < T) i++; const p = ta[i - 1], q = ta[i], u = (T - p[0]) / Math.max(q[0] - p[0], 1e-6); return [p[1] + (q[1] - p[1]) * u, p[2] + (q[2] - p[2]) * u, p[3] + (q[3] - p[3]) * u]; };
+        const behind = all.reduce((m, r) => { const p = nowOf(r[0]); return m + Math.hypot(r[4] - p[0], r[5] - p[1], r[6] - p[2]); }, 0) / Math.max(all.length, 1);
+        const delays = all.map(r => r[10] * 1000);
         const moved = ta.slice(1).reduce((m, r, i) => m + Math.hypot(r[1] - ta[i][1], r[2] - ta[i][2], r[3] - ta[i][3]), 0);
-        const secs = (ta[ta.length - 1][0] - ta[0][0]) / 1000, fps = (t) => (t.length - 1) / ((t[t.length - 1][0] - t[0][0]) / 1000);
-        return { lag: best.lag, eb: errOf(between, best.lag), es: errOf(smooth, best.lag), ea: errOf(all, best.lag), now: errOf(all, 0), all: all.length, smooth: smooth.length, between: between.length, moved, speed: moved / secs, fpsA: fps(ta), fpsB: fps(tb) };
+        const secs = ta[ta.length - 1][8] - ta[0][8], fps = (t) => (t.length - 1) / (t[t.length - 1][8] - t[0][8]);
+        const speed = moved / secs;
+        return { eb: errOf(between), es: errOf(smooth), ea: errOf(all), behind, lag: behind / speed * 1000, delay: [Math.min(...delays), Math.max(...delays)], all: all.length, smooth: smooth.length, between: between.length, moved, speed, fpsA: fps(ta), fpsB: fps(tb) };
     };
     {
         let m = null;
         for (let attempt = 1; attempt <= 3; attempt++) {
             const r = await measure();
             if (!r) { log('     attempt ' + attempt + ': no track recorded'); continue; }
-            log(`     attempt ${attempt}: A flew ${(r.moved / 1000).toFixed(2)} km through two rolls and two pulls at ${r.speed.toFixed(0)} m/s (A ${r.fpsA.toFixed(0)} fps, B ${r.fpsB.toFixed(0)} fps); B draws A ${r.lag} ms behind`);
+            log(`     attempt ${attempt}: A flew ${(r.moved / 1000).toFixed(2)} km through two rolls and two pulls at ${r.speed.toFixed(0)} m/s (A ${r.fpsA.toFixed(0)} fps, B ${r.fpsB.toFixed(0)} fps)`);
+            log(`       B draws A ${r.lag.toFixed(0)} ms behind its present (${r.behind.toFixed(0)} m; drawing delay ${r.delay[0].toFixed(0)}–${r.delay[1].toFixed(0)} ms + the network)`);
             log(`       of B's ${r.all} frames, ${r.smooth} had both pages running smoothly, ${r.between} of those with the puppet between two snapshots`);
-            log(`       error against A's own track at that lag: between snapshots ${r.eb.mean.toFixed(2)} m mean / ${r.eb.worst.toFixed(2)} m worst; all smooth frames ${r.es.mean.toFixed(2)} / ${r.es.worst.toFixed(2)} m; every frame ${r.ea.mean.toFixed(2)} / ${r.ea.worst.toFixed(2)} m; against A's present position ${r.now.mean.toFixed(0)} m`);
+            log(`       the puppet against where A was at the moment B was drawing: between snapshots ${r.eb.mean.toFixed(2)} m mean / ${r.eb.worst.toFixed(2)} m worst; all smooth frames (some coasting past the newest snapshot) ${r.es.mean.toFixed(2)} / ${r.es.worst.toFixed(2)} m; every frame ${r.ea.mean.toFixed(2)} / ${r.ea.worst.toFixed(2)} m`);
             if (!m || (r.between > 60 && (m.between <= 60 || r.eb.mean < m.eb.mean))) m = r;
-            if (r.between > 60 && r.eb.mean < 1.5 && r.eb.worst < r.speed * 0.05) break; // a clean measurement
+            if (r.between > 60 && r.eb.mean < 0.5 && r.eb.worst < 3) break; // a clean measurement
         }
         check(!!m && m.between > 60, 'enough frames to compare (both pages running smoothly, the puppet between two snapshots)', m ? m.between + ' frames' : '');
         if (m) {
-            check(m.lag >= 60 && m.lag <= 450, 'the puppet lags by the drawing delay plus the network', m.lag + ' ms');
-            check(m.eb.mean < 3 && m.eb.worst < m.speed * 0.1, 'B\'s puppet of A follows A\'s track within a small error', `mean ${m.eb.mean.toFixed(2)} m, worst ${m.eb.worst.toFixed(2)} m at ${m.speed.toFixed(0)} m/s (a tenth of a second of flight is ${(m.speed * 0.1).toFixed(0)} m)`);
-            check(m.now.mean < m.speed * 0.5, 'and stays with A (never left behind)', `on average ${m.now.mean.toFixed(0)} m behind A\'s present position`);
+            check(m.lag >= 60 && m.lag <= 450, 'the puppet is drawn the drawing delay plus the network behind', m.lag.toFixed(0) + ' ms');
+            check(m.eb.mean < 1 && m.eb.worst < 5, 'B\'s puppet of A follows A\'s track within a small error', `mean ${m.eb.mean.toFixed(2)} m, worst ${m.eb.worst.toFixed(2)} m at ${m.speed.toFixed(0)} m/s`);
+            check(m.es.mean < 5, 'also on the frames where it coasts past the newest snapshot', `mean ${m.es.mean.toFixed(2)} m, worst ${m.es.worst.toFixed(2)} m`);
         }
     }
 

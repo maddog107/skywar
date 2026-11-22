@@ -681,9 +681,9 @@ export class Multiplayer {
             if (!peer || !(c >= 0 && c < 1e10)) continue;
             // how much later than the quickest delivery this one came: the worst of late (fading) sets how far back we draw
             const late = now - peer.clock.update(c, now) - c;
-            peer.late = Math.max(peer.late * 0.96, Math.min(Math.max(late, 0), 0.5)); // (halves in under a second)
+            peer.late = Math.max(peer.late * 0.99, Math.min(Math.max(late, 0), 0.5)); // (halves in 3-4 s)
             // and how far apart its snapshots are stamped (a sender on a slow machine sends fewer)
-            if (peer.lastC > 0 && c > peer.lastC) peer.gap = Math.max(peer.gap * 0.96, Math.min(c - peer.lastC, 0.4));
+            if (peer.lastC > 0 && c > peer.lastC) peer.gap = Math.max(peer.gap * 0.99, Math.min(c - peer.lastC, 0.4));
             peer.lastC = c;
             peer.heard = now;
             const rows = s[2], ms = s[3];
@@ -811,7 +811,8 @@ export class Multiplayer {
             // to MAX_DELAY) when they come late or in bunches, so there is still one either side of the moment drawn
             // (the spacing of its snapshots plus the lateness seen lately). Changed slowly: the puppets must not lurch.
             const want = clamp(Math.max(peer.gap, 1 / SEND_HZ) + peer.late + 0.02, INTERP_DELAY, MAX_DELAY);
-            peer.delay += clamp(want - peer.delay, -0.05 * dt, 0.1 * dt);
+            // (a changing delay plays the puppet a little slow or fast: 6 % at most while it grows, 2 % while it shrinks)
+            peer.delay += clamp(want - peer.delay, -0.02 * dt, 0.06 * dt);
             for (const rec of peer.ents.values()) {
                 const ac = rec.ac;
                 if (!ac) continue;

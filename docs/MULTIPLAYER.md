@@ -70,8 +70,8 @@ read wherever in a frame a client happens to be, is off by a few milliseconds ea
 `ClockSync` maps a sender's clock onto ours from the quickest deliveries. A puppet is drawn **~100 ms in the past**
 (`INTERP_DELAY`), between two snapshots: position on a cubic Hermite curve through both positions and velocities (a
 turn stays an arc), orientation by slerp. The delay is per peer: the spacing of its snapshots plus how late they have
-been arriving lately, never under 0.1 s and never over 0.25 s. It grows by at most a tenth of a second per second and
-shrinks back at half that rate (the puppets must not lurch), so that there is still a snapshot either side of the
+been arriving lately, never under 0.1 s and never over 0.25 s. It grows by at most 60 ms per second and
+shrinks back at 20 ms per second (while it changes the puppet plays that much slow or fast: it must not lurch), so that there is still a snapshot either side of the
 moment drawn when a peer's snapshots come late, in bunches, or sparsely (a slow machine sends fewer). When the newest snapshot is nevertheless older than that moment the puppet coasts on its
 last velocity and the turn it was in for at most 0.5 s (`EXTRAP_MAX`), then holds still; after 3 s without a snapshot
 (`STALE_AFTER`) it is **stale**: hidden, `alive = false` (can't be hit, locked or chased by a missile) until snapshots
