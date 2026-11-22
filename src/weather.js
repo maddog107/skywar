@@ -16,6 +16,7 @@
 // across that live ~20-30 minutes; thunder travels at 343 m/s (3 s a kilometre).
 // ═══════════════════════════════════════════════════════════════
 import * as THREE from 'three';
+import { makeAir, sunTransmittance as atmSunT, skyLight, render3, lum as lum3 } from './atmosphere.js';
 
 // ── Time of day ──
 // Solar time (h) at a latitude of 33° N at the equinox (the map is southern California): sunrise 6:00, sunset
@@ -178,12 +179,13 @@ export const WX_FOG = {
 
 // the fog shader's ground-fog term, per fragment (FOG_GLSL uses it; skyFogE..H are declared there)
 export const GROUND_FOG_GLSL = /* glsl */`
-    float wxSoftplus(float x) { return max(x, 0.0) + log(1.0 + exp(-abs(x))); }
+    // (y - w softplus((y - H) / w), written so that nothing cancels far above the fog: there both ends give H exactly,
+    // where the difference of two rounded 3000s gave noise of either sign)
+    float wxFogInt(float y, float H, float w) { return min(y, H) - w * log(1.0 + exp(-abs(y - H) / w)); }
     float wxLayer(float D, float H, float y0, float y1, float L) {
         float dy = y1 - y0, w = ${FOG_W.toFixed(1)};
         if (abs(dy) < 0.01) return D * L / (1.0 + exp(min((y0 - H) / w, 80.0)));
-        float F0 = y0 - w * wxSoftplus((y0 - H) / w), F1 = y1 - w * wxSoftplus((y1 - H) / w);
-        return D * L * (F1 - F0) / dy;
+        return max(D * L * (wxFogInt(y1, H, w) - wxFogInt(y0, H, w)) / dy, 0.0);
     }
     float wxFront(vec2 xz) {
         if (skyFogG.x <= 0.0) return skyFogG.w;
@@ -201,64 +203,255 @@ export const GROUND_FOG_GLSL = /* glsl */`
     }`;
 
 // ═══════════════════════════════════════════════════════════════
-// Sky palettes at the old four times, blended by the sun's elevation (world.js applies them)
+// The sky's palette: what the world's lights, sky, fog, clouds and sea are set from (world.js applySky).
+//
+// Every colour (the sky's, the sun's, the sky light's, the fog's, the clouds') follows from the air: skyPalette().
+// Set by hand is only what the weather or a camera decides:
+//   the air, at the old four times and blended by the sun's elevation (PALETTES): fogDensity, the haze at sea level
+//   (1/m; the fog shader's exp² law: 32 km of visibility on a clear day) and `haze` its scale height (m); mist, mistH:
+//   the low mist under it; water: the sea's own colour
+//   the exposure (SUN_DAY, TWILIGHT_K, FILL, MOON_GROUND, MOON_SKY below): how bright a camera would draw that light.
+//   It opens up as the light goes: the beam of a sun 3° up is a twentieth of noon's and its sky a tenth, and both
+//   are drawn about twice as bright as that against noon's. Set so that mid-grey ground is as bright at the old
+//   four times as the hand-made palettes had it.
 const hex = (h) => new THREE.Color(h);
 export const PALETTES = {
-    day: {
-        zenith: hex(0x2463b4), horizon: hex(0xb3cde4), sun: hex(0xfff1dc), sunI: 3.3, hemiSky: hex(0x9cc0e4), hemiGround: hex(0x5a5236), hemiI: 0.5, envI: 0.62,
-        fogDensity: 0.000062, glow: hex(0xffe2b8), belt: hex(0x000000), clouds: hex(0xffffff), cloudShadow: hex(0x8e9db2), water: hex(0x14506c), mist: 0.00012, mistH: 60, haze: 1500,
-    },
-    dawn: {
-        zenith: hex(0x2d4f88), horizon: hex(0xc8b4b4), sun: hex(0xffb070), sunI: 2.5, hemiSky: hex(0x8aa4cc), hemiGround: hex(0x4b3f33), hemiI: 0.45, envI: 0.55,
-        fogDensity: 0.00007, glow: hex(0xff9a50), belt: hex(0x3a2436), clouds: hex(0xffd2b0), cloudShadow: hex(0x6f6a88), water: hex(0x183248), mist: 0.0005, mistH: 80, haze: 1500,
-    },
-    dusk: {
-        zenith: hex(0x213670), horizon: hex(0xb49aa2), sun: hex(0xff8a3c), sunI: 2.3, hemiSky: hex(0x7f7fb0), hemiGround: hex(0x40302a), hemiI: 0.42, envI: 0.55,
-        fogDensity: 0.00007, glow: hex(0xff6a20), belt: hex(0x40263c), clouds: hex(0xffb088), cloudShadow: hex(0x62506e), water: hex(0x1a2a40), mist: 0.00045, mistH: 70, haze: 1500,
-    },
-    night: {
-        zenith: hex(0x02050d), horizon: hex(0x0f1a2e), sun: hex(0x9fb6e0), sunI: 0.35, hemiSky: hex(0x33456b), hemiGround: hex(0x10141a), hemiI: 0.3, envI: 0.6,
-        fogDensity: 0.00008, glow: hex(0x3a4a70), belt: hex(0x000000), clouds: hex(0x39455e), cloudShadow: hex(0x161c28), water: hex(0x040b14), mist: 0.0004, mistH: 70, haze: 1500,
-    },
+    day: { fogDensity: 0.000062, water: hex(0x14506c), mist: 0.00012, mistH: 60, haze: 1500 },
+    dawn: { fogDensity: 0.00007, water: hex(0x183248), mist: 0.0005, mistH: 80, haze: 1500 },
+    dusk: { fogDensity: 0.00007, water: hex(0x1a2a40), mist: 0.00045, mistH: 70, haze: 1500 },
+    night: { fogDensity: 0.00008, water: hex(0x040b14), mist: 0.0004, mistH: 70, haze: 1500 },
 };
-const COLOR_KEYS = ['zenith', 'horizon', 'sun', 'hemiSky', 'hemiGround', 'glow', 'belt', 'clouds', 'cloudShadow', 'water'];
-const SCALAR_KEYS = ['sunI', 'hemiI', 'envI', 'fogDensity', 'mist', 'mistH', 'haze'];
-export function newPalette() { const P = {}; for (const k of COLOR_KEYS) P[k] = new THREE.Color(); for (const k of SCALAR_KEYS) P[k] = 0; P.overcast = 0; return P; }
-function mixPalette(out, a, b, t) {
-    for (const k of COLOR_KEYS) out[k].copy(a[k]).lerp(b[k], t);
-    for (const k of SCALAR_KEYS) out[k] = a[k] + (b[k] - a[k]) * t;
+const ANCHOR_KEYS = ['fogDensity', 'mist', 'mistH', 'haze'];
+// the colours the air gives (linear, as lit: radiances and irradiances at the palette's exposure)
+const COLOR_KEYS = ['zenith', 'horizon', 'sun', 'hemiSky', 'hemiGround', 'clouds', 'cloudShadow', 'fogWhite', 'water'];
+export function newPalette() {
+    const P = {};
+    for (const k of COLOR_KEYS) P[k] = new THREE.Color();
+    for (const k of ANCHOR_KEYS) P[k] = 0;
+    P.sunI = 0; P.hemiI = 0; P.envI = 1; P.overcast = 0;
+    return P;
+}
+function mixAnchors(out, a, b, t) {
+    out.water.copy(a.water).lerp(b.water, t);
+    for (const k of ANCHOR_KEYS) out[k] = a[k] + (b[k] - a[k]) * t;
     return out;
 }
-// the palette at solar time `hour` (before the weather): day above 20° of sun, dawn / dusk around the horizon, night
-// below -12°; the four old times land exactly on their own palettes
+// the hand-set part at solar time `hour` (before the weather): day above 22° of sun, dawn / dusk around the horizon,
+// night below -11°; the four old times land exactly on their own
 export function paletteAt(hour, out = newPalette()) {
     const { el } = sunAt(hour);
     const h = ((hour % 24) + 24) % 24;
     const twi = h < 12 ? PALETTES.dawn : PALETTES.dusk;
-    if (el >= 6) mixPalette(out, twi, PALETTES.day, smooth(6, 22, el));
-    else if (el >= 2) mixPalette(out, twi, twi, 0);
-    else mixPalette(out, PALETTES.night, twi, smooth(-11, 2, el));
+    if (el >= 6) mixAnchors(out, twi, PALETTES.day, smooth(6, 22, el));
+    else if (el >= 2) mixAnchors(out, twi, twi, 0);
+    else mixAnchors(out, PALETTES.night, twi, smooth(-11, 2, el));
     return out;
 }
-// the weather's greying of a palette (the old World.applyWeather, continuous in its severity)
-const GREY = hex(0x6f7780), DARK = hex(0x3a4048), CLOUD_GREY = hex(0x9aa2ab), CLOUD_SHADE = hex(0x3c434c), WATER_GREY = hex(0x1d2a33), SUN_GREY = hex(0xc8ccd2);
+// the weather's part of it: thicker haze and mist, a greyer sea (continuous in its severity)
+const WATER_GREY = hex(0x1d2a33);
 export function applyWeatherToPalette(P, W) {
     const k = W.sev;
     P.overcast = W.overcast;
     if (!(k > 0)) return P;
-    P.zenith.lerp(DARK, 0.55 * k);
-    P.horizon.lerp(GREY, 0.6 * k);
-    P.glow.lerp(GREY, 0.8 * k);
-    P.belt.multiplyScalar(1 - k);
-    P.sunI *= 1 - 0.65 * k;
-    P.hemiI *= 1 + 0.3 * k;
-    // (rain now thickens the air itself — rainSigma — so the haze thickens less than it used to)
+    // (rain thickens the air itself — rainSigma — so the haze thickens less under it)
     P.fogDensity *= 1 + (W.rain > 0 || W.cells > 5 ? 1.0 : 1.8) * k;
     P.mist = P.mist * (1 + k) + 0.00015 * k; P.mistH += 40 * k;
-    P.clouds.lerp(CLOUD_GREY, 0.7 * k);
-    P.cloudShadow.lerp(CLOUD_SHADE, 0.8 * k);
     P.water.lerp(WATER_GREY, 0.6 * k);
-    P.sun.lerp(SUN_GREY, 0.6 * k);
+    return P;
+}
+
+// ── The air and the light, from the atmosphere (atmosphere.js) ──
+export const REF_H = 0.3;          // the height the ground's light is worked out for (km: the country flown over)
+export const CLOUD_H = 2;          // ... and the clouds' (km)
+// Aerosol extinction at 550 nm (per km) for the fog shader's haze density (per m). The shader's exp² haze has no one
+// extinction coefficient (it is clearer close by than any real air of the same visual range): this takes the clear
+// day's 32 km haze as an aerosol optical depth of 0.11 at 550 nm (ordinary clear continental air, Linke turbidity
+// about 3: a deep blue zenith over a pale horizon, a low sun that still lights the ground), and the weathers scale
+// from there.
+export const MIE_PER_HAZE = 1200;
+// The exposure: the factor from the sun's irradiance above the air (1) to the game's light units.
+export const SUN_DAY = 2.94;       // from 22° up: whatever draws the sun's beam at this on a surface facing it in the clear day's air (the old 3.3 of warm white)
+export const TWILIGHT_K = 9;       // 6° up and lower: this (noon's is 3.8; between the two the beam's brightness is blended)
+export const TWILIGHT_EL = 2;      // below this the exposure opens as the light goes (deg)
+export const TWILIGHT_OPEN = [2.2, -5, 1.2]; // ... e-fold for every 2.2° the sun sinks, for every 1.2° once it is 5° down
+// The hemisphere light, as a multiple of the sky's own irradiance. The sky lights the materials once already through
+// the environment map (the dome as drawn: envI is 1); this is the fill on top of it that the old exposure had (the
+// light the surroundings bounce back, a camera's lifted shadows).
+export const FILL = 0.7;
+// the moon's light on the ground in clear air (the old night palette's light: a pale blue, 0.35), and how much of the
+// sky it would light is drawn (the night's exposure for the sky: the old night was darker than its own moonlight)
+export const MOON_GROUND = [0x9f, 0xb6, 0xe0].map(v => Math.pow((v / 255 + 0.055) / 1.055, 2.4) * 0.35);
+export const MOON_SKY = 0.65;
+// the night sky's own glow (airglow and starlight between the stars)
+const NIGHT_FLOOR = [0.00035, 0.0005, 0.0009];
+// what the old day palette gave at noon in clear air, which the model's light is scaled to there (see calib): the
+// hemisphere light's ground side (the light the ground sends back up), the clouds' shaded sides
+const OLD_DAY = { ground: [0.051, 0.042, 0.0185], cloudShadow: 0.33 };
+const AIR0 = makeAir(PALETTES.day.fogDensity * MIE_PER_HAZE, 1.3); // the clear day's air: the exposure's reference
+const MOON_EL = Math.asin(MOON_DIR.y) / DEG;
+const _T = [0, 0, 0], _T2 = [0, 0, 0], _sl = {}, _slm = {}, _e = [0, 0, 0], _z = [0, 0, 0], _hz = [0, 0, 0], _u = [0, 0, 0], _amb = [0, 0, 0], _dir = [0, 0, 0];
+const _grey = new THREE.Color();
+let _moon0 = null; // the moon's beam through the reference air
+let _L6 = 0;
+// The exposure for a sun `el` degrees up. From 22° up, what draws its beam at SUN_DAY in the reference air (the sun is
+// drawn equally bright all through the day); 6° up and lower, TWILIGHT_K (the beam then reddens and dims into the
+// horizon as the air makes it); from TWILIGHT_EL down it opens e-fold for every 2.2° the sun sinks, which is as fast
+// as the zenith darkens just after sunset (so the sky holds its brightness for the first ten minutes and then
+// fades, the glow in the west faster than the sky overhead), and faster from 5° down, where the real light collapses
+// by a factor of thousands: a faint glow is left on the horizon at the end of nautical twilight. Eyes and cameras
+// adapt.
+export function sunExposure(el) {
+    if (el >= 22) return SUN_DAY / lum3(atmSunT(AIR0, el, REF_H, _T));
+    if (el >= 6) {
+        if (!_L6) _L6 = TWILIGHT_K * lum3(atmSunT(AIR0, 6, REF_H, _T));
+        return (_L6 + (SUN_DAY - _L6) * smooth(6, 22, el)) / lum3(atmSunT(AIR0, el, REF_H, _T));
+    }
+    if (el >= TWILIGHT_EL) return TWILIGHT_K;
+    if (el < -18) return 0;
+    const [f0, deep, f1] = TWILIGHT_OPEN;
+    return Math.min(TWILIGHT_K * Math.exp((TWILIGHT_EL - Math.max(el, deep)) / f0 + Math.max(deep - el, 0) / f1), 2e5);
+}
+// the scale of the model's light at noon in clear air against the old palette's (worked out once)
+let _cal = null;
+function calib() {
+    if (_cal) return _cal;
+    const el = sunAt(KEY_HOURS.day).el, mu = Math.sin(el * DEG), K = sunExposure(el);
+    const E = render3(skyLight(AIR0, REF_H, mu, {}).E.map(v => v * K));
+    const sun = render3(atmSunT(AIR0, el, REF_H, [0, 0, 0])).map(v => v * K * mu);
+    _cal = { ground: OLD_DAY.ground.map((g, i) => g / (sun[i] + E[i])), cloudShadow: OLD_DAY.cloudShadow / lum3(E), cloudLit: 1 / SUN_DAY };
+    return _cal;
+}
+// the aerosol in 2 % steps, so the multiple-scattering tables are redrawn a few times through a change of weather
+// instead of every time the sky is applied
+const quantMie = (m) => Math.exp(Math.round(Math.log(Math.max(m, 1e-6)) / 0.02) * 0.02);
+const setC = (c, a, s = 1) => c.setRGB(a[0] * s, a[1] * s, a[2] * s);
+const greyTo = (a, t, dim) => { const l = lum3(a); for (let i = 0; i < 3; i++) a[i] += (l * dim - a[i]) * t; return a; };
+
+// what the atmosphere's tables are drawn from (world.js hands it to Atmosphere.set), and a few of the model's own
+// numbers for whoever wants them: the sun's elevation, the exposure, the sun's and the moon's light on the ground,
+// the clear sky's irradiance, how much of the sky the overcast covers
+export function newSky() {
+    return {
+        air: makeAir(PALETTES.day.fogDensity * MIE_PER_HAZE, 1.3),
+        lights: [{ dir: new THREE.Vector3(0, 1, 0), E: [0, 0, 0] }, { dir: MOON_DIR.clone(), E: [0, 0, 0] }], // the sun, the moon
+        veil: [0, 0, 0, 0], floor: [0, 0, 0],
+        el: 0, K: 0, sunRGB: [0, 0, 0], moonRGB: [0, 0, 0], skyE: [0, 0, 0], cover: 0, coverHigh: 0, sev: 0,
+    };
+}
+// the sun's light as it arrives h km up under the sky S (skyPalette's S.sunRGB is this at the ground): from an
+// aircraft the setting sun is brighter and less red than from the field below it
+export function sunLightAt(S, h, out = [0, 0, 0]) {
+    render3(atmSunT(S.air, S.el, h, out));
+    const dim = S.K * (1 - 0.65 * S.sev);
+    for (let i = 0; i < 3; i++) out[i] *= dim;
+    return greyTo(out, 0.6 * S.sev, 0.67);
+}
+
+// The palette at solar time `hour` under weather W (a kind's numbers: sev, overcast, rain, cells), and the sky's
+// state S for the atmosphere's tables.
+//   the air      the haze as aerosol (MIE_PER_HAZE): bluish and dry in clear weather, greyer droplets as it worsens
+//   the sun      its beam through that air to the ground (white at noon, orange-red at the horizon), at the exposure
+//                of the time of day; dimmed and whitened by the cloud the weather puts in front of it
+//   the moon     the old night's light, coming in from 3° to 7° of sun below the horizon; it lights the night sky as
+//                the sun does the day's (a moonlit sky is a dim blue one)
+//   the sky      its light on the ground from the same model (irradiance: the hemisphere light), the zenith's and
+//                the horizon's radiance (the sea's and the canopy's reflections; the dome itself reads the table)
+//   overcast     a deck over `cover` of the sky that lets 0.6 … 0.12 of the light above it through as a flat grey:
+//                the dome, the haze and the sky's light go grey and dim with it
+//   fog, clouds  thick fog's own colour (white droplets under that sun and sky); the clouds' sunlit and shaded sides
+export function skyPalette(hour, W, P = newPalette(), S = newSky()) {
+    const { el } = sunAt(hour, S.lights[0].dir);
+    const k = W.sev || 0, C = calib();
+    paletteAt(hour, P);
+    applyWeatherToPalette(P, W);
+    const mie = quantMie(P.fogDensity * MIE_PER_HAZE), ang = Math.round(1.3 * (1 - 0.75 * k) * 20) / 20;
+    if (S.air.mie !== mie || S.air.angstrom !== ang) makeAir(mie, ang, S.air);
+    const air = S.air, mu = Math.sin(el * DEG);
+    // the exposure, and how much of the twilight is left
+    const K = sunExposure(el) * smooth(-18, -10, el);
+    S.el = el; S.K = K;
+    // (the sky is covered by the weather's own deck, seen from under it, and by the high cloud that comes with bad
+    // weather, seen from anywhere: world.js picks between the two by the camera's height for the dome)
+    const cloudDim = 1 - 0.65 * k, moonFade = smooth(-3, -7, el), high = 0.9 * k * k, cover = Math.max(W.overcast || 0, high), deck = 0.6 - 0.48 * k;
+    S.cover = cover; S.coverHigh = high; S.sev = k;
+    // Under an overcast with the light low, the exposure opens to make up for what the deck takes, for the sky's
+    // light only: the beam that still finds its way through the cloud is not drawn brighter for it. (A storm deck lets
+    // an eighth of the light through: at midday that is a dark day; at dusk or by the moon it would be all but black,
+    // which no eye or camera leaves it at.)
+    const open = 1 + (1 / (1 - cover * (1 - deck)) - 1) * (1 - smooth(2, 22, el)), Ks = K * open;
+    // the sun's beam at the ground and at the clouds
+    const sun = S.sunRGB, moon = S.moonRGB, lit = _T2;
+    render3(atmSunT(air, el, REF_H, sun)); render3(atmSunT(air, el, CLOUD_H, lit));
+    for (let i = 0; i < 3; i++) { sun[i] *= K; lit[i] *= K; _u[i] = sun[i] * Math.max(mu, 0) * open; }
+    // the sky under it: irradiance, zenith, horizon
+    _e[0] = _e[1] = _e[2] = 0; _z[0] = _z[1] = _z[2] = 0; _hz[0] = _hz[1] = _hz[2] = 0;
+    if (K > 0) {
+        skyLight(air, REF_H, mu, _sl);
+        for (let i = 0; i < 3; i++) { _e[i] = _sl.E[i] * Ks; _z[i] = _sl.zenith[i] * Ks; _hz[i] = _sl.horizon[i] * Ks; }
+        render3(_e); render3(_z); render3(_hz);
+    }
+    S.lights[0].E[0] = S.lights[0].E[1] = S.lights[0].E[2] = Ks;
+    // the moon: its irradiance above the air from what reaches the ground in the reference air (ME: what lights
+    // the sky, MOON_SKY of it)
+    const ME = S.lights[1].E;
+    if (moonFade > 0) {
+        if (!_moon0) _moon0 = render3(atmSunT(AIR0, MOON_EL, REF_H, [0, 0, 0]));
+        render3(atmSunT(air, MOON_EL, REF_H, moon)); render3(atmSunT(air, MOON_EL, CLOUD_H, _T));
+        if (air.key !== _slm.key) { skyLight(air, REF_H, MOON_DIR.y, _slm); _slm.key = air.key; }
+        for (let i = 0; i < 3; i++) {
+            const m = MOON_GROUND[i] / _moon0[i] * moonFade;
+            ME[i] = m * MOON_SKY * open;
+            lit[i] += _T[i] * m;
+            moon[i] *= m;
+            _u[i] += moon[i] * MOON_DIR.y * open;
+        }
+        const add = (dst, src) => { for (let i = 0; i < 3; i++) _dir[i] = src[i] * ME[i]; render3(_dir); for (let i = 0; i < 3; i++) dst[i] += _dir[i]; };
+        add(_e, _slm.E); add(_z, _slm.zenith); add(_hz, _slm.horizon);
+    } else { ME[0] = ME[1] = ME[2] = 0; moon[0] = moon[1] = moon[2] = 0; }
+    for (let i = 0; i < 3; i++) S.skyE[i] = _e[i];
+    // the overcast: what the deck lets through of the beam and the sky above it, as a flat grey of the same irradiance
+    // (a radiance L (0.5 + 0.5 cos θ) over the hemisphere gives 2.618 L on the ground)
+    for (let i = 0; i < 3; i++) _u[i] = (_u[i] + _e[i]) * deck;
+    greyTo(_u, 0.5, 1);
+    for (let i = 0; i < 3; i++) {
+        S.veil[i] = _u[i] / 2.618;
+        _amb[i] = _e[i] * (1 - cover) + _u[i] * cover;
+        S.floor[i] = NIGHT_FLOOR[i] * (1 - cover);
+        _z[i] = _z[i] * (1 - cover) + S.veil[i] * cover + S.floor[i];
+        _hz[i] = _hz[i] * (1 - cover) + S.veil[i] * 0.5 * cover + S.floor[i];
+    }
+    S.veil[3] = cover;
+    setC(P.zenith, _z); setC(P.horizon, _hz);
+    // the weather's cloud in front of the sun (and the moon): dimmer, whiter
+    for (let i = 0; i < 3; i++) { sun[i] *= cloudDim; moon[i] *= cloudDim; }
+    greyTo(sun, 0.6 * k, 0.67); greyTo(moon, 0.6 * k, 0.67);
+    // the scene's one directional light: the sun until it is 3° down (by then long gone), then the moon
+    const light = el > -3 ? sun : moon, lightY = el > -3 ? Math.max(mu, 0) : MOON_DIR.y;
+    const lm = Math.max(light[0], light[1], light[2]);
+    P.sunI = lm;
+    if (lm > 1e-9) setC(P.sun, light, 1 / lm); else P.sun.setRGB(1, 1, 1);
+    // the sky's light on the ground, and the ground's back up
+    P.hemiI = lum3(_amb) * FILL * 2; // (hemiI as it was: twice the luminance, the colour a mid one)
+    const hk = 1 / Math.max(P.hemiI, 1e-9);
+    setC(P.hemiSky, _amb, FILL * hk);
+    P.envI = 1;
+    P.hemiGround.setRGB((light[0] * lightY + _amb[0]) * C.ground[0] * hk, (light[1] * lightY + _amb[1]) * C.ground[1] * hk, (light[2] * lightY + _amb[2]) * C.ground[2] * hk);
+    // thick fog: white droplets (albedo 0.75) under that sun and sky, lit as the ground is (the sky's light with its fill)
+    const fa = 1 + FILL;
+    P.fogWhite.setRGB(light[0] * lightY + _amb[0] * fa, light[1] * lightY + _amb[1] * fa, light[2] * lightY + _amb[2] * fa).multiplyScalar(0.75 / Math.PI);
+    // the clouds: their sunlit sides (the beam at their height: at dusk they are still lit when the ground's light has
+    // gone red), their shaded sides (the sky's light); greyed by the weather as they were
+    for (let i = 0; i < 3; i++) lit[i] *= C.cloudLit;
+    setC(P.clouds, lit);
+    const ll = lum3(lit) * 0.36;
+    P.clouds.lerp(_grey.setRGB(0.95 * ll, ll, 1.06 * ll), 0.7 * k);
+    setC(P.cloudShadow, _e, C.cloudShadow / open);
+    const sl = lum3(_e) * C.cloudShadow * 0.17 / open;
+    P.cloudShadow.lerp(_grey.setRGB(0.9 * sl, sl, 1.1 * sl), 0.8 * k);
+    // (by night the exposure that opened for the sky under an overcast shows the clouds too: a storm's clouds and its
+    // rain are dim shapes under the moon, not black)
+    const openC = 1 + (open - 1) * moonFade;
+    P.clouds.multiplyScalar(openC); P.cloudShadow.multiplyScalar(openC);
     return P;
 }
 
@@ -315,6 +508,10 @@ export class Weather {
             this.tr = null; this.front = null;
             copyParams(to, this.A); copyParams(to, this.B);
             this.A.kind = this.B.kind = to.kind;
+            // (here too, at once: the sky is applied from `local` straight after, before the next update() gets to it,
+            // and took the weather before this one)
+            copyParams(to, this.local);
+            this.local.kind = this.kind = to.kind;
         }
         this.dirty = true;
         return this;

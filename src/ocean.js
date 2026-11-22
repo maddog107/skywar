@@ -220,9 +220,9 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
     #define CAUSTIC_K 1.0
     uniform float time, whitecap, windU, underwater, geomS2;
     uniform vec3 sunDir, sunColor, skyColor, horizonColor, deepColor, fogColor;
-    // the sky dome's own palette (world.js skyMat, shared): the sky the water mirrors
-    uniform vec3 skyGlow, skyBelt, skyGlowDir, skySun;
-    uniform float skyLowSun, skyOvercast, skyNight;
+    // the sky dome's own uniforms (world.js skyMat, shared): the sun's light as the dome draws it, the overcast, the night
+    uniform vec3 skySun;
+    uniform float skyOvercast, skyNight;
     uniform vec2 swellDir;
     uniform sampler2D detailMap, foamMap;
     #if TIER >= 2
@@ -268,18 +268,12 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
         return vec3(v.xy / (-v.z * invProj) * 0.5 + 0.5, -v.z);
     }
     #endif
-    // The sky the water mirrors: the dome's gradient, the glow round the sun and the twilight belt (world.js skyMat,
-    // less the sun's disc: that is the glint), then the clouds: where the mirrored ray meets the cloud base, the
-    // cloud-shadow map says how much cloud stands there (its column toward the sun), drawn as the clouds' grey bases.
+    // The sky the water mirrors: the dome's own (the atmosphere's sky-view table, world.js skyMat: the blue overhead,
+    // the pale horizon, the glow round the sun, the twilight; less the sun's disc: that is the glint), then the
+    // clouds: where the mirrored ray meets the cloud base, the cloud-shadow map says how much cloud stands there (its
+    // column toward the sun), drawn as the clouds' grey bases.
     vec3 skyAt(vec3 R) {
-        float up = clamp(R.y, 0.0, 1.0);
-        vec3 c = mix(horizonColor, skyColor, pow(up, 0.5));
-        vec3 gd = normalize(skyGlowDir);
-        float sdr = dot(R, gd), sd = max(sdr, 0.0);
-        c += skyGlow * pow(sd, 6.0) * (0.25 + skyLowSun * 0.9 * exp(-up * 6.0)) * (1.0 - skyOvercast * 0.6);
-        c += skyBelt * skyLowSun * pow(max(-sdr, 0.0), 1.5) * exp(-abs(up - 0.08) * 14.0) * (1.0 - skyNight);
-        c += skySun * pow(sd, 90.0) * 0.6 * (1.0 - skyNight * 0.8) * (1.0 - skyOvercast * 0.8);
-        return c;
+        return skyLutAt(normalize(vec3(R.x, max(R.y, 0.003), R.z)));
     }
     // (Rc: the mirrored ray off a calmer normal for the clouds: a cloud base kilometres off, looked up through every
     // ripple's slope, would only come out as noise)
@@ -289,7 +283,7 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
             vec3 Q = P + Rc * ((cloudShadowB.x - P.y) / Rc.y);
             float cov = clamp((1.0 - cloudSunShadowAt(Q)) / max(cloudShadowB.w, 0.1), 0.0, 1.0);
             vec3 base = mix(horizonColor, vec3(dot(horizonColor, vec3(0.3, 0.59, 0.11))), 0.45) * (0.82 + 0.25 * skyOvercast)
-                + skySun * 0.06 * (1.0 - skyNight) * (1.0 - skyOvercast);
+                + skySun * 0.018 * (1.0 - skyNight) * (1.0 - skyOvercast); // (skySun: the sun's light, 3.3 at noon)
             // (low / medium, without the screen-space reflections' real clouds, show these flat bases more gently)
             #if TIER >= 2
             c = mix(c, base, cov * smoothstep(0.012, 0.07, Rc.y) * 0.9);
@@ -654,15 +648,16 @@ function fragShader(FOG_GLSL, CLOUD_SHADOW_GLSL) {
             alpha = max(alpha, foam);
             #endif
         }
+        // the air between (world.js FOG_GLSL): the haze takes the sea's light and adds the sky's for that direction
         vec3 ray = vWorld - cameraPosition;
-        vec2 fg = skyFogAmount(ray, cameraPosition);
-        col = mix(col, skyFogColor(fogColor, ray, fg.y), fg.x);
+        float fgx;
+        col = skyFog(col, ray, cameraPosition, fgx);
         #if TIER < 2
-        alpha = mix(alpha, 1.0, fg.x);
+        alpha = mix(alpha, 1.0, fgx);
         #else
         // the reflection weight for postfx's screen-space reflections (and < 0.7 marks water): foam doesn't mirror
         // (and where the planar pass mirrored an aircraft: it knows its underside, the screen doesn't)
-        alpha = 0.1 + 0.5 * clamp(F * (1.0 - foamCover) * (1.0 - fg.x) * (1.0 - planarA), 0.0, 1.0);
+        alpha = 0.1 + 0.5 * clamp(F * (1.0 - foamCover) * (1.0 - fgx) * (1.0 - planarA), 0.0, 1.0);
         #endif
         gl_FragColor = vec4(col, alpha);
         #include <tonemapping_fragment>
@@ -696,8 +691,7 @@ export class Ocean {
             shoreInfo: { value: new THREE.Vector4() },
             geomS2: { value: 0.01 }, swellDir: { value: new THREE.Vector2(1, 0) }, // the waves' own mean-square slope; the swell's heading
             // the sky dome's palette (world.js skyMat; its uniform objects are shared when given, so always current)
-            skyGlow: { value: new THREE.Color(0, 0, 0) }, skyBelt: { value: new THREE.Color(0, 0, 0) }, skyGlowDir: { value: new THREE.Vector3(0, 1, 0) },
-            skySun: { value: new THREE.Color(1, 1, 1) }, skyLowSun: { value: 0 }, skyOvercast: { value: 0 }, skyNight: { value: 0 },
+            skySun: { value: new THREE.Color(1, 1, 1) }, skyOvercast: { value: 0 }, skyNight: { value: 0 },
             // the wave field (water.js)
             waveA: { value: WATER.gpuA }, waveB: { value: WATER.gpuB }, waveN: { value: 0 }, waveOrigin: { value: new THREE.Vector2() },
             waveLod: { value: new THREE.Vector2(8, 12) }, setDepth: { value: new THREE.Vector3(...SET_DEPTH) },
@@ -716,8 +710,7 @@ export class Ocean {
         };
         if (skyUniforms) {
             const u = this.uniforms, k = skyUniforms;
-            if (k.glowColor) u.skyGlow = k.glowColor; if (k.beltColor) u.skyBelt = k.beltColor; if (k.sunDir) u.skyGlowDir = k.sunDir;
-            if (k.sunColor) u.skySun = k.sunColor; if (k.lowSun) u.skyLowSun = k.lowSun; if (k.overcast) u.skyOvercast = k.overcast;
+            if (k.sunColor) u.skySun = k.sunColor; if (k.overcast) u.skyOvercast = k.overcast;
             if (k.night) u.skyNight = k.night;
         }
         this.FOG_GLSL = FOG_GLSL; this.CLOUD_SHADOW_GLSL = CLOUD_SHADOW_GLSL;

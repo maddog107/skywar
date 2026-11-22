@@ -296,7 +296,7 @@ function lightsMaterial() {
     const u = THREE.UniformsUtils.merge([THREE.UniformsLib.fog, {
         uPower: { value: new Array(32).fill(1) }, uTime: { value: 0 }, uPx: { value: 800 },
     }]);
-    u.skyFogA = { value: SKY_FOG.a }; u.skyFogB = { value: SKY_FOG.b }; u.skyFogC = { value: SKY_FOG.c }; u.skyFogD = { value: SKY_FOG.d };
+    Object.assign(u, SKY_FOG.uniforms()); // (the fog chunks' uniforms: the haze's amounts, the sky-view table)
     return new THREE.ShaderMaterial({
         uniforms: u, vertexShader: VERT, fragmentShader: FRAG, fog: true,
         transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
@@ -459,7 +459,7 @@ export class AirfieldLights {
         if (!sl.length) return;
         const geo = new THREE.CylinderGeometry(1, 0.012, 1, 20, 1, true); geo.translate(0, 0.5, 0); // lamp at y = 0, opening upward
         const u = THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { uI: { value: 0.16 } }]);
-        u.skyFogA = { value: SKY_FOG.a }; u.skyFogB = { value: SKY_FOG.b }; u.skyFogC = { value: SKY_FOG.c }; u.skyFogD = { value: SKY_FOG.d };
+        Object.assign(u, SKY_FOG.uniforms());
         const mat = new THREE.ShaderMaterial({ uniforms: u, vertexShader: BEAM_VERT, fragmentShader: BEAM_FRAG, fog: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, forceSinglePass: true });
         const im = new THREE.InstancedMesh(geo, mat, sl.length);
         im.frustumCulled = false;

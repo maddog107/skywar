@@ -10,6 +10,7 @@ import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { terrainHeight, SKY_FOG } from './world.js';
+import { SKY_LUT_GLSL, SKY_LUT_U } from './atmosphere.js';
 import { WAVE_GLSL, WATER, waterHeight } from './water.js';
 
 // ── Quality presets ──
@@ -926,9 +927,10 @@ export const SENSOR_SPOTS = 24;
 // the scene's haze (world.js FOG_GLSL: an exponential height layer plus low mist, and the fade at the edge of the
 // streamed terrain), so the FLIR can see through most of it: the eye's haze is bright, the FLIR's a thin grey veil
 const SENSOR_FOG_GLSL = /* glsl */`
-    uniform vec4 fogA, fogD;
+    uniform vec4 fogA, fogD, fogB;
     uniform vec3 fogCol, camPos;
     uniform mat4 camWorld;
+    ${SKY_LUT_GLSL}
     float fogLayer(float dens, float k, float y0, float y1, float L) {
         float e0 = exp(-k * max(y0, 0.0)), e1 = exp(-k * max(y1, 0.0));
         float dk = k * (y1 - y0);
@@ -939,8 +941,12 @@ const SENSOR_FOG_GLSL = /* glsl */`
         float tau = fogLayer(fogA.x, fogA.y, camPos.y, camPos.y + ray.y, L) + fogLayer(fogD.x, fogD.y, camPos.y, camPos.y + ray.y, L);
         return max(1.0 - exp(-tau * tau), smoothstep(fogA.z, fogA.w, length(ray.xz)));
     }
-    // the colour before the haze was laid over it
-    vec3 defog(vec3 c, float f) { return max((c - fogCol * f) / max(1.0 - f, 0.06), vec3(0.0)); }
+    // the colour before the air was laid over it (world.js skyFogThrough backwards: the haze amount f and the air's
+    // own molecules took their share of it per colour and added the sky's for that direction)
+    vec3 defog(vec3 c, vec3 ray, float f) {
+        vec3 T = (1.0 - f) * exp(-fogB.rgb * fogLayer(1.0, fogB.w, camPos.y, camPos.y + ray.y, length(ray)));
+        return max((c - skyLutAt(normalize(ray)) * (1.0 - T)) / max(T, 0.06), vec3(0.0));
+    }
     // the cloud layer over the scene (clouds.js composites its premultiplied history with (1, 1 − a) blending,
     // depth-tested against the cloud's entry distance): the cloud here, or none when it's behind what's in view
     uniform sampler2D tCloud, tCloudInfo;
@@ -981,7 +987,7 @@ const SENSOR_STATS_FRAG = /* glsl */`
             vec4 cl = cloudAt(uv, length(P - camPos));
             if (cl.a > 0.5) continue; // (the gain follows the ground, not the clouds)
             c = max((c - cl.rgb) / max(1.0 - cl.a, 0.05), vec3(0.0));
-            float ll = log(max(dot(defog(c, fogAmount(P - camPos)), vec3(0.2126, 0.7152, 0.0722)), 1e-5));
+            float ll = log(max(dot(defog(c, P - camPos, fogAmount(P - camPos)), vec3(0.2126, 0.7152, 0.0722)), 1e-5));
             acc += vec4(ll, ll * ll, 1.0, l);
         }
         gl_FragColor = acc;
@@ -1041,7 +1047,7 @@ const SENSOR_FRAG = /* glsl */`
         if (sky) t = mix(0.26, 0.05, smoothstep(-0.03, 0.3, ray.y));
         else {
             float f = fogAmount(P - camPos);
-            vec3 c0 = defog(c, f);
+            vec3 c0 = defog(c, P - camPos, f);
             float lum0 = max(dot(c0, vec3(0.2126, 0.7152, 0.0722)), 1e-5);
             // apparent temperature: brightness about the frame's own mean (the FLIR's automatic gain); what only
             // shines (lamps, bright paint) doesn't saturate the picture — heat does, below
@@ -1114,6 +1120,7 @@ export class SensorPass extends Pass {
         this.noCloud.needsUpdate = true;
         const fog = {
             fogA: { value: new THREE.Vector4() }, fogD: { value: new THREE.Vector4() }, fogCol: { value: new THREE.Color() }, camPos: { value: new THREE.Vector3() }, camWorld: { value: new THREE.Matrix4() },
+            fogB: { value: SKY_FOG.b }, skyLut: SKY_LUT_U.skyLut, skyLutA: SKY_LUT_U.skyLutA, // (the air's molecules, the sky-view table: shared with the scene's fog)
             tCloud: { value: this.noCloud }, tCloudInfo: { value: this.noCloud }, cloudRes: { value: new THREE.Vector2(1, 1) }, cloudJitter: { value: new THREE.Vector2() }, cloudOn: { value: 0 },
         };
         this.statsMat = fxMaterial(SENSOR_STATS_FRAG, { ...depthUniforms(), ...fog, tColor: { value: null } });

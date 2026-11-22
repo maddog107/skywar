@@ -16,6 +16,7 @@ import * as THREE from 'three';
 import { rand, clamp, smoothstep, fbm, makeRadialTexture } from './util.js';
 import { terrainHeight } from './world.js';
 import { fireLights, FIRE_VIEW_GLSL, fireUniforms } from './firelight.js'; // [night] light from fires, motors, flashes
+import { SKY_LUT_GLSL, SKY_LUT_U } from './atmosphere.js'; // the haze's colour for a direction (the sky-view table)
 import { splitTwoSided } from './meshmerge.js';
 import { WaterFX, explosionKg } from './splash.js'; // what hits the water: spouts, columns, slicks (splash.js)
 import { FlipbookSystem, FLIPBOOK_EVENTS, FLIPBOOK_MIN_SIZE, fireballSpec } from './flipbook.js'; // simulated fireballs
@@ -121,6 +122,9 @@ const PARTICLE_VS = /* glsl */`
     attribute vec4 iVel;
     #endif
     varying vec2 vUv; varying vec4 vCol; varying float vDist; varying vec2 vRot; varying float vHeat;
+    // the colour the haze fades it to: the sky's behind it (world.js FOG_GLSL does the same for everything solid)
+    ${SKY_LUT_GLSL}
+    varying vec3 vFogCol;
     #ifdef LIT
     // [night] smoke lit from below by its fires (and by any flash or motor near it): firelight.js
     ${FIRE_VIEW_GLSL}
@@ -128,6 +132,8 @@ const PARTICLE_VS = /* glsl */`
     #endif
     void main() {
         vec4 mv = viewMatrix * vec4(iPos, 1.0);
+        vec3 fogDir = iPos - cameraPosition;
+        vFogCol = skyLutAt(fogDir * inversesqrt(max(dot(fogDir, fogDir), 1e-8)));
         #ifdef LIT
         vFire = fireIrradiance(mv.xyz, vFireDir);
         #endif
@@ -156,9 +162,11 @@ const PARTICLE_VS = /* glsl */`
     }`;
 
 const PARTICLE_FS = /* glsl */`
-    uniform sampler2D map; uniform vec3 fogColor; uniform float fogDensity;
+    uniform sampler2D map; uniform float fogDensity;
     uniform vec3 sunDirV, sunCol, ambTop, ambBot; uniform float addK;
     varying vec2 vUv; varying vec4 vCol; varying float vDist; varying vec2 vRot; varying float vHeat;
+    varying vec3 vFogCol;
+    #define fogColor vFogCol
     #ifdef LIT
     varying vec3 vFire, vFireDir;
     #endif
@@ -287,6 +295,7 @@ class ParticleSystem {
             transparent: true, depthWrite: false, fog: false, defines,
             uniforms: {
                 map: { value: texture }, fogColor: { value: new THREE.Color() }, fogDensity: { value: 0 }, addK: { value: addK },
+                skyLut: SKY_LUT_U.skyLut, skyLutA: SKY_LUT_U.skyLutA,
                 sunDirV: L.sunDirV || { value: new THREE.Vector3(0, 1, 0) }, sunCol: L.sunCol || { value: new THREE.Color(0.5, 0.5, 0.5) },
                 ambTop: L.ambTop || { value: new THREE.Color(0.4, 0.4, 0.4) }, ambBot: L.ambBot || { value: new THREE.Color(0.2, 0.2, 0.2) },
                 ...(lit ? fireUniforms() : {}),
@@ -597,17 +606,21 @@ export class Effects {
             forceSinglePass: additive, // (additive: the draw order of its faces doesn't matter, one pass is exact)
             blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
             defines: additive ? {} : { LIT: '' },
-            uniforms: { color: { value: new THREE.Color(...color) }, fogColor: { value: new THREE.Color() }, fogDensity: { value: 0 }, time: { value: 0 }, ...L, ...fireUniforms() },
+            uniforms: { color: { value: new THREE.Color(...color) }, fogColor: { value: new THREE.Color() }, fogDensity: { value: 0 }, time: { value: 0 }, ...L, ...fireUniforms(), skyLut: SKY_LUT_U.skyLut, skyLutA: SKY_LUT_U.skyLutA },
             vertexShader: /* glsl */`
-                attribute vec3 tdata; varying vec3 vD; varying float vDist; varying vec3 vFire;
+                attribute vec3 tdata; varying vec3 vD; varying float vDist; varying vec3 vFire, vFogCol;
                 ${FIRE_VIEW_GLSL}
+                ${SKY_LUT_GLSL}
                 void main() {
                     vD = tdata; vec4 mv = modelViewMatrix * vec4(position, 1.0); vDist = -mv.z; gl_Position = projectionMatrix * mv;
+                    vec3 fogDir = (modelMatrix * vec4(position, 1.0)).xyz - cameraPosition; // (the haze's colour: the sky's behind it)
+                    vFogCol = skyLutAt(fogDir * inversesqrt(max(dot(fogDir, fogDir), 1e-8)));
                     vec3 fdir;
                     vFire = fireIrradiance(mv.xyz, fdir); // [night] a motor lights its own smoke, fires the trails over them
                 }`,
             fragmentShader: /* glsl */`
-                uniform vec3 color, fogColor, sunCol, ambTop, ambBot; uniform float fogDensity, time; varying vec3 vD; varying float vDist; varying vec3 vFire;
+                uniform vec3 color, sunCol, ambTop, ambBot; uniform float fogDensity, time; varying vec3 vD; varying float vDist; varying vec3 vFire, vFogCol;
+                #define fogColor vFogCol
                 float h1(float n) { return fract(sin(n) * 43758.5453); }
                 float vnoise(float x) { float i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f); return mix(h1(i), h1(i + 1.0), f); }
                 void main() {

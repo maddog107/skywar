@@ -234,11 +234,14 @@ describe('weather transitions, fronts and the clock', () => {
         assert.ok(Math.abs(du.el - 3.5) < 1 && du.az > 250 && du.az < 290, 'dusk low in the west');
         assert.equal(WX.timeKeyFor(WX.KEY_HOURS.night), 'night');
         assert.ok(WX.nightOf(WX.KEY_HOURS.night) > 0.99 && WX.nightOf(WX.KEY_HOURS.day) < 0.01);
-        // the palettes land exactly on the old ones at those times
+        // what is still set by hand (the air: the haze and the mist; the sea's colour) lands exactly on the old four
+        // times' own (the sky's and the sun's colours now follow from that air: tests/atmosphere.test.mjs)
         for (const k of ['day', 'dawn', 'dusk', 'night']) {
-            const P = WX.paletteAt(WX.KEY_HOURS[k]);
-            assert.ok(P.zenith.equals(WX.PALETTES[k].zenith) && Math.abs(P.sunI - WX.PALETTES[k].sunI) < 1e-9, k);
+            const P = WX.paletteAt(WX.KEY_HOURS[k]), O = WX.PALETTES[k];
+            assert.ok(P.water.equals(O.water) && Math.abs(P.fogDensity - O.fogDensity) < 1e-12 && Math.abs(P.mist - O.mist) < 1e-12 && P.mistH === O.mistH && P.haze === O.haze, k);
         }
+        // the haze the game's eyes see through is what it was: 32 km on a clear day, by the fog shader's exp² law
+        assert.ok(Math.abs(Math.sqrt(WX.KOSCHMIEDER) / WX.PALETTES.day.fogDensity - 31900) < 100);
         // and it gets darker continuously through the evening
         let last = -1;
         for (let h = 16; h <= 21; h += 0.25) { const n = WX.nightOf(h); assert.ok(n >= last - 1e-9); last = n; }

@@ -1105,6 +1105,15 @@ entrance }), `ugSealed` (complex).
   is dense (~350 m visibility under a 170 m top, clear above: hills stand out of it), `overcast` is a low stratus
   ceiling (~450 m) with drizzle and sea fog banks.
 
+### The sky's colours (atmosphere.js): see docs/ATMOSPHERE.md
+- The sky, the sun's colour and strength, the sky's light and the haze over distant ground all come from one physical
+  model of the air (Rayleigh, Mie and ozone, with multiple scattering) kept in lookup tables. The weather changes
+  the air (how much haze, how grey, how much of the sky is overcast), not the colours.
+- For plug-ins: a custom shader that should haze like the rest of the scene includes `FOG_GLSL` (world.js), spreads
+  `SKY_FOG.uniforms()` into its uniforms and calls `skyFog(colour, ray, cameraPosition)` (ray: camera → point, world
+  space). `skyLutAt(dir)` is the sky's radiance in a direction. The palette (`world.palette`) has the sun's light
+  (`sun` × `sunI`), the sky's (`hemiSky` × `hemiI`), `zenith`, `horizon`, `fogWhite`, `clouds`, `cloudShadow`.
+
 ### Fire light (firelight.js), for plug-ins
 - `effects.light(pos, intensity, life, opts)` (as before) → `fireLights.flash`: a burst of light that decays;
   calls at a moving plume merge into one light. `fireLights.keep(key, pos, I, opts)` for a light that lives while

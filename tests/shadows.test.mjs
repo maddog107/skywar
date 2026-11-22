@@ -6,8 +6,9 @@ const THREE = await import('three');
 const { practicalSplits, cascadeLayout, lightBasis, snapToTexel, cascadeAhead, SunShadows, CSM_QUALITY, CSM_INSTALLED, CSM, SUN_TAN_RADIUS } = await src('shadows.js');
 const { sweepShadow, sampleHeights, shadowAt, terrainVisibility, toHalf, NO_SHADOW } = await src('terrainshadowcore.js');
 const { SHADING, QUALITY } = await src('postfx.js');
-const { sunTransmittance, airMass, lowSun, lowSunExposure } = await src('world.js');
+const { lowSunExposure } = await src('world.js');
 const WX = await src('weather.js');
+const ATMO = await src('atmosphere.js');
 
 const QUALITIES = ['low', 'medium', 'high', 'ultra'];
 
@@ -263,42 +264,52 @@ describe('terrain shadow (shadow-top sweep)', () => {
     });
 });
 
-describe('the sun through the atmosphere (world.js)', () => {
-    test('air mass: 1 overhead, ~2 at 30°, finite (~38) at the horizon', () => {
-        assert.ok(Math.abs(airMass(90) - 1) < 1e-3);
-        assert.ok(Math.abs(airMass(30) - 2) < 0.01);
-        assert.ok(airMass(0) > 30 && airMass(0) < 45);
-    });
+describe('the sun through the atmosphere (atmosphere.js, weather.js skyPalette)', () => {
+    // (the sun's colour is no longer a hand-made palette's reddened by an air-mass formula in world.js: it is the
+    // atmosphere model's transmittance through the weather's air; tests/atmosphere.test.mjs has the model itself)
+    const air = ATMO.makeAir(WX.PALETTES.day.fogDensity * WX.MIE_PER_HAZE, 1.3);
+    const T = (el) => ATMO.sunTransmittance(air, el, WX.REF_H, [0, 0, 0]);
 
     test('transmittance: blue goes first, everything dims monotonically toward the horizon', () => {
-        let prev = sunTransmittance(90);
+        let prev = T(90);
         assert.ok(prev[0] > prev[1] && prev[1] > prev[2] && prev[2] > 0.5, 'overhead: warm white');
         for (let el = 80; el >= 0; el -= 5) {
-            const t = sunTransmittance(el);
+            const t = T(el);
             for (let i = 0; i < 3; i++) assert.ok(t[i] < prev[i] + 1e-12 && t[i] > 0);
             assert.ok(t[2] / t[1] <= prev[2] / prev[1] + 1e-12, 'redder as it sinks');
             prev = t;
         }
-        const h = sunTransmittance(2.5);
+        const h = T(2.5);
         assert.ok(h[0] / h[1] > 3 && h[2] / h[1] < 0.15, `2.5° up: deep orange ${h.map(v => v.toFixed(3))}`);
+        assert.deepEqual(T(-3), [0, 0, 0], 'set: no beam');
     });
 
-    test('low sun: the palette untouched above 26°, redder and a little dimmer below, the sky fill up; not the moon', () => {
-        const P = WX.newPalette();
-        const at = (hour) => { WX.paletteAt(hour, P); const before = { sun: P.sun.clone(), sunI: P.sunI, hemiI: P.hemiI }; lowSun(P, WX.sunAt(hour).el); return before; };
-        let b = at(11.2);
-        assert.ok(P.sun.equals(b.sun) && P.sunI === b.sunI && P.hemiI === b.hemiI);
-        // noon and 5° up: the transmittance matches the palettes' own sun colours (the haze chosen for it)
-        const tn = sunTransmittance(57), t5 = sunTransmittance(5.65);
-        assert.ok(Math.abs(tn[0] / tn[1] - 1.14) < 0.1 && Math.abs(tn[2] / tn[1] - 0.81) < 0.06, `noon ${tn}`);
-        assert.ok(Math.abs(t5[0] / t5[1] - 3.9) < 0.5 && Math.abs(t5[2] / t5[1] - 0.18) < 0.06, `5° ${t5}`);
-        b = at(6.25); // ~3° up
-        const lum = (c) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
-        assert.ok(Math.abs(lum(P.sun) - lum(b.sun)) < 1e-6, 'brightness kept');
-        assert.ok(P.sun.r / P.sun.g > b.sun.r / b.sun.g && P.sun.b / P.sun.g < b.sun.b / b.sun.g, 'redder');
-        assert.ok(P.sunI < b.sunI && P.sunI >= b.sunI * 0.9 - 1e-9 && P.hemiI > b.hemiI, 'only a little dimmer');
-        b = at(23); // night: the moon
-        assert.ok(P.sun.equals(b.sun) && P.sunI === b.sunI);
+    test('the palette\'s light: midday as bright as it was, redder and dimmer as the sun sinks, gone when it has set; then the moon', () => {
+        const P = WX.newPalette(), S = WX.newSky(), clear = WX.kindParams('clear');
+        const lum = (c, k = 1) => (0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b) * k;
+        const at = (hour) => { WX.skyPalette(hour, clear, P, S); return { L: lum(P.sun, P.sunI), rg: P.sun.r / Math.max(P.sun.g, 1e-6), bg: P.sun.b / Math.max(P.sun.g, 1e-6), el: S.el }; };
+        const noon = at(WX.KEY_HOURS.day);
+        // (3.3 of the old warm white 0xfff1dc: a luminance of 2.94 on a surface facing the sun)
+        assert.ok(Math.abs(noon.L - 2.94) < 0.03, `midday ${noon.L.toFixed(3)}`);
+        assert.ok(noon.rg > 1.05 && noon.rg < 1.3 && noon.bg > 0.65 && noon.bg < 0.9, `a warm white ${noon.rg.toFixed(2)} ${noon.bg.toFixed(2)}`);
+        // through the afternoon: never brighter, never bluer; no jumps
+        // (a step is 36 s of the afternoon: the beam falls fastest in the last degrees, about 0.3 a degree)
+        let prev = at(12);
+        for (let h = 12.01; h <= 18.1; h += 0.01) {
+            const a = at(h);
+            assert.ok(a.L <= prev.L + 0.01, `dimmer at ${h.toFixed(2)}: ${a.L} after ${prev.L}`);
+            if (a.L > 0.01) assert.ok(a.rg >= prev.rg - 1e-6, `redder at ${h.toFixed(2)}`);
+            assert.ok(Math.abs(a.L - prev.L) < 0.06, `no jump at ${h.toFixed(2)}: ${prev.L.toFixed(3)} -> ${a.L.toFixed(3)}`);
+            prev = a;
+        }
+        const dusk = at(WX.KEY_HOURS.dusk);
+        assert.ok(dusk.L > 0.25 && dusk.L < 1 && dusk.rg > 3, `dusk: a red beam still lighting the ground (${dusk.L.toFixed(3)}, r/g ${dusk.rg.toFixed(1)})`);
+        // set (but not yet the moon's turn): no beam
+        const set = at(18.2);
+        assert.ok(set.el < -1 && set.el > -3 && set.L < 1e-6, `set: ${set.el.toFixed(1)}°, ${set.L}`);
+        // night: the moon, as the old night palette had it (0.35 of a pale blue)
+        const night = at(23);
+        assert.ok(Math.abs(night.L - 0.162) < 0.02 && night.bg > 1.2 && night.rg < 0.9, `the moon ${night.L.toFixed(3)}`);
     });
 });
 
