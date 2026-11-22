@@ -28,8 +28,11 @@ frame is cropped to its content), the fireball's width and the moment the fire i
 
 ## Re-making them
 
-    blender --background --factory-startup --python tools/fx/bake_fireball.py -- --event ground --res 128 --set noise=2 --cache /tmp/fx/ground
+    blender --background --factory-startup --python tools/fx/bake_fireball.py -- --event ground --cache /tmp/fx/ground
     python3 tools/fx/render_flipbook.py --cache /tmp/fx/ground --out models/fx --preview /tmp/fx/ground.png
 
-(`--event air | ground | fuel`; the cache is ~0.4 GB of grids per event and can be deleted afterwards; `cwebp` must be
-installed for the `.webp` files.) About 3.5 minutes to simulate and 3.5 to render per event on an Apple M5.
+(`--event air | ground | fuel`, one at a time. The defaults are what was baked: a 128-cell simulation with wavelet
+noise × 2, i.e. smoke and flame on a 178 × 178 × 256 grid of ~0.3 m cells, 64 frames. The cache is ~0.4 GB of grids
+per event and can be deleted afterwards; `cwebp` must be installed for the `.webp` files; the renderer needs only
+numpy.) On an Apple M5 with nothing else running: 3.3 minutes to simulate the air and ground bursts, 5.5 the fuel
+fire; 1.5 to 3 minutes to render each; under 2 GB of memory.
