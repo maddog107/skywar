@@ -2,8 +2,9 @@
 
 Friends open the page, pick **MULTIPLAYER**, type a callsign and a room code (or leave it empty for the public room),
 choose a side, and fly in the same world: they see each other's jets, can dogfight each other with guns and missiles,
-see kills in the feed and on a scoreboard, and get a new jet a few seconds after being shot down. The host of a room can
-call in AI bandits for everyone to fight together.
+see kills in the feed and on a scoreboard, and get a new jet a few seconds after being shot down. Bombs and rockets fly
+and go off on everyone's screen, and a town building one pilot knocks down is down for all of them. The host of a room
+can call in AI bandits for everyone to fight together.
 
 Single-player is untouched: nothing here opens a connection unless the MULTIPLAYER mode is launched.
 
@@ -14,11 +15,12 @@ Single-player is untouched: nothing here opens a connection unless the MULTIPLAY
 | Mode card | **MULTIPLAYER** in the menu. Callsign (letters, digits, space, `_`, `-`; 14 characters), room code (letters and digits, 8; empty = `PUBLIC`), side BLUE / RED. Every jet and paint scheme is unlocked. |
 | Time, weather | Set by whoever opens a room; everyone who joins flies in that. |
 | Start | AIR, RWY (default) or TAXI. Blue flies from SKYWAR AIR BASE, red from the ENEMY AIR BASE 18 km north; each pilot has his own spot (two abreast down the runway, a row on the apron, line abreast in the air). |
-| Tab (hold) | Scoreboard: pilot, side, aircraft, kills, losses, ping; ★ marks the host. (T still cycles targets.) |
+| Tab (hold) | Scoreboard: pilot, side, aircraft, kills, losses, ping; ★ marks the host. (T still cycles targets.) On a touch screen the **SCORE** button (shown in this mode only) puts it up and takes it down. |
 | N | The host: AI bandits on / off for the room (the dogfight mode's waves; they fly for RED). |
 | Esc / P | The menu comes up, but **the world does not stop**: the jet holds its wings level and its height until you come back. |
 | Enter | Stopped on the ground somewhere that isn't one of your side's pads (or belly-landed): a new jet. |
 | Shot down | A new jet after 4 s, with 6 s of spawn protection (it ends when you open fire; the others see `· SAFE` on your name tag). |
+| Bombs, rockets | Everyone sees them leave your jet's pylons, fly and go off (fireball, mushroom cloud, crater, sound, shake). A town building that comes down on your screen comes down on everyone's, and stays down while the room lives; someone joining later finds the ruins. The airbases' hangars and towers, and the bridges, can't be destroyed here. |
 | Not there | Photo mode, ejecting and climbing out (nobody else would see the man), the carrier, wingmen, the Ready Room start. |
 
 Name tags are the HUD's ordinary target labels: every other player is an ordinary aircraft to the HUD, the radar, the
@@ -110,6 +112,11 @@ Measured:
   player gets the usual missile warning and the host's AI evades. When the shooter's seeker loses its target the ghost
   stops warning ("MISSILE DEFEATED"). The warhead is a hit claim; `mx` ends the ghost with an explosion where the
   shooter's missile ended.
+  `mx` says how it ended (on its target, at the end of its flight — into the ground or the sea —, into a building, or
+  quietly), and the ghost ends the way the real one did: the same burst, water spout and crater as weapons.js draws,
+  and its blast on the buildings round it (below). The puppet's own rail empties as the ghost leaves it (pylons.js
+  takes a store off as the aircraft's count drops). A ghost's last snapshot row, overtaken on the way by the event
+  that ended it, doesn't bring it back.
 - **Flares / chaff.** A drop is an event (`fl`); every client's puppet of that aircraft drops them for real
   (`weapons.dropFlares`), so the shooter's own seeker can be decoyed by them. A human's puppet decoys like a player.
 - **Same side**: rounds pass through, missiles don't lock, and an owner refuses a claim from its own side.
@@ -119,6 +126,67 @@ Measured:
   did. Wings shot off are mirrored (`part`).
 - **Respawn**: 4 s after being shot down, on the pilot's own spot, with 6 s of spawn protection (claims refused by the
   owner; shooters see `· SAFE` and don't send any).
+
+### Bombs and rockets (`src/netordnance.js`)
+Every kind weapons.js drops or fires unguided — the plain bomb, the cluster bomb, the bunker buster, the MOAB and the
+MK-84X, a guided bomb without a target, a rocket pod's salvo — flies by gravity, drag and its motor alone, so one
+message is enough: `ord` carries, for everything one aircraft released in one frame (a pod's six rockets in one
+message), where it is (it left the station it hung on: pylons.js), its velocity, its age and its roll on the rail. Every
+other client draws a **ghost**: the store's own mesh (a rocket with its flame, smoke trail and light while the motor
+burns), flown with weapons.js's own equations (updateBombs, updateMissiles) in steps of 1/60 s, in the owner's past
+like his jet (the same clock and drawing delay), so it leaves the puppet's pylon as the puppet passes the release point,
+and that store goes from the puppet. Measured without network (tests/multiplayer.test.mjs): a bomb ghost stays within
+0.25 m of the owner's bomb over a 9 s fall, a rocket within 0.5 m. Through the real relay (tools/net/e2e.mjs): the
+other page played the burst of a Mk 82 dropped on a house 0.0 m from where the owner's went off, the same 14 houses
+came down on both, and a pilot who joined two minutes later had the same 14 as ruins; a six-rocket salvo was six
+rockets in flight on the other page.
+
+A **guided bomb** with a target steers on its owner's laser spot or GPS point: it rides in the owner's snapshots as a
+missile row marked 2 (by turns when there are more than fit) and is drawn between them.
+
+When it ends, the owner says where and how (`blast`, several in one message): on the ground, in the sea, on a building
+(no crater), a cluster bomb opening, a bunker buster going in (its delay fuse runs on every client), or quietly. The ghost
+gets there in our picture of the owner's world and ends there with the game's own burst: weapons.js `bombBurst` with
+the ghost marked `show` — the same fireball, MK-84X / MOAB mushroom cloud, bunker buster's fountain of earth, crater,
+water column, sound and camera shake — which stops before the damage; a cluster bomb's bomblets scatter and burst the
+same way (`show`: no damage). Rockets end as weapons.js draws them (fireball by height, crater on the ground, spout in
+the sea). An end further than 3 km from where we have the ghost is played where the ghost is.
+
+**Damage**: the owner's bomb does all the damage on the owner's client, as always: aircraft through hit claims (a
+blast that reaches someone's puppet is a claim to its owner, applied once; a ghost's burst never hurts an aircraft),
+buildings by the rule below.
+
+### Town buildings (`src/networld.js`)
+Every client builds the same 5,917 town building records in the same order (towns.js; tests/towns.test.mjs pins a
+digest; tools/net/e2e.mjs fingerprints them on each page). A building is named on the wire by its place in that list,
+with a byte of its position (`index × 256 + check`): a client whose list differed would ignore it rather than knock the
+wrong one down.
+
+- **Who decides**: as with aircraft, the shooter. Whoever's bomb, rocket, missile, cannon or crash brings a building down
+  on his own screen tells the room (`bld`, with his clock); everyone else brings that one down too when their picture of
+  his world gets to that moment (the ghost's burst first: the building falls as the bomb hits). The outcome of
+  buildings.js `explode` (which buildings are hit, by how much) has no dice in it — distance to the walls, radius,
+  amount — but each client's own count of the damage to a building differs (cannon hits are the shooter's own, a
+  newcomer starts with whole walls), so its count only decides what its own weapons bring down; the `bld` list is what
+  makes everyone agree. (The collapse — topple or pancake, the rubble thrown — is each client's own dice.)
+- **Damage adds up**: a peer's blast (its bomb's, rocket's or missile's burst, by that weapon's own splash and damage
+  from our store table) still damages the buildings round it here, but never brings one down: the last blow leaves it at
+  1 hp, scorched and smoking. So two pilots' bombs on one tower add up on both screens, and the one whose bomb is the
+  last blow on his own count brings it down for everyone.
+- **A newcomer** (or a client back after a lost connection) asks the room's host (`sync`): the answer is a bitset of the
+  buildings down (and those said to have fallen and not yet drawn): 185 32-bit words in four parts (at most ~2 KB of
+  JSON in all, a few hundred bytes while little is down), with the list's length and
+  digest; the newcomer takes it only from the host, only while it is waiting for it (15 s), only for its very towns.
+  Those are ruins at once (buildings.js `ruin`: the burnt stub of wall and the heap, no collapse, dust or fire). If the
+  host leaves before answering, the newcomer asks the next one. Partial damage isn't sent: the standing ones are whole
+  for the newcomer.
+- **When they come back**: they stay down while the room lives (as long as anyone who saw them fall is in it, host
+  migration included: every client has the same list down). A sortie flown from the menu starts with whole towns and
+  asks again. What falls on a client while its connection is down is told when it is back.
+- **Scenery**: building destruction scores nothing in multiplayer and puts nothing on the feed (the kill lines must stay
+  on it); the game's collateral penalty is single-player's.
+- **Not destructible here**: the airbases' structures (hangars, towers, shelters: other systems run them) and the
+  bridges (a downed span would need its own synchronising; they stay as they were).
 
 ### AI bandits (co-op)
 The host presses N: the room's `ai` switch goes on (kept by the relay, so it survives the host). The host runs the
@@ -144,14 +212,16 @@ and requires them equal. What was found and done:
 | Parked helicopters on the helipads | Their heading (and, on the enemy field, their type) came from `Math.random`: solid objects that differed between clients. **Fixed**: seeded (`airbase.js buildHelipad`). |
 | The home aircraft carrier | Steams on a random course: not in multiplayer (no CVN start). |
 | Airliners, airbase helicopters, the news helicopter | Fly on each client's own dice and can be flown into: removed in multiplayer (`quietWorld`), put back afterwards. |
-| Town buildings and bridges | Would be rubble for one pilot and standing for another: **indestructible** in multiplayer. |
+| Town buildings | **Destructible, the same for everyone** (networld.js, above): down on everyone's screen when down on the shooter's; a newcomer gets the ruins from the host. |
+| Airbase structures, bridges | **Indestructible** in multiplayer (as before): not synchronised. |
 | Wingmen, AWACS / tanker, ground forces, garrisons, enemy waves, the ground war, target ships | Single-player only: not spawned. |
 | Road traffic, pedestrians, base life, the tower's radio calls, lightning | Each client's own (ambience; nothing an aircraft collides with). The war layer's "INTEL: IDENTIFIED …" lines are muted: they would push the kill lines off the feed. |
-| Craters | Local (a puppet's crash digs one on every client; a missile's doesn't travel). Never on a runway. |
-| Unguided rockets, bombs | Fired locally; they do claim damage on aircraft, but the others don't see them fly. |
+| Bombs, unguided rockets, missiles | **Seen by everyone**: ghosts on the same path (netordnance.js), ending where and how the owner's did. |
+| Craters | Dug on every client by the same rules from the owner's end (a bomb's, a rocket's, a missile's; a puppet's crash); never on a runway, inside an airbase fence or on a bridge (weapons.js craterSite). Right next to a building that falls in the same blast one client may dig it and another not (whether the building still stood): cosmetic. |
+| Cluster bomblets, the collapse of a building | Where each bomblet lands and how a building comes down are each client's own dice (what the bomblets destroy is the owner's word). |
 
-Not synchronised yet (the relay already lets the event names through: `blast`, `bld`, `eject`, `sync`): bomb blasts and
-building destruction, ejected pilots.
+Not synchronised yet (the relay lets the event name through): ejected pilots (`eject`; there is no ejecting in
+multiplayer).
 
 ### No pausing the world
 - **Esc / P / lost pointer lock**: the pause menu comes up over the game; the simulation goes on. The jet flies itself
@@ -177,7 +247,7 @@ Client → relay:
 |---|---|
 | `{t:'hello', v, name, room, team, ac, lv, time, weather}` | first message; `v` = protocol version. `time` / `weather` only matter to a room that doesn't exist yet. |
 | `{t:'s', c, e, m}` | state: `c` our clock (ms), `e` entity rows, `m` missile rows (optional) |
-| `{t:'e', e:[name, …], to}` | an event for the room, or for client `to` |
+| `{t:'e', e:[name, …], to}` | an event for the room, or for client `to`; at most 64 long, the name included |
 | `{t:'ping', n}` | answered with `pong` (the scoreboard's ping) |
 | `{t:'set', ai}` | the host's: AI bandits on / off |
 
@@ -197,7 +267,8 @@ Rows (`src/netproto.js`), all plain numbers:
 - entity `[n, life, x, y, z, qx, qy, qz, qw, vx, vy, vz, throttle, flags, health, g]` — position to the centimetre,
   quaternion × 32767, velocity × 10, throttle %, health × 10, g × 10; ~100 bytes. Flags: gear, firing, on the ground,
   alive, afterburner, falling, speed brake, spawn-protected, flaps (2), hook, belly-landed.
-- missile `[id, x, y, z, vx, vy, vz, tracking]` — `id` 1…65535, the sender's own.
+- missile `[id, x, y, z, vx, vy, vz, tracking]` — `id` 1…65535, the sender's own (one numbering with its bombs and
+  rockets). `tracking` 2: a guided bomb's row, not a missile's.
 
 Events:
 
@@ -210,13 +281,19 @@ Events:
 | `part` | n, life, region | a wing came off |
 | `fl` | n | flares and chaff dropped |
 | `ml` | id, n, store, kind, target's id, x, y, z, vx, vy, vz, clock | a missile launched |
-| `mx` | id, x, y, z | that missile ended there |
+| `mx` | id, x, y, z, how | that missile ended there, that way (`how`, below) |
+| `ord` | n, store, kind, guided, clock, then per item: id, x, y, z, vx, vy, vz, age (ms), roll (rad × 100) | what aircraft `n` released in one frame: bombs (`kind` 0 bomb, 1 guided bomb, 2 bunker buster, 3 MOAB) or rockets (4), up to 6 a message; `store` a stores.js id of that class ('' : the plain table) |
+| `blast` | clock, then per item: id, x, y, z, how | those of its bombs and rockets ended there that way (up to 12): `how` 0 on its target / a ship, 1 on the ground (a missile or rocket: the end of its flight), 2 in the sea, 3 into a building, 4 a cluster bomb opened, 5 / 6 a bunker buster went into the ground / a building, 7 quietly |
+| `bld` | clock, then entries `index × 256 + check` | town buildings that fell on its screen (up to 62 a message) |
+| `sync` | 0 | to the host: the buildings down so far, please |
+| `sync` | 1, epoch, part, parts, count, digest, 56 words | the host's answer: a bitset of the buildings down, in parts |
 | `ai` | n, type, side, name, health, skill, ace | the host describes an AI aircraft it flies |
 | `st` | kills, losses, ping | the sender's own score |
 | `away` | 0 / 1 | its tab is hidden |
 
 Bump `PROTOCOL` in **both** `relay.mjs` and `src/netproto.js` when a message changes shape: a client with another
-number is refused with a message telling the player to reload.
+number is refused with a message telling the player to reload. It is **2** since bombs, rockets and buildings (`ord`,
+events up to 64 long, `mx` with `how`, missile rows marked 2): a page still on protocol 1 is told to reload.
 
 ## Security
 
@@ -249,7 +326,9 @@ inherent in the design (the shooter decides) and is the price of a relay that kn
 A modified client **can**: fly its own jet anywhere at any speed; refuse to take damage or never die; claim hits it
 didn't make (the owner checks only what it can: the right airframe, alive, not its own side, not spawn-protected, a
 cannon within 4 km of where it sees the shooter, at most 5000 a claim); report any score for itself; farm kills with a
-willing accomplice.
+willing accomplice; drop bombs and fire rockets anywhere, as many as its share allows; **knock town buildings down
+faster than fair** (any of them: a `bld` is its word) — on everyone else's screen they still come down at most 30 a
+frame.
 
 It **cannot** (checked by the relay or by every other client, with tests in tests/multiplayer.test.mjs "a peer is not
 trusted" and tests/relay.test.mjs): speak as someone else (the relay stamps the sender); move, hurt-proof, kill or
@@ -258,8 +337,20 @@ living airframe the receiver has a picture of, and gives a kill only to someone 
 claim a hit on it); touch another peer's missiles (ids are per peer); pose as the host (only the room's host may have
 AI aircraft); add to anyone's score but its own; put text or markup on anyone's screen; make a client build without
 limit (puppets: 48 in all, 14 a peer, a new airframe a second; ghost missiles: 64 / 16; launch warnings: 3 a second;
-flares: a salvo per 0.25 s); crash a client with a strange type name (`constructor`…: tables are read by own keys),
-a NaN, an id that doesn't exist or a message repeated a thousand times.
+flares: a salvo per 0.25 s; ghost bombs and rockets: 192 in all, 64 a peer, 24 launches a second with 48 saved up,
+gone 5 s past a rocket's life or 2 minutes past a bomb's release without an end; cluster bombs opening: 4 a second a
+peer; buildings waiting to fall: one entry each, so never more than the list); crash a client with a strange type name
+(`constructor`…: tables are read by own keys), a NaN, an id that doesn't exist or a message repeated a thousand times.
+
+Bombs, rockets and buildings, checked on receipt (tests in "a peer is not trusted"): a launch names a store of the
+stores table's own entries **of the class it claims** (a missile can't come as a bomb, nor a bomb as a rocket), or the
+plain table of that kind; from its own jet (entities 1… only from the host); a place inside the world and a speed under
+2.5 km/s; ids 1…65535, each peer's own (one peer can't end another's ghost; an end is played once). A blast's radius and
+strength are never taken from the wire: they are the store's own (so at most a MOAB's), and a peer's blast never brings
+a building down. An end further than 3 km from the ghost is played where the ghost is. A building entry must be a whole
+number naming one of our town buildings with the right check byte (not an airbase structure, nothing out of range).
+The buildings' state (`sync`) is taken only from the room's host, only while we asked for it, and only for a list of our
+length and digest; a host answers a peer's question twice at once and then once in 5 s.
 
 ## Running it
 
@@ -347,6 +438,8 @@ build are told to reload).
 | `src/netinterp.js` | `ClockSync`, `InterpBuffer` |
 | `src/netlink.js` | one WebSocket connection: hello / welcome, ping, send budget |
 | `src/multiplayer.js` | the game's side: `game.mp` (a plug-in system, systems.js) |
+| `src/netordnance.js` | bombs and rockets: ours told (`ord`, `blast`, guided bombs' rows), everyone else's drawn as ghosts (`mp.ord`) |
+| `src/networld.js` | the towns' buildings: who brought one down tells the room (`bld`), the state for a newcomer (`sync`) (`mp.net`) |
 | `src/mplobby.js` | the lobby in the menu |
 | `tools/net/e2e.mjs` | the end-to-end check |
 | `tests/relay.test.mjs`, `tests/multiplayer.test.mjs` | |
@@ -361,7 +454,13 @@ Hooks in shared code (all small):
   (no ejecting, no climbing out); the out-of-bounds warning is off in the mode.
 - `aircraft.js`: `ac.puppet` — `damage()` → `puppet.hit()`, `update()` → `puppet.place()` instead of the flight model,
   no falling logic and no ejection for a puppet.
-- `weapons.js`: a puppet's cannon rounds carry no damage; a human's puppet decoys missiles like a player.
+- `weapons.js`: a puppet's cannon rounds carry no damage; a human's puppet decoys missiles like a player; how a
+  missile or rocket ended is marked on it (`how`), and where and how a bomb went off (`endAt`, `endHow`: bombBurst,
+  openCluster); a bomb marked `show` (another pilot's, drawn here) and its bomblets stop before their damage.
+- `buildings.js`: `ruin(b)` (down already: the stub and the heap at once, no collapse); `keepStanding(b)` factored out
+  of `destroy` for it. multiplayer.js / networld.js wrap the instance's `damage` and `destroy` while the mode runs (only
+  the towns' buildings can be hurt; no score; tell the room) and put them back after.
 - `airbase.js`: the helipads' parked helicopters are seeded.
 - `main.js`, `index.html`, `style.css`: the lobby; LAUNCH in the mode connects first and launches into the room's time
-  and weather; jets and paint unlocked while the mode is selected.
+  and weather; jets and paint unlocked while the mode is selected. `touch.js`, `style.css`, `main.js`: the touch
+  screens' SCORE button (action `scores`, shown only while the mode runs: `#touchUI.mp`).

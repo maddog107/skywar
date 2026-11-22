@@ -833,7 +833,7 @@ function frame(dt) {
     postfx.render(dt, game); // [postfx] composer.render + GPU timing for adaptive resolution
     hud.draw(game, dt);
     music.update(dt, game);
-    if (touchUI) touchUI.classList.toggle('show', game.state === 'playing' && !game.pilotMode);
+    if (touchUI) { touchUI.classList.toggle('show', game.state === 'playing' && !game.pilotMode); touchUI.classList.toggle('mp', game.mode === 'multiplayer'); }
 }
 
 function updateMenuScene(dt) {

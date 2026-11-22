@@ -202,6 +202,9 @@ input[type=range] { accent-color: var(--accent); width: 170px; }
 .t-buttons { position: absolute; right: 86px; bottom: 28px; display: grid; grid-template-columns: repeat(4, 58px); gap: 6px; }
 .t-buttons button { height: 44px; border: 1px solid rgba(255,255,255,0.3); background: rgba(0,0,0,0.3); color: #fff; font-family: 'Share Tech Mono', monospace; font-size: 12px; }
 .t-buttons button.big { height: 58px; background: rgba(255,181,71,0.25); border-color: rgba(255,181,71,0.6); }
+/* multiplayer only: the scoreboard (Tab on a keyboard) */
+.t-buttons button.t-mp { display: none; }
+#touchUI.mp .t-buttons button.t-mp { display: block; }
 
 /* touch screens have no pointer lock to capture */
 @media (pointer: coarse) { #clickToFly { display: none !important; } }

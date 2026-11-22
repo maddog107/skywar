@@ -13,6 +13,9 @@
 // the targeted player the usual warning; its flares are dropped for real by its puppet here, so our seekers can be
 // decoyed. Deaths are the owner's: a puppet falls, burns and blows up with the game's own effects when told to.
 //
+// Bombs and rockets are ghosts too (netordnance.js: one launch message, the same ballistics, the owner's own end), and
+// the towns' buildings come down for everyone when they come down for whoever's weapon did it (networld.js).
+//
 // The world can't pause: Esc brings the menu up while the jet flies on wings-level; photo mode is off; a hidden tab
 // is "away" at once (hidden to the others, can't be hit) and gets a new jet if it stayed away.
 //
@@ -22,7 +25,7 @@ import * as THREE from 'three';
 import { AIRCRAFT, WEAPONS } from './config.js';
 import { Aircraft, soundSpeed } from './aircraft.js';
 import { Pilot } from './ai.js';
-import { STORES } from './stores.js';
+import { STORES, CLASS, classOfKind } from './stores.js';
 import { storeMesh } from './weapons.js';
 import { applyLivery, LIVERIES } from './models.js';
 import { BASES, baseToWorld } from './world.js';
@@ -31,10 +34,12 @@ import { registerAirTarget, unregisterAirTarget } from './softtargets.js';
 import { clamp, rand, pick } from './util.js';
 import { NetLink } from './netlink.js';
 import { InterpBuffer, ClockSync, MODE } from './netinterp.js';
+import { NetOrdnance } from './netordnance.js';
+import { NetWorld } from './networld.js';
 import {
     SEND_HZ, INTERP_DELAY, STALE_AFTER, MAX_ENTITIES, MAX_MISSILES, NMAX, FLAG, KINDS, REGION_CODES, kindCode,
     eid, eidOwner, eidN, encodeEntity, decodeEntity, encodeMissile, decodeMissile, safeStr, relayUrl,
-    MAX_MISSILE_ID, MAX_LIFE, MAX_PLAYERS, cleanCallsign, cleanRoom,
+    MAX_MISSILE_ID, MAX_LIFE, MAX_PLAYERS, MAX_EVENT, HOW, cleanCallsign, cleanRoom,
 } from './netproto.js';
 
 export const SPAWN_SAFE = 6;        // s of spawn protection (it ends early when you open fire)
@@ -102,6 +107,8 @@ export class Multiplayer {
         this.pending = null;         // a connection the lobby opened, waiting for the launch
         this.clockFn = () => performance.now() / 1000;
         this.makeLink = (url) => new NetLink(url);
+        this.ord = new NetOrdnance(this);  // bombs and rockets, ours and everyone else's (netordnance.js)
+        this.net = new NetWorld(this);     // the towns' buildings (networld.js)
         this.reset();
         if (game.events) this.bind();
         if (typeof document !== 'undefined' && document.addEventListener) {
@@ -132,6 +139,7 @@ export class Multiplayer {
         this.kills = 0; this.deaths = 0;
         this.sendT = 0; this.statT = 0; this.sentStat = '';
         this.menuOpen = false;
+        this.board = false;            // the scoreboard held up (the touch screens' SCORE button; Tab holds it on a keyboard)
         this.away = false; this.wasHidden = false; this.awaySince = 0; this.lastTick = 0; this.t0 = 0;
         this.offline = null;           // { since, tries, nextAt, msg }: the connection dropped, we're trying again
         this.connecting = false;
@@ -140,6 +148,8 @@ export class Multiplayer {
         this.killedBy = null;
         this.quiet = null;
         this.hello = null;
+        if (this.ord) this.ord.forget();
+        if (this.net) this.net.reset();
     }
 
     get isHost() { return !!this.link && this.room.host === this.me.id; }
@@ -187,11 +197,12 @@ export class Multiplayer {
         this.pending = null;
         this.reset();
         this.where = ['air', 'runway', 'apron'].includes(opts.start) ? opts.start : g.startPoint ? g.startPoint() : 'runway';
+        this.quietWorld(true); // (before the connection's backlog is read: it may say buildings fell)
         if (pend) this.attach(pend.link, pend.welcome, pend.hello, pend.url);
         else this.offline = { since: this.now(), tries: 0, nextAt: Infinity, msg: 'NOT CONNECTED' }; // (launched without the lobby: alone)
         this.lastTick = 0;
         this.t0 = this.now() - (g.time || 0);
-        this.quietWorld(true);
+        this.net.ask(); // (the buildings down in the room so far, from its host)
         const p = g.player;
         if (this.me.team === 'red' && g.war && g.war.setSide) g.war.setSide('red');
         if (p) { p.team = this.me.team; this.adoptPlayer(p); }
@@ -204,6 +215,7 @@ export class Multiplayer {
         const g = this.game;
         if (this.link) { this.link.onClose = null; this.link.close(); this.link = null; }
         for (const gh of [...this.ghosts]) this.removeGhost(gh, false);
+        this.ord.clear();
         if (this.active || this.quiet) this.quietWorld(false);
         this.active = false;
         g.cockpitOnly = false;
@@ -233,6 +245,8 @@ export class Multiplayer {
         this.updatePuppets(now, dt);
         this.updateGhosts(dt, now);
         this.trackMissiles();
+        this.ord.update(dt, now);   // bombs and rockets: ours released or ended this frame, everyone else's ghosts
+        this.net.update(now);       // buildings: ours that fell, and theirs once our picture of them gets there
         this.updateBandits(dt);
         if (now - this.sendT >= 1 / SEND_HZ - 0.004) { this.sendT = now; this.sendState(); }
         if (now - this.statT > 3) this.sendStats(true);
@@ -256,6 +270,7 @@ export class Multiplayer {
             case 'eject': g.addFeed('NO EJECTING IN MULTIPLAYER — STAY WITH THE JET', DIM); return true;
             case 'target': return g.input.down('Tab'); // Tab holds the scoreboard up here; T still cycles targets
             case 'spawn': this.toggleBandits(); return true;
+            case 'scores': this.board = !this.board; return true; // (touch.js: no Tab key on a touch screen)
             case 'confirm':
                 // stuck (belly-landed, or stopped somewhere that isn't one of our pads): a new jet
                 if (p && p.alive && p.onGround && p.speed < 2 && (p.bellied || !g.atFriendlyPad(p))) { this.respawn('NEW JET'); return true; }
@@ -424,6 +439,7 @@ export class Multiplayer {
             const t = r.target;
             ms.push(encodeMissile({ id: r.id, pos: m.pos, vel: m.vel, tracking: !!t && m.target === t && !m.lost && t.alive !== false }));
         }
+        this.ord.rows(ms); // (our guided bombs, in what room is left)
         this.flushClaims();
         link.state(Math.round(this.frameNow() * 1e4) / 10, rows, ms); // our frame clock, ms to a tenth (a millisecond is 30 cm at Mach 1)
     }
@@ -445,7 +461,11 @@ export class Multiplayer {
         ev.on('exploded', (ac, d) => { if (this.active) this.localExploded(ac, d || {}); });
         ev.on('flares', (ac) => { const e = this.active && this.locals.get(ac); if (e) this.send(['fl', e.n]); });
         ev.on('partLost', (ac, d) => { const e = this.active && this.locals.get(ac); if (e && d) this.send(['part', e.n, e.life, Math.max(0, REGION_CODES.indexOf(d.region))]); });
-        ev.on('missileLaunch', (ac, d) => { if (this.active && d && d.missile && !d.missile.ghost) this.localLaunch(ac, d.missile, d.target); });
+        ev.on('missileLaunch', (ac, d) => {
+            if (!this.active || !d || !d.missile || d.missile.ghost) return;
+            if (d.missile.kind === 'rkt') this.ord.onRocket(ac, d.missile); else this.localLaunch(ac, d.missile, d.target);
+        });
+        ev.on('bomb', (ac, d) => { if (this.active && d && d.bomb) this.ord.onBomb(ac, d.bomb, d.kind); });
     }
 
     // an entity anywhere in the room, by id: { ac, name, team, mine, player }
@@ -575,7 +595,7 @@ export class Multiplayer {
         const peer = {
             id, name: cleanCallsign(p[1]) || 'PILOT', team: p[2] === 'red' ? 'red' : 'blue',
             ac: own(AIRCRAFT, p[3]) ? p[3] : 'f16', lv: own(LIVERIES, p[4]) ? p[4] : 'default',
-            clock: new ClockSync(), ents: new Map(), desc: new Map(), ended: new Map(), ghosts: new Map(),
+            clock: new ClockSync(), ents: new Map(), desc: new Map(), ended: new Map(), ghosts: new Map(), ord: new Map(), gone: [],
             launches: {}, builds: {}, heard: 0, away: false, kills: 0, deaths: 0, ping: 0, late: 0, gap: 0, lastC: 0, delay: INTERP_DELAY,
         };
         this.peers.set(id, peer);
@@ -606,11 +626,13 @@ export class Multiplayer {
             g.addFeed(peer.name + ' LEFT', DIM);
         }
         if (wasHost && this.isHost) g.addFeed('YOU ARE THE HOST NOW — N: AI BANDITS ON / OFF', AMBER);
+        if (wasHost) this.net.hostChanged(); // (still waiting for the buildings: ask the new host)
     }
 
     removePeer(peer) {
         for (const rec of [...peer.ents.values()]) this.removePuppet(rec);
         for (const gh of [...peer.ghosts.values()]) this.removeGhost(gh, false);
+        this.ord.removePeer(peer);
         this.peers.delete(peer.id);
     }
 
@@ -629,7 +651,7 @@ export class Multiplayer {
     // keeps more memory when a message is repeated.
     onEvent(from, e) {
         const peer = this.peers.get(from);
-        if (!peer || !Array.isArray(e) || e.length > 24) return;
+        if (!peer || !Array.isArray(e) || e.length > MAX_EVENT) return;
         for (let i = 1; i < e.length; i++) if (typeof e[i] !== 'string' && !(typeof e[i] === 'number' && isFinite(e[i]))) return;
         switch (e[0]) {
             case 'hit': return this.onHit(peer, e);
@@ -641,6 +663,10 @@ export class Multiplayer {
             case 'ml': return this.onLaunch(peer, e);
             case 'mx': return this.onMissileEnd(peer, e);
             case 'ai': return this.onDescribe(peer, e);
+            case 'ord': return this.ord.onOrd(peer, e);
+            case 'blast': return this.ord.onBlast(peer, e);
+            case 'bld': return this.net.onBld(peer, e);
+            case 'sync': return this.net.onSync(peer, e);
             // (its own score as it counts it: shown on the board, never added to ours)
             case 'st': peer.kills = Math.max(0, int(e[1], 0, 9999)); peer.deaths = Math.max(0, int(e[2], 0, 9999)); peer.ping = Math.max(0, int(e[3], 0, 9999)); return;
             case 'away': peer.away = e[1] === 1; return;
@@ -910,7 +936,8 @@ export class Multiplayer {
         for (const [m, r] of this.myMissiles) {
             if (live.includes(m)) continue;
             this.myMissiles.delete(m);
-            this.send(['mx', r.id, Math.round(m.pos.x * 10) / 10, Math.round(m.pos.y * 10) / 10, Math.round(m.pos.z * 10) / 10]);
+            // (and how: on its target, the end of its flight, into a building; or quietly)
+            this.send(['mx', r.id, Math.round(m.pos.x * 10) / 10, Math.round(m.pos.y * 10) / 10, Math.round(m.pos.z * 10) / 10, m.how === 0 ? HOW.HIT : m.how === 1 ? HOW.GROUND : m.how === 3 ? HOW.WORLD : HOW.QUIET]);
         }
     }
 
@@ -960,8 +987,11 @@ export class Multiplayer {
     onMissile(peer, c, row, now) {
         const d = decodeMissile(row, _M);
         if (!d) return;
+        if (d.bomb) return this.ord.onRow(peer, c, d, now); // (a guided bomb's: netordnance.js)
         let gh = peer.ghosts.get(d.id); // (a peer's ids name its own missiles only)
-        // one we never saw launched (we joined while it flew): a plain missile
+        // one we never saw launched (we joined while it flew): a plain missile; not one that has just ended (its last
+        // snapshot can come after the event that ended it: snapshots wait for the relay's next combined message)
+        if (!gh && peer.gone.includes(d.id)) return;
         if (!gh) { gh = this.makeGhost(peer, d.id, WEAPONS.missile, 'aam', null, null, d.px, d.py, d.pz, d.vx, d.vy, d.vz, c); if (!gh) return; gh.age = 1; }
         gh.buf.push(c, d);
         gh.heard = now;
@@ -974,24 +1004,32 @@ export class Multiplayer {
         }
     }
 
+    // e: ['mx', its id, x, y, z, how]: it ended there, the way its owner's did (netproto.js HOW)
     onMissileEnd(peer, e) {
         const gh = peer.ghosts.get(int(e[1], 1, MAX_MISSILE_ID));
         if (!gh || gh.peer !== peer) return;
         if (typeof e[2] === 'number' && typeof e[3] === 'number' && typeof e[4] === 'number' && _v.set(e[2], e[3], e[4]).distanceToSquared(gh.pos) < 4000 * 4000) gh.pos.copy(_v);
-        this.removeGhost(gh, true);
+        const how = e.length > 5 ? int(e[5], 0, HOW.QUIET) : HOW.HIT;
+        this.removeGhost(gh, how < 0 ? HOW.HIT : how);
     }
 
+    // bang: false (gone quietly), true, or how it ended (its burst, crater and blast on the buildings round it, as
+    // its owner's: netordnance.js endFx)
     removeGhost(gh, bang) {
         const g = this.game;
         this.ghosts.delete(gh);
         if (gh.peer.ghosts.get(gh.id) === gh) gh.peer.ghosts.delete(gh.id);
+        const gone = gh.peer.gone; gone.push(gh.id); if (gone.length > 32) gone.shift();
         gh.alive = false;
         if (gh.target && gh.target.incoming) { const i = gh.target.incoming.indexOf(gh); if (i >= 0) gh.target.incoming.splice(i, 1); }
         if (gh.trail) gh.trail.emitting = false;
         g.scene.remove(gh.mesh);
-        if (bang && gh.mesh.visible) {
-            g.effects.explosion(gh.pos, gh.W.boom || 0.8, gh.vel);
-            if (g.audio && g.audio.boom) g.audio.boom(g.camera.position.distanceTo(gh.pos), 0.6);
+        if (bang !== false && gh.mesh.visible) {
+            const how = bang === true ? HOW.HIT : bang;
+            if (this.ord.endFx(gh.W, gh.kind, gh.pos, gh.vel, how)) {
+                if (g.audio && g.audio.boom) g.audio.boom(g.camera.position.distanceTo(gh.pos), 0.6);
+                if (this.ord.splashes(gh.W, false, how, gh.pos)) this.net.blast(gh.pos, gh.W.splash || 26, gh.W.damage * 2.2);
+            }
         }
     }
 
@@ -1005,6 +1043,12 @@ export class Multiplayer {
             if (!first || T < first.t) continue; // not launched yet in the picture we draw
             if (!gh.buf.sample(T, _S)) continue;
             gh.mesh.visible = true;
+            if (!gh.left) {
+                // off its rail: the puppet's station empties (pylons.js takes the store off as the count drops)
+                gh.left = true;
+                const ac = gh.owner, cls = CLASS[classOfKind(gh.kind)];
+                if (ac && ac.puppet && cls && ac[cls.ammo] > 0) ac[cls.ammo]--;
+            }
             gh.pos.set(_S.px, _S.py, _S.pz);
             gh.vel.set(_S.vx, _S.vy, _S.vz);
             gh.age += dt;
@@ -1098,6 +1142,7 @@ export class Multiplayer {
         if (this.link) { this.link.onClose = null; this.link.close(); this.link = null; }
         for (const peer of [...this.peers.values()]) this.removePeer(peer);
         this.myMissiles.clear(); this.claims.clear();
+        this.ord.forget(); // (what we fire meanwhile, nobody sees: its end isn't told either; buildings that fall are, later)
         const msg = info && info.refused ? String(info.refused) : '';
         this.offline = { since: now, tries: 0, nextAt: now + 1.5, msg };
         g.showBanner('CONNECTION LOST', msg || 'Trying to get back into room ' + this.room.code + '…', 5, WARN);
@@ -1117,6 +1162,7 @@ export class Multiplayer {
             this.offline = null;
             this.sentStat = '';
             g.addFeed('BACK IN ROOM ' + this.room.code + ' — ' + this.playerCount + ' PILOT' + (this.playerCount === 1 ? '' : 'S'), GREEN);
+            this.net.ask(); // (what fell while we were gone)
             for (const peer of this.peers.values()) this.greet(peer);
             for (const [a, e] of this.locals) if (e.n > 0 && !a.exploded) this.send(this.describe(a, e));
         } catch (err) {
@@ -1131,8 +1177,9 @@ export class Multiplayer {
 
     // ═════════════ A world that's the same for everyone ═════════════
     // What each client would otherwise run on its own dice is left out of multiplayer: the airliners and the airbase
-    // helicopters (they can be flown into and shot down), and damage to the towns' buildings and to bridges (a block
-    // standing for one pilot and rubble for another). Put back when the sortie ends.
+    // helicopters (they can be flown into and shot down), and damage to bridges (a span standing for one pilot and in
+    // the water for another). The towns' buildings come down for everyone instead (networld.js). Put back when the
+    // sortie ends.
     quietWorld(on) {
         const g = this.game, world = g.world || {};
         if (on && !this.quiet) {
@@ -1150,8 +1197,9 @@ export class Multiplayer {
                 q.traffic = at; q.trafficUpdate = at.update;
                 at.update = () => {};
             }
+            // the towns' buildings come down for everyone (networld.js); the bridges stay up (not synchronised)
             const bl = world.towns && world.towns.buildings;
-            if (bl && bl.damage) { q.bl = bl; bl.damage = () => {}; bl.explode = () => {}; }
+            if (bl && bl.damage) { q.bl = bl; this.net.attach(bl); }
             for (const b of (world.towns && world.towns.bridges) || []) if (b.damage) { b.damage = () => {}; q.bridges.push(b); }
             // the war layer's intelligence chatter ("INTEL: IDENTIFIED: …" for every boat and truck seen) would push the
             // kill lines off the feed: not here (the tower's calls stay)
@@ -1167,7 +1215,7 @@ export class Multiplayer {
                 if (at.update !== q.trafficUpdate) at.update = q.trafficUpdate;
                 for (const ap of at.airports || []) { at.spawn(ap, 'arrival'); at.spawn(ap, 'departure'); } // as at boot
             }
-            if (q.bl) { delete q.bl.damage; delete q.bl.explode; }
+            if (q.bl) this.net.detach();
             for (const b of q.bridges) delete b.damage;
             if (q.war) delete q.war.radio;
         }
@@ -1196,7 +1244,7 @@ export class Multiplayer {
             ctx.fillText(isFinite(this.offline.nextAt) ? 'CONNECTION LOST — RECONNECTING' + (this.offline.tries ? ' (TRY ' + (this.offline.tries + 1) + ')' : '') : 'NOT CONNECTED — FLYING ALONE', W / 2, H * 0.2);
             if (this.offline.msg) { mono('600', 11); ctx.fillStyle = DIM; ctx.fillText(this.offline.msg.toUpperCase().slice(0, 110), W / 2, H * 0.2 + 18, W * 0.9); }
         }
-        if (!g.input || !g.input.down('Tab')) return;
+        if (!this.board && (!g.input || !g.input.down('Tab'))) return;
         const rows = this.scoreRows(), rh = 22, w = Math.min(560, W - 24), x = (W - w) / 2, h = 74 + rows.length * rh, y = Math.max(10, (H - h) / 2);
         ctx.fillStyle = 'rgba(6,12,18,0.92)'; ctx.fillRect(x, y, w, h);
         ctx.strokeStyle = 'rgba(93,255,160,0.35)'; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);

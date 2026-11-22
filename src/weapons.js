@@ -402,6 +402,7 @@ export class Weapons {
             trail: this.game.effects.addTrail({ max: 220, width: kind === 'sam' ? 1.0 : kind === 'rkt' ? 0.6 : big ? 1.4 : 1.1, life: kind === 'sam' ? 7 : kind === 'rkt' ? 2 : 5.5, color: [0.92, 0.92, 0.9], alpha: 0.5, minDist: 10, widthGrow: 2.2 }),
             fireT: 0,
             twist: st && vel.lengthSq() > 1 ? releaseTwist(st.quat, _v3.copy(vel).normalize()) : 0,
+            how: -1, // how it ended (multiplayer: netproto.js HOW): 0 on its target, 1 the end of its flight, 3 into the world
         };
         // a GPS weapon flies to where the target is now (a cruise missile: JASSM, Storm Shadow)
         if (target && W.seeker === 'gps') m.aim = target.pos.clone();
@@ -480,6 +481,7 @@ export class Weapons {
                 continue;
             }
             if (m.armed !== false && this.worldMissileHit(m)) {
+                m.how = 3;
                 fx.explosion(m.pos, 0.8);
                 this.splash(m);
                 this.removeMissile(i);
@@ -487,6 +489,7 @@ export class Weapons {
             }
             const h = terrainHeight(m.pos.x, m.pos.z);
             if (m.pos.y < Math.max(h, 0) || m.life <= 0 || (m.age > W.boost + 2 && !sustaining && speed < (W.minSpeed ?? 170))) {
+                m.how = 1;
                 // into the sea: its warhead throws a column up (splash.js), a fireball on the surface inside it
                 if (m.pos.y < 0 && h < 0) { if (fx.water) fx.water.blast(m.pos, { kg: W.kg ?? WARHEAD_KG[m.kind] ?? 8, depth: 'contact', vel: m.vel, agl: 0 }); else fx.waterSplash(m.pos, 0.6); }
                 else {
@@ -723,6 +726,7 @@ export class Weapons {
 
     detonate(m, t) {
         const g = this.game, W = m.W;
+        m.how = 0;
         g.effects.explosion(m.pos, W.boom || 0.9, m.vel);
         if (t.isFlare) return;
         this.blastPeople(m.pos, 30, 90, m.owner, m.team);
@@ -960,7 +964,7 @@ export class Weapons {
         mesh.quaternion.copy(st ? st.quat : ac.quat);
         mesh.traverse(o => { if (o.isMesh) o.castShadow = true; });
         this.game.scene.add(mesh);
-        const b = { mesh, pos: mesh.position, vel: ac.vel.clone().addScaledVector(ac.getUp(_v1), -4), owner: ac, team: ac.team, life: W.guided ? 300 : 90, W, kind, age: 0 }; // (a glide bomb can be minutes in the air)
+        const b = { mesh, pos: mesh.position, vel: ac.vel.clone().addScaledVector(ac.getUp(_v1), -4), owner: ac, team: ac.team, life: W.guided ? 300 : 90, W, kind, age: 0, endAt: null, endHow: -1 }; // (a glide bomb can be minutes in the air)
         if (st && b.vel.lengthSq() > 1) b.twist = releaseTwist(st.quat, _v2.copy(b.vel).normalize());
         if (W.guided && target) { b.target = target; if (W.seeker === 'gps') b.aim = target.pos.clone(); }
         this.bombs.push(b);
@@ -1022,11 +1026,12 @@ export class Weapons {
     // a cluster bomb opens: the case splits and its bomblets scatter over a circle `spread` m across on the ground
     openCluster(b) {
         const C = b.W.cluster, fx = this.game.effects;
+        b.endAt = b.pos; b.endHow = 4;
         const h = Math.max(1, b.pos.y - this.game.surfaceAt(b.pos.x, b.pos.z, b.pos.y).h);
         const vy = Math.max(0, -b.vel.y), tFall = Math.max(0.5, (Math.sqrt(vy * vy + 2 * G * h) - vy) / G);
         for (let k = 0; k < C.n; k++) {
             const a = rand(0, Math.PI * 2), s = C.spread * Math.sqrt(Math.random()) / tFall;
-            this.bomblets.push({ pos: b.pos.clone(), vel: b.vel.clone().add(_v1.set(Math.cos(a) * s, rand(-4, 4), Math.sin(a) * s)), owner: b.owner, team: b.team, C, n: k });
+            this.bomblets.push({ pos: b.pos.clone(), vel: b.vel.clone().add(_v1.set(Math.cos(a) * s, rand(-4, 4), Math.sin(a) * s)), owner: b.owner, team: b.team, C, n: k, show: !!b.show });
         }
         fx.smoke.emit(b.pos, _v1.set(0, 0, 0), 2.5, 3, 12, [0.55, 0.55, 0.52], [0.7, 0.7, 0.68], 0.5, 0, 1.5, 0);
         fx.sparks && fx.sparks.emit && fx.sparks.emit(b.pos, b.vel, 0.4, 1.2, 0.4, [4, 3, 2], [2, 1, 0.4], 1, 0, 0, 0);
@@ -1050,6 +1055,7 @@ export class Weapons {
             if (s.water && !hitShip) { fx.waterSplash ? fx.waterSplash(at, 0.4) : null; continue; }
             fx.explosion(at, 0.75);
             if (q.n % 6 === 0) g.audio.boom(g.camera.position.distanceTo(at), 0.5);
+            if (q.show) continue; // (another player's, drawn here: multiplayer)
             if (g.ground) for (const t of g.ground.targets) {
                 if (!t.alive || t.team === q.team) continue;
                 if (t === hitShip) { t.damage(C.dmg, q.owner, 'bomb'); continue; }
@@ -1160,6 +1166,7 @@ export class Weapons {
         const g = this.game, fx = g.effects, W = b.W || WEAPONS.bomb;
         const buster = b.kind === 'buster', size = W.fx || 2.4, k = size / 2.4;
         const dmgKind = buster ? 'penetrator' : 'bomb';
+        b.endAt = at; b.endHow = wet ? 2 : hitShip ? 0 : onBuilding ? 3 : 1; // (multiplayer: netproto.js HOW)
         if (wet) {
             // into the sea it goes off a few metres down (a buster deeper): the column, the base surge, the slick (splash.js)
             if (fx.water) fx.water.blast(at, { kg: W.kg ?? WARHEAD_KG.bomb, depth: buster ? 'optimal' : 'shallow', vel: b.vel, agl: 0 });
@@ -1182,6 +1189,7 @@ export class Weapons {
         const camD = g.camera.position.distanceTo(at);
         if (!wet || !fx.water) g.audio.boom(camD, 1.6 * Math.sqrt(k)); // (in the water: splash.js's own whoomp)
         if (camD < 800 * Math.sqrt(k)) { const a = (wet ? 0.45 : 0.6) * Math.sqrt(k), cap = 1.5 * Math.sqrt(k); if (g.shockShake) g.shockShake(camD, a, cap); else g.shake = Math.min(cap, g.shake + a); }
+        if (b.show) return; // (another player's bomb drawn here, multiplayer: its owner's own bomb does the damage)
         g.events.emit('bombImpact', b, { at, water: wet, ship: hitShip, W, kind: b.kind || 'bomb' }); // (bases.js: runway craters)
         // splash damage
         if (g.ground) for (const t of g.ground.targets) {

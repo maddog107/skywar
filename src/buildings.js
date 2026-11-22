@@ -261,21 +261,7 @@ export class Buildings {
         b.alive = false;
         if (game) this.game = game;
         const h = b.top - b.y, K = KINDS[b.kind] || KINDS.town;
-        // remember each part's standing transform; the collapse animates from it
-        for (const pt of b.parts) {
-            if (pt.im) {
-                pt.im.getMatrixAt(pt.i, _m); pt.base = _m.clone();
-                pt.im.updateWorldMatrix(true, false);
-                const P = pt.im.matrixWorld;
-                pt.P = P.equals(_m3.identity()) ? null : P.clone();
-                pt.Pinv = pt.P ? pt.P.clone().invert() : null;
-            } else {
-                pt.obj.updateWorldMatrix(true, true);
-                pt.meshes = [];
-                pt.obj.traverse(o => { if (o.isMesh || o.isSprite || o.isLine || o.isPoints) pt.meshes.push({ o, base: o.matrixWorld.clone(), auto: o.matrixWorldAutoUpdate }); });
-                for (const q of pt.meshes) q.o.matrixWorldAutoUpdate = false;
-            }
-        }
+        this.keepStanding(b);
         const vehicle = K.style === 'vehicle';
         const full = !game || this.fallen < FULL_FX;
         // How it comes down. Most buildings pancake: each storey crushes onto the one below and the whole thing sinks
@@ -323,6 +309,39 @@ export class Buildings {
                 }
             }
         }
+    }
+
+    // remember each part's standing transform (the collapse animates from it, reset() puts it back)
+    keepStanding(b) {
+        for (const pt of b.parts) {
+            if (pt.im) {
+                pt.im.getMatrixAt(pt.i, _m); pt.base = _m.clone();
+                pt.im.updateWorldMatrix(true, false);
+                const P = pt.im.matrixWorld;
+                pt.P = P.equals(_m3.identity()) ? null : P.clone();
+                pt.Pinv = pt.P ? pt.P.clone().invert() : null;
+            } else {
+                pt.obj.updateWorldMatrix(true, true);
+                pt.meshes = [];
+                pt.obj.traverse(o => { if (o.isMesh || o.isSprite || o.isLine || o.isPoints) pt.meshes.push({ o, base: o.matrixWorld.clone(), auto: o.matrixWorldAutoUpdate }); });
+                for (const q of pt.meshes) q.o.matrixWorldAutoUpdate = false;
+            }
+        }
+    }
+
+    // Already down when we got here (multiplayer.js: a pilot joining a room where it was bombed before he came): the
+    // ruin as a collapse leaves it, at once — the burnt stub of wall, the heap — with no fall, no dust, no fire
+    ruin(b) {
+        if (!b.alive) return;
+        b.alive = false;
+        const vehicle = (KINDS[b.kind] || KINDS.town).style === 'vehicle';
+        this.keepStanding(b);
+        for (const pt of b.parts) {
+            if (pt.im) { pt.im.setMatrixAt(pt.i, pt.role === 'wall' && !vehicle ? this.stub(b, pt) : HIDDEN); touch(pt.im.instanceMatrix, pt.i); }
+            else for (const q of pt.meshes) q.o.matrixWorld.copy(HIDDEN);
+        }
+        this.addRubble(b, vehicle);
+        this.smoking = this.smoking.filter(s => s.b !== b);
     }
 
     update(dt, cam) {
