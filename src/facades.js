@@ -130,6 +130,11 @@ const WALL_FRAG_PARS = /* glsl */`
         return col * (1.5 / (0.7 + dl * dl * 0.3));
     }
 
+    // the coating of a curtain wall's glass (blue, green, bronze or grey), by the building's accent
+    vec3 fcTint(float a) {
+        return mix(mix(vec3(0.22, 0.33, 0.42), vec3(0.24, 0.36, 0.33), smoothstep(0.3, 0.5, a)), mix(vec3(0.4, 0.33, 0.24), vec3(0.34, 0.37, 0.4), smoothstep(0.75, 0.9, a)), smoothstep(0.55, 0.7, a));
+    }
+
     void facadeEval(vec3 inCol) {
         fcEmit = vec3(0.0); fcGlass = 0.0; fcF0 = vec3(0.04); fcRough = 0.9; fcTilt = vec2(0.0);
         float seed = vStyle.w;
@@ -146,8 +151,6 @@ const WALL_FRAG_PARS = /* glsl */`
         float faceId = (xF ? 2.0 : 0.0) + step(0.0, sg);
         // metres of wall per pixel
         float pu = fwidth(u), py = fwidth(y), px = max(pu, py);
-        vec4 nz = texture2D(tFacNoise, vec2(u + seed * 40.0 + faceId * 13.0, y) * 0.045);
-        vec4 nz2 = texture2D(tFacNoise, vec2(u * 0.09 + seed * 17.0 + faceId * 5.0, y * 0.03));
         if (abs(vLn.y) > 0.5) { fcAlb = wc * 0.4 * (1.0 - 0.8 * burn); return; } // the top of the box (under the roof; a ruin's floor)
 
         float st = floor(vStyle.x + 0.5), fl = floor(vStyle.y + 0.5);
@@ -182,6 +185,19 @@ const WALL_FRAG_PARS = /* glsl */`
         float cu = (u + halfW) / fwS, bay = floor(cu);
         float ox = (cu - bay - 0.5) * fwS;                     // metres from the bay's centre line
         ww = min(ww, fwS * 0.82);
+        vec3 tint = fcTint(vStyle.z);
+        if (px > 2.4) {
+            // too far for a window to be a pixel: the facade's average, and nothing more is worked out
+            vec3 gC = glassSt ? tint * 0.6 + 0.04 : officeSt ? tint * 0.1 + 0.02 : vec3(0.048, 0.054, 0.06);
+            float cov = (ww / fwS) * ((wt - wb) / fhS) * (1.0 - party) * inSt;
+            fcAlb = mix(wc, gC, cov) * (1.0 - 0.75 * burn);
+            fcGlass = cov * (1.0 - burn); fcF0 = glassSt ? tint * 0.9 + 0.08 : vec3(0.09); fcRough = 0.6;
+            fcEmit = vec3(1.0, 0.78, 0.5) * (uNight * cov * (officeSt ? 0.2 : churchSt ? 0.12 : 0.3) * 0.5 * (1.0 - smoothstep(0.0, 0.15, burn)));
+            return;
+        }
+        // (the noise, at a level of detail of our own: a plain lookup's derivatives aren't defined after a branch)
+        vec4 nz = textureLod(tFacNoise, vec2(u + seed * 40.0 + faceId * 13.0, y) * 0.045, log2(max(px * 5.76, 1.0)));
+        vec4 nz2 = textureLod(tFacNoise, vec2(u * 0.09 + seed * 17.0 + faceId * 5.0, y * 0.03), log2(max(max(pu * 0.09, py * 0.03) * 128.0, 1.0)));
         vec4 hb = hash42(vec2(seed * 913.7 + 1.0, 3.3 + st));  // this building's own numbers
         vec4 hb2 = hash42(vec2(seed * 517.3 + 7.0, 9.1));
         vec4 hw = hash42(vec2(bay + faceId * 37.0, sto) + seed * 71.0 + 0.5); // this window's
@@ -204,26 +220,16 @@ const WALL_FRAG_PARS = /* glsl */`
         vec3 glassC = vec3(0.028, 0.034, 0.04);
         vec3 glassF0 = vec3(0.09, 0.095, 0.1);
         // curtain walls and office glazing are coated: a tint that reflects more
-        vec3 tint = mix(mix(vec3(0.22, 0.33, 0.42), vec3(0.24, 0.36, 0.33), smoothstep(0.3, 0.5, vStyle.z)), mix(vec3(0.4, 0.33, 0.24), vec3(0.34, 0.37, 0.4), smoothstep(0.75, 0.9, vStyle.z)), smoothstep(0.55, 0.7, vStyle.z));
-        if (glassSt) { glassC = tint * 0.2; glassF0 = tint * 0.9 + 0.08; }
+        if (glassSt) { glassC = tint * 0.6 + 0.02; glassF0 = tint * 0.9 + 0.08; }
         else if (officeSt) { glassC = tint * 0.1; glassF0 = tint * 0.4 + 0.05; }
-        float avgWin = (ww / fwS) * ((wt - wb) / fhS) * (1.0 - party);
         // lit windows: about a third of homes in the evening; offices by the storey (a floor working late)
         float pLit = 0.3;
-        if (officeSt) pLit = hash11(sto * 7.3 + seed * 31.0) > 0.7 ? 0.55 : 0.09;
+        if (officeSt) { float fl_ = hash11(sto * 7.3 + seed * 31.0); pLit = 0.05 + 0.6 * fl_ * fl_ * fl_; }
         if (churchSt) pLit = 0.12;
         float dark = 1.0 - smoothstep(0.0, 0.15, burn); // nothing lit in a burning building
         vec3 warm = mix(vec3(1.0, 0.68, 0.36), vec3(1.0, 0.84, 0.62), hw.y);
         if (hw.z > 0.9) warm = vec3(0.72, 0.84, 1.0);
         if (officeSt) warm = mix(vec3(0.9, 0.94, 1.0), vec3(1.0, 0.88, 0.7), step(0.55, hw.y)) * (0.6 + 0.4 * hw.w);
-
-        if (px > 2.4) {
-            // too far for a window to be a pixel: the facade's average, and nothing more
-            fcAlb = mix(wc, glassC + 0.02, avgWin) * (1.0 - 0.75 * burn);
-            fcGlass = avgWin * (1.0 - burn); fcF0 = glassF0; fcRough = 0.6;
-            fcEmit = vec3(1.0, 0.78, 0.5) * (uNight * avgWin * pLit * 0.5 * dark * inSt);
-            return;
-        }
 
         float d2 = 1.0 - smoothstep(0.16, 0.3, px);   // window frames, sills, curtains, doors
         float d3 = 1.0 - smoothstep(0.022, 0.05, px); // brick courses, boards, slats
@@ -407,7 +413,7 @@ const WALL_FRAG_PARS = /* glsl */`
             emit = warm * (win * lit * (glassSt ? 0.5 : 0.6));
             if (glassSt) {
                 // spandrels: opaque glass or metal panels, flatter than the vision glass; louvres on the plant floor
-                vec3 sp = mix(tint * 0.3 + 0.03, wc * 0.6, step(0.5, hb2.x));
+                vec3 sp = mix(tint * 0.5 + 0.04, wc * 0.75, step(0.5, hb2.x));
                 sp *= 1.0 - 0.5 * louvre * d2 * (1.0 - pulseW(fy / 0.12, 0.0, 0.55, py / 0.12));
                 alb = mix(alb, sp, spandrel);
                 // every pane hangs a little out of true: the reflections break up across the wall
@@ -688,11 +694,19 @@ const ROOF_FRAG_PARS = /* glsl */`
         vec3 rc = inCol / max(kb, 0.25), wallC = vWallC;
         vec2 uv = vRuv.xy;
         float pu = fwidth(uv.x), pv = fwidth(uv.y), px = max(pu, pv);
-        vec4 nz = texture2D(tFacNoise, (uv + seed * 37.0) * 0.06);
-        vec4 nz2 = texture2D(tFacNoise, vec2(uv.x * 0.11 + seed * 11.0, uv.y * 0.045));
         vec4 hr = hash42(vec2(seed * 733.1 + 2.0, 5.7 + kind));
         float ny = vRn.y, pyl = fwidth(vLp.y), pxl = fwidth(vLp.x);
         bool spire = kind > 6.5;
+        if (px > 1.6) {
+            // from far off: the covering in this roof's own shade (the walls' colour on a gable end), and nothing more
+            bool flatRoof = kind > 3.5 && kind < 6.5;
+            vec3 far_ = flatRoof ? (ny > 0.5 ? rc * (0.83 + 0.14 * hr.y) : mix(wallC, vec3(0.5), 0.4)) : (ny < 0.12 && !spire ? wallC * 0.95 : rc * (0.86 + 0.19 * hr.y));
+            rfAlb = far_ * (1.0 - 0.6 * burn);
+            if ((kind > 2.5 && kind < 3.5) || spire) { rfRough = 0.5; rfMetal = 0.55; }
+            return;
+        }
+        vec4 nz = textureLod(tFacNoise, (uv + seed * 37.0) * 0.06, log2(max(px * 7.68, 1.0)));
+        vec4 nz2 = textureLod(tFacNoise, vec2(uv.x * 0.11 + seed * 11.0, uv.y * 0.045), log2(max(max(pu * 0.11, pv * 0.045) * 128.0, 1.0)));
         float d2 = 1.0 - smoothstep(0.5, 1.2, px), d3 = 1.0 - smoothstep(0.05, 0.13, px);
         vec3 alb;
         if (kind < 3.5 || kind > 6.5) {
@@ -1021,16 +1035,16 @@ function joinGeo(list) {
     out.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
     return out;
 }
-// Gable roof: a prism with its ridge along z (two pitches and the gable ends: the eaves' gutter line and the ridge
-// are drawn by the roof shader)
+// Gable roof: a prism with its ridge along z: two pitches, the gable ends and the soffit (the walls under it have no
+// top, and from the street one looks up under the eaves). The gutter line and the ridge are drawn by the roof shader.
 export function gableGeometry() {
     const A = [-0.5, 0, -0.5], B = [0.5, 0, -0.5], C = [0.5, 0, 0.5], D = [-0.5, 0, 0.5], T = [0, 1, -0.5], T2 = [0, 1, 0.5];
-    return triGeo([...quad(A, D, T2, T), ...quad(C, B, T, T2), [B, A, T], [D, C, T2]]);
+    return triGeo([...quad(A, D, T2, T), ...quad(C, B, T, T2), [B, A, T], [D, C, T2], ...quad(A, B, C, D)]);
 }
 // Hip roof: a shorter ridge along z, the ends pitched too
 export function hipGeometry() {
     const A = [-0.5, 0, -0.5], B = [0.5, 0, -0.5], C = [0.5, 0, 0.5], D = [-0.5, 0, 0.5], R0 = [0, 1, -0.22], R1 = [0, 1, 0.22];
-    return triGeo([[D, C, R1], [B, A, R0], ...quad(A, D, R1, R0), ...quad(C, B, R0, R1)]);
+    return triGeo([[D, C, R1], [B, A, R0], ...quad(A, D, R1, R0), ...quad(C, B, R0, R1), ...quad(A, B, C, D)]);
 }
 // Flat roof: a tray. The outer face up to the coping, the coping's top, the upstand's inner face down to the roof
 // deck. The upstand is 2.5% of each side wide (0.3 m on a 12 m block, most of a metre on a tower).
